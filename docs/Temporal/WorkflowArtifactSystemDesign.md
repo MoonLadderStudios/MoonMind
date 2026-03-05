@@ -7,9 +7,11 @@ Last updated: 2026-03-05
 
 MoonMind is being redesigned around **Temporal**.
 
-- **Workflow Executions** are the primary units of orchestration and user-visible progress.
+- For **Temporal-managed flows**, **Workflow Executions** are the primary units of durable orchestration.
 - **Activities** perform all side effects (network calls, filesystem, GitHub/Jules, etc.).
 - Temporal history and payloads must remain **small** and **safe** (avoid large blobs, avoid leaking secrets).
+
+Public MoonMind surfaces may still describe these executions as `tasks` during migration. This document defines the artifact contract at the Temporal/runtime layer.
 
 Therefore, workflows and activities must pass **artifact references** (pointers) rather than large payloads. This document defines a complete artifact system: storage, identity, ACLs, APIs, and retention.
 
@@ -95,6 +97,8 @@ A minimal reference to a Temporal **Workflow Execution**:
 1) Activity receives `ArtifactRef`
 2) Activity fetches bytes using internal credentials (or presigned download)
 3) Activity returns small results (new `ArtifactRef`s, summaries, statuses) to workflow
+
+Compatibility APIs may resolve those artifacts back into task-oriented detail payloads, but the artifact linkage remains execution-centric at the Temporal layer.
 
 ---
 

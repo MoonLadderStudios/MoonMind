@@ -3,13 +3,13 @@
 **Project:** MoonMind
 **Doc type:** System architecture / platform foundation
 **Status:** Draft (implementation-oriented)
-**Last updated:** 2026-03-04 (America/Los_Angeles)
+**Last updated:** 2026-03-05 (America/Los_Angeles)
 
 ---
 
 ## 1. Purpose
 
-This document defines the **Temporal Platform** foundation for MoonMind: how we deploy, secure, observe, and operate Temporal as the **primary workflow manager and scheduling tool**, and what durable platform contracts MoonMind will rely on.
+This document defines the **Temporal Platform** foundation for MoonMind: how we deploy, secure, observe, and operate Temporal as the **primary workflow manager and scheduling tool for migrated flows**, and what durable platform contracts MoonMind will rely on.
 
 MoonMind aligns to Temporal’s core abstractions:
 
@@ -100,9 +100,17 @@ We will **not** keep sensitive/large payloads in Temporal history as a strategy;
 
 ---
 
-## 6. Visibility contract for MoonMind (Temporal is the list-of-record)
+## 6. Visibility contract for MoonMind
 
-MoonMind’s “Tasks List” (the UI list of executions) is backed by **Temporal Visibility** (not Postgres dashboard tables, and not merged views).
+For **Temporal-managed work**, Temporal Visibility is the list/query/count source of truth.
+
+During migration, MoonMind may still expose unified task-oriented surfaces that combine:
+
+* queue-backed tasks
+* orchestrator-backed tasks
+* Temporal-backed executions
+
+The platform contract here is narrower: Temporal-managed records should be listed from **Temporal Visibility**, not from mirrored Postgres dashboard tables.
 
 ### 6.1 Search Attributes
 
@@ -188,12 +196,14 @@ Changing `numHistoryShards` after a cluster is provisioned is effectively a **cl
 
 ## 10. Scheduling foundation (Temporal Schedules)
 
-MoonMind will standardize on Temporal-native scheduling mechanisms (Schedules) for periodic triggers, sweepers, and recurring automation.
+MoonMind will standardize on Temporal-native scheduling mechanisms (Schedules) for periodic triggers, sweepers, and recurring automation **once a flow is Temporal-managed**.
 
 **Foundation contract**
 
 * No cron/beat-style external schedulers for Temporal-driven workflows.
 * Scheduling definitions are managed as Temporal Schedule objects and controlled via Temporal CLI/automation.
+
+Existing non-Temporal schedulers may remain for flows that have not yet migrated.
 
 (Details live in a separate “Scheduling” system doc.)
 

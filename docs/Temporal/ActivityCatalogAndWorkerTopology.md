@@ -22,6 +22,8 @@ This document standardizes:
 * reliability (timeouts, retries, heartbeats, idempotency)
 * observability expectations
 
+This doc covers the **Temporal-managed worker model**. Current queue workers and orchestrator workers may continue to exist during migration, but they should converge toward these activity boundaries rather than invent parallel long-term runtime abstractions.
+
 ---
 
 ## 2) Goals and non-goals

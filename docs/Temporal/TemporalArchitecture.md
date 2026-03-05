@@ -1,490 +1,468 @@
-# MoonMind Temporal-First Architecture
+# MoonMind Temporal Architecture
 
-## 0) Intent
+**Status:** Draft (migration-oriented)  
+**Owner:** MoonMind Platform  
+**Last updated:** 2026-03-05  
+**Audience:** backend, infra, dashboard, workflow authors
 
-Redesign MoonMind to use **Temporal** as the **primary workflow manager and scheduling system**.
+## 1. Purpose
 
-MoonMind will align to Temporal’s core abstractions:
+This document defines MoonMind's **Temporal migration architecture**:
 
-* **Workflow Execution** is the primary “thing” the product creates, lists, edits, cancels, and observes.
-* **Activity** is the only place side effects happen (LLM calls, filesystem work, GitHub/Jules calls, running tests, etc.).
-* **Task Queue** exists only as Temporal plumbing for worker routing; it is **not** a product-level “queue” and we do not promise queue-like ordering semantics to users.
+- what MoonMind runs **today**
+- what MoonMind is moving **toward**
+- which design decisions are already **locked**
+- how current task/orchestrator flows map into Temporal-native workflow execution
 
-MoonMind keeps only domain concepts that Temporal doesn’t cover:
+This is intentionally a **bridge document**. It does not pretend the current runtime is already fully Temporal-backed, and it does not duplicate every low-level decision from the more specific Temporal docs.
 
-* **Skill** (a capability contract)
-* **Plan** (a structured set/graph of skill invocations)
-* **Artifact** (durable storage for large inputs/outputs)
+## 2. Related docs
 
-Notably absent: “task”, “job”, “work item”, and any “spec” naming in runtime execution.
+- `docs/Temporal/TemporalPlatformFoundation.md`
+- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
+- `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
+- `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/MoonMindArchitecture.md`
+- `docs/OrchestratorArchitecture.md`
+- `docs/OrchestratorTaskRuntime.md`
 
-## 1) Goals and non-goals
+## 3. Current state and target state
 
-### Goals
+### 3.1 Current state
 
-1. **Single canonical unit in the UI**: every row is a **Workflow Execution**.
-2. **Correct pagination + totals** via Temporal **Visibility** APIs (no merged pagers).
-3. **Edits** implemented via Temporal **Update** (request/response) and/or **Signal**.
-4. **Scheduling / polling / retries** handled by Temporal (Timers, Retry Policies, Schedules).
-5. **Manifest ingestion** is first-class and cleanly modeled in Temporal terms.
-6. **LLM and non-LLM execution** supported without creating competing abstractions.
-7. **No Celery** and no competing workflow engines.
+MoonMind currently operates with:
 
-### Non-goals
+- a FastAPI control plane
+- Postgres-backed task/run state
+- runtime-specific workers for Codex, Gemini, and Claude
+- an agent/task queue model
+- Celery + RabbitMQ automation for spec workflow and orchestrator paths
+- `mm-orchestrator` for repo mutation, compose build/restart, verification, and rollback
 
-* Preserving old APIs, old database schemas, or old queue behavior.
-* Pretending Task Queues are user-visible queues with stable ordering guarantees.
+This is the current documented and implemented direction in the repository, not legacy trivia.
 
-## 2) Vocabulary (what MoonMind will say)
+### 3.2 Target state
 
-### Temporal-native terms (use these in code/docs/UI where feasible)
+MoonMind is migrating to **Temporal as the primary durable workflow manager and scheduling system** for workflow-driven automation.
 
-* **Workflow Execution**: a specific running/completed instance of a workflow.
-* **Workflow Type**: the name that maps to a workflow definition.
-* **Activity / Activity Type**: side-effecting work + its name-to-definition mapping.
-* **Task Queue**: the routing point workers poll from.
-* **Worker**: a process that executes workflow and/or activity tasks.
-* **Signal**: async message to a workflow execution.
-* **Update**: request/response interaction that can mutate workflow state.
-* **Timer**: deterministic waiting inside workflows.
-* **Schedule**: server-side mechanism to start workflows on a timetable.
-* **Visibility / Search Attributes / Memo**: listing, filtering, and display metadata.
+In the target state:
 
-### MoonMind domain terms (kept because Temporal doesn’t provide them)
+- Temporal **Workflow Executions** are the durable orchestration primitive
+- Temporal **Activities** perform all side effects
+- Temporal **Visibility** becomes the list/query/count source for Temporal-managed work
+- Temporal **Schedules** replace cron/beat-style scheduling for Temporal-managed flows
+- MoonMind keeps only domain concepts Temporal does not provide directly:
+  - **Skill**
+  - **Plan**
+  - **Artifact**
 
-* **Skill**: a named capability with inputs/outputs and an executor implementation.
-* **Plan**: structured set/graph of skill invocations.
-* **Artifact**: stored inputs/outputs referenced by ID/URI (object store, DB, etc.).
+### 3.3 Non-goals
 
-## 3) Top-level architecture
+- Claiming Celery, the agent queue, or orchestrator task records are already gone
+- Rewriting all public APIs around Temporal terms in one step
+- Exposing Temporal task queues as a user-visible queue product with ordering guarantees
 
-### Components
+## 4. Locked platform decisions
 
-1. **Temporal Service**
+The following are already locked by newer Temporal design docs and should be treated as canonical here:
 
-   * Cluster (self-hosted or cloud)
-   * Visibility store enabled as needed for list queries and counts
+- **Deployment mode:** self-hosted only, not Temporal Cloud
+- **Deployment runtime:** Docker Compose
+- **Temporal persistence + visibility:** PostgreSQL
+- **Default artifact backend:** MinIO / S3-compatible object storage
+- **Default worker versioning behavior:** Auto-Upgrade
+- **Task queue posture:** routing only, not product semantics
+- **Default queue set:** start small; add subqueues only when isolation or scaling demands it
 
-2. **MoonMind API (FastAPI)**
+This document should not re-open those choices.
 
-   * Auth and user/session management
-   * Starts workflow executions
-   * Sends Updates / Signals
-   * Lists workflow executions via Visibility
-   * Issues presigned upload/download for artifacts
+## 5. Vocabulary and compatibility model
 
-3. **Artifact Store**
+### 5.1 User-facing and internal terms
 
-   * Object store (S3/GCS/MinIO) recommended
-   * Stores large payloads: manifests, plans, patches, logs, outputs, attachments
-   * Prevents bloating workflow histories
+MoonMind needs two layers of vocabulary during migration:
 
-4. **Skill Registry**
+- **User-facing term:** `task`
+- **Temporal term:** `workflow execution`
 
-   * Source of truth for what skills exist, schemas, and executor bindings
-   * Can be code-defined + config (versioned)
+Rationale:
 
-5. **Temporal Workers**
+- MoonMind's current UI and API direction remains task-oriented
+- Temporal's runtime model is workflow-oriented
+- forcing an immediate full rename would conflict with current product contracts and migration specs
 
-   * **Workflow Worker(s)** (orchestration only; deterministic code)
-   * **Activity Worker fleets** segmented by capability, isolation, and secrets:
+### 5.2 Recommended wording
 
-     * LLM activities
-     * Sandbox/command execution activities
-     * Integrations (GitHub, Jules, etc.)
-     * Artifact I/O activities (if not local)
+- Use **task** in current dashboard and compatibility APIs
+- Use **workflow execution** in Temporal implementation docs and internal runtime contracts
+- Use **task queue** only for Temporal plumbing, never as a user-visible ordering promise
 
-### Dataflow (high level)
+### 5.3 Identifier compatibility
 
-* User triggers “run” → API starts a **Workflow Execution** (Workflow Type).
-* Workflow orchestrates steps and calls **Activities**.
-* Activities read/write **Artifacts** and interact with integrations.
-* Dashboard lists **Workflow Executions** directly from Temporal Visibility.
+During migration, the system may expose more than one identifier:
 
-## 4) Temporal modeling: Workflow Types (root-level differentiation)
+| Identifier | Meaning | Status |
+| --- | --- | --- |
+| `taskId` | Current MoonMind task handle used by UI and compatibility APIs | Required during migration |
+| `runId` | Legacy orchestrator compatibility identifier | Transitional only |
+| `workflowId` | Temporal Workflow ID | Canonical for Temporal-managed executions |
+| `temporalRunId` | Temporal run instance identifier | Detail/debug use only |
 
-MoonMind will avoid introducing a new “kind” abstraction. Root-level differentiation is done with **Workflow Type**.
+Rules:
 
-### Proposed Workflow Types
+- Public task APIs may return both `taskId` and `workflowId` during migration
+- Legacy orchestrator APIs may still require `runId` compatibility for a period
+- `workflowId` is the durable Temporal identity
+- `temporalRunId` is not the primary product handle
 
-#### A) `MoonMind.Run`
+## 6. Architecture overview
 
-General-purpose execution:
+### 6.1 Current deployment shape
 
-* can involve planning (via skills)
-* can involve executing skills directly
-* can include external integrations and long-lived waiting
+MoonMind currently contains:
 
-This is the default “start a run” entry point.
+- API service
+- Postgres
+- Qdrant
+- runtime workers
+- scheduler
+- Celery + RabbitMQ stack
+- `mm-orchestrator`
+- Temporal foundation services in Compose
 
-#### B) `MoonMind.ManifestIngest`
+### 6.2 Target Temporal shape
 
-Manifest ingestion and orchestration:
+For Temporal-managed flows, the architecture becomes:
 
-* turns a manifest artifact into a Plan (or set of Plans)
-* executes that Plan by orchestrating Activities and/or spawning child workflow executions
+1. **MoonMind API**
+   - authenticates callers
+   - starts workflows
+   - sends updates/signals/cancel requests
+   - issues artifact upload/download grants
+   - exposes task-oriented compatibility surfaces while Temporal adoption is in progress
 
-This exists as a separate Workflow Type because manifest ingestion typically implies:
+2. **Temporal service**
+   - stores workflow state/history
+   - provides visibility for list/query/count
+   - owns timers, retries, schedules, child workflow orchestration
 
-* multi-run fan-out
-* dependency graphs
-* partial failure policy choices
-* aggregation of results
+3. **Artifact system**
+   - stores large inputs/outputs outside workflow history
+   - links artifacts to workflow executions
+   - enforces retention, previews, and access control
 
-If you later decide manifests are “just another input format,” `MoonMind.ManifestIngest` can become a thin workflow that immediately starts one or more `MoonMind.Run` executions and exits.
+4. **Temporal workers**
+   - workflow workers run deterministic orchestration code
+   - activity workers execute side-effecting work under capability and secret boundaries
 
-## 5) Execution model: Activities, not “runtimes baked into workflows”
+5. **Compatibility adapters**
+   - bridge current task/orchestrator APIs and UI surfaces onto Temporal-backed workflows where needed
 
-### Key rule
+## 7. Migration phases
 
-A workflow orchestration can mix LLM and non-LLM work in one execution. **Selection happens at the Activity level**, not by creating separate workflow types per runtime.
+### Phase 0: Current production path
 
-### How this works
+- Queue tasks, Celery automation, and orchestrator task records remain canonical for current runtime features
+- Temporal foundation may be present but is not yet the primary execution substrate
 
-* The workflow interprets a **Plan** (or directly a single skill invocation).
-* Each step resolves to:
+### Phase 1: Temporal foundation
 
-  * an **Activity Type** (what to execute)
-  * and a **Task Queue** (which worker fleet can execute it)
+- Stand up self-hosted Temporal in Docker Compose
+- Register namespace and retention policy
+- Validate Postgres visibility and upgrade playbooks
+- Establish artifact store and worker topology contracts
 
-This allows a single `MoonMind.Run` execution to do:
+### Phase 2: Temporal-backed workflow introduction
 
-* non-LLM steps (git operations, running tests, file transforms),
-* LLM steps (planning, codegen),
-* integration steps (Jules, GitHub),
-  in a single coherent, durable execution.
+- Introduce first workflow types behind MoonMind APIs
+- preserve current task-oriented UI and compatibility API surfaces
+- map task actions to workflow start/update/signal/cancel operations
 
-## 6) Task Queues: required plumbing, not product semantics
+### Phase 3: Temporal as primary workflow engine
 
-Temporal requires Task Queues. MoonMind uses them **only** for routing.
+- new durable orchestration flows start on Temporal by default
+- Temporal Visibility becomes the source of truth for Temporal-managed list/detail surfaces
+- compatibility adapters remain for legacy queue/orchestrator records still in flight
 
-### Naming conventions (recommended)
+### Phase 4: Legacy decommission
 
-* Workflow task queue:
+Only after parity is proven:
 
-  * `mm.workflow`
+- remove Celery paths that Temporal has replaced
+- remove duplicated queue leasing/state logic where Temporal is authoritative
+- retire transitional identifier and route compatibility
 
-* Activity task queues (routing by capability):
+## 8. Concept mapping: current MoonMind to Temporal
 
-  * `mm.activity.llm.codex`
-  * `mm.activity.llm.gemini`
-  * `mm.activity.llm.claude`
-  * `mm.activity.sandbox`
-  * `mm.activity.integrations.github`
-  * `mm.activity.integrations.jules`
-  * `mm.activity.artifacts`
+| Current concept | Temporal-aligned concept | Notes |
+| --- | --- | --- |
+| Queue task / orchestrator task | Workflow Execution plus MoonMind compatibility row | User may still see `task` while runtime is a workflow |
+| `ActionPlan` | `Plan` artifact plus workflow orchestration logic | Plan stays a MoonMind domain concept |
+| Step | Plan node, activity call, or child workflow | Depends on isolation and retry boundary |
+| `prepare -> execute -> publish` | workflow phases reflected in `mm_state` and artifacts | Keep phase meaning, change substrate |
+| Approval token / approval gate | Signal or Update plus workflow policy check | Approval remains a product policy concept |
+| Worker runtime selection | Activity routing and worker capability binding | Not a new workflow taxonomy |
+| DB state sink snapshot | Artifact-backed fallback plus reconciliation | Relevant during migration and degraded mode |
 
-Optional: add priority lanes by suffix if needed:
+## 9. Workflow model
 
-* `...:high`, `...:normal`, `...:low`
+### 9.1 Root-level workflow types
 
-**Important:** Priority lanes are a routing/throughput mechanism, not an ordering promise.
+MoonMind should keep **few** workflow types and avoid rebuilding legacy taxonomies inside Temporal.
 
-## 7) Inputs, outputs, and “no spec in runtime naming”
+Initial catalog:
 
-MoonMind will not use “spec” terminology in execution code. Inputs and outputs are:
+- `MoonMind.Run`
+- `MoonMind.ManifestIngest`
 
-* **Artifact references** (large payloads)
-* **Skill and Plan data structures** (small structured JSON)
+`MoonMind.Run` is the general entry point for:
 
-### Workflow inputs (examples)
+- direct skill execution
+- plan-driven execution
+- external integrations
+- long-lived waiting and callback handling
 
-#### `MoonMind.Run` input
+`MoonMind.ManifestIngest` exists only because manifest-driven orchestration usually introduces:
 
-* `title` (string, optional)
-* `requested_skill` (string | null)
-* `plan_artifact_id` (optional) — if the user provides a plan
-* `input_artifact_id` (optional) — user text/instructions/blob
-* `initial_parameters` (small JSON for toggles)
+- graph compilation
+- fan-out / fan-in
+- result aggregation
+- explicit failure policy
 
-#### `MoonMind.ManifestIngest` input
+### 9.2 What not to do
 
-* `manifest_artifact_id` (required)
-* `execution_parameters` (small JSON: concurrency caps, failure policy)
+Do not create separate workflow type families just for:
 
-### Where payloads live
+- Codex vs Gemini vs Claude
+- queue task vs orchestrator task
+- worker brand or provider choice
 
-* Anything large (instructions, manifests, diffs, logs, generated files) lives in **Artifact Store**
-* Temporal history carries only references + small state
+Those are routing and execution concerns, not root orchestration categories.
 
-## 8) Edits: Temporal Updates as the primary mechanism
+## 10. Activity model and worker topology
 
-MoonMind’s “edit” feature is modeled as a Temporal **Update** to a Workflow Execution.
+### 10.1 Core rule
 
-### Update semantics (recommended)
+All side effects belong in **Activities**:
 
-#### Update: `UpdateInputs`
+- LLM calls
+- filesystem and repo operations
+- shell/sandbox execution
+- artifact IO
+- GitHub and other integrations
+- callback verification and external polling
 
-Payload:
+Workflow code remains deterministic.
 
-* `input_artifact_id` (optional)
-* `plan_artifact_id` (optional)
-* `parameters_patch` (optional)
+### 10.2 Minimal task queue set
 
-Behavior in workflow:
+Start with a small queue topology:
 
-* validate the update (schema, permissions, state)
-* decide when to apply:
+- `mm.workflow`
+- `mm.activity.artifacts`
+- `mm.activity.llm`
+- `mm.activity.sandbox`
+- `mm.activity.integrations`
 
-  * immediately if safe
-  * at the next “stable point” (between steps)
-  * or trigger **Continue-As-New** to restart orchestration with new inputs cleanly
+Provider-specific queues such as `mm.activity.llm.codex` are **deferred**, not default. Add them only when operations require stronger isolation, separate scaling, or distinct secrets/egress.
 
-Return value:
+### 10.3 Routing model
 
-* `accepted: bool`
-* `effective_at: "now" | "next_step" | "continue_as_new"`
-* `message`
+Routing is by capability and security boundary, not by legacy nouns:
 
-### Cancellation
+- LLM workers for model/provider activity execution
+- sandbox workers for command and repo operations
+- integration workers for GitHub/Jules/webhook interactions
+- artifact workers for object-store lifecycle work
 
-Use Temporal cancellation on the workflow execution, optionally with a Signal for graceful shutdown.
+## 11. Payloads and artifacts
 
-## 9) Manifest ingestion (dedicated section)
+### 11.1 Payload discipline
 
-### Question: “Does this need its own root type?”
-
-In Temporal terms, the deciding factor is whether manifest ingestion requires materially different orchestration behavior. In practice, manifests usually imply:
-
-* graph orchestration
-* fan-out/fan-in
-* result aggregation
-* policy controls (continue on error, fail fast, etc.)
-
-That maps cleanly to a dedicated **Workflow Type**, so the proposal is **yes**: `MoonMind.ManifestIngest`.
-
-### Where it executes
-
-* Orchestration: workflow worker (`mm.workflow`)
-* Parsing/validation/compilation: Activities (e.g., `mm.activity.artifacts` or `mm.activity.sandbox` depending on implementation)
-* Step execution: Activities routed to the correct worker fleet (LLM vs non-LLM vs integrations)
-
-### Proposed `MoonMind.ManifestIngest` structure
-
-1. **Activity** `artifact.read(manifest_artifact_id)`
-2. **Activity** `manifest.parse(bytes)`
-3. **Activity** `manifest.validate(parsed)`
-4. **Activity** `manifest.compile_to_plan(parsed)` → returns a Plan (graph)
-
-Then either:
-
-**Option A: Execute plan inside the same workflow**
-
-* schedule activities for nodes as dependencies resolve
-* enforce concurrency limits
-* aggregate results into an output artifact
-
-**Option B (recommended for visibility): Spawn child workflow executions**
-
-* for each top-level node or each declared “run” in the manifest:
-
-  * start child `MoonMind.Run` workflow execution with inputs/plan references
-* wait for completion
-* aggregate results
-
-Option B gives you:
-
-* separate Workflow Executions per run (clean dashboard visibility)
-* isolation of failures and retries
-
-### Failure policies
-
-Manifest ingestion should make failure policy explicit in workflow logic:
-
-* `fail_fast`
-* `continue_and_report`
-* `best_effort`
-
-These are parameters to the workflow (small JSON), not a new abstraction.
-
-## 10) Skills and Plans: how they map to Activities
-
-### Skill registry responsibilities
-
-Each skill defines:
-
-* `name`
-* input schema
-* output schema
-* executor mapping (which Activity Type(s) implement it)
-* default retry policy and timeout
-* required capability class (LLM, sandbox, integration)
-
-### Plan format (high level)
-
-A Plan is a sequence or graph of “skill invocation” nodes:
-
-* `skill_name`
-* `inputs` (small JSON and/or artifact refs)
-* `executor_hint` (optional)
-* dependencies (for graphs)
-
-### Execution in `MoonMind.Run`
-
-1. Acquire a Plan:
-
-   * If `plan_artifact_id` provided → load it
-   * Else optionally call `plan.generate` as an Activity (planning is “just a skill”)
-2. For each node:
-
-   * Resolve to Activity Type + Task Queue
-   * Execute Activity with retry/timeout policy
-3. Persist outputs as artifacts and record summary metadata
-
-This makes “planning” a capability, not a baked-in “spec system.”
-
-## 11) External integrations and monitoring (Jules)
-
-Temporal is used for long-lived monitoring without an external scheduler.
-
-### Preferred integration patterns
-
-#### A) Callback-first (asynchronous completion)
-
-* Activity starts external work and returns an external job id.
-* External system calls your webhook.
-* API signals the workflow execution with the completion payload.
-* Workflow continues.
-
-#### B) Timer-based polling loop (fallback / if callbacks are unavailable)
-
-* Workflow sets a timer.
-* On timer fire, schedules `jules.get_status` activity.
-* Uses backoff and stop conditions.
-* Continues when complete.
-
-Both patterns live entirely inside Temporal workflow logic (Timers + Activities + Signals/Updates).
-
-## 12) Dashboard: list/paginate/count workflow executions from Visibility
-
-### Source of truth
-
-The dashboard lists **Workflow Executions** directly from Temporal Visibility.
-
-### Pagination
-
-* Use Temporal’s native page token returned by list operations.
-* No cross-source merge.
-* Page size is an API parameter (default 50).
-
-### Totals
-
-* Use Temporal’s count capability for the same filter set (or compute via Visibility mechanisms appropriate to your cluster configuration).
-* If exact totals are expensive, provide:
-
-  * exact totals for narrow filters
-  * “unknown / estimated” for broad queries (configurable)
-    But the architectural intent is “Temporal provides the truth.”
-
-### Display fields
+Temporal payloads and history should remain small.
 
 Use:
 
-* **Search Attributes** for filtering
-* **Memo** for lightweight display data (title, short summary, runtime label)
-* **Artifacts** for large details (full instructions, logs, outputs)
+- `ArtifactRef` values for large inputs/outputs
+- small JSON for workflow parameters, patches, and summaries
 
-Recommended Search Attributes:
+Do not put these into workflow history:
 
-* `OwnerId`
-* `WorkflowType` (already known)
-* `Status` (domain status you maintain inside workflow via attributes)
-* `RuntimeLabel` (if you want to filter by “codex/gemini/etc.”)
-* `UpdatedAt`
+- prompts
+- manifests
+- diffs
+- generated files
+- logs
+- large command output
 
-## 13) Security and isolation model
+### 11.2 Artifact system baseline
 
-Segment worker fleets by risk and secrets:
+The default MoonMind artifact path for Temporal-managed work is:
 
-* **LLM workers**: network egress to model providers, limited filesystem, limited repo access unless needed.
-* **Sandbox workers**: run commands/tests; strongest isolation (containers, seccomp, limited egress).
-* **Integration workers**: GitHub/Jules tokens, webhooks; restricted to integration endpoints.
-* **Artifact workers**: access to object store, minimal other privileges.
+- MinIO / S3-compatible blob storage for bytes
+- Postgres metadata/index for artifact records and execution linkage
 
-Routing is via Task Queues, not by inventing new domain “kinds.”
+### 11.3 Manifest processing best practice
 
-## 14) Reliability: retries, idempotency, and history control
+Manifest workflows should exchange **refs**, not blobs:
 
-### Retries
+1. `artifact.read(manifest_ref)` only inside an activity boundary
+2. `manifest.parse(manifest_ref) -> parsed_ref`
+3. `manifest.validate(parsed_ref) -> validated_ref`
+4. `manifest.compile_to_plan(validated_ref) -> plan_ref`
+5. execute inline or spawn child workflows using `plan_ref`
 
-* Use Temporal Activity retry policies as the default reliability mechanism.
-* Keep workflow code simple and deterministic; push failure-prone work into activities.
+That keeps workflow state small and makes retries safer.
 
-### Idempotency
+## 12. Visibility and UI model
 
-* Activity implementations must be idempotent where possible:
+### 12.1 Current product reality
 
-  * artifact writes use content addressing or “put-if-absent”
-  * external job starts store external job id and reuse on retry
+MoonMind's product surface is still task-oriented. Near-term list/detail experiences may need to unify:
 
-### History size control
+- queue-backed tasks
+- orchestrator-backed tasks
+- Temporal-backed workflow executions
 
-* Keep payloads out of history (use artifacts).
-* Use **Continue-As-New** for:
+### 12.2 Target Temporal model
 
-  * long polling loops
-  * very large manifests
-  * very long-running runs with many steps
+For Temporal-managed work, Temporal Visibility is the list/query/count source of truth.
 
-## 15) Deployment blueprint
+Canonical search attributes and memo fields should align with the newer workflow lifecycle doc:
 
-### Minimal set of services
+**Search Attributes**
 
-* Temporal cluster
-* MoonMind API
-* Artifact store (S3/GCS/MinIO)
-* Worker deployments:
+- `mm_owner_id`
+- `mm_state`
+- `mm_updated_at`
+- `mm_entry`
+- optional bounded fields such as `mm_repo` or `mm_integration`
 
-  * workflow workers
-  * activity workers (llm/sandbox/integrations/artifacts)
+**Memo**
 
-### Scaling
+- `title`
+- `summary`
+- optional input or manifest refs when safe
 
-* scale activity workers by task queue backlog and throughput needs
-* keep workflow workers modest (they orchestrate; they shouldn’t do heavy work)
+### 12.3 UI contract during migration
 
-## 16) Concrete API surface (example)
+- Keep `/tasks/*` user flows where required by active product work
+- allow a task row to map to a Temporal workflow execution behind the scenes
+- avoid inventing queue-order semantics for list sorting or status interpretation
+- use Temporal page tokens and count semantics only for Temporal-backed queries
 
-All naming is product-level; underlying behavior is Temporal-native.
+## 13. Public API posture
 
-* `POST /executions`
+### 13.1 During migration
 
-  * starts a Workflow Execution (Workflow Type = `MoonMind.Run` or `MoonMind.ManifestIngest`)
-* `POST /executions/{workflow_id}/update`
+Public APIs should remain compatible with current task/orchestrator contracts where active product specs require that compatibility.
 
-  * Temporal Update (`UpdateInputs`)
-* `POST /executions/{workflow_id}/signal`
+That includes:
 
-  * for async events (approval, webhook completion, etc.)
-* `POST /executions/{workflow_id}/cancel`
+- `/tasks/*` list/detail flows
+- `/orchestrator/tasks*` compatibility routes
+- `/orchestrator/runs*` transitional support where still required
 
-  * cancel workflow execution
-* `GET /executions`
+### 13.2 Temporal-backed operations
 
-  * list workflow executions (Visibility) with page token + filters
-* `GET /executions/{workflow_id}`
+When a task is backed by Temporal, MoonMind should map public actions to Temporal-native controls:
 
-  * describe execution + memo + links to artifacts
+- create/start -> start workflow execution
+- edit -> update
+- approval or webhook event -> signal or update, depending on response needs
+- cancel -> workflow cancellation
+- rerun -> continue-as-new or explicit new workflow start, depending on semantics
 
-## 17) What gets deleted by design (Celery-free, queue-free product semantics)
+### 13.3 Internal versus external API
 
-* No Celery workers, beat, or result backends.
-* No custom “Agent Queue” leasing/heartbeat mechanisms.
-* No product-level “queue” semantics.
-* No “task/job/work item” nouns in runtime code.
-* No “spec” variables or spec-kit coupling in execution paths.
+If MoonMind later adds a direct `/executions` API surface, it should be treated as either:
 
-## 18) Open decisions (Temporal-native choices you should lock early)
+- an internal adapter API first, or
+- a future public API after compatibility needs are retired
 
-1. **Visibility backend level**
+This document does not assume that `/executions` is already the primary public product surface.
 
-   * what filtering and count guarantees you want
-2. **Update semantics**
+## 14. Edits, approvals, and external events
 
-   * apply immediately vs apply at stable points vs always Continue-As-New
-3. **Manifest execution strategy**
+### 14.1 Updates
 
-   * in-workflow orchestration vs spawning child executions (recommended)
-4. **Priority routing**
+Preferred workflow updates include:
 
-   * do you need lane-based task queues now, or later?
+- `UpdateInputs`
+- `SetTitle`
+- `RequestRerun`
+
+Use Updates when the caller needs a request/response result and acceptance decision.
+
+### 14.2 Signals
+
+Use Signals for asynchronous events such as:
+
+- approval arrival
+- GitHub/Jules/webhook callbacks
+- pause/resume requests
+- external completion notifications
+
+### 14.3 Approval policy
+
+Approval remains a MoonMind policy concern, not a Temporal-native concept. Temporal provides the transport and durability; MoonMind workflows still enforce:
+
+- who may approve
+- when approval is required
+- what happens on expiry or rejection
+
+## 15. Scheduling and long-lived monitoring
+
+For Temporal-managed flows:
+
+- use Temporal Timers for deterministic waiting
+- use Temporal Schedules for recurring starts
+- prefer callback-first integration patterns
+- use timer-based polling only as a fallback when callbacks are unavailable
+
+Existing non-Temporal scheduler paths may remain until the corresponding flow is migrated.
+
+## 16. Reliability and security
+
+### 16.1 Reliability rules
+
+- activity retries are the default recovery mechanism
+- side-effecting activities must be idempotent or keyed for safe retry
+- use Continue-As-New to control workflow history growth
+- keep large payloads out of workflow history
+
+### 16.2 Security and isolation
+
+- Temporal is self-hosted and private-network only
+- worker fleets are segmented by capability and secret boundary
+- sandbox execution is isolated separately from LLM and integration workers
+- artifact access is mediated through MoonMind authorization and short-lived grants
+
+## 17. Decommission criteria for legacy systems
+
+Do not remove Celery, the agent queue, or orchestrator persistence just because a Temporal design exists on paper.
+
+Retirement should require all of the following for a given flow:
+
+1. Temporal implementation is production-ready
+2. Observability, retries, artifacts, and approvals have parity
+3. UI and API compatibility behavior is preserved or intentionally retired
+4. Degraded-mode and rollback behavior are verified
+5. Migration of in-flight and historical records is either complete or intentionally scoped out
+
+## 18. Open decisions to lock next
+
+1. Which MoonMind flows migrate to Temporal first after the foundation work
+2. Whether task list/detail stays a unified multi-source surface through the full transition or gains Temporal-first views earlier
+3. Which approval paths should use Updates versus Signals
+4. When child workflows are preferred over inline orchestration for manifest fan-out
+5. When, if ever, provider-specific LLM task queues become operationally necessary
+
+## 19. Summary
+
+MoonMind is not yet a purely Temporal product, but it is intentionally moving in that direction. The correct architecture stance is:
+
+- acknowledge the current task/orchestrator runtime honestly
+- adopt Temporal-native workflow, activity, visibility, and schedule concepts where they are now the target
+- keep public compatibility layers explicit during migration
+- avoid reintroducing MoonMind-specific abstractions where Temporal already provides the right primitive

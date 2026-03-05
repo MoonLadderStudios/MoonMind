@@ -1,6 +1,6 @@
 # Workflow Type Catalog and Lifecycle
 
-MoonMind Temporal-first design (greenfield)
+MoonMind Temporal-native lifecycle contract for **Temporal-managed executions** during migration
 
 **Status:** Draft
 **Owner:** MoonMind Platform
@@ -11,7 +11,7 @@ MoonMind Temporal-first design (greenfield)
 
 ## 1) Purpose
 
-Define the **Workflow Types** that constitute the MoonMind Temporal application, and specify:
+Define the **Workflow Types** that constitute MoonMind's Temporal application layer, and specify:
 
 * the **lifecycle** of each Workflow Execution (how it starts, progresses, ends)
 * the canonical **state model** exposed to the UI (via Temporal Visibility)
@@ -19,14 +19,14 @@ Define the **Workflow Types** that constitute the MoonMind Temporal application,
 * lifecycle **invariants**, **timeouts**, **retry policies**, and **history management**
 * the minimal set of **Search Attributes** and **Memo** fields required for list + filtering + totals
 
-This document intentionally avoids legacy nouns like “task/job/work item” and avoids “spec” terminology entirely.
+This document defines the **Temporal-side contract**. Public MoonMind APIs and UI flows may still use `task` terminology during migration, but once work is represented inside Temporal, this document treats it as a **Workflow Execution**.
 
 ---
 
 ## 2) Design principles
 
-1. **A dashboard row is a Workflow Execution.**
-   We list and paginate executions using Temporal Visibility. No multi-source merging.
+1. **A Temporal-managed row is a Workflow Execution.**
+   For Temporal-backed list/detail views, we list and paginate executions using Temporal Visibility. Public `/tasks/*` surfaces may still remain multi-source during migration.
 
 2. **Workflow Types are the only root-level categorization.**
    We do not introduce “kind” or other parallel taxonomies.
@@ -68,15 +68,16 @@ Workflow ID format:
 
 Rules:
 
-* Workflow ID is user-visible in API responses.
+* Workflow ID is the canonical Temporal identifier for a Temporal-managed execution.
 * Do not encode sensitive info into the ID.
 * A “re-run” or “restart” uses the same Workflow ID via **Continue-As-New** when appropriate.
+* Public MoonMind task APIs may expose `taskId` alongside `workflowId` during migration.
 
 ### 3.3 Run IDs
 
 Run IDs are Temporal-generated identifiers for each run of the execution.
 
-* The UI may show the latest Run ID on a detail page, but the primary handle is Workflow ID.
+* The UI may show the latest Run ID on a detail page, but the primary Temporal handle is Workflow ID.
 
 ---
 
@@ -95,7 +96,7 @@ Run IDs are Temporal-generated identifiers for each run of the execution.
 
 ## 5) Common lifecycle model (applies to all Workflow Types)
 
-Temporal already provides Workflow Execution statuses (Running/Completed/Failed/Canceled/Terminated/TimedOut/ContinuedAsNew). MoonMind additionally maintains a **domain state** for filtering and UI messaging.
+Temporal already provides Workflow Execution statuses (Running/Completed/Failed/Canceled/Terminated/TimedOut/ContinuedAsNew). MoonMind additionally maintains a **domain state** for filtering and UI messaging on Temporal-managed executions.
 
 ### 5.1 Domain state model (Search Attribute)
 
@@ -131,7 +132,7 @@ Optional second Search Attribute if you need more detail without exploding state
 
 ### 5.2 Minimal Visibility schema (Search Attributes + Memo)
 
-#### Search Attributes (indexed, used for list filters)
+#### Search Attributes (indexed, used for Temporal-backed list filters)
 
 Required:
 
@@ -161,6 +162,7 @@ Rules:
 
 * Keep Memo small and human-readable.
 * Never store large user prompts/manifests in Memo.
+* Compatibility adapters may transform these fields into task-oriented list/detail payloads without changing the Temporal source of truth.
 
 ---
 

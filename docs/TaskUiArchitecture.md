@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-01
+Last Updated: 2026-03-05
 
 ## 1. Purpose
 
@@ -14,7 +14,7 @@ This document contains UI-specific behavior and contracts:
 - Endpoint-level integrations.
 - Task submit payload construction.
 - Realtime/polling behavior.
-- Run detail controls.
+- Task detail controls.
 
 High-level system architecture intentionally lives in `docs/TaskArchitecture.md`.
 
@@ -22,7 +22,7 @@ High-level system architecture intentionally lives in `docs/TaskArchitecture.md`
 
 The dashboard follows a thin UI strategy over existing REST endpoints:
 
-- Reuse queue/orchestrator/proposal/manifest APIs instead of introducing a UI-specific backend.
+- Reuse queue/orchestrator/proposal/manifest APIs, plus compatibility adapters for newer contracts, instead of introducing a UI-specific backend.
 - Keep dashboard concerns focused on typed submit forms, list/detail rendering, and operator controls.
 - Minimize operational risk by avoiding high-churn architectural changes in task execution services.
 
@@ -31,8 +31,8 @@ The dashboard follows a thin UI strategy over existing REST endpoints:
 In scope:
 
 - Dedicated dashboard task operations UI under `/tasks*`.
-- Views for active, queued, and historical work by source.
-- Typed submit forms for queue task jobs, orchestrator runs, and manifests.
+- Unified list/detail views across queue and orchestrator sources, with compatibility redirects from older routes.
+- Typed submit forms for queue task jobs, orchestrator tasks, and manifests.
 - Detail pages with events/logs, artifacts, and supported controls.
 - Polling refresh with queue detail SSE when available.
 
@@ -42,6 +42,7 @@ Out of scope:
 - Unified backend `runs` table across all workflow systems.
 - Worker/fleet heartbeat model redesign.
 - Open-WebUI plugin internals.
+- Full Temporal-native UI replacement in this document; task compatibility surfaces remain the current product contract.
 
 ---
 
@@ -73,18 +74,19 @@ Default/fallback values in current code path:
 
 ## 3. Route Map
 
-Current dashboard routes rendered by `dashboard.js`:
+Current target dashboard routes rendered by `dashboard.js`:
 
 | Route | Purpose |
 | --- | --- |
-| `/tasks` | Unified active view across queue + orchestrator running/queued workloads |
-| `/tasks/queue` | Queue job list with runtime/skill/status/publish filters |
+| `/tasks` | Compatibility alias that redirects to `/tasks/list` |
+| `/tasks/list` | Unified task list across queue + orchestrator workloads |
 | `/tasks/new` | Unified submit page (worker runtimes + orchestrator; defaults to queue runtime) |
 | `/tasks/queue/new` | Alias to `/tasks/new` with worker default runtime; prefill mode uses `?editJobId=<jobId>` and resolves to edit or resubmit based on source status |
-| `/tasks/queue/:jobId` | Queue job detail (summary, events, live output, artifacts, controls) |
-| `/tasks/orchestrator` | Orchestrator run list |
+| `/tasks/:taskId` | Unified task detail shell resolved by source |
+| `/tasks/queue/:jobId` | Compatibility alias to unified task detail with `source=queue` |
 | `/tasks/orchestrator/new` | Alias to `/tasks/new?runtime=orchestrator` |
-| `/tasks/orchestrator/:runId` | Orchestrator run detail |
+| `/tasks/orchestrator` | Compatibility alias to `/tasks/list?filterRuntime=orchestrator` |
+| `/tasks/orchestrator/:runId` | Compatibility alias to unified task detail with `source=orchestrator` |
 | `/tasks/manifests` | Manifest run list (queue jobs filtered by `type=manifest`) |
 | `/tasks/manifests/new` | Manifest submit flow (inline or registry-backed) |
 | `/tasks/proposals` | Proposal queue list and triage actions |
@@ -93,7 +95,8 @@ Current dashboard routes rendered by `dashboard.js`:
 Notes:
 
 - Server route allowlist currently accepts manifest detail paths (`/tasks/manifests/{id}`), but the client router does not render a manifest detail page yet.
-- The "Active" page intentionally fans out to queue + orchestrator sources only.
+- The canonical list/detail experience is now `/tasks/list` and `/tasks/:taskId`.
+- Queue and orchestrator legacy paths should redirect instead of remaining first-class pages.
 
 ---
 
@@ -126,12 +129,20 @@ Queue detail operational controls:
 
 ### 4.2 Orchestrator endpoints (`/orchestrator/*`)
 
-- `POST /orchestrator/runs`
-- `GET /orchestrator/runs`
-- `GET /orchestrator/runs/{run_id}`
-- `GET /orchestrator/runs/{run_id}/artifacts`
-- `POST /orchestrator/runs/{run_id}/approvals`
-- `POST /orchestrator/runs/{run_id}/retry`
+- Preferred:
+  - `POST /orchestrator/tasks`
+  - `GET /orchestrator/tasks`
+  - `GET /orchestrator/tasks/{task_id}`
+  - `GET /orchestrator/tasks/{task_id}/artifacts`
+  - `POST /orchestrator/tasks/{task_id}/approvals`
+  - `POST /orchestrator/tasks/{task_id}/retry`
+- Transitional compatibility:
+  - `POST /orchestrator/runs`
+  - `GET /orchestrator/runs`
+  - `GET /orchestrator/runs/{run_id}`
+  - `GET /orchestrator/runs/{run_id}/artifacts`
+  - `POST /orchestrator/runs/{run_id}/approvals`
+  - `POST /orchestrator/runs/{run_id}/retry`
 
 ### 4.3 Proposal endpoints (`/api/proposals/*`)
 
@@ -168,7 +179,7 @@ Used when `FEATURE_FLAGS__TASK_TEMPLATE_CATALOG=1`:
 ### 4.6 Skills endpoint
 
 - `GET /api/tasks/skills`  
-  Used to populate queue submit skill suggestions.
+  Used to populate runtime-aware skill suggestions. The response should support grouped worker and orchestrator skill catalogs.
 
 ---
 
@@ -303,14 +314,22 @@ Server-side normalization still applies after submit and remains source-of-truth
 
 Fields:
 
-- `instruction` (required)
+- Ordered step editor using the shared task step model
 - `targetService` (required)
 - `priority` (`normal` or `high`)
 - Optional `approvalToken`
+- Optional skill ids and args per step
+- Queue-style publish/repo fields may remain visible when supported by the runtime flow
 
 Request:
 
-- `POST /orchestrator/runs`
+- Preferred: `POST /orchestrator/tasks`
+- Compatibility: `POST /orchestrator/runs`
+
+Behavior:
+
+- If `steps[]` is provided, the dashboard submits explicit orchestrator task steps.
+- If `steps[]` is omitted, the backend may preserve legacy autogenerated action-plan behavior.
 
 ### 6.2 Manifest submit
 
@@ -331,27 +350,25 @@ Request routing:
 
 ## 7. List Pages and Triage Flows
 
-### 7.1 Active page (`/tasks`)
+### 7.1 Unified task list (`/tasks/list`)
 
 Client fan-out:
 
-- `GET /api/queue/jobs?status=running&limit=200`
-- `GET /api/queue/jobs?status=queued&limit=200`
-- `GET /orchestrator/runs?status=running&limit=100`
-- `GET /orchestrator/runs?status=pending&limit=100`
-- `GET /orchestrator/runs?status=awaiting_approval&limit=100`
-
-### 7.2 Queue list (`/tasks/queue`)
+- `GET /api/queue/jobs?limit=200`
+- `GET /orchestrator/tasks?limit=200`
 
 Behavior:
 
-- Loads `GET /api/queue/jobs?limit=200`
-- Loads migration telemetry from `GET /api/queue/telemetry/migration?windowHours=168`
-- Supports client filters:
-  - runtime
-  - skill
-  - normalized stage status
-  - publish mode
+- Normalizes queue and orchestrator rows into one shared task table
+- Supports source/runtime/status filtering
+- Keeps compatibility with older queue/orchestrator links through redirect routes
+- May layer migration telemetry from `GET /api/queue/telemetry/migration?windowHours=168` where useful for queue-backed rows
+
+### 7.2 Compatibility list aliases
+
+- `/tasks` redirects to `/tasks/list`
+- `/tasks/queue` redirects to `/tasks/list?source=queue`
+- `/tasks/orchestrator` redirects to `/tasks/list?filterRuntime=orchestrator`
 
 ### 7.3 Manifest list (`/tasks/manifests`)
 
@@ -379,23 +396,32 @@ Detail supports:
 
 ---
 
-## 8. Queue Detail Page Behavior
+## 8. Unified Task Detail Behavior
 
-Queue detail (`/tasks/queue/:jobId`) combines:
+Unified detail (`/tasks/:taskId`) combines:
 
-- Job summary and cancellation state
-- Event timeline table
-- Live output panel
-- Artifact table/download links
-- Live session and operator controls
+- summary and state header
+- source-aware timeline table
+- artifact table/download links
+- live output and operator controls where the underlying source supports them
 
 ### 8.1 Data loading
 
-Primary fetches:
+Primary source resolution:
+
+- Use `?source=` when present
+- Otherwise probe queue first, then orchestrator
+
+Queue-backed fetches:
 
 - `GET /api/queue/jobs/{job_id}`
 - `GET /api/queue/jobs/{job_id}/artifacts`
 - `GET /api/queue/jobs/{job_id}/live-session` (best-effort; handles missing route/state)
+
+Orchestrator-backed fetches:
+
+- `GET /orchestrator/tasks/{task_id}`
+- `GET /orchestrator/tasks/{task_id}/artifacts`
 
 Events:
 
@@ -414,19 +440,36 @@ Features:
 - Transport status indicator (`SSE` vs `Polling`)
 - Full-log quick download when a log artifact is detected
 
+Queue-backed detail retains:
+
+- SSE or polling event transport
+- live output filters
+- live session state
+
+Orchestrator-backed detail retains:
+
+- action-plan or step timeline
+- approval state and approval actions
+- orchestrator artifacts and retry controls
+
 ### 8.3 Operator controls
 
-Current control actions exposed:
+Current source-aware control actions exposed:
 
-- Cancel job
-- Enable live session
-- Grant write access (15 minutes)
-- Revoke live session
-- Pause/resume
-- Takeover request
-- Send operator message
+- Queue-backed detail:
+  - Cancel job
+  - Enable live session
+  - Grant write access (15 minutes)
+  - Revoke live session
+  - Pause/resume
+  - Takeover request
+  - Send operator message
+- Orchestrator-backed detail:
+  - Approve
+  - Retry
+  - Artifact refresh and timeline refresh
 
-All control actions post through queue control/live-session endpoints, then refresh detail/events.
+Queue-backed controls post through queue control/live-session endpoints. Orchestrator-backed controls post through `/orchestrator/tasks*` endpoints or their transitional `/orchestrator/runs*` aliases, then refresh detail state.
 
 ---
 
@@ -472,7 +515,7 @@ There is no generalized exponential backoff layer in current dashboard polling.
 
 ### 11.3 Known auth gap
 
-`/orchestrator/*` routes currently do not enforce the same explicit `get_current_user()` dependency pattern used by queue/proposal/manifests routes. Alignment is still pending.
+`/orchestrator/tasks*` and transitional `/orchestrator/runs*` routes do not yet enforce the same explicit `get_current_user()` dependency pattern used by queue/proposal/manifests routes. Alignment is still pending.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-19
+Last Updated: 2026-03-05
 
 ## 1. Purpose
 
@@ -12,16 +12,18 @@ It intentionally stays broad. Detailed UI behavior, route-level contracts, paylo
 
 ---
 
-## 2. Current System Snapshot (2026-02-19)
+## 2. Current System Snapshot (2026-03-05)
 
 MoonMind's task system has expanded beyond a single queue submit/list flow. The current dashboard and backend now support:
 
 - Queue Task jobs (`type="task"`) with canonical payload normalization.
 - Manifest ingestion jobs (`type="manifest"`) in the same queue system.
-- Orchestrator runs for service-level action plans.
+- Orchestrator tasks for service-level action plans, with transitional `runId` compatibility still present in parts of the stack.
 - Task proposal review and promotion into executable queue jobs.
 - Shared task preset/template catalog support for task authoring workflows.
 - Queue run operations (cancellation, live sessions, operator controls/messages) surfaced in the dashboard.
+
+The broader platform is also introducing a Temporal foundation for durable workflow execution, but the task dashboard remains the primary product surface and still operates over queue/orchestrator APIs during this migration phase.
 
 The Tasks Dashboard is now the primary control-plane UI for these task-adjacent workflows.
 
@@ -53,6 +55,7 @@ flowchart LR
 - **Control Plane APIs**: queue, orchestrator, proposals, manifests, template catalog.
 - **Execution Plane**: workers that claim eligible jobs/runs and emit events/artifacts.
 - **Policy Layer**: auth, worker capability checks, repository/job-type constraints, secret handling.
+- **Migration Layer**: compatibility between current task-oriented product contracts and newer durable workflow infrastructure where applicable.
 
 ---
 
@@ -61,9 +64,9 @@ flowchart LR
 The Tasks Dashboard provides one place to:
 
 - Monitor active and historical work across queue and orchestrator systems.
-- Submit new work requests (queue task, orchestrator run, manifest run).
+- Submit new work requests (queue task, orchestrator task, manifest run).
 - Review and triage worker-generated follow-up proposals.
-- Inspect run state through events, artifacts, and run metadata.
+- Inspect task state through events, artifacts, and execution metadata.
 - Apply operator controls for active queue task runs.
 
 Implementation details for pages, form fields, endpoint calls, and rendering strategy are intentionally delegated to `docs/TaskUiArchitecture.md`.
@@ -83,10 +86,11 @@ Implementation details for pages, form fields, endpoint calls, and rendering str
 - Manifest ingestion is modeled as queue work.
 - Shares queue lifecycle primitives (claim, heartbeat, events, artifacts, cancellation).
 
-### 5.3 Orchestrator Runs
+### 5.3 Orchestrator Tasks
 
-- Separate run model for service action plans.
-- Tracked and managed through `/orchestrator/*` APIs and dashboard pages.
+- Separate task model for service action plans.
+- Exposed through `/orchestrator/tasks*` contracts with `/orchestrator/runs*` transitional compatibility where needed.
+- Rendered in the same dashboard task surfaces as other work, with source-aware behavior.
 
 ### 5.4 Task Proposals
 
@@ -148,4 +152,3 @@ This document does not define:
 - Worker runtime adapter internals.
 - Manifest pipeline internals.
 - Orchestrator plan-step implementation details.
-
