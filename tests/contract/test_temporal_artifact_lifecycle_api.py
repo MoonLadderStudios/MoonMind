@@ -10,7 +10,10 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service, router
+from api_service.api.routers.temporal_artifacts import (
+    _get_temporal_artifact_service,
+    router,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db import models as db_models
 from moonmind.schemas.temporal_artifact_models import ArtifactMetadataModel
@@ -45,7 +48,9 @@ def _policy(artifact: SimpleNamespace) -> SimpleNamespace:
         content_type=artifact.content_type,
         encryption=artifact.encryption.value,
     )
-    return SimpleNamespace(raw_access_allowed=True, preview_artifact_ref=None, default_read_ref=ref)
+    return SimpleNamespace(
+        raw_access_allowed=True, preview_artifact_ref=None, default_read_ref=ref
+    )
 
 
 def _build_app() -> tuple[FastAPI, AsyncMock]:
@@ -53,7 +58,9 @@ def _build_app() -> tuple[FastAPI, AsyncMock]:
     app.include_router(router)
     service = AsyncMock()
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
-    mock_user = SimpleNamespace(id=uuid4(), email="lifecycle@example.com", is_active=True)
+    mock_user = SimpleNamespace(
+        id=uuid4(), email="lifecycle@example.com", is_active=True
+    )
     user_dependencies = {
         dep.call
         for route_item in router.routes
@@ -74,7 +81,9 @@ def test_pin_unpin_delete_contracts() -> None:
     service.get_metadata.return_value = (artifact, [], True, _policy(artifact))
 
     with TestClient(app) as client:
-        pin_response = client.post(f"/api/artifacts/{artifact.artifact_id}/pin", json={"reason": "keep"})
+        pin_response = client.post(
+            f"/api/artifacts/{artifact.artifact_id}/pin", json={"reason": "keep"}
+        )
         assert pin_response.status_code == 200
         ArtifactMetadataModel.model_validate(pin_response.json())
 

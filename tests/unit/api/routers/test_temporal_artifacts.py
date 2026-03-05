@@ -82,7 +82,9 @@ def _build_read_policy(artifact: SimpleNamespace) -> SimpleNamespace:
 
 
 def _override_user_dependencies(app: FastAPI) -> None:
-    mock_user = SimpleNamespace(id=uuid4(), email="artifact@example.com", is_active=True)
+    mock_user = SimpleNamespace(
+        id=uuid4(), email="artifact@example.com", is_active=True
+    )
     user_dependencies = {
         dep.call
         for route in router.routes
@@ -202,7 +204,9 @@ def test_get_metadata_include_download() -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["artifact_id"] == artifact.artifact_id
-        assert body["download_url"].endswith(f"/api/artifacts/{artifact.artifact_id}/download")
+        assert body["download_url"].endswith(
+            f"/api/artifacts/{artifact.artifact_id}/download"
+        )
 
 
 def test_list_execution_artifacts_returns_collection() -> None:

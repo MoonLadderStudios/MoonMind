@@ -49,7 +49,9 @@ async def test_authenticated_mode_denies_cross_principal_read(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            artifact, _upload = await service.create(principal="user-1", content_type="text/plain")
+            artifact, _upload = await service.create(
+                principal="user-1", content_type="text/plain"
+            )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
                 principal="user-1",
@@ -77,7 +79,9 @@ async def test_disabled_mode_allows_local_default_principal_reads(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            artifact, _upload = await service.create(principal="default-user", content_type="text/plain")
+            artifact, _upload = await service.create(
+                principal="default-user", content_type="text/plain"
+            )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
                 principal="default-user",

@@ -10,7 +10,10 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service, router
+from api_service.api.routers.temporal_artifacts import (
+    _get_temporal_artifact_service,
+    router,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db import models as db_models
 from moonmind.schemas.temporal_artifact_models import (
@@ -76,7 +79,9 @@ def _build_app() -> tuple[FastAPI, AsyncMock]:
     app.include_router(router)
     service = AsyncMock()
     app.dependency_overrides[_get_temporal_artifact_service] = lambda: service
-    mock_user = SimpleNamespace(id=uuid4(), email="contract@example.com", is_active=True)
+    mock_user = SimpleNamespace(
+        id=uuid4(), email="contract@example.com", is_active=True
+    )
     user_dependencies = {
         dep.call
         for route_item in router.routes
@@ -132,7 +137,12 @@ def test_temporal_artifact_get_list_presign_download_contracts() -> None:
     app, service = _build_app()
     artifact = _build_artifact()
     link = _build_link()
-    service.get_metadata.return_value = (artifact, [link], False, _build_read_policy(artifact))
+    service.get_metadata.return_value = (
+        artifact,
+        [link],
+        False,
+        _build_read_policy(artifact),
+    )
     service.list_for_execution.return_value = [artifact]
     service.presign_download.return_value = (
         artifact,

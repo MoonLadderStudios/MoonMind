@@ -213,7 +213,9 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("artifact_id", name="uq_temporal_artifact_pins_artifact_id"),
+        sa.UniqueConstraint(
+            "artifact_id", name="uq_temporal_artifact_pins_artifact_id"
+        ),
     )
 
 

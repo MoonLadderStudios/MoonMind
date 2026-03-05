@@ -9,7 +9,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable
 from uuid import uuid4
 
 import boto3
@@ -148,7 +148,9 @@ def _validate_sha256(value: str | None) -> str | None:
     if not normalized:
         return None
     if not re.fullmatch(r"[0-9a-f]{64}", normalized):
-        raise TemporalArtifactValidationError("sha256 must be a 64-character hex string")
+        raise TemporalArtifactValidationError(
+            "sha256 must be a 64-character hex string"
+        )
     return normalized
 
 
@@ -205,16 +207,22 @@ class TemporalArtifactStore:
     def supports_multipart(self) -> bool:
         return False
 
-    def build_storage_key(self, *, namespace: str, artifact_id: str, now: datetime) -> str:
+    def build_storage_key(
+        self, *, namespace: str, artifact_id: str, now: datetime
+    ) -> str:
         raise NotImplementedError
 
-    def write_bytes(self, storage_key: str, payload: bytes, *, content_type: str | None) -> None:
+    def write_bytes(
+        self, storage_key: str, payload: bytes, *, content_type: str | None
+    ) -> None:
         raise NotImplementedError
 
     def read_bytes(self, storage_key: str) -> bytes:
         raise NotImplementedError
 
-    def read_chunks(self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES) -> Iterable[bytes]:
+    def read_chunks(
+        self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
+    ) -> Iterable[bytes]:
         raise NotImplementedError
 
     def read_path(self, storage_key: str) -> Path:
@@ -238,7 +246,9 @@ class TemporalArtifactStore:
         storage_key: str,
         content_type: str | None,
     ) -> str:
-        raise TemporalArtifactValidationError("multipart upload is not supported by storage backend")
+        raise TemporalArtifactValidationError(
+            "multipart upload is not supported by storage backend"
+        )
 
     def presign_upload_part(
         self,
@@ -248,7 +258,9 @@ class TemporalArtifactStore:
         part_number: int,
         expires_in_seconds: int,
     ) -> tuple[str, dict[str, str]]:
-        raise TemporalArtifactValidationError("multipart upload is not supported by storage backend")
+        raise TemporalArtifactValidationError(
+            "multipart upload is not supported by storage backend"
+        )
 
     def complete_multipart_upload(
         self,
@@ -257,7 +269,9 @@ class TemporalArtifactStore:
         upload_id: str,
         parts: list[dict[str, Any]],
     ) -> None:
-        raise TemporalArtifactValidationError("multipart upload is not supported by storage backend")
+        raise TemporalArtifactValidationError(
+            "multipart upload is not supported by storage backend"
+        )
 
     def abort_multipart_upload(
         self,
@@ -265,7 +279,9 @@ class TemporalArtifactStore:
         storage_key: str,
         upload_id: str,
     ) -> None:
-        raise TemporalArtifactValidationError("multipart upload is not supported by storage backend")
+        raise TemporalArtifactValidationError(
+            "multipart upload is not supported by storage backend"
+        )
 
     def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
         raise NotImplementedError
@@ -281,10 +297,14 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
     def backend(self) -> db_models.TemporalArtifactStorageBackend:
         return db_models.TemporalArtifactStorageBackend.LOCAL_FS
 
-    def build_storage_key(self, *, namespace: str, artifact_id: str, now: datetime) -> str:
+    def build_storage_key(
+        self, *, namespace: str, artifact_id: str, now: datetime
+    ) -> str:
         safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "moonmind"
         if ".." in safe_namespace.split("/"):
-            raise TemporalArtifactValidationError("namespace must not contain traversal")
+            raise TemporalArtifactValidationError(
+                "namespace must not contain traversal"
+            )
         return f"{safe_namespace}/artifacts/{now:%Y/%m/%d}/{artifact_id}"
 
     def resolve_storage_key(self, storage_key: str) -> Path:
@@ -303,7 +323,9 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
             )
         return destination
 
-    def write_bytes(self, storage_key: str, payload: bytes, *, content_type: str | None) -> None:
+    def write_bytes(
+        self, storage_key: str, payload: bytes, *, content_type: str | None
+    ) -> None:
         _ = content_type
         destination = self.resolve_storage_key(storage_key)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -312,7 +334,9 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
     def read_bytes(self, storage_key: str) -> bytes:
         return self.resolve_storage_key(storage_key).read_bytes()
 
-    def read_chunks(self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES) -> Iterable[bytes]:
+    def read_chunks(
+        self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
+    ) -> Iterable[bytes]:
         path = self.resolve_storage_key(storage_key)
         with path.open("rb") as handle:
             while True:
@@ -393,13 +417,19 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
                 raise
         self._client.create_bucket(Bucket=self._bucket)
 
-    def build_storage_key(self, *, namespace: str, artifact_id: str, now: datetime) -> str:
+    def build_storage_key(
+        self, *, namespace: str, artifact_id: str, now: datetime
+    ) -> str:
         safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "moonmind"
         if ".." in safe_namespace.split("/"):
-            raise TemporalArtifactValidationError("namespace must not contain traversal")
+            raise TemporalArtifactValidationError(
+                "namespace must not contain traversal"
+            )
         return f"{safe_namespace}/artifacts/{now:%Y/%m/%d}/{artifact_id}"
 
-    def write_bytes(self, storage_key: str, payload: bytes, *, content_type: str | None) -> None:
+    def write_bytes(
+        self, storage_key: str, payload: bytes, *, content_type: str | None
+    ) -> None:
         kwargs: dict[str, Any] = {
             "Bucket": self._bucket,
             "Key": storage_key,
@@ -413,7 +443,9 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
         return response["Body"].read()
 
-    def read_chunks(self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES) -> Iterable[bytes]:
+    def read_chunks(
+        self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
+    ) -> Iterable[bytes]:
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
         stream = response["Body"]
         try:
@@ -509,9 +541,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             etag = str(item.get("etag") or "").strip()
             part_number = int(item.get("part_number"))
             if not etag:
-                raise TemporalArtifactValidationError(
-                    "multipart part etag is required"
-                )
+                raise TemporalArtifactValidationError("multipart part etag is required")
             normalized_parts.append({"ETag": etag, "PartNumber": part_number})
         normalized_parts.sort(key=lambda row: row["PartNumber"])
 
@@ -620,7 +650,9 @@ class TemporalArtifactRepository:
         await self._session.flush()
         return link
 
-    async def list_links(self, artifact_id: str) -> list[db_models.TemporalArtifactLink]:
+    async def list_links(
+        self, artifact_id: str
+    ) -> list[db_models.TemporalArtifactLink]:
         stmt: Select[tuple[db_models.TemporalArtifactLink]] = (
             select(db_models.TemporalArtifactLink)
             .where(db_models.TemporalArtifactLink.artifact_id == artifact_id)
@@ -826,7 +858,9 @@ class TemporalArtifactService:
     def _build_store_from_settings() -> TemporalArtifactStore:
         backend = settings.spec_workflow.temporal_artifact_backend
         if backend == db_models.TemporalArtifactStorageBackend.LOCAL_FS.value:
-            return LocalTemporalArtifactStore(settings.spec_workflow.temporal_artifact_root)
+            return LocalTemporalArtifactStore(
+                settings.spec_workflow.temporal_artifact_root
+            )
         if backend == db_models.TemporalArtifactStorageBackend.S3.value:
             return S3TemporalArtifactStore(
                 endpoint_url=settings.spec_workflow.temporal_artifact_s3_endpoint,
@@ -841,7 +875,9 @@ class TemporalArtifactService:
         )
 
     @staticmethod
-    def _coerce_execution_ref(link: dict[str, Any] | ExecutionRef | None) -> ExecutionRef | None:
+    def _coerce_execution_ref(
+        link: dict[str, Any] | ExecutionRef | None
+    ) -> ExecutionRef | None:
         if link is None:
             return None
         if isinstance(link, ExecutionRef):
@@ -906,7 +942,10 @@ class TemporalArtifactService:
         *,
         principal: str,
     ) -> bool:
-        if artifact.redaction_level is not db_models.TemporalArtifactRedactionLevel.RESTRICTED:
+        if (
+            artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
             return True
         owner = self._owner_principal(artifact)
         if owner and owner == principal:
@@ -954,9 +993,13 @@ class TemporalArtifactService:
     ) -> None:
         expected_sha = _validate_sha256(artifact.sha256)
         if expected_sha is not None and digest != expected_sha:
-            raise TemporalArtifactValidationError("sha256 mismatch during upload completion")
+            raise TemporalArtifactValidationError(
+                "sha256 mismatch during upload completion"
+            )
         if artifact.size_bytes is not None and artifact.size_bytes != size_bytes:
-            raise TemporalArtifactValidationError("size_bytes mismatch during upload completion")
+            raise TemporalArtifactValidationError(
+                "size_bytes mismatch during upload completion"
+            )
 
     async def _create_preview_if_required(
         self,
@@ -966,14 +1009,19 @@ class TemporalArtifactService:
         payload: bytes,
         policy: str,
     ) -> None:
-        if artifact.redaction_level is not db_models.TemporalArtifactRedactionLevel.RESTRICTED:
+        if (
+            artifact.redaction_level
+            is not db_models.TemporalArtifactRedactionLevel.RESTRICTED
+        ):
             return
         metadata = dict(artifact.metadata_json or {})
         if metadata.get("preview_artifact_id"):
             return
 
         text = payload.decode("utf-8", errors="ignore")
-        text = re.sub(r"(?i)(token|password|secret)\s*[:=]\s*[^\s]+", r"\1=[REDACTED]", text)
+        text = re.sub(
+            r"(?i)(token|password|secret)\s*[:=]\s*[^\s]+", r"\1=[REDACTED]", text
+        )
         text = text[:_PREVIEW_MAX_BYTES]
 
         preview_artifact, _upload = await self.create(
@@ -1025,7 +1073,9 @@ class TemporalArtifactService:
         )
         expires_at = _expires_at_for_retention(derived_retention, now)
         artifact_id = generate_artifact_id(now)
-        namespace = execution_ref.namespace if execution_ref else self._default_namespace
+        namespace = (
+            execution_ref.namespace if execution_ref else self._default_namespace
+        )
         storage_key = self._store.build_storage_key(
             namespace=namespace,
             artifact_id=artifact_id,
@@ -1144,7 +1194,7 @@ class TemporalArtifactService:
         )
         artifact.sha256 = digest
         artifact.size_bytes = actual_size
-        artifact.content_type = (content_type or artifact.content_type or None)
+        artifact.content_type = content_type or artifact.content_type or None
         artifact.status = db_models.TemporalArtifactStatus.COMPLETE
         artifact.upload_id = None
         artifact.upload_expires_at = None
@@ -1317,7 +1367,9 @@ class TemporalArtifactService:
             raise TemporalArtifactStateError("artifact is not readable")
         if not allow_restricted_raw:
             self._assert_raw_access(artifact, principal=principal)
-        return artifact, self._store.read_chunks(artifact.storage_key, chunk_size=chunk_size)
+        return artifact, self._store.read_chunks(
+            artifact.storage_key, chunk_size=chunk_size
+        )
 
     async def read_path(
         self,
@@ -1353,7 +1405,9 @@ class TemporalArtifactService:
         preview_artifact_id = metadata.get("preview_artifact_id")
         if preview_artifact_id:
             try:
-                preview_artifact = await self._repository.get_artifact(str(preview_artifact_id))
+                preview_artifact = await self._repository.get_artifact(
+                    str(preview_artifact_id)
+                )
             except TemporalArtifactNotFoundError:
                 preview_artifact = None
             if preview_artifact is not None:
@@ -1429,7 +1483,10 @@ class TemporalArtifactService:
             artifact_id=artifact_id,
             execution=self._coerce_execution_ref(execution_ref),
         )
-        if artifact.retention_class is db_models.TemporalArtifactRetentionClass.STANDARD:
+        if (
+            artifact.retention_class
+            is db_models.TemporalArtifactRetentionClass.STANDARD
+        ):
             derived = _derive_retention(None, link.link_type)
             artifact.retention_class = derived
             artifact.expires_at = _expires_at_for_retention(derived, datetime.now(UTC))
@@ -1546,7 +1603,9 @@ class TemporalArtifactService:
         if artifact.hard_deleted_at is not None:
             return artifact
         if artifact.status is not db_models.TemporalArtifactStatus.DELETED:
-            raise TemporalArtifactStateError("artifact must be soft-deleted before hard delete")
+            raise TemporalArtifactStateError(
+                "artifact must be soft-deleted before hard delete"
+            )
 
         self._store.delete(artifact.storage_key)
         now = datetime.now(UTC)
@@ -1580,7 +1639,9 @@ class TemporalArtifactService:
             artifact.last_lifecycle_run_id = lifecycle_run_id
 
         cutoff = sweep_now - self._lifecycle.hard_delete_after
-        hard_candidates = await self._repository.list_deleted_for_hard_delete(cutoff=cutoff)
+        hard_candidates = await self._repository.list_deleted_for_hard_delete(
+            cutoff=cutoff
+        )
         hard_deleted = 0
         for artifact in hard_candidates:
             self._store.delete(artifact.storage_key)

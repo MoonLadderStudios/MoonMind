@@ -17,9 +17,9 @@ from api_service.db.models import (
 )
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,
-    TemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactStore,
     TemporalArtifactValidationError,
     build_artifact_ref,
     generate_artifact_id,
@@ -64,7 +64,9 @@ class _MultipartMemoryStore(TemporalArtifactStore):
         _ = now
         return f"{namespace}/artifacts/{artifact_id}"
 
-    def write_bytes(self, storage_key: str, payload: bytes, *, content_type=None) -> None:
+    def write_bytes(
+        self, storage_key: str, payload: bytes, *, content_type=None
+    ) -> None:
         _ = content_type
         self._objects[storage_key] = payload
 
@@ -82,7 +84,9 @@ class _MultipartMemoryStore(TemporalArtifactStore):
     def delete(self, storage_key: str) -> None:
         self._objects.pop(storage_key, None)
 
-    def presign_single_upload(self, *, storage_key: str, content_type, expires_in_seconds: int):
+    def presign_single_upload(
+        self, *, storage_key: str, content_type, expires_in_seconds: int
+    ):
         _ = content_type, expires_in_seconds
         return f"https://example.test/upload/{storage_key}", {}
 
@@ -92,11 +96,20 @@ class _MultipartMemoryStore(TemporalArtifactStore):
         self._uploads[upload_id] = {}
         return upload_id
 
-    def presign_upload_part(self, *, storage_key: str, upload_id: str, part_number: int, expires_in_seconds: int):
+    def presign_upload_part(
+        self,
+        *,
+        storage_key: str,
+        upload_id: str,
+        part_number: int,
+        expires_in_seconds: int,
+    ):
         _ = storage_key, expires_in_seconds
         return f"https://example.test/upload-part/{upload_id}/{part_number}", {}
 
-    def complete_multipart_upload(self, *, storage_key: str, upload_id: str, parts: list[dict]):
+    def complete_multipart_upload(
+        self, *, storage_key: str, upload_id: str, parts: list[dict]
+    ):
         assembled = b""
         for part in sorted(parts, key=lambda row: row["part_number"]):
             etag = part["etag"]
@@ -261,7 +274,9 @@ async def test_create_rejects_negative_declared_size(tmp_path: Path) -> None:
                 )
 
 
-async def test_create_switches_to_multipart_for_large_declared_size(tmp_path: Path) -> None:
+async def test_create_switches_to_multipart_for_large_declared_size(
+    tmp_path: Path,
+) -> None:
     """Large declared sizes should return multipart upload instructions."""
 
     async with temporal_db(tmp_path) as session_maker:
@@ -284,7 +299,9 @@ async def test_create_switches_to_multipart_for_large_declared_size(tmp_path: Pa
             assert upload.upload_id is not None
 
 
-async def test_complete_multipart_upload_sets_integrity_metadata(tmp_path: Path) -> None:
+async def test_complete_multipart_upload_sets_integrity_metadata(
+    tmp_path: Path,
+) -> None:
     """Multipart completion should persist digest and size metadata deterministically."""
 
     async with temporal_db(tmp_path) as session_maker:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import AsyncMock
@@ -10,9 +11,11 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from datetime import UTC, datetime
 
-from api_service.api.routers.temporal_artifacts import _get_temporal_artifact_service, router
+from api_service.api.routers.temporal_artifacts import (
+    _get_temporal_artifact_service,
+    router,
+)
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 
@@ -27,7 +30,9 @@ def _restore_auth_provider() -> Iterator[None]:
 
 
 def _override_user_dependencies(app: FastAPI) -> None:
-    mock_user = SimpleNamespace(id=uuid4(), email="artifact@example.com", is_active=True)
+    mock_user = SimpleNamespace(
+        id=uuid4(), email="artifact@example.com", is_active=True
+    )
     user_dependencies = {
         dep.call
         for route_item in router.routes

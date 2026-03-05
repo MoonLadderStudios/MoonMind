@@ -41,7 +41,9 @@ async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
                 lifecycle_hard_delete_after_seconds=1,
             )
-            artifact, _upload = await service.create(principal="owner", content_type="text/plain")
+            artifact, _upload = await service.create(
+                principal="owner", content_type="text/plain"
+            )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
                 principal="owner",
@@ -52,7 +54,9 @@ async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
             row.expires_at = datetime.now(UTC) - timedelta(days=1)
             await service._repository.commit()
 
-            await service.sweep_lifecycle(principal="service:lifecycle", now=datetime.now(UTC))
+            await service.sweep_lifecycle(
+                principal="service:lifecycle", now=datetime.now(UTC)
+            )
             refreshed = await service._repository.get_artifact(artifact.artifact_id)
             assert refreshed.status is TemporalArtifactStatus.DELETED
 

@@ -180,7 +180,9 @@ class SpecWorkflowSettings(BaseSettings):
     temporal_artifact_s3_endpoint: str = Field(
         "http://minio:9000",
         env=("TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"),
-        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"),
+        validation_alias=AliasChoices(
+            "TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"
+        ),
         description="S3-compatible endpoint used by Temporal artifact storage.",
     )
     temporal_artifact_s3_bucket: str = Field(

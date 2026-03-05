@@ -35,7 +35,9 @@ async def temporal_db(tmp_path: Path):
         await engine.dispose()
 
 
-async def test_lifecycle_sweep_is_idempotent_across_soft_and_hard_delete(tmp_path: Path) -> None:
+async def test_lifecycle_sweep_is_idempotent_across_soft_and_hard_delete(
+    tmp_path: Path,
+) -> None:
     """Sweep should soft-delete then hard-delete once, and become idempotent."""
 
     async with temporal_db(tmp_path) as session_maker:
@@ -46,7 +48,9 @@ async def test_lifecycle_sweep_is_idempotent_across_soft_and_hard_delete(tmp_pat
                 lifecycle_hard_delete_after_seconds=3600,
             )
 
-            artifact, _upload = await service.create(principal="user-1", content_type="text/plain")
+            artifact, _upload = await service.create(
+                principal="user-1", content_type="text/plain"
+            )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
                 principal="user-1",
@@ -98,7 +102,9 @@ async def test_lifecycle_sweep_skips_pinned_artifacts(tmp_path: Path) -> None:
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
 
-            artifact, _upload = await service.create(principal="user-1", content_type="text/plain")
+            artifact, _upload = await service.create(
+                principal="user-1", content_type="text/plain"
+            )
             await service.write_complete(
                 artifact_id=artifact.artifact_id,
                 principal="user-1",
