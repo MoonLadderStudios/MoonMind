@@ -2,7 +2,63 @@
 
 ## Core Principles
 
-### I. The Bittersweet Lesson: AI scaffolding is useful, but it has a half-life.
+### I. One-Click Agent Deployment
+
+MoonMind MUST provide a “fresh clone → running system” path that is simple, documented, and reliable.
+
+Non-negotiable rules:
+
+- The repo MUST define a canonical “one-click” operator path (for MoonMind, Docker Compose is the default target).
+- A default deployment MUST start successfully using only:
+  - documented prerequisites (e.g., Docker), and
+  - a minimal, clearly documented set of required secrets (if any).
+- All non-secret configuration MUST have smart defaults (safe, functional, and predictable).
+- Optional integrations MUST be either:
+  - disabled by default with safe no-op behavior, or
+  - enabled by default only if they do not require secrets and do not increase operational risk.
+- Any missing prerequisite MUST fail fast with an actionable error message (what is missing + how to fix it).
+
+Rationale: MoonMind is an operator tool. Setup friction is a feature-killer.
+
+### II. Avoid Vendor Lock-In
+
+MoonMind MUST avoid designs that force one exclusive proprietary provider to use core functionality.
+
+Non-negotiable rules:
+
+- Vendor-specific behavior MUST live behind adapter interfaces so alternatives can be added without refactoring core flows.
+- Data formats for artifacts, run state, and logs MUST be stored in portable, inspectable formats (e.g., JSON/YAML/text diffs).
+- When introducing a vendor-specific feature, the plan MUST document:
+  - what would change to support an alternative provider, and
+  - what is intentionally vendor-specific (and why).
+
+Rationale: MoonMind should remain deployable and evolvable across ecosystems.
+
+### III. Own Your Data
+
+MoonMind MUST make it easy to gather data from many sources, store it wherever you want, and provide it as exclusive context to AI tools.
+
+### IV. Skills Are First-Class and Easy to Add
+
+MoonMind MUST make skills straightforward to create, register, test, and use across runtimes.
+
+Non-negotiable rules:
+
+- Skills MUST be discoverable and composable (usable as steps in larger workflows).
+- Adding a skill SHOULD be “low ceremony”:
+  - minimal boilerplate,
+  - clear registration location,
+  - clear contract for inputs/outputs and side effects.
+- Skills MUST declare:
+  - required inputs,
+  - produced outputs/artifacts,
+  - external dependencies,
+  - failure modes and expected operator actions.
+- Skill execution SHOULD be runtime-neutral at the workflow level (with runtime adapters implementing the specifics).
+
+Rationale: Skills are the unit of scale for MoonMind automation.
+
+### V. The Bittersweet Lesson: AI scaffolds are useful, but they must constantly evolve.
 
 **The Principle:** AI scaffolding is a massive short-term speed multiplier—but it expires. Scaffolding decays rapidly as product boundaries sharpen, integrations drift, and foundation model capabilities internalize what used to require custom code. Therefore, optimize for **replaceability and evolution**: build every scaffold expecting to delete, swap, or regenerate it quickly without destabilizing the system.
 
@@ -21,25 +77,7 @@ Focus rigid, robust engineering on what LLMs won’t do natively: secure remote 
 5. **Isolate Volatility**
 Encapsulate likely-to-change code—vendor auth flows, API clients, capability negotiation, and UI seams—into replaceable modules with explicit boundaries. This ensures that early integration hacks don’t calcify into the permanent architecture.
 
-### II. One-Click Deployment with Smart Defaults
-
-MoonMind MUST provide a “fresh clone → running system” path that is simple, documented, and reliable.
-
-Non-negotiable rules:
-
-- The repo MUST define a canonical “one-click” operator path (for MoonMind, Docker Compose is the default target).
-- A default deployment MUST start successfully using only:
-  - documented prerequisites (e.g., Docker), and
-  - a minimal, clearly documented set of required secrets (if any).
-- All non-secret configuration MUST have smart defaults (safe, functional, and predictable).
-- Optional integrations MUST be either:
-  - disabled by default with safe no-op behavior, or
-  - enabled by default only if they do not require secrets and do not increase operational risk.
-- Any missing prerequisite MUST fail fast with an actionable error message (what is missing + how to fix it).
-
-Rationale: MoonMind is an operator tool. Setup friction is a feature-killer.
-
-### III. Powerful Runtime Configurability
+### VI. Powerful Runtime Configurability
 
 MoonMind MUST be configurable at runtime without requiring code edits or image rebuilds for routine changes.
 
@@ -60,7 +98,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind runs in many environments; routine tuning must be easy and reversible.
 
-### IV. Modular and Extensible Architecture
+### VII. Modular and Extensible Architecture
 
 MoonMind MUST remain easy to extend without rewriting the core.
 
@@ -75,21 +113,7 @@ Non-negotiable rules:
 
 Rationale: Extensibility is the product. Architecture must resist entanglement.
 
-### V. Avoid Exclusive Proprietary Vendor Lock-In
-
-MoonMind MUST avoid designs that force one exclusive proprietary provider to use core functionality.
-
-Non-negotiable rules:
-
-- Vendor-specific behavior MUST live behind adapter interfaces so alternatives can be added without refactoring core flows.
-- Data formats for artifacts, run state, and logs MUST be stored in portable, inspectable formats (e.g., JSON/YAML/text diffs).
-- When introducing a vendor-specific feature, the plan MUST document:
-  - what would change to support an alternative provider, and
-  - what is intentionally vendor-specific (and why).
-
-Rationale: MoonMind should remain deployable and evolvable across ecosystems.
-
-### VI. Self-Healing by Default
+### VIII. Self-Healing by Default
 
 MoonMind MUST recover safely from common failures without manual babysitting.
 
@@ -105,7 +129,7 @@ Non-negotiable rules:
 
 Rationale: Operators will restart containers. The system must withstand it.
 
-### VII. Facilitate Continuous Improvement
+### IX. Facilitate Continuous Improvement
 
 MoonMind MUST make it easy to improve itself and the projects it operates on.
 
@@ -122,7 +146,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind is an automation engine; it must learn from real execution.
 
-### VIII. Spec-Driven Development Is the Source of Truth
+### X. Spec-Driven Development Is the Source of Truth
 
 MoonMind development MUST be spec-driven, with clear contracts and traceability.
 
@@ -139,26 +163,6 @@ Non-negotiable rules:
   - if reality changes, update the spec/plan/tasks to match.
 
 Rationale: Specs are how MoonMind stays maintainable while evolving quickly.
-
-### IX. Skills Are First-Class and Easy to Add
-
-MoonMind MUST make skills straightforward to create, register, test, and use across runtimes.
-
-Non-negotiable rules:
-
-- Skills MUST be discoverable and composable (usable as steps in larger workflows).
-- Adding a skill SHOULD be “low ceremony”:
-  - minimal boilerplate,
-  - clear registration location,
-  - clear contract for inputs/outputs and side effects.
-- Skills MUST declare:
-  - required inputs,
-  - produced outputs/artifacts,
-  - external dependencies,
-  - failure modes and expected operator actions.
-- Skill execution SHOULD be runtime-neutral at the workflow level (with runtime adapters implementing the specifics).
-
-Rationale: Skills are the unit of scale for MoonMind automation.
 
 ## Non-Negotiable Product & Operational Constraints
 

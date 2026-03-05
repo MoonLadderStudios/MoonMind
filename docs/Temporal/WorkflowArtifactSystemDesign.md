@@ -125,6 +125,9 @@ The repository's default Docker Compose path must treat MinIO as the standard ar
 - Bring up MinIO in the default compose stack (not as an optional add-on profile)
 - Configure Artifact API and workers to use MinIO endpoints/bucket by default
 - Treat external S3 configuration as an explicit override, not the baseline
+- Keep MinIO reachable on the internal Docker network for API/worker services by default
+- Use `AUTH_PROVIDER=disabled` by default for one-click deployment, and align artifact API behavior to that app-level mode (section 9.5)
+- Treat authenticated app modes as explicit overrides from the one-click default
 
 ---
 
@@ -264,6 +267,27 @@ Log at minimum:
 - execution linkage (if any)
 - timestamp
 - IP/user-agent (for user clients)
+
+### 9.5 App auth mode integration (required)
+Artifact API auth behavior must follow the same app-level auth mode used by MoonMind.
+
+| App auth setting | Artifact API behavior | Intended environment |
+|---|---|---|
+| `AUTH_PROVIDER=disabled` (**default**) | **No end-user authentication required** for user-facing artifact metadata/presign endpoints. Requests are attributed to `DEFAULT_USER_ID` (or built-in local fallback) for audit consistency. | One-click local/dev deployment |
+| `AUTH_PROVIDER=local` / external IdP modes | Require authenticated user identity and enforce execution-linked authorization policy from section 9.2. | Shared dev/staging/prod |
+
+Notes:
+- This is an API-layer auth choice; it does not require anonymous/public MinIO buckets.
+- Worker-internal artifact operations continue using service credentials and least-privilege roles.
+- Worker-only mutation endpoints (claim/heartbeat/upload completion internals) still require worker identity/token.
+
+### 9.6 Local no-auth profile with MinIO
+For local deployment where app auth is disabled:
+
+- Use MinIO as default artifact backend with local/internal credentials.
+- Allow unauthenticated app clients at the Artifact API layer (as defined above), not by exposing public object storage.
+- Keep presigned URL issuance enabled and short-lived; API still controls access shape even in no-auth local mode.
+- This profile is the default for one-click deployment.
 
 ---
 
