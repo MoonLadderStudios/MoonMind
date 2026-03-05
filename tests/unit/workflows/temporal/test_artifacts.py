@@ -299,6 +299,38 @@ async def test_create_switches_to_multipart_for_large_declared_size(
             assert upload.upload_id is not None
 
 
+async def test_complete_rejects_undeclared_single_put_over_size_limit(
+    tmp_path: Path,
+) -> None:
+    """Completion must reject oversized single-put uploads without declared size."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = _MultipartMemoryStore()
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=store,
+                direct_upload_max_bytes=4,
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="application/octet-stream",
+            )
+
+            store.write_bytes(
+                artifact.storage_key,
+                b"oversized",
+                content_type="application/octet-stream",
+            )
+
+            with pytest.raises(TemporalArtifactValidationError, match="max bytes"):
+                await service.complete(
+                    artifact_id=artifact.artifact_id,
+                    principal="user-1",
+                )
+
+
 async def test_complete_multipart_upload_sets_integrity_metadata(
     tmp_path: Path,
 ) -> None:

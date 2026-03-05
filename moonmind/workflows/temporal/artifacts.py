@@ -1176,6 +1176,15 @@ class TemporalArtifactService:
             )
 
         digest, actual_size = self._compute_digest_and_size(payload)
+        if (
+            artifact.upload_mode is db_models.TemporalArtifactUploadMode.SINGLE_PUT
+            and actual_size > self._direct_upload_max_bytes
+        ):
+            artifact.status = db_models.TemporalArtifactStatus.FAILED
+            await self._repository.commit()
+            raise TemporalArtifactValidationError(
+                f"artifact exceeds max bytes ({self._direct_upload_max_bytes})"
+            )
         try:
             self._validate_integrity_declarations(
                 artifact,
@@ -1297,6 +1306,15 @@ class TemporalArtifactService:
                 ) from exc
 
         digest, actual_size = self._compute_digest_and_size(payload)
+        if (
+            artifact.upload_mode is db_models.TemporalArtifactUploadMode.SINGLE_PUT
+            and actual_size > self._direct_upload_max_bytes
+        ):
+            artifact.status = db_models.TemporalArtifactStatus.FAILED
+            await self._repository.commit()
+            raise TemporalArtifactValidationError(
+                f"artifact exceeds max bytes ({self._direct_upload_max_bytes})"
+            )
         try:
             self._validate_integrity_declarations(
                 artifact,

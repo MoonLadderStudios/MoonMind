@@ -91,7 +91,7 @@ def test_authenticated_mode_requires_identity(_restore_auth_provider) -> None:
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[_get_temporal_artifact_service] = lambda: AsyncMock()
+    app.dependency_overrides[_get_temporal_artifact_service] = AsyncMock
 
     with TestClient(app) as client:
         response = client.post("/api/artifacts", json={"content_type": "text/plain"})
