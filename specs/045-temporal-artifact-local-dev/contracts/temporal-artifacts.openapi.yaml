@@ -1,0 +1,529 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Temporal Artifact API
+  version: 0.1.0
+  description: >
+    Runtime contract for Temporal artifact metadata and transfer flows in local/dev
+    mode with MinIO as the default S3-compatible backend.
+servers:
+  - url: /
+paths:
+  /api/artifacts:
+    post:
+      summary: Create an artifact upload session
+      operationId: createArtifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateArtifactRequest"
+      responses:
+        "201":
+          description: Created artifact reference and upload instructions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateArtifactResponse"
+        "422":
+          description: Invalid request payload
+        "413":
+          description: Declared size exceeds configured direct upload threshold
+
+  /api/artifacts/{artifactId}/content:
+    put:
+      summary: Upload direct artifact content for single-part mode
+      operationId: putArtifactContent
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Artifact is completed and reference is returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactRef"
+        "409":
+          description: Artifact in invalid state for upload
+        "413":
+          description: Payload exceeds configured direct upload threshold
+
+  /api/artifacts/{artifactId}/presign-upload-part:
+    post:
+      summary: Presign one multipart upload part
+      operationId: presignArtifactUploadPart
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PresignUploadPartRequest"
+      responses:
+        "200":
+          description: Presigned URL and constraints for one multipart part
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PresignUploadPartResponse"
+        "409":
+          description: Artifact is not in multipart upload state
+
+  /api/artifacts/{artifactId}/complete:
+    post:
+      summary: Complete artifact upload (multipart or single-part confirmation)
+      operationId: completeArtifact
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteArtifactRequest"
+      responses:
+        "200":
+          description: Artifact completion confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactRef"
+        "409":
+          description: Completion not allowed due to state mismatch
+        "422":
+          description: Invalid part list or checksum mismatch
+
+  /api/artifacts/{artifactId}:
+    get:
+      summary: Get artifact metadata
+      operationId: getArtifact
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: include_download
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Artifact metadata (optionally with download grant)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactMetadata"
+        "404":
+          description: Artifact not found
+        "403":
+          description: Access denied
+    delete:
+      summary: Soft-delete artifact
+      operationId: deleteArtifact
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Soft-deleted artifact metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactMetadata"
+        "404":
+          description: Artifact not found
+        "403":
+          description: Access denied
+
+  /api/artifacts/{artifactId}/presign-download:
+    post:
+      summary: Presign artifact download URL
+      operationId: presignArtifactDownload
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Download grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PresignDownloadResponse"
+        "403":
+          description: Access denied
+        "404":
+          description: Artifact not found
+
+  /api/artifacts/{artifactId}/links:
+    post:
+      summary: Link artifact to one execution reference
+      operationId: linkArtifact
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkArtifactRequest"
+      responses:
+        "200":
+          description: Artifact metadata including updated links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactMetadata"
+        "403":
+          description: Access denied
+
+  /api/executions/{namespace}/{workflowId}/{runId}/artifacts:
+    get:
+      summary: List artifacts linked to an execution
+      operationId: listExecutionArtifacts
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: runId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: link_type
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution-scoped artifact collection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactListResponse"
+        "403":
+          description: Access denied
+
+  /api/artifacts/{artifactId}/pin:
+    post:
+      summary: Pin artifact to prevent retention deletion
+      operationId: pinArtifact
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinArtifactRequest"
+      responses:
+        "200":
+          description: Artifact metadata after pin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactMetadata"
+    delete:
+      summary: Remove explicit artifact pin
+      operationId: unpinArtifact
+      parameters:
+        - in: path
+          name: artifactId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Artifact metadata after unpin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactMetadata"
+
+components:
+  schemas:
+    ArtifactRef:
+      type: object
+      required:
+        - artifact_ref_v
+        - artifact_id
+        - encryption
+      properties:
+        artifact_ref_v:
+          type: integer
+          const: 1
+        artifact_id:
+          type: string
+          pattern: "^art_[0-9A-HJKMNP-TV-Z]{26}$"
+        sha256:
+          type: string
+          nullable: true
+        size_bytes:
+          type: integer
+          nullable: true
+        content_type:
+          type: string
+          nullable: true
+        encryption:
+          type: string
+
+    ExecutionLink:
+      type: object
+      required: [namespace, workflow_id, run_id, link_type]
+      properties:
+        namespace:
+          type: string
+        workflow_id:
+          type: string
+        run_id:
+          type: string
+        link_type:
+          type: string
+        label:
+          type: string
+          nullable: true
+        created_by_activity_type:
+          type: string
+          nullable: true
+        created_by_worker:
+          type: string
+          nullable: true
+
+    UploadDescriptor:
+      type: object
+      required: [mode, expires_at, max_size_bytes]
+      properties:
+        mode:
+          type: string
+          enum: [single_put, multipart]
+        upload_url:
+          type: string
+          nullable: true
+        upload_id:
+          type: string
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+        max_size_bytes:
+          type: integer
+
+    CreateArtifactRequest:
+      type: object
+      properties:
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+        retention_class:
+          type: string
+          enum: [ephemeral, standard, long, pinned]
+        link:
+          $ref: "#/components/schemas/ExecutionLink"
+        metadata:
+          type: object
+          additionalProperties: true
+        redaction_level:
+          type: string
+          enum: [none, preview_only, restricted]
+        encryption:
+          type: string
+          enum: [sse-kms, sse-s3, none, envelope]
+
+    CreateArtifactResponse:
+      type: object
+      required: [artifact_ref, upload]
+      properties:
+        artifact_ref:
+          $ref: "#/components/schemas/ArtifactRef"
+        upload:
+          $ref: "#/components/schemas/UploadDescriptor"
+
+    PresignUploadPartRequest:
+      type: object
+      required: [part_number]
+      properties:
+        part_number:
+          type: integer
+          minimum: 1
+
+    PresignUploadPartResponse:
+      type: object
+      required: [url, expires_at, part_number]
+      properties:
+        part_number:
+          type: integer
+        url:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        required_headers:
+          type: object
+          additionalProperties:
+            type: string
+
+    CompleteArtifactPart:
+      type: object
+      required: [part_number, etag]
+      properties:
+        part_number:
+          type: integer
+          minimum: 1
+        etag:
+          type: string
+
+    CompleteArtifactRequest:
+      type: object
+      properties:
+        parts:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompleteArtifactPart"
+
+    ArtifactMetadata:
+      type: object
+      required:
+        - artifact_id
+        - created_at
+        - storage_backend
+        - storage_key
+        - encryption
+        - status
+        - retention_class
+        - redaction_level
+        - artifact_ref
+        - links
+        - pinned
+      properties:
+        artifact_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        created_by_principal:
+          type: string
+          nullable: true
+        content_type:
+          type: string
+          nullable: true
+        size_bytes:
+          type: integer
+          nullable: true
+        sha256:
+          type: string
+          nullable: true
+        storage_backend:
+          type: string
+          enum: [s3, local_fs]
+        storage_key:
+          type: string
+        encryption:
+          type: string
+          enum: [sse-kms, sse-s3, none, envelope]
+        status:
+          type: string
+          enum: [pending_upload, complete, failed, deleted]
+        retention_class:
+          type: string
+          enum: [ephemeral, standard, long, pinned]
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        redaction_level:
+          type: string
+          enum: [none, preview_only, restricted]
+        metadata:
+          type: object
+          additionalProperties: true
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionLink"
+        pinned:
+          type: boolean
+        artifact_ref:
+          $ref: "#/components/schemas/ArtifactRef"
+        download_url:
+          type: string
+          nullable: true
+        download_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ArtifactListResponse:
+      type: object
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactMetadata"
+
+    LinkArtifactRequest:
+      allOf:
+        - $ref: "#/components/schemas/ExecutionLink"
+
+    PinArtifactRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          nullable: true
+
+    PresignDownloadResponse:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url:
+          type: string
+        expires_at:
+          type: string
+          format: date-time

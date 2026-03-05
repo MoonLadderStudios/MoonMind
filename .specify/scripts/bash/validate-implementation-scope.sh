@@ -137,9 +137,17 @@ validate_diff_scope() {
   mapfile -t committed < <(git diff --name-only "${merge_base}"..HEAD)
   mapfile -t staged < <(git diff --name-only --cached)
   mapfile -t unstaged < <(git diff --name-only)
+  mapfile -t untracked < <(git ls-files --others --exclude-standard)
 
   local all_files
-  all_files="$(printf '%s\n' "${committed[@]:-}" "${staged[@]:-}" "${unstaged[@]:-}" | unique_nonempty_lines)"
+  all_files="$(
+    printf '%s\n' \
+      "${committed[@]:-}" \
+      "${staged[@]:-}" \
+      "${unstaged[@]:-}" \
+      "${untracked[@]:-}" \
+      | unique_nonempty_lines
+  )"
 
   if [[ -z "$all_files" ]]; then
     echo "Scope validation failed: no changes detected against ${BASE_REF}." >&2

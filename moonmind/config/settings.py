@@ -159,6 +159,97 @@ class SpecWorkflowSettings(BaseSettings):
         env="AGENT_JOB_ARTIFACT_ROOT",
         description="Filesystem location where agent queue artifacts are persisted.",
     )
+    temporal_artifact_root: str = Field(
+        "var/artifacts/temporal_artifacts",
+        env=(
+            "TEMPORAL_ARTIFACT_ROOT",
+            "TEMPORAL_ARTIFACTS_ROOT",
+        ),
+        validation_alias=AliasChoices(
+            "TEMPORAL_ARTIFACT_ROOT",
+            "TEMPORAL_ARTIFACTS_ROOT",
+        ),
+        description="Filesystem location where local-dev Temporal artifacts are persisted.",
+    )
+    temporal_artifact_backend: str = Field(
+        "s3",
+        env="TEMPORAL_ARTIFACT_BACKEND",
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_BACKEND"),
+        description="Artifact blob backend for Temporal runtime (s3 or local_fs).",
+    )
+    temporal_artifact_s3_endpoint: str = Field(
+        "http://minio:9000",
+        env=("TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"),
+        description="S3-compatible endpoint used by Temporal artifact storage.",
+    )
+    temporal_artifact_s3_bucket: str = Field(
+        "moonmind-temporal-artifacts",
+        env=("TEMPORAL_ARTIFACT_S3_BUCKET", "MINIO_BUCKET"),
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_BUCKET", "MINIO_BUCKET"),
+        description="S3 bucket used to persist Temporal artifact bytes.",
+    )
+    temporal_artifact_s3_access_key_id: str = Field(
+        "minioadmin",
+        env=("TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID", "MINIO_ACCESS_KEY"),
+        validation_alias=AliasChoices(
+            "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
+            "MINIO_ACCESS_KEY",
+        ),
+        description="Access key for the Temporal artifact S3-compatible backend.",
+    )
+    temporal_artifact_s3_secret_access_key: str = Field(
+        "minioadmin",
+        env=("TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY", "MINIO_SECRET_KEY"),
+        validation_alias=AliasChoices(
+            "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
+            "MINIO_SECRET_KEY",
+        ),
+        description="Secret key for the Temporal artifact S3-compatible backend.",
+    )
+    temporal_artifact_s3_region: str = Field(
+        "us-east-1",
+        env="TEMPORAL_ARTIFACT_S3_REGION",
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_REGION"),
+        description="Region hint for S3-compatible artifact backend.",
+    )
+    temporal_artifact_s3_use_ssl: bool = Field(
+        False,
+        env="TEMPORAL_ARTIFACT_S3_USE_SSL",
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_USE_SSL"),
+        description="Whether S3-compatible artifact endpoint requires TLS.",
+    )
+    temporal_artifact_default_namespace: str = Field(
+        "moonmind",
+        env="TEMPORAL_NAMESPACE",
+        validation_alias=AliasChoices("TEMPORAL_NAMESPACE"),
+        description="Default namespace prefix used for Temporal artifact storage keys.",
+    )
+    temporal_artifact_presign_ttl_seconds: int = Field(
+        15 * 60,
+        env="TEMPORAL_ARTIFACT_PRESIGN_TTL_SECONDS",
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_PRESIGN_TTL_SECONDS"),
+        description="TTL in seconds for local-dev artifact download/upload URL hints.",
+        ge=1,
+    )
+    temporal_artifact_direct_upload_max_bytes: int = Field(
+        10 * 1024 * 1024,
+        env="TEMPORAL_ARTIFACT_DIRECT_UPLOAD_MAX_BYTES",
+        validation_alias=AliasChoices("TEMPORAL_ARTIFACT_DIRECT_UPLOAD_MAX_BYTES"),
+        description="Maximum local-dev direct upload payload size in bytes.",
+        gt=0,
+    )
+    temporal_artifact_lifecycle_hard_delete_after_seconds: int = Field(
+        3600,
+        env="TEMPORAL_ARTIFACT_LIFECYCLE_HARD_DELETE_AFTER_SECONDS",
+        validation_alias=AliasChoices(
+            "TEMPORAL_ARTIFACT_LIFECYCLE_HARD_DELETE_AFTER_SECONDS"
+        ),
+        description=(
+            "Delay in seconds between soft-delete and hard-delete/tombstone lifecycle sweep."
+        ),
+        ge=0,
+    )
     agent_job_artifact_max_bytes: int = Field(
         50 * 1024 * 1024,
         env="AGENT_JOB_ARTIFACT_MAX_BYTES",
@@ -805,6 +896,18 @@ class SpecWorkflowSettings(BaseSettings):
         if not tokens:
             return ()
         return tuple(dict.fromkeys(tokens))
+
+    @field_validator("temporal_artifact_backend", mode="before")
+    @classmethod
+    def _normalize_temporal_artifact_backend(cls, value: object) -> str:
+        backend = str(value or "").strip().lower()
+        if not backend:
+            return "s3"
+        if backend not in {"s3", "local_fs"}:
+            raise ValueError(
+                "spec_workflow.temporal_artifact_backend must be one of: s3, local_fs"
+            )
+        return backend
 
     @field_validator("proposal_targets_default", mode="before")
     @classmethod
