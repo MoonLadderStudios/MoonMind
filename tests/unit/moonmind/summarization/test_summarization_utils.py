@@ -132,7 +132,7 @@ class TestUpdateSummaries(unittest.TestCase):
 
         self.mock_model_factory.assert_called_once()
         mock_read_text_file.assert_any_call("/prompt.txt")
-        mock_read_text_file.assert_any_call("/input/file1.copy")
+        mock_read_text_file.assert_any_call("/input/file1.copy", safe_base_dir="/input")
         mock_find_files.assert_called_once_with(
             search_directory="/input", target_extension=".copy"
         )

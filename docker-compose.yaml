@@ -80,6 +80,8 @@ services:
       - MODEL_CONTEXT_PROTOCOL_PORT=5000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
@@ -122,6 +124,130 @@ services:
         aliases:
           # local-network is external/shared; use a unique DB hostname to avoid cross-stack DNS collisions.
           - moonmind-api-db
+    restart: unless-stopped
+
+  temporal-db:
+    image: postgres:${TEMPORAL_POSTGRES_VERSION:-17}
+    environment:
+      POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
+      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      POSTGRES_DB: ${TEMPORAL_POSTGRES_DB:-temporal}
+    volumes:
+      - temporal-db-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${TEMPORAL_POSTGRES_USER:-temporal} -d ${TEMPORAL_POSTGRES_DB:-temporal}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - temporal-network
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:${TEMPORAL_VERSION:-1.29.1}
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_SEEDS=temporal-db
+      - POSTGRES_USER=${TEMPORAL_POSTGRES_USER:-temporal}
+      - POSTGRES_PWD=${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      - DBNAME=${TEMPORAL_POSTGRES_DB:-temporal}
+      - VISIBILITY_DBNAME=${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
+      - NUM_HISTORY_SHARDS=${TEMPORAL_NUM_HISTORY_SHARDS:-1}
+      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml
+    expose:
+      - "7233"
+    volumes:
+      - ./services/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+    networks:
+      - temporal-network
+      - local-network
+    restart: unless-stopped
+
+  temporal-namespace-init:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
+    environment:
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_NAMESPACE_RETENTION_DAYS=${TEMPORAL_NAMESPACE_RETENTION_DAYS:-}
+      - TEMPORAL_RETENTION_MAX_STORAGE_GB=${TEMPORAL_RETENTION_MAX_STORAGE_GB:-100}
+      - TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY=${TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY:-1}
+    volumes:
+      - ./services/temporal/scripts/bootstrap-namespace.sh:/etc/temporal/bootstrap-namespace.sh:ro
+    entrypoint:
+      - /bin/sh
+      - /etc/temporal/bootstrap-namespace.sh
+    depends_on:
+      temporal:
+        condition: service_started
+    networks:
+      - temporal-network
+      - local-network
+    restart: "no"
+
+  temporal-visibility-rehearsal:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
+    profiles: ["temporal-tools"]
+    environment:
+      - TEMPORAL_POSTGRES_HOST=temporal-db
+      - TEMPORAL_POSTGRES_PORT=5432
+      - TEMPORAL_POSTGRES_USER=${TEMPORAL_POSTGRES_USER:-temporal}
+      - TEMPORAL_POSTGRES_PASSWORD=${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      - TEMPORAL_VISIBILITY_DB=${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
+      - TEMPORAL_VISIBILITY_SCHEMA_DIR=${TEMPORAL_VISIBILITY_SCHEMA_DIR:-/etc/temporal/schema/postgresql/v12/visibility/versioned}
+      - TEMPORAL_NUM_HISTORY_SHARDS=${TEMPORAL_NUM_HISTORY_SHARDS:-1}
+      - TEMPORAL_SHARD_DECISION_ACK=${TEMPORAL_SHARD_DECISION_ACK:-}
+    volumes:
+      - ./services/temporal/scripts/rehearse-visibility-schema-upgrade.sh:/etc/temporal/rehearse-visibility-schema-upgrade.sh:ro
+    entrypoint:
+      - /bin/sh
+      - /etc/temporal/rehearse-visibility-schema-upgrade.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+    networks:
+      - temporal-network
+    restart: "no"
+
+  temporal-admin-tools:
+    image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
+    profiles: ["temporal-tools"]
+    environment:
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+    command: sh -lc "sleep infinity"
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+    networks:
+      - temporal-network
+      - local-network
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.34.0}
+    profiles: ["temporal-ui"]
+    environment:
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+    ports:
+      - "${TEMPORAL_UI_HOST_PORT:-8088}:8080"
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
     restart: unless-stopped
 
   qdrant:
@@ -617,6 +743,7 @@ volumes:
   open-webui:
   qdrant-storage:
   api-db-data:
+  temporal-db-data:
   keycloak-data:
   speckit_workspaces:
   agent_workspaces:
@@ -634,4 +761,6 @@ networks:
   local-network:
     external: true
   docker-proxy-network:
+    internal: true
+  temporal-network:
     internal: true

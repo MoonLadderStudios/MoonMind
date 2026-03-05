@@ -1,0 +1,490 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Temporal Execution and Foundation API
+  version: 0.1.0
+  description: >
+    Contract for Temporal-first runtime lifecycle operations and foundation
+    controls used by the Temporal compose foundation feature.
+servers:
+  - url: /
+paths:
+  /api/executions:
+    post:
+      summary: Start a Temporal workflow execution
+      operationId: createExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExecutionRequest"
+      responses:
+        "201":
+          description: Execution started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionModel"
+        "422":
+          description: Invalid execution request
+    get:
+      summary: List workflow executions from Temporal Visibility
+      operationId: listExecutions
+      parameters:
+        - in: query
+          name: workflowType
+          schema:
+            type: string
+            enum: [MoonMind.Run, MoonMind.ManifestIngest]
+        - in: query
+          name: state
+          schema:
+            type: string
+        - in: query
+          name: ownerId
+          schema:
+            type: string
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: nextPageToken
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated execution list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionListResponse"
+
+  /api/executions/{workflowId}:
+    get:
+      summary: Describe one workflow execution
+      operationId: describeExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionModel"
+        "404":
+          description: Execution not found
+
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Update execution inputs using Temporal Update
+      operationId: updateExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateExecutionRequest"
+      responses:
+        "200":
+          description: Update accepted/rejected response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateExecutionResponse"
+        "409":
+          description: Update rejected by state/invariant checks
+
+  /api/executions/{workflowId}/signal:
+    post:
+      summary: Send async signal to running execution
+      operationId: signalExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalExecutionRequest"
+      responses:
+        "202":
+          description: Signal accepted
+        "404":
+          description: Execution not found
+
+  /api/executions/{workflowId}/cancel:
+    post:
+      summary: Cancel workflow execution
+      operationId: cancelExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelExecutionRequest"
+      responses:
+        "202":
+          description: Cancel requested
+        "404":
+          description: Execution not found
+
+  /api/temporal/foundation/health:
+    get:
+      summary: Validate Temporal foundation health
+      operationId: getTemporalFoundationHealth
+      responses:
+        "200":
+          description: Foundation health report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FoundationHealthReport"
+
+  /api/temporal/foundation/namespace/reconcile:
+    put:
+      summary: Reconcile namespace and retention policy idempotently
+      operationId: reconcileTemporalNamespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReconcileNamespaceRequest"
+      responses:
+        "200":
+          description: Namespace reconciliation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NamespacePolicyModel"
+
+  /api/temporal/foundation/upgrade-rehearsals:
+    post:
+      summary: Run visibility schema upgrade rehearsal checks
+      operationId: runVisibilitySchemaRehearsal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpgradeRehearsalRequest"
+      responses:
+        "200":
+          description: Rehearsal result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeReadinessModel"
+
+  /api/temporal/schedules/{scheduleId}:
+    put:
+      summary: Create or update Temporal schedule definition
+      operationId: upsertTemporalSchedule
+      parameters:
+        - in: path
+          name: scheduleId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertScheduleRequest"
+      responses:
+        "200":
+          description: Schedule definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleModel"
+
+components:
+  schemas:
+    CreateExecutionRequest:
+      type: object
+      required: [workflowType]
+      properties:
+        workflowType:
+          type: string
+          enum: [MoonMind.Run, MoonMind.ManifestIngest]
+        title:
+          type: string
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        manifestArtifactRef:
+          type: string
+        failurePolicy:
+          type: string
+          enum: [fail_fast, continue_and_report, best_effort]
+        initialParameters:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+
+    UpdateExecutionRequest:
+      type: object
+      properties:
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        parametersPatch:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+
+    UpdateExecutionResponse:
+      type: object
+      required: [accepted, applied]
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum: [immediate, next_safe_point, continue_as_new]
+        message:
+          type: string
+
+    SignalExecutionRequest:
+      type: object
+      required: [signalName]
+      properties:
+        signalName:
+          type: string
+          enum: [ExternalEvent, Approve, Pause, Resume]
+        payload:
+          type: object
+          additionalProperties: true
+        payloadArtifactRef:
+          type: string
+
+    CancelExecutionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+        graceful:
+          type: boolean
+          default: true
+
+    ExecutionModel:
+      type: object
+      required:
+        - namespace
+        - workflowId
+        - runId
+        - workflowType
+        - state
+        - startedAt
+        - updatedAt
+      properties:
+        namespace:
+          type: string
+        workflowId:
+          type: string
+        runId:
+          type: string
+        workflowType:
+          type: string
+        state:
+          type: string
+        searchAttributes:
+          type: object
+          additionalProperties: true
+        memo:
+          type: object
+          additionalProperties: true
+        artifactRefs:
+          type: array
+          items:
+            type: string
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    ExecutionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionModel"
+        nextPageToken:
+          type: string
+          nullable: true
+        count:
+          type: integer
+          nullable: true
+        countMode:
+          type: string
+          enum: [exact, estimated_or_unknown]
+
+    FoundationHealthReport:
+      type: object
+      required: [temporalHealthy, persistenceHealthy, visibilityHealthy, namespace]
+      properties:
+        temporalHealthy:
+          type: boolean
+        persistenceHealthy:
+          type: boolean
+        visibilityHealthy:
+          type: boolean
+        namespace:
+          type: string
+        pollerHealth:
+          type: object
+          additionalProperties: true
+        retryStormDetected:
+          type: boolean
+        visibilityFailuresDetected:
+          type: boolean
+
+    ReconcileNamespaceRequest:
+      type: object
+      properties:
+        namespace:
+          type: string
+          default: moonmind
+        retentionDays:
+          type: integer
+          minimum: 1
+          default: 36500
+        maxStorageGb:
+          type: integer
+          minimum: 1
+          default: 100
+
+    NamespacePolicyModel:
+      type: object
+      required: [namespace, retentionDays, maxStorageGb, reconciled]
+      properties:
+        namespace:
+          type: string
+        retentionDays:
+          type: integer
+        maxStorageGb:
+          type: integer
+        reconciled:
+          type: boolean
+        reconciledAt:
+          type: string
+          format: date-time
+
+    UpgradeRehearsalRequest:
+      type: object
+      required: [targetTemporalVersion, targetVisibilitySchemaVersion]
+      properties:
+        targetTemporalVersion:
+          type: string
+        targetAdminToolsVersion:
+          type: string
+        targetVisibilitySchemaVersion:
+          type: string
+        requireShardDecisionAck:
+          type: boolean
+          default: true
+
+    UpgradeReadinessModel:
+      type: object
+      required:
+        - targetTemporalVersion
+        - targetVisibilitySchemaVersion
+        - visibilitySchemaRehearsalPassed
+        - shardDecisionAcknowledged
+        - approved
+      properties:
+        targetTemporalVersion:
+          type: string
+        targetVisibilitySchemaVersion:
+          type: string
+        visibilitySchemaRehearsalPassed:
+          type: boolean
+        shardDecisionAcknowledged:
+          type: boolean
+        workerVersioningValidated:
+          type: boolean
+        approved:
+          type: boolean
+        notes:
+          type: array
+          items:
+            type: string
+
+    UpsertScheduleRequest:
+      type: object
+      required: [workflowType]
+      properties:
+        workflowType:
+          type: string
+        cronExpression:
+          type: string
+        calendarSpec:
+          type: object
+          additionalProperties: true
+        workflowInputRef:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+        overlapPolicy:
+          type: string
+
+    ScheduleModel:
+      type: object
+      required: [scheduleId, workflowType, enabled]
+      properties:
+        scheduleId:
+          type: string
+        workflowType:
+          type: string
+        enabled:
+          type: boolean
+        overlapPolicy:
+          type: string
+        nextRunAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastRunAt:
+          type: string
+          format: date-time
+          nullable: true
