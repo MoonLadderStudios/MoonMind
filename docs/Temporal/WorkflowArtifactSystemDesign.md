@@ -60,7 +60,9 @@ A minimal reference to a Temporal **Workflow Execution**:
 ### 5.1 Components
 
 1. **Artifact Store (blob storage)**
-   - Primary storage for bytes (object store recommended).
+   - Primary storage for bytes.
+   - **Default backend is MinIO (S3-compatible)** for MoonMind local/dev and default Docker Compose environments.
+   - Non-MinIO object stores are explicit deployment overrides.
 
 2. **Artifact Index (metadata + query)**
    - Stores artifact metadata and relationships to workflow executions.
@@ -96,7 +98,7 @@ A minimal reference to a Temporal **Workflow Execution**:
 
 ---
 
-## 6. Artifact store choice
+## 6. Artifact store choice (MinIO default)
 
 ### 6.1 Options considered
 
@@ -108,11 +110,21 @@ A minimal reference to a Temporal **Workflow Execution**:
 
 ### 6.2 Decision
 
-**Use an S3-compatible object store as the primary Artifact Store**:
-- Production: S3 or GCS (via S3-compatible gateways only if needed)
-- Dev: MinIO (S3-compatible)
+**MoonMind's main and default Artifact Store is MinIO (S3-compatible).**
+
+- Default local/dev setup: **MinIO**
+- Default Docker Compose setup: **MinIO service is provisioned and wired by default**
+- Production override: AWS S3 (or another S3-compatible provider) only through explicit configuration override
 
 **Use Postgres only as the Artifact Index** (metadata + relationships), not for blob bytes.
+
+### 6.3 Docker Compose default requirement
+
+The repository's default Docker Compose path must treat MinIO as the standard artifact backend:
+
+- Bring up MinIO in the default compose stack (not as an optional add-on profile)
+- Configure Artifact API and workers to use MinIO endpoints/bucket by default
+- Treat external S3 configuration as an explicit override, not the baseline
 
 ---
 
@@ -136,14 +148,14 @@ Object store keys should support:
 Recommended key pattern:
 ```
 
-<env>/<namespace>/artifacts/<yyyy>/<mm>/<dd>/<artifact_id>
+<namespace>/artifacts/<yyyy>/<mm>/<dd>/<artifact_id>
 
 ```
 
 Example:
 ```
 
-prod/moonmind/artifacts/2026/03/05/art_01J9Z9F7...
+moonmind/artifacts/2026/03/05/art_01J9Z9F7...
 
 ````
 
