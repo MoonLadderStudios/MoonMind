@@ -88,25 +88,73 @@ class CancelExecutionRequest(BaseModel):
     graceful: bool = Field(True, alias="graceful")
 
 
+class ExecutionActionCapabilityModel(BaseModel):
+    """State-aware Temporal action visibility returned to the dashboard."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    can_set_title: bool = Field(False, alias="canSetTitle")
+    can_update_inputs: bool = Field(False, alias="canUpdateInputs")
+    can_rerun: bool = Field(False, alias="canRerun")
+    can_approve: bool = Field(False, alias="canApprove")
+    can_pause: bool = Field(False, alias="canPause")
+    can_resume: bool = Field(False, alias="canResume")
+    can_cancel: bool = Field(False, alias="canCancel")
+    disabled_reasons: dict[str, str] = Field(
+        default_factory=dict, alias="disabledReasons"
+    )
+
+
+class ExecutionDebugFieldsModel(BaseModel):
+    """Optional debug metadata gated by Temporal dashboard settings."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    temporal_run_id: str = Field(..., alias="temporalRunId")
+    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId")
+    namespace: str = Field(..., alias="namespace")
+    temporal_status: str = Field(..., alias="temporalStatus")
+    raw_state: str = Field(..., alias="rawState")
+    close_status: Optional[str] = Field(None, alias="closeStatus")
+    waiting_reason: Optional[str] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     namespace: str = Field(..., alias="namespace")
+    source: str = Field("temporal", alias="source")
+    task_id: str = Field(..., alias="taskId")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
+    temporal_run_id: str = Field(..., alias="temporalRunId")
+    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId")
     workflow_type: str = Field(..., alias="workflowType")
+    dashboard_status: str = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
+    raw_state: str = Field(..., alias="rawState")
     temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")
+    waiting_reason: Optional[str] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
     search_attributes: dict[str, Any] = Field(
         default_factory=dict, alias="searchAttributes"
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    actions: ExecutionActionCapabilityModel = Field(
+        default_factory=ExecutionActionCapabilityModel, alias="actions"
+    )
+    debug_fields: Optional[ExecutionDebugFieldsModel] = Field(
+        None, alias="debugFields"
+    )
+    redirect_path: Optional[str] = Field(None, alias="redirectPath")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")

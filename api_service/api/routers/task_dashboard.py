@@ -5,20 +5,29 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.agent_queue import _get_service, list_jobs
 from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
+from api_service.db.base import get_async_session
 from api_service.db.models import User
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_queue_models import JobListResponse
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.orchestrator.skill_executor import list_runnable_skill_names
+from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
 from moonmind.workflows.skills.resolver import list_available_skill_names
+from moonmind.workflows.temporal import (
+    TemporalExecutionNotFoundError,
+    TemporalExecutionService,
+)
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
 
@@ -26,10 +35,6 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_SAFE_TASK_ID_SEGMENT = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
-
 _STATIC_PATHS = {
     "list",
     "queue",
@@ -43,6 +48,7 @@ _STATIC_PATHS = {
     "manifests/new",
     "schedules",
     "schedules/new",
+    "temporal",
     "settings",
 }
 
@@ -50,6 +56,7 @@ _PATH_ALIASES = {
     "new": "queue/new",
     "create": "queue/new",
 }
+_BLOCKED_TOP_LEVEL_TASK_IDS = {"speckit"}
 
 
 class DashboardSkillOption(BaseModel):
@@ -65,6 +72,15 @@ class DashboardSkillListResponse(BaseModel):
     legacy_items: list[DashboardSkillOption] = Field(
         default_factory=list, alias="legacyItems"
     )
+
+
+class DashboardTaskSourceResponse(BaseModel):
+    """Canonical source metadata for a unified dashboard task id."""
+
+    task_id: str = Field(..., alias="taskId")
+    source: str = Field(..., alias="source")
+    source_label: str = Field(..., alias="sourceLabel")
+    detail_path: str = Field(..., alias="detailPath")
 
 
 def _is_dynamic_detail(path: str, source: str) -> bool:
@@ -89,13 +105,22 @@ def _is_safe_detail_segment(segment: str) -> bool:
 def _is_allowed_path(path: str) -> bool:
     if not path:
         return False
-    if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
-        return True
+    if path in _BLOCKED_TOP_LEVEL_TASK_IDS:
+        return False
     if path in _STATIC_PATHS:
+        return True
+    if "/" not in path and _is_safe_detail_segment(path):
         return True
     return any(
         _is_dynamic_detail(path, source)
-        for source in ("queue", "orchestrator", "proposals", "manifests", "schedules")
+        for source in (
+            "queue",
+            "orchestrator",
+            "proposals",
+            "manifests",
+            "schedules",
+            "temporal",
+        )
     )
 
 
@@ -124,6 +149,77 @@ def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
     if not dependencies:
         dependencies.append(get_current_user())
     return dependencies
+
+
+async def _get_temporal_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> TemporalExecutionService:
+    return TemporalExecutionService(
+        session,
+        namespace=settings.temporal.namespace,
+        run_continue_as_new_step_threshold=(
+            settings.temporal.run_continue_as_new_step_threshold
+        ),
+        manifest_continue_as_new_phase_threshold=(
+            settings.temporal.manifest_continue_as_new_phase_threshold
+        ),
+    )
+
+
+def _build_task_source_response(
+    *,
+    task_id: str,
+    source: str,
+) -> DashboardTaskSourceResponse:
+    source_label = {
+        "queue": "Queue",
+        "orchestrator": "Orchestrator",
+        "temporal": "Temporal",
+    }.get(source, source.title())
+    return DashboardTaskSourceResponse(
+        taskId=task_id,
+        source=source,
+        sourceLabel=source_label,
+        detailPath=f"/tasks/{task_id}?source={source}",
+    )
+
+
+async def _resolve_dashboard_task_source(
+    *,
+    task_id: str,
+    queue_service: AgentQueueService,
+    session: AsyncSession,
+    temporal_service: TemporalExecutionService,
+    user: User,
+) -> DashboardTaskSourceResponse | None:
+    task_uuid: UUID | None = None
+    try:
+        task_uuid = UUID(task_id)
+    except ValueError:
+        task_uuid = None
+
+    if task_uuid is not None:
+        queue_job = await queue_service.get_job(task_uuid)
+        if queue_job is not None:
+            return _build_task_source_response(task_id=task_id, source="queue")
+
+        orchestrator_run = await OrchestratorRepository(session).get_run(task_uuid)
+        if orchestrator_run is not None:
+            return _build_task_source_response(task_id=task_id, source="orchestrator")
+
+    try:
+        execution = await temporal_service.describe_execution(task_id)
+    except TemporalExecutionNotFoundError:
+        return None
+
+    if bool(getattr(user, "is_superuser", False)):
+        return _build_task_source_response(task_id=task_id, source="temporal")
+
+    owner_id = getattr(execution, "owner_id", None)
+    user_id = getattr(user, "id", None)
+    if owner_id is not None and user_id is not None and str(owner_id) == str(user_id):
+        return _build_task_source_response(task_id=task_id, source="temporal")
+    return None
 
 
 def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
@@ -168,7 +264,7 @@ async def task_dashboard_route(
                     "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
                     "/tasks/orchestrator, /tasks/orchestrator/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/schedules/new, "
+                    "/tasks/schedules, /tasks/schedules/new, /tasks/temporal, "
                     "or /tasks/settings."
                 ),
             },
@@ -226,6 +322,37 @@ async def list_dashboard_tasks(
         service=service,
         _user=_user,
     )
+
+
+@router.get(
+    "/api/tasks/{task_id}/source",
+    response_model=DashboardTaskSourceResponse,
+)
+async def resolve_dashboard_task_source(
+    task_id: str,
+    queue_service: AgentQueueService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
+    _user: User = Depends(get_current_user()),
+) -> DashboardTaskSourceResponse:
+    """Resolve a canonical dashboard task id to its backing source."""
+
+    resolved = await _resolve_dashboard_task_source(
+        task_id=task_id,
+        queue_service=queue_service,
+        session=session,
+        temporal_service=temporal_service,
+        user=_user,
+    )
+    if resolved is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "task_source_not_found",
+                "message": f"Task {task_id} was not found in dashboard sources.",
+            },
+        )
+    return resolved
 
 
 __all__ = ["router", "_is_allowed_path", "_resolve_user_dependency_overrides"]

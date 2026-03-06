@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.task_dashboard import (
     _get_service,
+    _get_temporal_service,
     _is_allowed_path,
     _resolve_user_dependency_overrides,
     router,
@@ -36,6 +37,7 @@ def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     app.dependency_overrides[_get_service] = lambda: mock_service
+    app.dependency_overrides[_get_temporal_service] = lambda: AsyncMock()
 
     with TestClient(app) as test_client:
         yield test_client, mock_service
@@ -55,6 +57,9 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
     assert _is_allowed_path("orchestrator/run-1")
+    assert _is_allowed_path("temporal")
+    assert _is_allowed_path("temporal/mm:123")
+    assert _is_allowed_path("mm:123")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("new")
     assert _is_allowed_path("manifests")
@@ -66,7 +71,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("")
-    assert not _is_allowed_path("unknown")
+    assert not _is_allowed_path("speckit")
     assert not _is_allowed_path("queue/new/extra")
     assert not _is_allowed_path("queue//")
     assert not _is_allowed_path("queue/<script>alert(1)</script>")
@@ -94,6 +99,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/create",
         "/tasks/orchestrator",
         "/tasks/orchestrator/new",
+        "/tasks/temporal",
         "/tasks/manifests",
         "/tasks/manifests/new",
         "/tasks/schedules",
@@ -108,8 +114,10 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         f"/tasks/{uuid4()}",
+        "/tasks/mm:workflow-123",
         f"/tasks/queue/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
+        "/tasks/temporal/mm:workflow-123",
         f"/tasks/manifests/{uuid4()}",
         f"/tasks/schedules/{uuid4()}",
     ):
@@ -130,7 +138,7 @@ def test_speckit_routes_return_404(client: TestClient) -> None:
 
 
 def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
-    response = client.get("/tasks/not-a-valid-dashboard-path")
+    response = client.get("/tasks/not-a-valid-dashboard-path/extra")
 
     assert response.status_code == 404
     detail = response.json()["detail"]
@@ -140,7 +148,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
         "/tasks/orchestrator, /tasks/orchestrator/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-        "/tasks/schedules, /tasks/schedules/new, "
+        "/tasks/schedules, /tasks/schedules/new, /tasks/temporal, "
         "or /tasks/settings."
     )
 
@@ -183,6 +191,50 @@ def test_tasks_api_alias_returns_queue_list_shape(client: TestClient) -> None:
     assert body["offset"] == 0
     assert body["page_size"] == 50
     assert body["next_cursor"] is None
+
+
+def test_task_source_endpoint_returns_resolved_temporal_source(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake_resolve(**_kwargs):
+        return {
+            "taskId": "mm:workflow-123",
+            "source": "temporal",
+            "sourceLabel": "Temporal",
+            "detailPath": "/tasks/mm:workflow-123?source=temporal",
+        }
+
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard._resolve_dashboard_task_source",
+        _fake_resolve,
+    )
+
+    response = client.get("/api/tasks/mm:workflow-123/source")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "taskId": "mm:workflow-123",
+        "source": "temporal",
+        "sourceLabel": "Temporal",
+        "detailPath": "/tasks/mm:workflow-123?source=temporal",
+    }
+
+
+def test_task_source_endpoint_returns_404_when_not_found(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _fake_resolve(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard._resolve_dashboard_task_source",
+        _fake_resolve,
+    )
+
+    response = client.get("/api/tasks/mm:workflow-404/source")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "task_source_not_found"
 
 
 def test_tasks_api_alias_rejects_cursor_with_offset_above_limit() -> None:

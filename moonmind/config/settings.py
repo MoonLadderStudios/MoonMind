@@ -202,6 +202,70 @@ class TemporalSettings(BaseSettings):
         return normalized
 
 
+class TemporalDashboardSettings(BaseSettings):
+    """Task-dashboard Temporal source contract and rollout flags."""
+
+    enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_ENABLED")
+    list_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_LIST_ENABLED")
+    detail_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_DETAIL_ENABLED")
+    actions_enabled: bool = Field(False, env="TEMPORAL_DASHBOARD_ACTIONS_ENABLED")
+    submit_enabled: bool = Field(False, env="TEMPORAL_DASHBOARD_SUBMIT_ENABLED")
+    debug_fields_enabled: bool = Field(
+        False, env="TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED"
+    )
+    list_endpoint: str = Field(
+        "/api/executions",
+        env="TEMPORAL_DASHBOARD_LIST_ENDPOINT",
+    )
+    create_endpoint: str = Field(
+        "/api/executions",
+        env="TEMPORAL_DASHBOARD_CREATE_ENDPOINT",
+    )
+    detail_endpoint: str = Field(
+        "/api/executions/{workflowId}",
+        env="TEMPORAL_DASHBOARD_DETAIL_ENDPOINT",
+    )
+    update_endpoint: str = Field(
+        "/api/executions/{workflowId}/update",
+        env="TEMPORAL_DASHBOARD_UPDATE_ENDPOINT",
+    )
+    signal_endpoint: str = Field(
+        "/api/executions/{workflowId}/signal",
+        env="TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT",
+    )
+    cancel_endpoint: str = Field(
+        "/api/executions/{workflowId}/cancel",
+        env="TEMPORAL_DASHBOARD_CANCEL_ENDPOINT",
+    )
+    artifacts_endpoint: str = Field(
+        "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+        env="TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT",
+    )
+    artifact_create_endpoint: str = Field(
+        "/api/artifacts",
+        env="TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT",
+    )
+    artifact_metadata_endpoint: str = Field(
+        "/api/artifacts/{artifactId}",
+        env="TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT",
+    )
+    artifact_presign_download_endpoint: str = Field(
+        "/api/artifacts/{artifactId}/presign-download",
+        env="TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT",
+    )
+    artifact_download_endpoint: str = Field(
+        "/api/artifacts/{artifactId}/download",
+        env="TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class SpecWorkflowSettings(BaseSettings):
     """Settings specific to Spec Kit Celery workflows."""
 
@@ -1712,6 +1776,9 @@ class AppSettings(BaseSettings):
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
     celery: CelerySettings = Field(default_factory=CelerySettings)
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
+    temporal_dashboard: TemporalDashboardSettings = Field(
+        default_factory=TemporalDashboardSettings
+    )
     spec_workflow: AppSpecWorkflowSettings = Field(
         default_factory=AppSpecWorkflowSettings
     )

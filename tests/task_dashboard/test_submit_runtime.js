@@ -159,13 +159,37 @@ const helpers = loadSubmitRuntimeHelpers();
 })();
 
 (function testDetermineSubmitDestinationRoutesPayloads() {
-  const endpoints = { queue: "/api/queue/jobs", orchestrator: "/orchestrator/tasks" };
+  const endpoints = {
+    queue: "/api/queue/jobs",
+    orchestrator: "/orchestrator/tasks",
+    temporal: "/api/executions",
+  };
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
   assert.strictEqual(workerTarget.mode, "worker");
   assert.strictEqual(workerTarget.endpoint, "/api/queue/jobs");
   const orchestratorTarget = helpers.determineSubmitDestination("orchestrator", endpoints);
   assert.strictEqual(orchestratorTarget.mode, "orchestrator");
   assert.strictEqual(orchestratorTarget.endpoint, "/orchestrator/tasks");
+  const temporalTarget = helpers.determineSubmitDestination(
+    "codex",
+    endpoints,
+    { temporalSubmitEnabled: true, isEditMode: false },
+  );
+  assert.strictEqual(temporalTarget.mode, "temporal");
+  assert.strictEqual(temporalTarget.endpoint, "/api/executions");
+  const editTarget = helpers.determineSubmitDestination(
+    "codex",
+    endpoints,
+    { temporalSubmitEnabled: true, isEditMode: true },
+  );
+  assert.strictEqual(editTarget.mode, "worker");
+})();
+
+(function testTemporalSubmitHelpersKeepPickerWorkerOnly() {
+  assert.strictEqual(helpers.shouldUseTemporalSubmit("codex", { temporalSubmitEnabled: true }), true);
+  assert.strictEqual(helpers.shouldUseTemporalSubmit("orchestrator", { temporalSubmitEnabled: true }), false);
+  assert.strictEqual(helpers.isWorkerSubmitRuntime("temporal"), false);
+  assert.strictEqual(helpers.validateSubmitRuntime("temporal"), null);
 })();
 
 (function testValidateOrchestratorSubmissionEnforcesFields() {

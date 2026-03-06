@@ -113,6 +113,9 @@ class TemporalExecutionService:
         failure_policy: str | None,
         initial_parameters: dict[str, Any] | None,
         idempotency_key: str | None,
+        repository: str | None = None,
+        integration: str | None = None,
+        summary: str | None = None,
     ) -> TemporalExecutionRecord:
         workflow_type_enum = self._parse_workflow_type(workflow_type)
         owner = str(owner_id) if owner_id is not None else None
@@ -142,7 +145,7 @@ class TemporalExecutionService:
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
             "title": resolved_title,
-            "summary": "Execution initialized.",
+            "summary": summary or "Execution initialized.",
         }
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
@@ -151,10 +154,15 @@ class TemporalExecutionService:
 
         search_attributes = {
             "mm_owner_id": owner or "unknown",
+            "mm_owner_type": "user" if owner else "system",
             "mm_state": MoonMindWorkflowState.INITIALIZING.value,
             "mm_updated_at": now.isoformat(),
             "mm_entry": WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
         }
+        if repository:
+            search_attributes["mm_repo"] = repository
+        if integration:
+            search_attributes["mm_integration"] = integration
 
         artifact_refs = [
             ref
@@ -214,7 +222,11 @@ class TemporalExecutionService:
         *,
         workflow_type: str | None,
         state: str | None,
+        entry: str | None,
+        owner_type: str | None,
         owner_id: UUID | str | None,
+        repo: str | None,
+        integration: str | None,
         page_size: int,
         next_page_token: str | None,
     ) -> TemporalExecutionListResult:
@@ -225,13 +237,19 @@ class TemporalExecutionService:
             self._parse_workflow_type(workflow_type) if workflow_type else None
         )
         state_enum = self._parse_state(state) if state else None
+        entry_value = self._parse_entry(entry) if entry else None
+        owner_type_value = self._parse_owner_type(owner_type) if owner_type else None
 
         stmt = select(TemporalExecutionRecord)
         stmt = self._apply_filters(
             stmt,
             workflow_type=workflow_type_enum,
             state=state_enum,
+            entry=entry_value,
+            owner_type=owner_type_value,
             owner_id=owner,
+            repo=repo,
+            integration=integration,
         )
         stmt = stmt.order_by(
             TemporalExecutionRecord.updated_at.desc(),
@@ -250,7 +268,11 @@ class TemporalExecutionService:
             count_stmt,
             workflow_type=workflow_type_enum,
             state=state_enum,
+            entry=entry_value,
+            owner_type=owner_type_value,
             owner_id=owner,
+            repo=repo,
+            integration=integration,
         )
         count = int((await self._session.execute(count_stmt)).scalar_one())
 
@@ -740,6 +762,7 @@ class TemporalExecutionService:
         attrs["mm_updated_at"] = now.isoformat()
         attrs.setdefault("mm_entry", record.entry)
         attrs.setdefault("mm_owner_id", record.owner_id or "unknown")
+        attrs.setdefault("mm_owner_type", "user" if record.owner_id else "system")
         record.search_attributes = attrs
 
     def _update_summary(
@@ -773,6 +796,18 @@ class TemporalExecutionService:
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 
+    def _parse_entry(self, raw: str) -> str:
+        value = str(raw).strip().lower()
+        if value not in {"run", "manifest"}:
+            raise TemporalExecutionValidationError(f"Unsupported entry: {raw}")
+        return value
+
+    def _parse_owner_type(self, raw: str) -> str:
+        value = str(raw).strip().lower()
+        if value not in {"user", "system"}:
+            raise TemporalExecutionValidationError(f"Unsupported ownerType: {raw}")
+        return value
+
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
         if workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
             return "Manifest Ingest"
@@ -801,14 +836,34 @@ class TemporalExecutionService:
         *,
         workflow_type: TemporalWorkflowType | None,
         state: MoonMindWorkflowState | None,
+        entry: str | None,
+        owner_type: str | None,
         owner_id: str | None,
+        repo: str | None,
+        integration: str | None,
     ) -> Select[Any]:
         if workflow_type:
             stmt = stmt.where(TemporalExecutionRecord.workflow_type == workflow_type)
         if state:
             stmt = stmt.where(TemporalExecutionRecord.state == state)
+        if entry:
+            stmt = stmt.where(TemporalExecutionRecord.entry == entry)
+        if owner_type:
+            stmt = stmt.where(
+                TemporalExecutionRecord.search_attributes["mm_owner_type"].as_string()
+                == owner_type
+            )
         if owner_id:
             stmt = stmt.where(TemporalExecutionRecord.owner_id == owner_id)
+        if repo:
+            stmt = stmt.where(
+                TemporalExecutionRecord.search_attributes["mm_repo"].as_string() == repo
+            )
+        if integration:
+            stmt = stmt.where(
+                TemporalExecutionRecord.search_attributes["mm_integration"].as_string()
+                == integration
+            )
         return stmt
 
     def _decode_page_token(self, token: str | None) -> int:
