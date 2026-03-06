@@ -78,7 +78,10 @@ def upgrade() -> None:
         index["name"]
         for index in inspector.get_indexes("temporal_integration_correlations")
     }
-    if "ix_temporal_integration_correlations_workflow_status" not in correlation_indexes:
+    if (
+        "ix_temporal_integration_correlations_workflow_status"
+        not in correlation_indexes
+    ):
         op.create_index(
             "ix_temporal_integration_correlations_workflow_status",
             "temporal_integration_correlations",
