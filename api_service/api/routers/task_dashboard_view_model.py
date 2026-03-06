@@ -15,7 +15,6 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "jules", "universal")
-_DEFAULT_TASK_RUNTIME = "codex"
 _DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
 _DEFAULT_CODEX_EFFORT = "high"
 _DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
