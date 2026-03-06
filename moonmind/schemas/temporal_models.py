@@ -7,6 +7,15 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+NormalizedIntegrationStatus = Literal[
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "canceled",
+    "unknown",
+]
+
 
 class CreateExecutionRequest(BaseModel):
     """Request payload for starting a workflow execution."""
@@ -80,6 +89,105 @@ class SignalExecutionRequest(BaseModel):
     payload_artifact_ref: Optional[str] = Field(None, alias="payloadArtifactRef")
 
 
+class ConfigureIntegrationMonitoringRequest(BaseModel):
+    """Request payload for starting Temporal-side external monitoring."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    integration_name: str = Field(..., alias="integrationName", min_length=1)
+    correlation_id: Optional[str] = Field(None, alias="correlationId")
+    external_operation_id: str = Field(..., alias="externalOperationId", min_length=1)
+    normalized_status: NormalizedIntegrationStatus = Field(
+        ..., alias="normalizedStatus"
+    )
+    provider_status: Optional[str] = Field(None, alias="providerStatus")
+    callback_supported: bool = Field(..., alias="callbackSupported")
+    callback_correlation_key: Optional[str] = Field(
+        None, alias="callbackCorrelationKey"
+    )
+    recommended_poll_seconds: Optional[int] = Field(
+        None, alias="recommendedPollSeconds", ge=1
+    )
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    provider_summary: dict[str, Any] = Field(
+        default_factory=dict, alias="providerSummary"
+    )
+    result_refs: list[str] = Field(default_factory=list, alias="resultRefs")
+
+
+class PollIntegrationRequest(BaseModel):
+    """Request payload for polling updates while awaiting external completion."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    normalized_status: NormalizedIntegrationStatus = Field(
+        ..., alias="normalizedStatus"
+    )
+    provider_status: Optional[str] = Field(None, alias="providerStatus")
+    observed_at: Optional[datetime] = Field(None, alias="observedAt")
+    recommended_poll_seconds: Optional[int] = Field(
+        None, alias="recommendedPollSeconds", ge=1
+    )
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    provider_summary: dict[str, Any] = Field(
+        default_factory=dict, alias="providerSummary"
+    )
+    result_refs: list[str] = Field(default_factory=list, alias="resultRefs")
+    completed_wait_cycles: int = Field(1, alias="completedWaitCycles", ge=0)
+
+
+class IntegrationCallbackRequest(BaseModel):
+    """Generic provider callback payload resolved through correlation storage."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: Optional[str] = Field(None, alias="source")
+    event_type: str = Field(..., alias="eventType", min_length=1)
+    external_operation_id: Optional[str] = Field(None, alias="externalOperationId")
+    provider_event_id: Optional[str] = Field(None, alias="providerEventId")
+    normalized_status: Optional[NormalizedIntegrationStatus] = Field(
+        None, alias="normalizedStatus"
+    )
+    provider_status: Optional[str] = Field(None, alias="providerStatus")
+    observed_at: Optional[datetime] = Field(None, alias="observedAt")
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    provider_summary: dict[str, Any] = Field(
+        default_factory=dict, alias="providerSummary"
+    )
+    payload_artifact_ref: Optional[str] = Field(None, alias="payloadArtifactRef")
+
+
+class IntegrationStateModel(BaseModel):
+    """Compact persisted state for a monitored external integration."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    integration_name: str = Field(..., alias="integrationName")
+    correlation_id: str = Field(..., alias="correlationId")
+    external_operation_id: str = Field(..., alias="externalOperationId")
+    normalized_status: NormalizedIntegrationStatus = Field(
+        ..., alias="normalizedStatus"
+    )
+    provider_status: Optional[str] = Field(None, alias="providerStatus")
+    started_at: datetime = Field(..., alias="startedAt")
+    last_observed_at: datetime = Field(..., alias="lastObservedAt")
+    monitor_attempt_count: int = Field(..., alias="monitorAttemptCount", ge=0)
+    callback_supported: bool = Field(..., alias="callbackSupported")
+    result_refs: list[str] = Field(default_factory=list, alias="resultRefs")
+    callback_correlation_key: Optional[str] = Field(
+        None, alias="callbackCorrelationKey"
+    )
+    provider_event_ids_seen: list[str] = Field(
+        default_factory=list, alias="providerEventIdsSeen"
+    )
+    next_poll_at: Optional[datetime] = Field(None, alias="nextPollAt")
+    poll_interval_seconds: Optional[int] = Field(None, alias="pollIntervalSeconds")
+    external_url: Optional[str] = Field(None, alias="externalUrl")
+    provider_summary: dict[str, Any] = Field(
+        default_factory=dict, alias="providerSummary"
+    )
+
+
 class CancelExecutionRequest(BaseModel):
     """Request payload for cancellation."""
 
@@ -110,6 +218,7 @@ class ExecutionModel(BaseModel):
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     started_at: datetime = Field(..., alias="startedAt")

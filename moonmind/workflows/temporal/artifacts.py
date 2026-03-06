@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -1709,6 +1710,137 @@ class TemporalArtifactService:
             raise TemporalArtifactStateError("preview artifact is unavailable")
         preview = await self._repository.get_artifact(str(preview_id))
         return build_artifact_ref(preview)
+
+    async def write_integration_event_artifact(
+        self,
+        *,
+        principal: str,
+        execution: ExecutionRef,
+        integration_name: str,
+        correlation_id: str,
+        payload: bytes,
+        content_type: str = "application/json",
+        event_type: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
+        redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+    ) -> ArtifactRef:
+        """Persist one raw integration callback/event payload as an artifact."""
+
+        metadata = dict(metadata_json or {})
+        metadata.update(
+            {
+                "integration_name": integration_name,
+                "correlation_id": correlation_id,
+                "event_type": event_type,
+                "artifact_kind": "integration_event",
+            }
+        )
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(payload),
+            link=ExecutionRef(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                link_type="debug.trace",
+                label=execution.label or f"{integration_name}:callback",
+            ),
+            metadata_json=metadata,
+            redaction_level=redaction_level,
+        )
+        artifact = await self.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=payload,
+            content_type=content_type,
+        )
+        return build_artifact_ref(artifact)
+
+    async def write_integration_result_artifact(
+        self,
+        *,
+        principal: str,
+        execution: ExecutionRef,
+        integration_name: str,
+        correlation_id: str,
+        payload: dict[str, Any] | bytes,
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> ArtifactRef:
+        """Persist one integration result envelope using standard output retention."""
+
+        encoded = (
+            payload
+            if isinstance(payload, bytes)
+            else json.dumps(payload, sort_keys=True).encode("utf-8")
+        )
+        metadata = {
+            "integration_name": integration_name,
+            "correlation_id": correlation_id,
+            "artifact_kind": "integration_result",
+        }
+        metadata.update(metadata_json or {})
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(encoded),
+            link=ExecutionRef(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                link_type="output.primary",
+                label=execution.label or f"{integration_name}:result",
+            ),
+            metadata_json=metadata,
+            redaction_level=db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+        artifact = await self.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=encoded,
+            content_type=content_type,
+        )
+        return build_artifact_ref(artifact)
+
+    async def write_integration_failure_artifact(
+        self,
+        *,
+        principal: str,
+        execution: ExecutionRef,
+        integration_name: str,
+        correlation_id: str,
+        external_operation_id: str,
+        normalized_status: str,
+        provider_status: str | None,
+        summary: str,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> ArtifactRef:
+        """Persist a compact provider failure summary with restricted preview semantics."""
+
+        payload = {
+            "integrationName": integration_name,
+            "correlationId": correlation_id,
+            "externalOperationId": external_operation_id,
+            "normalizedStatus": normalized_status,
+            "providerStatus": provider_status,
+            "summary": summary,
+            "diagnostics": diagnostics or {},
+        }
+        return await self.write_integration_result_artifact(
+            principal=principal,
+            execution=ExecutionRef(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                link_type="output.summary",
+                label=execution.label or f"{integration_name}:failure",
+            ),
+            integration_name=integration_name,
+            correlation_id=correlation_id,
+            payload=payload,
+            metadata_json={"artifact_kind": "integration_failure"},
+        )
 
 
 class TemporalArtifactActivities:

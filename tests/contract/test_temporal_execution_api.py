@@ -68,6 +68,25 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             assert describe_response.json()["state"] == "initializing"
             assert describe_response.json()["temporalStatus"] == "running"
 
+            configure_integration = await client.post(
+                f"/api/executions/{workflow_id}/integration",
+                json={
+                    "integrationName": "jules",
+                    "externalOperationId": "task-123",
+                    "normalizedStatus": "running",
+                    "providerStatus": "queued",
+                    "callbackSupported": True,
+                    "recommendedPollSeconds": 30,
+                    "externalUrl": "https://jules.example.test/tasks/task-123",
+                },
+            )
+            assert configure_integration.status_code == 202
+            configured_body = configure_integration.json()
+            assert configured_body["state"] == "awaiting_external"
+            assert configured_body["searchAttributes"]["mm_integration"] == "jules"
+            callback_key = configured_body["integration"]["callbackCorrelationKey"]
+            assert callback_key
+
             update_response = await client.post(
                 f"/api/executions/{workflow_id}/update",
                 json={
@@ -92,6 +111,31 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             )
             assert resume_response.status_code == 202
             assert resume_response.json()["state"] == "executing"
+
+            poll_response = await client.post(
+                f"/api/executions/{workflow_id}/integration/poll",
+                json={
+                    "normalizedStatus": "running",
+                    "providerStatus": "running",
+                    "completedWaitCycles": 1,
+                },
+            )
+            assert poll_response.status_code == 202
+            assert poll_response.json()["integration"]["monitorAttemptCount"] == 1
+
+            callback_response = await client.post(
+                f"/api/integrations/jules/callbacks/{callback_key}",
+                json={
+                    "eventType": "completed",
+                    "providerEventId": "evt-1",
+                    "normalizedStatus": "succeeded",
+                    "providerStatus": "completed",
+                },
+            )
+            assert callback_response.status_code == 202
+            callback_body = callback_response.json()
+            assert callback_body["state"] == "executing"
+            assert callback_body["integration"]["normalizedStatus"] == "succeeded"
 
             cancel_response = await client.post(
                 f"/api/executions/{workflow_id}/cancel",
