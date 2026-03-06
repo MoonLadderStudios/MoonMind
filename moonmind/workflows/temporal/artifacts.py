@@ -1716,9 +1716,11 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
-    async def artifact_create(self, *, principal: str, **kwargs: Any) -> ArtifactRef:
-        artifact, _ = await self._service.create(principal=principal, **kwargs)
-        return build_artifact_ref(artifact)
+    async def artifact_create(
+        self, *, principal: str, **kwargs: Any
+    ) -> tuple[ArtifactRef, ArtifactUploadDescriptor]:
+        artifact, upload = await self._service.create(principal=principal, **kwargs)
+        return build_artifact_ref(artifact), upload
 
     async def artifact_read(
         self,
@@ -1781,10 +1783,65 @@ class TemporalArtifactActivities:
             policy=policy,
         )
 
-    async def artifact_sweep_lifecycle(
+    async def artifact_lifecycle_sweep(
         self,
         *,
         principal: str,
         run_id: str | None = None,
     ) -> LifecycleSweepSummary:
         return await self._service.sweep_lifecycle(principal=principal, run_id=run_id)
+
+    async def artifact_sweep_lifecycle(
+        self,
+        *,
+        principal: str,
+        run_id: str | None = None,
+    ) -> LifecycleSweepSummary:
+        """Backward-compatible alias for the canonical lifecycle sweep activity."""
+
+        return await self.artifact_lifecycle_sweep(
+            principal=principal,
+            run_id=run_id,
+        )
+
+    async def artifact_link(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        execution_ref: dict[str, Any] | ExecutionRef,
+    ) -> str:
+        link = await self._service.link_artifact(
+            artifact_id=artifact_id,
+            principal=principal,
+            execution_ref=execution_ref,
+        )
+        return str(link.id)
+
+    async def artifact_pin(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        reason: str | None = None,
+    ) -> str:
+        await self._service.pin(
+            artifact_id=artifact_id,
+            principal=principal,
+            reason=reason,
+        )
+        pin = await self._service._repository.get_pin(artifact_id)  # noqa: SLF001
+        if pin is None:
+            raise TemporalArtifactStateError("pin was not created")
+        return str(pin.id)
+
+    async def artifact_unpin(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+    ) -> None:
+        await self._service.unpin(
+            artifact_id=artifact_id,
+            principal=principal,
+        )
