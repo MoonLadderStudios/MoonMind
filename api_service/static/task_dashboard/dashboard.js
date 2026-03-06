@@ -2885,6 +2885,7 @@
       };
       window.__temporalRunHistoryTest = {
         resolveTemporalDetailContext,
+        resolveManifestIngestContext,
       };
     }
 
@@ -8358,6 +8359,32 @@
       memo,
       continueAsNewCause,
       artifactsEndpoint,
+    };
+  }
+
+  function resolveManifestIngestContext(
+    execution,
+    workflowId,
+    sourceConfig = temporalSourceConfig,
+  ) {
+    const detailContext = resolveTemporalDetailContext(execution, workflowId, sourceConfig);
+    const resolvedWorkflowId = detailContext.taskId || workflowId;
+    const statusEndpointTemplate =
+      sourceConfig.manifestStatus || "/api/executions/{workflowId}/manifest-status";
+    const nodesEndpointTemplate =
+      sourceConfig.manifestNodes || "/api/executions/{workflowId}/manifest-nodes";
+    return {
+      ...detailContext,
+      manifestStatusEndpoint: endpoint(statusEndpointTemplate, {
+        workflowId: resolvedWorkflowId,
+      }),
+      manifestNodesEndpoint: endpoint(nodesEndpointTemplate, {
+        workflowId: resolvedWorkflowId,
+      }),
+      runIndexArtifactRef:
+        pick(execution, "runIndexArtifactRef")
+        || pick(execution, "run_index_artifact_ref")
+        || null,
     };
   }
 

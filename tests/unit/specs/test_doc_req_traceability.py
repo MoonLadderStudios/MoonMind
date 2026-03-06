@@ -22,6 +22,13 @@ _FEATURES = (
         Path("specs/048-run-history-rerun/spec.md"),
         Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
     ),
+    (
+        "049-manifest-ingest-runtime",
+        Path("specs/049-manifest-ingest-runtime/spec.md"),
+        Path(
+            "specs/049-manifest-ingest-runtime/contracts/requirements-traceability.md"
+        ),
+    ),
 )
 
 

@@ -533,6 +533,22 @@ def build_default_activity_catalog(
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
 
 
+def manifest_ingest_activity_routes(
+    catalog: TemporalActivityCatalog | None = None,
+) -> tuple[TemporalActivityRoute, ...]:
+    """Return the canonical activity routes used by manifest ingest."""
+
+    resolved_catalog = catalog or build_default_activity_catalog()
+    return tuple(
+        resolved_catalog.resolve_activity(activity_type)
+        for activity_type in (
+            "artifact.read",
+            "plan.generate",
+            "artifact.write_complete",
+        )
+    )
+
+
 def skill_policy_as_route(
     *,
     activity_type: str,
@@ -584,5 +600,6 @@ __all__ = [
     "WORKFLOW_FLEET",
     "WORKFLOW_TASK_QUEUE",
     "build_default_activity_catalog",
+    "manifest_ingest_activity_routes",
     "skill_policy_as_route",
 ]

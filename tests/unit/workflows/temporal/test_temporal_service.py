@@ -54,6 +54,7 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         )
 
         assert record.workflow_id.startswith("mm:")
+        assert record.search_attributes["mm_owner_type"] == "user"
         assert record.state is MoonMindWorkflowState.INITIALIZING
         assert record.search_attributes["mm_owner_id"] == str(owner_id)
         assert record.search_attributes["mm_state"] == "initializing"
@@ -162,6 +163,10 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-1",
         )
 
@@ -208,6 +213,10 @@ async def test_request_rerun_rejected_for_terminal_execution(tmp_path):
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-terminal",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -251,6 +260,10 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path)
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-clears-pause",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -388,6 +401,10 @@ async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
             plan_artifact_ref="artifact://plan/new",
             parameters_patch={"force": "yes"},
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-with-overrides",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -425,6 +442,10 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             plan_artifact_ref="artifact://plan/replacement",
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="update-major-reconfig",
         )
         refreshed = await service.describe_execution(created.workflow_id)

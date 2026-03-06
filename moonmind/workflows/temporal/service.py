@@ -24,6 +24,18 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from moonmind.schemas.manifest_ingest_models import (
+    ManifestNodePageModel,
+    ManifestStatusSnapshotModel,
+)
+from moonmind.workflows.temporal.manifest_ingest import (
+    MANIFEST_UPDATE_NAMES,
+    ManifestIngestValidationError,
+    apply_manifest_update,
+    build_manifest_status_snapshot,
+    initialize_manifest_projection,
+    list_manifest_nodes,
+)
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.SUCCEEDED,
@@ -52,7 +64,12 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
-ALLOWED_UPDATE_NAMES: set[str] = {"UpdateInputs", "SetTitle", "RequestRerun"}
+ALLOWED_UPDATE_NAMES: set[str] = {
+    "UpdateInputs",
+    "SetTitle",
+    "RequestRerun",
+    *MANIFEST_UPDATE_NAMES,
+}
 ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
 ALLOWED_ERROR_CATEGORIES: set[str] = {
     "user_error",
@@ -155,6 +172,7 @@ class TemporalExecutionService:
             memo["manifest_ref"] = manifest_artifact_ref
 
         search_attributes = {
+            "mm_owner_type": "user" if owner else "system",
             "mm_owner_id": owner or "unknown",
             "mm_state": MoonMindWorkflowState.INITIALIZING.value,
             "mm_updated_at": now.isoformat(),
@@ -197,6 +215,8 @@ class TemporalExecutionService:
             closed_at=None,
         )
         self._session.add(record)
+        if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
+            initialize_manifest_projection(record)
         try:
             await self._session.commit()
         except IntegrityError as exc:
@@ -282,6 +302,10 @@ class TemporalExecutionService:
         plan_artifact_ref: str | None,
         parameters_patch: dict[str, Any] | None,
         title: str | None,
+        new_manifest_artifact_ref: str | None,
+        mode: str | None,
+        max_concurrency: int | None,
+        node_ids: list[str] | None,
         idempotency_key: str | None,
     ) -> dict[str, Any]:
         if update_name not in ALLOWED_UPDATE_NAMES:
@@ -302,7 +326,24 @@ class TemporalExecutionService:
                 "message": "Workflow is in a terminal state and no longer accepts updates.",
             }
 
-        if update_name == "UpdateInputs":
+        if record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST and (
+            update_name in MANIFEST_UPDATE_NAMES
+        ):
+            try:
+                response = apply_manifest_update(
+                    record,
+                    update_name=update_name,
+                    new_manifest_artifact_ref=new_manifest_artifact_ref,
+                    mode=mode,
+                    max_concurrency=max_concurrency,
+                    node_ids=node_ids,
+                )
+            except ManifestIngestValidationError as exc:
+                raise TemporalExecutionValidationError(str(exc)) from exc
+            self._touch(record)
+            if response.get("message"):
+                self._update_summary(record, str(response["message"]))
+        elif update_name == "UpdateInputs":
             response = self._apply_update_inputs(
                 record,
                 input_artifact_ref=input_artifact_ref,
@@ -330,6 +371,35 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         return response
+
+    async def describe_manifest_status(
+        self,
+        workflow_id: str,
+    ) -> ManifestStatusSnapshotModel:
+        record = await self.describe_execution(workflow_id)
+        try:
+            return build_manifest_status_snapshot(record)
+        except ManifestIngestValidationError as exc:
+            raise TemporalExecutionValidationError(str(exc)) from exc
+
+    async def list_manifest_nodes(
+        self,
+        workflow_id: str,
+        *,
+        state: str | None,
+        cursor: str | None,
+        limit: int,
+    ) -> ManifestNodePageModel:
+        record = await self.describe_execution(workflow_id)
+        try:
+            return list_manifest_nodes(
+                record,
+                state=state,
+                cursor=cursor,
+                limit=limit,
+            )
+        except ManifestIngestValidationError as exc:
+            raise TemporalExecutionValidationError(str(exc)) from exc
 
     async def signal_execution(
         self,
@@ -754,6 +824,7 @@ class TemporalExecutionService:
         record.updated_at = now
 
         attrs = dict(record.search_attributes or {})
+        attrs.setdefault("mm_owner_type", "user" if record.owner_id else "system")
         attrs["mm_state"] = record.state.value
         attrs["mm_updated_at"] = now.isoformat()
         attrs.setdefault("mm_entry", record.entry)

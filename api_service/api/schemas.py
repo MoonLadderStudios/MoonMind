@@ -96,8 +96,18 @@ class ManifestRunMetadataModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    source: Optional[Literal["queue", "temporal"]] = Field(None, alias="source")
     job_id: Optional[uuid.UUID] = Field(None, alias="jobId")
     status: Optional[str] = Field(None, alias="status")
+    task_id: Optional[str] = Field(None, alias="taskId")
+    workflow_id: Optional[str] = Field(None, alias="workflowId")
+    temporal_run_id: Optional[str] = Field(None, alias="temporalRunId")
+    workflow_type: Optional[str] = Field(None, alias="workflowType")
+    temporal_status: Optional[Literal["running", "completed", "failed", "canceled"]] = Field(
+        None, alias="temporalStatus"
+    )
+    manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
+    link: Optional[str] = Field(None, alias="link")
     started_at: Optional[datetime] = Field(None, alias="startedAt")
     finished_at: Optional[datetime] = Field(None, alias="finishedAt")
 
@@ -112,6 +122,9 @@ class ManifestSummaryModel(BaseModel):
     content_hash: str = Field(..., alias="contentHash")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
     last_run_job_id: Optional[uuid.UUID] = Field(None, alias="lastRunJobId")
+    last_run_source: Optional[Literal["queue", "temporal"]] = Field(
+        None, alias="lastRunSource"
+    )
     last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
     state_updated_at: Optional[datetime] = Field(None, alias="stateUpdatedAt")
 
@@ -179,7 +192,14 @@ class ManifestRunRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     action: str = Field("run", alias="action")
+    title: Optional[str] = Field(None, alias="title")
     options: Optional[ManifestRunOptions] = Field(None, alias="options")
+    failure_policy: Optional[
+        Literal["fail_fast", "continue_and_report", "best_effort"]
+    ] = Field(None, alias="failurePolicy")
+    max_concurrency: Optional[int] = Field(None, alias="maxConcurrency")
+    tags: dict[str, str] = Field(default_factory=dict, alias="tags")
+    idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
     @field_validator("action", mode="before")
     @classmethod
@@ -194,6 +214,13 @@ class ManifestRunRequest(BaseModel):
         if normalized not in {"plan", "run"}:
             raise ValueError("action must be one of: plan, run")
         return normalized
+
+    @field_validator("max_concurrency")
+    @classmethod
+    def _validate_max_concurrency(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and not 1 <= value <= 500:
+            raise ValueError("maxConcurrency must be between 1 and 500 when provided")
+        return value
 
 
 class ManifestStateUpdateRequest(BaseModel):
@@ -225,8 +252,10 @@ class ManifestRunResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    job_id: uuid.UUID = Field(..., alias="jobId")
-    queue: ManifestRunQueueMetadata = Field(..., alias="queue")
+    source: Literal["queue", "temporal"] = Field(..., alias="source")
+    job_id: Optional[uuid.UUID] = Field(None, alias="jobId")
+    queue: Optional[ManifestRunQueueMetadata] = Field(None, alias="queue")
+    execution: Optional[ManifestRunMetadataModel] = Field(None, alias="execution")
 
 
 class QueueSystemMetadataModel(BaseModel):

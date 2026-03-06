@@ -210,6 +210,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "create": "/api/executions",
                 "detail": "/api/executions/{workflowId}",
                 "update": "/api/executions/{workflowId}/update",
+                "manifestStatus": "/api/executions/{workflowId}/manifest-status",
+                "manifestNodes": "/api/executions/{workflowId}/manifest-nodes",
                 "signal": "/api/executions/{workflowId}/signal",
                 "cancel": "/api/executions/{workflowId}/cancel",
                 "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",

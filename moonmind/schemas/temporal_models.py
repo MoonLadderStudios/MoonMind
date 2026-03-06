@@ -7,6 +7,12 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.schemas.manifest_ingest_models import (
+    ManifestExecutionPolicyModel,
+    ManifestNodeCountsModel,
+    RequestedByModel,
+)
+
 
 class CreateExecutionRequest(BaseModel):
     """Request payload for starting a workflow execution."""
@@ -45,13 +51,27 @@ class UpdateExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    update_name: Literal["UpdateInputs", "SetTitle", "RequestRerun"] = Field(
-        "UpdateInputs", alias="updateName"
-    )
+    update_name: Literal[
+        "UpdateInputs",
+        "SetTitle",
+        "RequestRerun",
+        "UpdateManifest",
+        "SetConcurrency",
+        "Pause",
+        "Resume",
+        "CancelNodes",
+        "RetryNodes",
+    ] = Field("UpdateInputs", alias="updateName")
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     parameters_patch: Optional[dict[str, Any]] = Field(None, alias="parametersPatch")
     title: Optional[str] = Field(None, alias="title")
+    new_manifest_artifact_ref: Optional[str] = Field(
+        None, alias="newManifestArtifactRef"
+    )
+    mode: Optional[Literal["REPLACE_FUTURE", "APPEND"]] = Field(None, alias="mode")
+    max_concurrency: Optional[int] = Field(None, alias="maxConcurrency")
+    node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
 
@@ -66,6 +86,7 @@ class UpdateExecutionResponse(BaseModel):
     )
     message: str = Field(..., alias="message")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
+    result: Optional[dict[str, Any]] = Field(None, alias="result")
 
 
 class SignalExecutionRequest(BaseModel):
@@ -110,6 +131,21 @@ class ExecutionModel(BaseModel):
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
+    plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
+    summary_artifact_ref: Optional[str] = Field(None, alias="summaryArtifactRef")
+    run_index_artifact_ref: Optional[str] = Field(None, alias="runIndexArtifactRef")
+    checkpoint_artifact_ref: Optional[str] = Field(
+        None, alias="checkpointArtifactRef"
+    )
+    requested_by: Optional[RequestedByModel] = Field(None, alias="requestedBy")
+    execution_policy: Optional[ManifestExecutionPolicyModel] = Field(
+        None,
+        alias="executionPolicy",
+    )
+    phase: Optional[str] = Field(None, alias="phase")
+    paused: Optional[bool] = Field(None, alias="paused")
+    counts: Optional[ManifestNodeCountsModel] = Field(None, alias="counts")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     started_at: datetime = Field(..., alias="startedAt")

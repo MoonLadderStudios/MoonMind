@@ -39,6 +39,11 @@ from moonmind.workflows.skills.skill_registry import (
     parse_skill_registry,
 )
 from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
+from moonmind.workflows.temporal.manifest_ingest import (
+    build_manifest_run_index,
+    build_manifest_summary,
+    compile_manifest_plan,
+)
 from moonmind.workflows.temporal.artifacts import (
     ArtifactRef,
     ArtifactUploadDescriptor,
@@ -72,6 +77,15 @@ class PlanGenerateActivityResult:
     """Result from ``plan.generate``."""
 
     plan_ref: ArtifactRef
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestCompileActivityResult:
+    """Result from manifest compile activity helpers."""
+
+    plan_ref: ArtifactRef
+    manifest_digest: str
+    nodes: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,6 +527,112 @@ class TemporalSkillActivities:
             dispatcher=self._dispatcher,
             context=context,
         )
+
+
+class TemporalManifestActivities:
+    """Implementation helpers for manifest-ingest activity steps."""
+
+    def __init__(self, *, artifact_service: TemporalArtifactService) -> None:
+        self._artifact_service = artifact_service
+
+    async def manifest_read(
+        self,
+        *,
+        principal: str,
+        manifest_ref: ArtifactRef | str,
+    ) -> str:
+        _artifact, payload = await self._artifact_service.read(
+            artifact_id=_artifact_id_from_ref(manifest_ref),
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        return payload.decode("utf-8")
+
+    async def manifest_compile(
+        self,
+        *,
+        principal: str,
+        manifest_ref: ArtifactRef | str,
+        manifest_payload: bytes | str,
+        action: str,
+        options: Mapping[str, Any] | None,
+        requested_by: Mapping[str, Any],
+        execution_policy: Mapping[str, Any],
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> ManifestCompileActivityResult:
+        plan = compile_manifest_plan(
+            manifest_ref=_artifact_id_from_ref(manifest_ref),
+            manifest_payload=manifest_payload,
+            action=action,
+            options=options,
+            requested_by=requested_by,
+            execution_policy=execution_policy,
+        )
+        plan_ref = await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload=plan.model_dump(by_alias=True),
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "manifest_plan.json",
+                "producer": "activity:manifest.compile",
+                "labels": ["manifest", "plan"],
+            },
+        )
+        return ManifestCompileActivityResult(
+            plan_ref=plan_ref,
+            manifest_digest=plan.manifest_digest,
+            nodes=tuple(node.model_dump(by_alias=True) for node in plan.nodes),
+        )
+
+    async def manifest_write_summary(
+        self,
+        *,
+        principal: str,
+        workflow_id: str,
+        state: str,
+        phase: str,
+        manifest_ref: str,
+        plan_ref: str | None,
+        nodes: Sequence[Mapping[str, Any]],
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> tuple[ArtifactRef, ArtifactRef]:
+        summary = build_manifest_summary(
+            workflow_id=workflow_id,
+            state=state,
+            phase=phase,
+            manifest_ref=manifest_ref,
+            plan_ref=plan_ref,
+            nodes=list(nodes),
+        )
+        run_index = build_manifest_run_index(
+            workflow_id=workflow_id,
+            manifest_ref=manifest_ref,
+            nodes=list(nodes),
+        )
+        summary_ref = await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload=summary.model_dump(by_alias=True),
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "manifest_summary.json",
+                "producer": "activity:manifest.summary",
+                "labels": ["manifest", "summary"],
+            },
+        )
+        run_index_ref = await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload=run_index.model_dump(by_alias=True),
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "manifest_run_index.json",
+                "producer": "activity:manifest.run_index",
+                "labels": ["manifest", "run-index"],
+            },
+        )
+        return summary_ref, run_index_ref
 
 
 class TemporalSandboxActivities:
