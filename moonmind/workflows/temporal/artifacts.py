@@ -1560,10 +1560,10 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         reason: str | None,
-    ) -> None:
+    ) -> db_models.TemporalArtifactPin:
         artifact = await self._repository.get_artifact(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
-        await self._repository.pin_artifact(
+        pin = await self._repository.pin_artifact(
             artifact_id=artifact_id,
             principal=principal,
             reason=reason,
@@ -1571,6 +1571,7 @@ class TemporalArtifactService:
         artifact.retention_class = db_models.TemporalArtifactRetentionClass.PINNED
         artifact.expires_at = None
         await self._repository.commit()
+        return pin
 
     async def unpin(
         self,
@@ -1825,14 +1826,11 @@ class TemporalArtifactActivities:
         principal: str,
         reason: str | None = None,
     ) -> str:
-        await self._service.pin(
+        pin = await self._service.pin(
             artifact_id=artifact_id,
             principal=principal,
             reason=reason,
         )
-        pin = await self._service._repository.get_pin(artifact_id)  # noqa: SLF001
-        if pin is None:
-            raise TemporalArtifactStateError("pin was not created")
         return str(pin.id)
 
     async def artifact_unpin(

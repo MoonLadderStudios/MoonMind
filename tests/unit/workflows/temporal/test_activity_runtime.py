@@ -277,9 +277,13 @@ async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            workspace = tmp_path / "workspace"
-            workspace.mkdir()
-            activities = TemporalSandboxActivities(artifact_service=service)
+            workspace_root = tmp_path / "workspaces"
+            workspace = workspace_root / "temporal_sandbox" / "unit-run-command"
+            workspace.mkdir(parents=True)
+            activities = TemporalSandboxActivities(
+                artifact_service=service,
+                workspace_root=workspace_root,
+            )
 
             result = await activities.sandbox_run_command(
                 workspace_ref=workspace,
@@ -300,6 +304,33 @@ async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
                 principal="user-1",
             )
             assert b"hello sandbox" in payload
+
+
+async def test_sandbox_rejects_workspace_outside_sandbox_root(tmp_path: Path):
+    activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
+    outside_workspace = tmp_path / "outside"
+    outside_workspace.mkdir()
+
+    with pytest.raises(TemporalActivityRuntimeError, match="escapes sandbox root"):
+        await activities.sandbox_run_command(
+            workspace_ref=outside_workspace,
+            cmd=("pwd",),
+        )
+
+
+async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(tmp_path: Path):
+    activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
+    source = tmp_path / "repo"
+    source.mkdir()
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match="must be under workspace_root",
+    ):
+        await activities.sandbox_checkout_repo(
+            repo_ref=source,
+            idempotency_key="checkout-outside",
+        )
 
 
 async def test_shared_envelope_helpers_build_compact_runtime_contracts():
@@ -345,8 +376,8 @@ async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            repo = tmp_path / "repo"
-            repo.mkdir()
+            repo = tmp_path / "workspaces" / "repo"
+            repo.mkdir(parents=True)
             (repo / "sample.txt").write_text("hello\n", encoding="utf-8")
             (repo / "tools").mkdir()
             (repo / "tools" / "test_unit.sh").write_text(
@@ -474,6 +505,7 @@ async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
 
             assert first.external_id == second.external_id
             assert len(fake_client.created) == 1
+            assert fake_client.created[0].metadata["idempotencyKey"] == "idem-jules-1"
 
 
 async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path):

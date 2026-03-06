@@ -18,8 +18,4 @@ if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
 
-if [ -n "${TEMPORAL_WORKER_COMMAND:-}" ]; then
-  exec sh -lc "$TEMPORAL_WORKER_COMMAND"
-fi
-
-exec sleep infinity
+exec python -m moonmind.workflows.temporal.workers --fleet "$FLEET"

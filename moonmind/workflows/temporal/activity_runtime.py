@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
+from uuid import uuid4
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
@@ -530,6 +531,27 @@ class TemporalSandboxActivities:
             workspace_root or settings.spec_workflow.workspace_root
         ).resolve()
 
+    def _resolve_workspace(self, workspace_ref: str | Path, *, must_exist: bool) -> Path:
+        workspace = Path(workspace_ref).expanduser().resolve()
+        sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+        if not workspace.is_relative_to(sandbox_root):
+            raise TemporalActivityRuntimeError(
+                f"workspace path escapes sandbox root: {workspace}"
+            )
+        if must_exist and not workspace.exists():
+            raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
+        return workspace
+
+    def _resolve_checkout_source(self, repo_ref: str | Path) -> Path:
+        source = Path(str(repo_ref).removeprefix("file://")).expanduser().resolve()
+        if not source.exists() or not source.is_dir():
+            raise TemporalActivityRuntimeError(f"unsupported sandbox repo_ref '{repo_ref}'")
+        if not source.is_relative_to(self._workspace_root):
+            raise TemporalActivityRuntimeError(
+                "sandbox.checkout_repo local sources must be under workspace_root"
+            )
+        return source
+
     async def sandbox_checkout_repo(
         self,
         *,
@@ -537,16 +559,12 @@ class TemporalSandboxActivities:
         idempotency_key: str,
         checkout_revision: str | None = None,
     ) -> str:
-        source = Path(str(repo_ref).removeprefix("file://")).expanduser().resolve()
-        if not source.exists() or not source.is_dir():
-            raise TemporalActivityRuntimeError(
-                f"unsupported sandbox repo_ref '{repo_ref}'"
-            )
+        source = self._resolve_checkout_source(repo_ref)
 
         workspace_id = hashlib.sha256(
             f"{source}:{checkout_revision or ''}:{idempotency_key}".encode("utf-8")
         ).hexdigest()[:16]
-        workspace = self._workspace_root / "temporal_sandbox" / workspace_id
+        workspace = (self._workspace_root / "temporal_sandbox" / workspace_id).resolve()
         workspace.parent.mkdir(parents=True, exist_ok=True)
         if not workspace.exists():
             shutil.copytree(source, workspace)
@@ -567,9 +585,7 @@ class TemporalSandboxActivities:
                 "sandbox.apply_patch requires artifact storage"
             )
 
-        cwd = Path(workspace_ref).resolve()
-        if not cwd.exists():
-            raise TemporalActivityRuntimeError(f"workspace does not exist: {cwd}")
+        cwd = self._resolve_workspace(workspace_ref, must_exist=True)
 
         _artifact, patch_payload = await self._artifact_service.read(
             artifact_id=_artifact_id_from_ref(patch_ref),
@@ -623,12 +639,10 @@ class TemporalSandboxActivities:
         timeout_seconds: float | None = None,
         heartbeat: HeartbeatCallback | None = None,
     ) -> SandboxCommandResult:
-        cwd = Path(workspace_ref).resolve()
-        if not cwd.exists():
-            raise TemporalActivityRuntimeError(f"workspace does not exist: {cwd}")
+        cwd = self._resolve_workspace(workspace_ref, must_exist=True)
 
         if isinstance(cmd, str):
-            command = ("bash", "-lc", cmd)
+            command = tuple(shlex.split(cmd))
         else:
             command = tuple(str(part) for part in cmd)
         if not command:
@@ -843,13 +857,19 @@ class TemporalJulesActivities:
         if metadata is not None and not isinstance(metadata, Mapping):
             raise TemporalActivityRuntimeError("integration metadata must be an object")
 
+        metadata_payload = dict(metadata or {})
+        if idempotency_key is not None:
+            metadata_payload.setdefault("idempotencyKey", idempotency_key)
+            metadata_payload.setdefault("requestId", idempotency_key)
+        metadata_payload.setdefault("moonmindStartRequestId", str(uuid4()))
+
         client = self._client_factory()
         try:
             response = await client.create_task(
                 JulesCreateTaskRequest(
                     title=title,
                     description=description,
-                    metadata=dict(metadata or {}),
+                    metadata=metadata_payload,
                 )
             )
         finally:
