@@ -201,7 +201,16 @@ const { context, helpers } = loadTemporalHelpers();
   );
 })();
 
-(function testBuildTemporalActionRequestMapsRerunAndCancel() {
+(function testBuildTemporalActionRequestMapsApproveRerunAndCancel() {
+  const approve = helpers.buildTemporalActionRequest("mm:workflow-123", "approve");
+  assert.strictEqual(approve.request.url, "/api/executions/mm%3Aworkflow-123/signal");
+  assert.deepStrictEqual(JSON.parse(approve.request.options.body), {
+    signalName: "Approve",
+    payload: {
+      approval_type: "human",
+    },
+  });
+
   const rerun = helpers.buildTemporalActionRequest("mm:workflow-123", "rerun");
   assert.strictEqual(rerun.request.url, "/api/executions/mm%3Aworkflow-123/update");
   assert.deepStrictEqual(JSON.parse(rerun.request.options.body), {
@@ -214,6 +223,31 @@ const { context, helpers } = loadTemporalHelpers();
     graceful: true,
     reason: "Cancelled from task dashboard",
   });
+})();
+
+(function testResolveTemporalActionResultMessageUsesAcceptedPayloadAndRejectsFalse() {
+  assert.strictEqual(
+    helpers.resolveTemporalActionResultMessage(
+      { successMessage: "Task inputs updated." },
+      {
+        accepted: true,
+        message: "Update accepted and will be applied at the next safe point.",
+      },
+    ),
+    "Update accepted and will be applied at the next safe point.",
+  );
+
+  assert.throws(
+    () =>
+      helpers.resolveTemporalActionResultMessage(
+        { successMessage: "Task inputs updated." },
+        {
+          accepted: false,
+          message: "Workflow is in a terminal state and no longer accepts updates.",
+        },
+      ),
+    /no longer accepts updates/i,
+  );
 })();
 
 (function testBuildTemporalArtifactCreatePayloadIncludesExecutionLink() {

@@ -2863,6 +2863,7 @@
       buildTemporalArtifactEditUpdatePayload,
       buildTemporalArtifactLinkPayload,
       fetchTemporalArtifactMetadata,
+      resolveTemporalActionResultMessage,
       resolveTemporalActionSurface,
       resolveTemporalDetailModel,
       resolveTemporalRunId,
@@ -8134,6 +8135,41 @@
     feedbackNode.className = isError ? "notice error" : "small";
   }
 
+  function buildTemporalApprovalPayload(options = {}) {
+    const payload =
+      options.payload && typeof options.payload === "object" && !Array.isArray(options.payload)
+        ? { ...options.payload }
+        : {};
+    if (!String(payload.approval_type || "").trim()) {
+      payload.approval_type = "human";
+    }
+    return payload;
+  }
+
+  function resolveTemporalActionResultMessage(actionRequest, responsePayload) {
+    const payload =
+      responsePayload && typeof responsePayload === "object" && !Array.isArray(responsePayload)
+        ? responsePayload
+        : null;
+    if (payload && Object.prototype.hasOwnProperty.call(payload, "accepted")) {
+      if (payload.accepted === false) {
+        const rejectionMessage =
+          String(payload.message || "").trim() ||
+          String(actionRequest.rejectedMessage || "").trim() ||
+          "Task action was rejected.";
+        const error = new Error(rejectionMessage);
+        error.code = "temporal_action_rejected";
+        error.payload = payload;
+        throw error;
+      }
+      const acceptedMessage = String(payload.message || "").trim();
+      if (acceptedMessage) {
+        return acceptedMessage;
+      }
+    }
+    return actionRequest.successMessage;
+  }
+
   function buildTemporalActionRequest(workflowId, actionKey, options = {}) {
     const normalizedAction = String(actionKey || "").trim().toLowerCase();
     const normalizedWorkflowId = String(workflowId || "").trim();
@@ -8209,6 +8245,7 @@
     if (normalizedAction === "approve") {
       return {
         successMessage: "Task approval sent.",
+        rejectedMessage: "Task approval was rejected.",
         request: {
           url: endpoint(
             temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
@@ -8218,7 +8255,7 @@
             method: "POST",
             body: JSON.stringify({
               signalName: "Approve",
-              payload: options.payload || {},
+              payload: buildTemporalApprovalPayload(options),
             }),
           },
         },
@@ -8303,6 +8340,126 @@
     }
   }
 
+  function requestDashboardTextInput(options = {}) {
+    const title = String(options.title || "Enter a value").trim() || "Enter a value";
+    const description = String(options.description || "").trim();
+    const label = String(options.label || "Value").trim() || "Value";
+    const confirmLabel = String(options.confirmLabel || "Save").trim() || "Save";
+    const cancelLabel = String(options.cancelLabel || "Cancel").trim() || "Cancel";
+    const initialValue = String(options.initialValue || "");
+    const placeholder = String(options.placeholder || "");
+    if (!document || typeof document.createElement !== "function" || !document.body) {
+      if (typeof window.prompt === "function") {
+        return Promise.resolve(window.prompt(title, initialValue));
+      }
+      return Promise.resolve(null);
+    }
+
+    return new Promise((resolve) => {
+      const previouslyFocused =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const overlay = document.createElement("div");
+      overlay.setAttribute("role", "presentation");
+      overlay.style.position = "fixed";
+      overlay.style.inset = "0";
+      overlay.style.zIndex = "999";
+      overlay.style.display = "flex";
+      overlay.style.alignItems = "center";
+      overlay.style.justifyContent = "center";
+      overlay.style.padding = "1rem";
+      overlay.style.background = "rgba(10, 8, 30, 0.45)";
+
+      const panel = document.createElement("div");
+      panel.className = "card stack";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-label", title);
+      panel.style.width = "min(32rem, 100%)";
+      panel.style.margin = "0";
+      panel.style.background = "rgb(var(--mm-panel))";
+
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      heading.style.margin = "0";
+      panel.appendChild(heading);
+
+      if (description) {
+        const descriptionNode = document.createElement("p");
+        descriptionNode.className = "small";
+        descriptionNode.textContent = description;
+        descriptionNode.style.margin = "0";
+        panel.appendChild(descriptionNode);
+      }
+
+      const labelNode = document.createElement("label");
+      labelNode.textContent = label;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = initialValue;
+      if (placeholder) {
+        input.placeholder = placeholder;
+      }
+      labelNode.appendChild(input);
+      panel.appendChild(labelNode);
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button";
+      confirmButton.textContent = confirmLabel;
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.className = "secondary";
+      cancelButton.textContent = cancelLabel;
+      actions.appendChild(confirmButton);
+      actions.appendChild(cancelButton);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const cleanup = (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        overlay.remove();
+        if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+          previouslyFocused.focus();
+        }
+        resolve(value);
+      };
+
+      confirmButton.addEventListener("click", () => cleanup(input.value));
+      cancelButton.addEventListener("click", () => cleanup(null));
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) {
+          cleanup(null);
+        }
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          cleanup(input.value);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cleanup(null);
+        }
+      });
+
+      const scheduleFocus =
+        typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (callback) => window.setTimeout(callback, 0);
+      scheduleFocus(() => {
+        input.focus();
+        input.select();
+      });
+    });
+  }
+
   async function handleTemporalArtifactAction(button) {
     if (!(button instanceof HTMLButtonElement)) {
       return;
@@ -8354,14 +8511,25 @@
     }
 
     const requestOptions = {};
-    if (actionKey === "rename" && typeof window.prompt === "function") {
+    if (actionKey === "rename") {
       const currentTitle = deriveTemporalTitle(execution);
-      const nextTitle = window.prompt("Enter a task title", currentTitle);
+      const nextTitle = await requestDashboardTextInput({
+        title: "Rename task",
+        description: "Choose a new title for this Temporal task.",
+        label: "Task title",
+        confirmLabel: "Rename task",
+        initialValue: currentTitle,
+        placeholder: "Task title",
+      });
       if (nextTitle === null) {
         setTemporalActionFeedback("Rename cancelled.");
         return;
       }
       requestOptions.title = String(nextTitle).trim();
+      if (!requestOptions.title) {
+        setTemporalActionFeedback("Task title is required.", true);
+        return;
+      }
     }
 
     button.disabled = true;
@@ -8374,8 +8542,13 @@
         actionKey,
         requestOptions,
       );
-      await fetchJson(actionRequest.request.url, actionRequest.request.options);
-      setTemporalActionFeedback(actionRequest.successMessage);
+      const responsePayload = await fetchJson(
+        actionRequest.request.url,
+        actionRequest.request.options,
+      );
+      setTemporalActionFeedback(
+        resolveTemporalActionResultMessage(actionRequest, responsePayload),
+      );
       if (typeof reload === "function") {
         await reload();
       }
