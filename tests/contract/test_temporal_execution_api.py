@@ -278,9 +278,10 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             assert second_page.status_code == 200
             second_body = second_page.json()
             assert len(second_body["items"]) == 1
-            assert second_body["items"][0]["taskId"] == second_body["items"][0][
-                "workflowId"
-            ]
+            assert (
+                second_body["items"][0]["taskId"]
+                == second_body["items"][0]["workflowId"]
+            )
 
             canceled_only = await client.get(
                 "/api/executions",
@@ -290,9 +291,10 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             canceled_body = canceled_only.json()
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
-            assert canceled_body["items"][0]["taskId"] == canceled_body["items"][0][
-                "workflowId"
-            ]
+            assert (
+                canceled_body["items"][0]["taskId"]
+                == canceled_body["items"][0]["workflowId"]
+            )
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

@@ -13,7 +13,9 @@ _FEATURES = (
     (
         "047-activity-worker-topology",
         Path("specs/047-activity-worker-topology/spec.md"),
-        Path("specs/047-activity-worker-topology/contracts/requirements-traceability.md"),
+        Path(
+            "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+        ),
     ),
     (
         "048-run-history-rerun",
@@ -40,8 +42,7 @@ def test_doc_req_traceability_contract(
     assert doc_req_ids, f"Expected DOC-REQ entries in {feature_name} spec.md"
 
     assert feature_traceability.exists(), (
-        "Missing traceability file for DOC-REQ feature: "
-        f"{feature_traceability}"
+        "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"
     )
 
     traceability_rows = _parse_traceability_rows(feature_traceability)

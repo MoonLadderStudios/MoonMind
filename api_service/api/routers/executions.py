@@ -59,9 +59,8 @@ def _serialize_execution(record) -> ExecutionModel:
     close_status = record.close_status.value if record.close_status else None
     memo = dict(record.memo or {})
     search_attributes = dict(record.search_attributes or {})
-    continue_as_new_cause = (
-        memo.get("continue_as_new_cause")
-        or search_attributes.get("mm_continue_as_new_cause")
+    continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
+        "mm_continue_as_new_cause"
     )
     if record.close_status is TemporalExecutionCloseStatus.COMPLETED:
         temporal_status = "completed"

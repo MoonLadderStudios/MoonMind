@@ -65,9 +65,7 @@ class UpdateExecutionResponse(BaseModel):
         ..., alias="applied"
     )
     message: str = Field(..., alias="message")
-    continue_as_new_cause: Optional[str] = Field(
-        None, alias="continueAsNewCause"
-    )
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
 
 
 class SignalExecutionRequest(BaseModel):
