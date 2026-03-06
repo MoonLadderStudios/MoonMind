@@ -29,6 +29,11 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
 )
+from moonmind.schemas.temporal_models import (
+    SUPPORTED_FAILURE_POLICIES,
+    SUPPORTED_SIGNAL_NAMES,
+    SUPPORTED_UPDATE_NAMES,
+)
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.SUCCEEDED,
@@ -57,8 +62,9 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
-ALLOWED_UPDATE_NAMES: set[str] = {"UpdateInputs", "SetTitle", "RequestRerun"}
-ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
+ALLOWED_UPDATE_NAMES: frozenset[str] = frozenset(SUPPORTED_UPDATE_NAMES)
+ALLOWED_SIGNAL_NAMES: frozenset[str] = frozenset(SUPPORTED_SIGNAL_NAMES)
+ALLOWED_FAILURE_POLICIES: frozenset[str] = frozenset(SUPPORTED_FAILURE_POLICIES)
 ALLOWED_ERROR_CATEGORIES: set[str] = {
     "user_error",
     "integration_error",
@@ -178,6 +184,15 @@ class TemporalExecutionService:
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
 
+        if (
+            failure_policy is not None
+            and failure_policy not in ALLOWED_FAILURE_POLICIES
+        ):
+            supported = ", ".join(sorted(ALLOWED_FAILURE_POLICIES))
+            raise TemporalExecutionValidationError(
+                f"Unsupported failurePolicy '{failure_policy}'. Supported values: {supported}"
+            )
+
         if idempotency_key:
             existing = await self._find_by_create_idempotency(
                 idempotency_key=idempotency_key,
@@ -192,7 +207,7 @@ class TemporalExecutionService:
         workflow_id = f"mm:{uuid4()}"
         run_id = str(uuid4())
         params = dict(initial_parameters or {})
-        if failure_policy:
+        if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)

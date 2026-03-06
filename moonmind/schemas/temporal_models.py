@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
+
+SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest")
+SUPPORTED_FAILURE_POLICIES = (
+    "fail_fast",
+    "continue_and_report",
+    "best_effort",
+)
+SUPPORTED_UPDATE_NAMES = ("UpdateInputs", "SetTitle", "RequestRerun")
+SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Approve", "Pause", "Resume")
 
 NormalizedIntegrationStatus = Literal[
     "queued",
@@ -22,31 +31,24 @@ class CreateExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    workflow_type: Literal["MoonMind.Run", "MoonMind.ManifestIngest"] = Field(
-        ..., alias="workflowType"
+    workflow_type: str = Field(
+        ...,
+        alias="workflowType",
+        json_schema_extra={"enum": SUPPORTED_WORKFLOW_TYPES},
     )
     title: Optional[str] = Field(None, alias="title")
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
-    failure_policy: Optional[
-        Literal["fail_fast", "continue_and_report", "best_effort"]
-    ] = Field(None, alias="failurePolicy")
+    failure_policy: Optional[str] = Field(
+        None,
+        alias="failurePolicy",
+        json_schema_extra={"enum": SUPPORTED_FAILURE_POLICIES},
+    )
     initial_parameters: dict[str, Any] = Field(
         default_factory=dict, alias="initialParameters"
     )
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
-
-    @model_validator(mode="after")
-    def _validate_required_fields(self) -> "CreateExecutionRequest":
-        if (
-            self.workflow_type == "MoonMind.ManifestIngest"
-            and not self.manifest_artifact_ref
-        ):
-            raise ValueError(
-                "manifestArtifactRef is required when workflowType is MoonMind.ManifestIngest"
-            )
-        return self
 
 
 class UpdateExecutionRequest(BaseModel):
@@ -54,8 +56,10 @@ class UpdateExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    update_name: Literal["UpdateInputs", "SetTitle", "RequestRerun"] = Field(
-        "UpdateInputs", alias="updateName"
+    update_name: str = Field(
+        "UpdateInputs",
+        alias="updateName",
+        json_schema_extra={"enum": SUPPORTED_UPDATE_NAMES},
     )
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
@@ -82,8 +86,10 @@ class SignalExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    signal_name: Literal["ExternalEvent", "Approve", "Pause", "Resume"] = Field(
-        ..., alias="signalName"
+    signal_name: str = Field(
+        ...,
+        alias="signalName",
+        json_schema_extra={"enum": SUPPORTED_SIGNAL_NAMES},
     )
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     payload_artifact_ref: Optional[str] = Field(None, alias="payloadArtifactRef")
