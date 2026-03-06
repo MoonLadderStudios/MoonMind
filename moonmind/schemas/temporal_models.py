@@ -85,6 +85,7 @@ class ExecutionModel(BaseModel):
     task_id: str = Field(..., alias="taskId")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
+    temporal_run_id: str = Field(..., alias="temporalRunId")
     workflow_type: str = Field(..., alias="workflowType")
     entry: Literal["run", "manifest"] = Field(..., alias="entry")
     owner_type: Literal["user", "system", "service"] = Field(..., alias="ownerType")
@@ -120,6 +121,8 @@ class ExecutionModel(BaseModel):
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    latest_run_view: bool = Field(True, alias="latestRunView")
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
@@ -154,6 +157,7 @@ class UpdateExecutionResponse(BaseModel):
         ..., alias="applied"
     )
     message: str = Field(..., alias="message")
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     execution: ExecutionModel | None = Field(None, alias="execution")
     refresh: ExecutionRefreshEnvelope | None = Field(None, alias="refresh")
 

@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gate for spec features that declare document requirements."""
+"""DOC-REQ traceability gates for feature specs that declare document requirements."""
 
 from __future__ import annotations
 

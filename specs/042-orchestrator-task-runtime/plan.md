@@ -152,7 +152,7 @@ tests/
 
 - Preserve approval-token gates and expiry semantics.
 - Keep skill execution guardrails that reject arbitrary command-style args.
-- Align orchestrator route auth dependency behavior with unified task dashboard expectations.
+- Align orchestrator route auth dependency behavior with unified Mission Control expectations.
 
 ### 7. Validation and release gates
 

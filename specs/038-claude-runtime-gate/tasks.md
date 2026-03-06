@@ -75,7 +75,7 @@
 
 ## Phase 5: User Story 3 – Dashboard hides unusable runtimes (Priority: P2)
 
-**Goal**: Ensure the task dashboard only advertises supported runtimes and never defaults to Claude when the gate is disabled.  
+**Goal**: Ensure the Mission Control only advertises supported runtimes and never defaults to Claude when the gate is disabled.  
 **Independent Test**: Call `GET /api/task-dashboard/config` before/after exporting `ANTHROPIC_API_KEY` and confirm `supportedTaskRuntimes` + `defaultTaskRuntime` match expectations.
 
 ### Tests for User Story 3

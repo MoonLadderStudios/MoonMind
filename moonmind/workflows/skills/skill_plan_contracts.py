@@ -6,6 +6,7 @@ These models implement the runtime contracts described in
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
@@ -15,6 +16,10 @@ REGISTRY_DIGEST_PREFIX = "reg:sha256:"
 SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
 SUPPORTED_FAILURE_MODES = frozenset({"FAIL_FAST", "CONTINUE"})
 SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+EXPLICIT_BINDING_REASONS = frozenset(
+    {"stronger_isolation", "specialized_credentials", "clearer_routing"}
+)
+OBSERVABILITY_OUTCOMES = frozenset({"succeeded", "failed", "cancelled", "partial"})
 SKILL_FAILURE_CODES = frozenset(
     {
         "INVALID_INPUT",
@@ -29,6 +34,7 @@ SKILL_FAILURE_CODES = frozenset(
         "INTERNAL",
     }
 )
+TEMPORAL_ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9A-HJKMNP-TV-Z]{26}$")
 
 
 class ContractValidationError(ValueError):
@@ -186,16 +192,33 @@ class SkillExecutorBinding:
 
     activity_type: str
     selector_mode: str = "by_capability"
+    explicit_binding_reason: str | None = None
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.activity_type, field_name="executor.activity_type")
         _ensure_non_empty(self.selector_mode, field_name="executor.selector.mode")
+        if self.activity_type == "mm.skill.execute":
+            if self.explicit_binding_reason is not None:
+                raise ContractValidationError(
+                    "invalid_contract",
+                    "executor.binding_reason is only valid for explicit activity bindings",
+                )
+            return
+        if self.explicit_binding_reason not in EXPLICIT_BINDING_REASONS:
+            raise ContractValidationError(
+                "invalid_contract",
+                "executor.binding_reason must be one of "
+                f"{sorted(EXPLICIT_BINDING_REASONS)} for explicit activity bindings",
+            )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "activity_type": self.activity_type,
             "selector": {"mode": self.selector_mode},
         }
+        if self.explicit_binding_reason is not None:
+            payload["binding_reason"] = self.explicit_binding_reason
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +370,150 @@ class SkillResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ActivityInvocationEnvelope:
+    """Shared business envelope for one side-effecting activity request."""
+
+    correlation_id: str
+    idempotency_key: str | None = None
+    input_refs: tuple[str, ...] = ()
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+    side_effecting: bool = True
+
+    def __post_init__(self) -> None:
+        _ensure_non_empty(self.correlation_id, field_name="correlation_id")
+        if self.side_effecting:
+            _ensure_non_empty(
+                str(self.idempotency_key or ""), field_name="idempotency_key"
+            )
+        for ref in self.input_refs:
+            _ensure_non_empty(str(ref), field_name="input_refs[]")
+        if not isinstance(self.parameters, Mapping):
+            raise ContractValidationError(
+                "invalid_contract", "parameters must be an object"
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "correlation_id": self.correlation_id,
+            "input_refs": list(self.input_refs),
+            "parameters": dict(self.parameters),
+        }
+        if self.idempotency_key is not None:
+            payload["idempotency_key"] = self.idempotency_key
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class CompactActivityResult:
+    """Compact response envelope for activity outputs and summaries."""
+
+    output_refs: tuple[str, ...] = ()
+    summary: Mapping[str, Any] = field(default_factory=dict)
+    metrics: Mapping[str, Any] | None = None
+    diagnostics_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        for ref in self.output_refs:
+            _ensure_non_empty(str(ref), field_name="output_refs[]")
+        if not isinstance(self.summary, Mapping):
+            raise ContractValidationError("invalid_result", "summary must be an object")
+        if self.metrics is not None and not isinstance(self.metrics, Mapping):
+            raise ContractValidationError("invalid_result", "metrics must be an object")
+        if self.diagnostics_ref is not None:
+            _ensure_non_empty(self.diagnostics_ref, field_name="diagnostics_ref")
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "output_refs": list(self.output_refs),
+            "summary": dict(self.summary),
+        }
+        if self.metrics is not None:
+            payload["metrics"] = dict(self.metrics)
+        if self.diagnostics_ref is not None:
+            payload["diagnostics_ref"] = self.diagnostics_ref
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityExecutionContext:
+    """Runtime-derived Temporal metadata for one activity attempt."""
+
+    workflow_id: str
+    run_id: str
+    activity_id: str
+    attempt: int
+    task_queue: str
+
+    def __post_init__(self) -> None:
+        _ensure_non_empty(self.workflow_id, field_name="workflow_id")
+        _ensure_non_empty(self.run_id, field_name="run_id")
+        _ensure_non_empty(self.activity_id, field_name="activity_id")
+        _ensure_positive_int(self.attempt, field_name="attempt")
+        _ensure_non_empty(self.task_queue, field_name="task_queue")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "run_id": self.run_id,
+            "activity_id": self.activity_id,
+            "attempt": self.attempt,
+            "task_queue": self.task_queue,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ObservabilitySummary:
+    """Structured operator-facing summary for one activity outcome."""
+
+    workflow_id: str
+    run_id: str
+    activity_type: str
+    activity_id: str
+    attempt: int
+    correlation_id: str
+    idempotency_key_hash: str
+    outcome: str
+    diagnostics_ref: str | None = None
+    metrics_dimensions: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _ensure_non_empty(self.workflow_id, field_name="workflow_id")
+        _ensure_non_empty(self.run_id, field_name="run_id")
+        _ensure_non_empty(self.activity_type, field_name="activity_type")
+        _ensure_non_empty(self.activity_id, field_name="activity_id")
+        _ensure_positive_int(self.attempt, field_name="attempt")
+        _ensure_non_empty(self.correlation_id, field_name="correlation_id")
+        _ensure_non_empty(self.idempotency_key_hash, field_name="idempotency_key_hash")
+        if self.outcome not in OBSERVABILITY_OUTCOMES:
+            raise ContractValidationError(
+                "invalid_result",
+                f"outcome must be one of {sorted(OBSERVABILITY_OUTCOMES)}",
+            )
+        if self.diagnostics_ref is not None:
+            _ensure_non_empty(self.diagnostics_ref, field_name="diagnostics_ref")
+        if not isinstance(self.metrics_dimensions, Mapping):
+            raise ContractValidationError(
+                "invalid_result", "metrics_dimensions must be an object"
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "workflow_id": self.workflow_id,
+            "run_id": self.run_id,
+            "activity_type": self.activity_type,
+            "activity_id": self.activity_id,
+            "attempt": self.attempt,
+            "correlation_id": self.correlation_id,
+            "idempotency_key_hash": self.idempotency_key_hash,
+            "outcome": self.outcome,
+            "metrics_dimensions": dict(self.metrics_dimensions),
+        }
+        if self.diagnostics_ref is not None:
+            payload["diagnostics_ref"] = self.diagnostics_ref
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class PlanRegistrySnapshot:
     """Pinned registry snapshot metadata referenced by a plan."""
 
@@ -366,10 +533,14 @@ class PlanRegistrySnapshot:
             self.artifact_ref,
             field_name="metadata.registry_snapshot.artifact_ref",
         )
-        if not artifact_ref.startswith(ARTIFACT_REF_PREFIX):
+        if not (
+            artifact_ref.startswith(ARTIFACT_REF_PREFIX)
+            or artifact_ref.startswith("artifact://")
+            or TEMPORAL_ARTIFACT_ID_PATTERN.fullmatch(artifact_ref)
+        ):
             raise ContractValidationError(
                 "invalid_plan",
-                f"registry snapshot artifact_ref must start with '{ARTIFACT_REF_PREFIX}'",
+                "registry snapshot artifact_ref must be a supported artifact locator",
             )
 
     def to_payload(self) -> dict[str, str]:
@@ -632,6 +803,9 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
                 ).get("mode")
                 or "by_capability"
             ).strip(),
+            explicit_binding_reason=(
+                str(executor.get("binding_reason") or "").strip() or None
+            ),
         ),
         required_capabilities=tuple(
             str(capability).strip()
@@ -666,7 +840,13 @@ __all__ = [
     "SUPPORTED_FAILURE_MODES",
     "SKILL_FAILURE_CODES",
     "ArtifactRef",
+    "ActivityExecutionContext",
+    "ActivityInvocationEnvelope",
+    "CompactActivityResult",
     "ContractValidationError",
+    "EXPLICIT_BINDING_REASONS",
+    "OBSERVABILITY_OUTCOMES",
+    "ObservabilitySummary",
     "PlanDefinition",
     "PlanEdge",
     "PlanMetadata",

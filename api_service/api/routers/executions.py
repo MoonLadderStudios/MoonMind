@@ -100,6 +100,11 @@ def _serialize_execution(
 ) -> ExecutionModel:
     temporal_status = "running"
     close_status = record.close_status.value if record.close_status else None
+    memo = dict(record.memo or {})
+    search_attributes = dict(record.search_attributes or {})
+    continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
+        "mm_continue_as_new_cause"
+    )
     if record.close_status is TemporalExecutionCloseStatus.COMPLETED:
         temporal_status = "completed"
     elif record.close_status is TemporalExecutionCloseStatus.CANCELED:
@@ -120,6 +125,7 @@ def _serialize_execution(
         task_id=record.workflow_id,
         workflow_id=record.workflow_id,
         run_id=record.run_id,
+        temporal_run_id=record.run_id,
         workflow_type=record.workflow_type.value,
         entry=record.entry,
         owner_type=record.owner_type,
@@ -135,6 +141,8 @@ def _serialize_execution(
         search_attributes=search_attributes,
         memo=memo,
         artifact_refs=list(record.artifact_refs or []) if include_artifact_refs else [],
+        latest_run_view=True,
+        continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,

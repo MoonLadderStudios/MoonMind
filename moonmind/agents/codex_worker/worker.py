@@ -127,6 +127,14 @@ _PR_RESOLVER_SKILL_ID = "pr-resolver"
 _PROPOSAL_INSTRUCTIONS_PLACEHOLDER = "<OBJECTIVE>"
 _DEFAULT_PREPARE_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PREPARE_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
+_DEFAULT_GEMINI_MODEL = "gemini-3.1-pro"
+_DEFAULT_GEMINI_ALLOWED_TOOLS = (
+    "activate_skill",
+    "run_shell_command",
+    "replace",
+    "write_file",
+    "web_fetch",
+)
 _FINISH_STAGE_NAMES = ("prepare", "execute", "publish", "proposals", "finalize")
 _DEFAULT_STEP_LOG_MAX_BYTES = 1024 * 1024
 _MIN_STEP_LOG_MAX_BYTES = 1024
@@ -394,7 +402,7 @@ class CodexWorkerConfig:
     allowed_skills: tuple[str, ...] = ("speckit",)
     default_codex_model: str | None = None
     default_codex_effort: str | None = None
-    default_gemini_model: str | None = None
+    default_gemini_model: str | None = _DEFAULT_GEMINI_MODEL
     default_gemini_effort: str | None = None
     default_claude_model: str | None = None
     default_claude_effort: str | None = None
@@ -402,6 +410,7 @@ class CodexWorkerConfig:
     default_jules_effort: str | None = None
     gemini_binary: str = "gemini"
     gemini_cli_auth_mode: str = "api_key"
+    gemini_allowed_tools: tuple[str, ...] = _DEFAULT_GEMINI_ALLOWED_TOOLS
     claude_binary: str = "claude"
     jules_enabled: bool = False
     jules_api_url: str | None = None
@@ -621,7 +630,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_GEMINI_MODEL",
-                    source.get("GEMINI_MODEL", ""),
+                    source.get("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL),
                 )
             ).strip()
             or None
@@ -681,6 +690,13 @@ class CodexWorkerConfig:
         if gemini_cli_auth_mode not in {"api_key", "oauth"}:
             raise ValueError(
                 "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
+            )
+        gemini_allowed_tools_raw = source.get("MOONMIND_GEMINI_ALLOWED_TOOLS")
+        if gemini_allowed_tools_raw is None:
+            gemini_allowed_tools = _DEFAULT_GEMINI_ALLOWED_TOOLS
+        else:
+            gemini_allowed_tools = tuple(
+                cls._normalize_runtime_option_values(str(gemini_allowed_tools_raw))
             )
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
@@ -1052,6 +1068,7 @@ class CodexWorkerConfig:
             default_jules_effort=default_jules_effort,
             gemini_binary=gemini_binary,
             gemini_cli_auth_mode=gemini_cli_auth_mode,
+            gemini_allowed_tools=gemini_allowed_tools,
             claude_binary=claude_binary,
             jules_enabled=jules_gate.enabled,
             jules_api_url=jules_api_url,
@@ -10037,6 +10054,15 @@ class CodexWorker:
     ) -> list[str]:
         if runtime_mode == "gemini":
             command = [self._config.gemini_binary, "--prompt", instruction]
+            if self._config.gemini_allowed_tools:
+                # Gemini CLI excludes or prompts for these tools in non-interactive
+                # mode unless they are explicitly allowed.
+                command.extend(
+                    [
+                        "--allowed-tools",
+                        ",".join(self._config.gemini_allowed_tools),
+                    ]
+                )
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
