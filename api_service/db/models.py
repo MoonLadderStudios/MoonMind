@@ -1258,6 +1258,39 @@ class TemporalIntegrationCorrelationRecord(Base):
     )
 
 
+class TaskSourceMapping(Base):
+    """Persisted global task index for canonical source resolution."""
+
+    __tablename__ = "task_source_mappings"
+    __table_args__ = (
+        Index("ix_task_source_mappings_source_entry", "source", "entry"),
+        Index(
+            "ix_task_source_mappings_source_record_id",
+            "source",
+            "source_record_id",
+        ),
+    )
+
+    task_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    entry: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    source_record_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    owner_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    owner_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class ApprovalGate(Base):
     """Approval policies applied to orchestrator runs."""
 

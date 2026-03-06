@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.db.models import TemporalExecutionCloseStatus, User
+from api_service.db.models import (
+    MoonMindWorkflowState,
+    TemporalExecutionCloseStatus,
+    User,
+)
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_queue_models import CreateJobRequest
 from moonmind.schemas.temporal_models import (
@@ -34,6 +38,18 @@ from moonmind.workflows.temporal import (
 )
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
+_TEMPORAL_SOURCE = "temporal"
+_ALLOWED_OWNER_TYPES = {"user", "system", "service"}
+_DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
+    MoonMindWorkflowState.INITIALIZING: "queued",
+    MoonMindWorkflowState.PLANNING: "running",
+    MoonMindWorkflowState.EXECUTING: "running",
+    MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
+    MoonMindWorkflowState.FINALIZING: "running",
+    MoonMindWorkflowState.SUCCEEDED: "succeeded",
+    MoonMindWorkflowState.FAILED: "failed",
+    MoonMindWorkflowState.CANCELED: "cancelled",
+}
 
 _MAX_TASK_TITLE_LENGTH = 120
 _MAX_TASK_SUMMARY_LENGTH = 180
@@ -47,6 +63,29 @@ def _is_execution_admin(user: User | None) -> bool:
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
+
+
+def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
+    owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
+    if owner_type in _ALLOWED_OWNER_TYPES:
+        return owner_type
+    owner_id = str(record.owner_id or "").strip().lower()
+    return "system" if owner_id == "system" or not owner_id else "user"
+
+
+def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
+    entry = str(
+        search_attributes.get("mm_entry") or getattr(record, "entry", "")
+    ).strip()
+    if entry:
+        return entry.lower()
+
+    workflow_type = str(
+        getattr(getattr(record, "workflow_type", None), "value", "")
+    ).lower()
+    if workflow_type.endswith("manifestingest"):
+        return "manifest"
+    return "run"
 
 
 async def _get_service(
@@ -74,16 +113,6 @@ async def _get_service(
 
 
 def _serialize_execution(record) -> ExecutionModel:
-    dashboard_status_map = {
-        "initializing": "queued",
-        "planning": "queued",
-        "executing": "running",
-        "awaiting_external": "awaiting_action",
-        "finalizing": "running",
-        "succeeded": "succeeded",
-        "failed": "failed",
-        "canceled": "cancelled",
-    }
     temporal_status = "running"
     close_status = record.close_status.value if record.close_status else None
     memo = dict(record.memo or {})
@@ -104,12 +133,23 @@ def _serialize_execution(record) -> ExecutionModel:
         temporal_status = "failed"
 
     raw_state = record.state.value
-    waiting_reason = None
-    if raw_state == "awaiting_external":
-        waiting_reason = (
-            str(dict(record.memo or {}).get("summary") or "").strip() or None
+    owner_type = _normalize_owner_type(record, search_attributes)
+    owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
+    entry = _resolve_execution_entry(record, search_attributes)
+    title = str(memo.get("title") or "").strip() or record.workflow_type.value
+    summary = str(memo.get("summary") or "").strip() or "Execution updated."
+    waiting_reason = (
+        str(memo.get("waiting_reason") or "").strip()
+        or (
+            str(memo.get("summary") or "").strip()
+            if raw_state == "awaiting_external"
+            else ""
         )
-    attention_required = raw_state == "awaiting_external"
+    )
+    attention_required = bool(memo.get("attention_required") or False)
+    if raw_state == "awaiting_external":
+        attention_required = True
+    dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(record.state, "queued")
     actions = _build_action_capabilities(record)
     debug_fields = _build_debug_fields(
         record=record,
@@ -120,24 +160,32 @@ def _serialize_execution(record) -> ExecutionModel:
     )
 
     return ExecutionModel(
-        namespace=record.namespace,
-        source="temporal",
         task_id=record.workflow_id,
+        namespace=record.namespace,
+        source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,
         run_id=record.run_id,
         temporal_run_id=record.run_id,
         legacy_run_id=None,
         workflow_type=record.workflow_type.value,
-        dashboard_status=dashboard_status_map.get(raw_state, "queued"),
+        entry=entry or record.entry,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        title=title,
+        summary=summary,
+        status=dashboard_status,
+        dashboard_status=dashboard_status,
         state=record.state.value,
         raw_state=raw_state,
         temporal_status=temporal_status,
         close_status=close_status,
-        waiting_reason=waiting_reason,
+        waiting_reason=str(waiting_reason) if waiting_reason else None,
         attention_required=attention_required,
-        search_attributes=dict(record.search_attributes or {}),
-        memo=dict(record.memo or {}),
+        search_attributes=search_attributes,
+        memo=memo,
         artifact_refs=list(record.artifact_refs or []),
+        artifacts_count=len(record.artifact_refs or []),
+        created_at=record.started_at,
         actions=actions,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
@@ -149,6 +197,7 @@ def _serialize_execution(record) -> ExecutionModel:
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,
+        detail_href=f"/tasks/{record.workflow_id}",
     )
 
 
@@ -453,6 +502,7 @@ async def create_execution(
         record = await service.create_execution(
             workflow_type=request.workflow_type,
             owner_id=user.id,
+            owner_type="user",
             title=request.title,
             input_artifact_ref=request.input_artifact_ref,
             plan_artifact_ref=request.plan_artifact_ref,
@@ -508,7 +558,8 @@ async def list_executions(
                     "message": "Cannot list executions for another user.",
                 },
             )
-        if owner_type not in {None, "", "user"}:
+        normalized_owner_type = str(owner_type or "").strip().lower()
+        if normalized_owner_type not in {"", "user"}:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={
@@ -517,7 +568,7 @@ async def list_executions(
                 },
             )
         effective_owner = _owner_id(user)
-        effective_owner_type = "user" if owner_type == "user" else None
+        effective_owner_type = "user" if normalized_owner_type == "user" else None
 
     try:
         result = await service.list_executions(

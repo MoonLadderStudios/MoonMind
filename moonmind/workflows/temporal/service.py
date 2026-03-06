@@ -29,6 +29,11 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
 )
+from moonmind.schemas.temporal_models import (
+    SUPPORTED_FAILURE_POLICIES,
+    SUPPORTED_SIGNAL_NAMES,
+    SUPPORTED_UPDATE_NAMES,
+)
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.SUCCEEDED,
@@ -57,13 +62,23 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
-ALLOWED_UPDATE_NAMES: set[str] = {"UpdateInputs", "SetTitle", "RequestRerun"}
-ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
+ALLOWED_UPDATE_NAMES: frozenset[str] = frozenset(SUPPORTED_UPDATE_NAMES)
+ALLOWED_SIGNAL_NAMES: frozenset[str] = frozenset(SUPPORTED_SIGNAL_NAMES)
+ALLOWED_FAILURE_POLICIES: frozenset[str] = frozenset(SUPPORTED_FAILURE_POLICIES)
 ALLOWED_ERROR_CATEGORIES: set[str] = {
     "user_error",
     "integration_error",
     "execution_error",
     "system_error",
+}
+ALLOWED_OWNER_TYPES: set[str] = {"user", "system", "service"}
+ALLOWED_WAITING_REASONS: set[str] = {
+    "approval_required",
+    "external_callback",
+    "external_completion",
+    "operator_paused",
+    "retry_backoff",
+    "unknown_external",
 }
 ALLOWED_INTEGRATION_STATUSES: set[str] = {
     "queued",
@@ -172,6 +187,15 @@ class TemporalExecutionService:
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
 
+        if (
+            failure_policy is not None
+            and failure_policy not in ALLOWED_FAILURE_POLICIES
+        ):
+            supported = ", ".join(sorted(ALLOWED_FAILURE_POLICIES))
+            raise TemporalExecutionValidationError(
+                f"Unsupported failurePolicy '{failure_policy}'. Supported values: {supported}"
+            )
+
         if idempotency_key:
             existing = await self._find_by_create_idempotency(
                 idempotency_key=idempotency_key,
@@ -186,7 +210,7 @@ class TemporalExecutionService:
         workflow_id = f"mm:{uuid4()}"
         run_id = str(uuid4())
         params = dict(initial_parameters or {})
-        if failure_policy:
+        if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
@@ -452,9 +476,16 @@ class TemporalExecutionService:
                 record.artifact_refs = refs
             integration_state = self._integration_state(record)
             if integration_state is None:
-                record.awaiting_external = False
+                record.awaiting_external = bool(record.paused)
                 if not record.paused:
                     self._set_state(record, MoonMindWorkflowState.EXECUTING)
+                    self._clear_wait_metadata(record)
+                else:
+                    self._set_wait_metadata(
+                        record,
+                        waiting_reason="operator_paused",
+                        attention_required=True,
+                    )
                 self._update_summary(
                     record,
                     f"Processed external event '{event_type}' from '{source}'.",
@@ -480,6 +511,11 @@ class TemporalExecutionService:
             record.paused = True
             record.awaiting_external = True
             self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
+            self._set_wait_metadata(
+                record,
+                waiting_reason="operator_paused",
+                attention_required=True,
+            )
             self._update_summary(record, "Execution paused.")
         elif signal_name == "Resume":
             record.paused = False
@@ -824,11 +860,18 @@ class TemporalExecutionService:
         *,
         workflow_id: str,
         summary: str | None = None,
+        waiting_reason: str = "unknown_external",
+        attention_required: bool = False,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         record.awaiting_external = True
         self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
+        self._set_wait_metadata(
+            record,
+            waiting_reason=waiting_reason,
+            attention_required=attention_required,
+        )
         if summary:
             self._update_summary(record, summary)
         await self._sync_integration_correlation_record(record)
@@ -1137,6 +1180,9 @@ class TemporalExecutionService:
         *,
         close_status: TemporalExecutionCloseStatus | None = None,
     ) -> None:
+        if state is not MoonMindWorkflowState.AWAITING_EXTERNAL:
+            self._clear_wait_metadata(record)
+
         if state in TERMINAL_STATES:
             enforced_status = close_status or TERMINAL_STATE_TO_CLOSE_STATUS[state]
             record.close_status = enforced_status
@@ -1201,6 +1247,29 @@ class TemporalExecutionService:
             memo["external_url"] = resolved_external_url
         else:
             memo.pop("external_url", None)
+        record.memo = memo
+
+    def _set_wait_metadata(
+        self,
+        record: TemporalExecutionRecord,
+        *,
+        waiting_reason: str,
+        attention_required: bool,
+    ) -> None:
+        if waiting_reason not in ALLOWED_WAITING_REASONS:
+            supported = ", ".join(sorted(ALLOWED_WAITING_REASONS))
+            raise TemporalExecutionValidationError(
+                f"Unsupported waiting_reason '{waiting_reason}'. Supported values: {supported}"
+            )
+        memo = dict(record.memo or {})
+        memo["waiting_reason"] = waiting_reason
+        memo["attention_required"] = bool(attention_required)
+        record.memo = memo
+
+    def _clear_wait_metadata(self, record: TemporalExecutionRecord) -> None:
+        memo = dict(record.memo or {})
+        memo.pop("waiting_reason", None)
+        memo.pop("attention_required", None)
         record.memo = memo
 
     def _resolve_owner_metadata(
@@ -1526,17 +1595,53 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 
     def _parse_entry(self, raw: str) -> str:
-        value = str(raw).strip().lower()
-        if value not in {"run", "manifest"}:
-            raise TemporalExecutionValidationError(f"Unsupported entry: {raw}")
+        value = str(raw or "").strip().lower()
+        if value not in set(WORKFLOW_ENTRY_BY_TYPE.values()):
+            supported = ", ".join(sorted(set(WORKFLOW_ENTRY_BY_TYPE.values())))
+            raise TemporalExecutionValidationError(
+                f"Unsupported entry: {raw}. Supported values: {supported}"
+            )
         return value
 
     def _parse_owner_type(self, raw: str) -> str:
-        value = str(raw).strip().lower()
-        if value not in {"user", "system"}:
-            raise TemporalExecutionValidationError(f"Unsupported ownerType: {raw}")
+        value = str(raw or "").strip().lower()
+        if value not in ALLOWED_OWNER_TYPES:
+            supported = ", ".join(sorted(ALLOWED_OWNER_TYPES))
+            raise TemporalExecutionValidationError(
+                f"Unsupported ownerType: {raw}. Supported values: {supported}"
+            )
         return value
 
+    def _normalize_owner(
+        self,
+        *,
+        owner_type: str,
+        owner_id: UUID | str | None,
+    ) -> tuple[str, str]:
+        normalized_owner_type = self._parse_owner_type(owner_type)
+        if normalized_owner_type == "system":
+            owner = str(owner_id).strip() if owner_id is not None else "system"
+            return normalized_owner_type, owner or "system"
+
+        if owner_id is None:
+            raise TemporalExecutionValidationError(
+                f"owner_id is required when ownerType is {normalized_owner_type}"
+            )
+
+        owner = str(owner_id).strip()
+        if not owner:
+            raise TemporalExecutionValidationError(
+                f"owner_id is required when ownerType is {normalized_owner_type}"
+            )
+        return normalized_owner_type, owner
+
+    def _default_owner_type(self, record: TemporalExecutionRecord) -> str:
+        attrs = dict(record.search_attributes or {})
+        owner_type = str(attrs.get("mm_owner_type") or "").strip().lower()
+        if owner_type in ALLOWED_OWNER_TYPES:
+            return owner_type
+        owner_id = str(record.owner_id or "").strip().lower()
+        return "system" if owner_id == "system" or not owner_id else "user"
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
         if workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
             return "Manifest Ingest"
@@ -1635,7 +1740,7 @@ class TemporalExecutionService:
             stmt = stmt.where(model.entry == entry)
         if owner_type:
             stmt = stmt.where(
-                model.search_attributes["mm_owner_type"].as_string() == owner_type
+                model.owner_type == TemporalExecutionOwnerType(owner_type)
             )
         if owner_id:
             stmt = stmt.where(model.owner_id == owner_id)

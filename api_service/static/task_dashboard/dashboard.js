@@ -195,6 +195,9 @@
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
   );
+  const taskResolutionEndpoint = String(
+    systemConfig.taskResolution || "/api/tasks/{taskId}/resolution",
+  );
   const supportedWorkerRuntimes =
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
     systemConfig.supportedWorkerRuntimes.length > 0
@@ -9281,21 +9284,38 @@
     startPolling(() => load(true), pollIntervals.detail);
   }
 
-  async function resolveUnifiedTaskSource(taskId) {
+  async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
     const safeTaskId = normalizeDashboardDetailSegment(taskId);
     if (!safeTaskId) {
       return "";
     }
     try {
-      const payload = await fetchJson(
-        endpoint(taskSourceResolverEndpoint, { taskId: safeTaskId }),
+      const resolutionUrl = new URL(
+        endpoint(taskResolutionEndpoint, { taskId: safeTaskId }),
+        window.location.origin,
       );
+      const normalizedSourceHint = String(sourceHint || "").trim().toLowerCase();
+      if (normalizedSourceHint) {
+        resolutionUrl.searchParams.set("source", normalizedSourceHint);
+      }
+      const payload = await fetchJson(`${resolutionUrl.pathname}${resolutionUrl.search}`);
       const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
       return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
         ? resolvedSource
         : "";
-    } catch (_error) {
-      return "";
+    }
+    catch (_error) {
+      try {
+        const payload = await fetchJson(
+          endpoint(taskSourceResolverEndpoint, { taskId: safeTaskId }),
+        );
+        const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
+        return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
+          ? resolvedSource
+          : "";
+      } catch (_fallbackError) {
+        return "";
+      }
     }
   }
 

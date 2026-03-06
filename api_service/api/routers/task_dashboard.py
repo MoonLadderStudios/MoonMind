@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -27,6 +28,11 @@ from moonmind.workflows.skills.resolver import list_available_skill_names
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionService,
+)
+from moonmind.workflows.tasks.source_mapping import (
+    TaskResolutionAmbiguousError,
+    TaskResolutionNotFoundError,
+    TaskSourceMappingService,
 )
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
@@ -88,6 +94,14 @@ class DashboardTaskSourceResponse(BaseModel):
     source_label: str = Field(..., alias="sourceLabel")
     detail_path: str = Field(..., alias="detailPath")
 
+class TaskSourceResolutionResponse(BaseModel):
+    """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
+
+    task_id: str = Field(..., alias="taskId")
+    source: Literal["queue", "orchestrator", "temporal"] = Field(..., alias="source")
+    entry: str | None = Field(None, alias="entry")
+    workflow_id: str | None = Field(None, alias="workflowId")
+
 
 def _is_dynamic_detail(path: str, source: str) -> bool:
     parts = path.split("/")
@@ -108,6 +122,21 @@ def _is_safe_detail_segment(segment: str) -> bool:
     return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
 
 
+def _is_temporal_task_id(path: str) -> bool:
+    return path.startswith("mm:") and _is_safe_detail_segment(path)
+
+
+def _parse_task_uuid(task_id: str) -> UUID | None:
+    try:
+        return UUID(str(task_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_execution_admin(user: User | None) -> bool:
+    return bool(user and getattr(user, "is_superuser", False))
+
+
 def _is_allowed_path(path: str) -> bool:
     if not path:
         return False
@@ -115,9 +144,7 @@ def _is_allowed_path(path: str) -> bool:
         return False
     if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
         return True
-    if _SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT.fullmatch(path) or (
-        path.startswith("mm:") and _is_safe_detail_segment(path)
-    ):
+    if _is_temporal_task_id(path):
         return True
     if path in _STATIC_PATHS:
         return True
@@ -307,6 +334,54 @@ async def list_dashboard_skills(
 
 
 @router.get(
+    "/api/tasks/{task_id}/resolution",
+    response_model=TaskSourceResolutionResponse,
+)
+async def resolve_dashboard_task_source(
+    task_id: str,
+    *,
+    source_hint: Literal["queue", "orchestrator", "temporal"] | None = Query(
+        None, alias="source"
+    ),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> TaskSourceResolutionResponse:
+    """Resolve a unified task handle to its canonical execution source."""
+
+    service = TaskSourceMappingService(session)
+    try:
+        resolved = await service.resolve_task(
+            task_id=task_id,
+            source_hint=source_hint,
+            user=user,
+        )
+    except TaskResolutionNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "task_not_found",
+                "message": str(exc),
+            },
+        ) from exc
+    except TaskResolutionAmbiguousError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ambiguous_task_source",
+                "message": str(exc),
+                "sources": sorted(exc.sources),
+            },
+        ) from exc
+
+    return TaskSourceResolutionResponse(
+        taskId=task_id,
+        source=resolved.source,
+        entry=resolved.entry,
+        workflowId=resolved.workflow_id,
+    )
+
+
+@router.get(
     "/api/tasks",
     response_model=JobListResponse,
     response_model_exclude={"items": {"__all__": {"finish_summary"}}},
@@ -334,8 +409,6 @@ async def list_dashboard_tasks(
         service=service,
         _user=_user,
     )
-
-
 @router.get(
     "/api/tasks/{task_id}/source",
     response_model=DashboardTaskSourceResponse,
@@ -363,8 +436,12 @@ async def resolve_dashboard_task_source(
                 "code": "task_source_not_found",
                 "message": f"Task {task_id} was not found in dashboard sources.",
             },
-        )
+    )
     return resolved
 
 
-__all__ = ["router", "_is_allowed_path", "_resolve_user_dependency_overrides"]
+__all__ = [
+    "router",
+    "_is_allowed_path",
+    "_resolve_user_dependency_overrides",
+]
