@@ -1389,8 +1389,10 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             workflow_type="MoonMind.Run",
             state=None,
             entry=None,
-            owner_type="user",
+            owner_type=None,
             owner_id=owner_a,
+            repo=None,
+            integration=None,
             page_size=2,
             next_page_token=None,
         )
@@ -1402,8 +1404,10 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             workflow_type="MoonMind.Run",
             state=None,
             entry=None,
-            owner_type="user",
+            owner_type=None,
             owner_id=owner_a,
+            repo=None,
+            integration=None,
             page_size=2,
             next_page_token=first_page.next_page_token,
         )
@@ -1421,6 +1425,66 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         )
         assert len(manifest_page.items) == 1
         assert manifest_page.items[0].entry == "manifest"
+
+
+@pytest.mark.asyncio
+async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+
+        matching = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Matching run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="matching-run",
+            repository="Moon/Mind",
+            integration="github",
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Other repo",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="other-repo",
+            repository="Other/Repo",
+            integration="github",
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.ManifestIngest",
+            owner_id=owner_id,
+            title="Manifest",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref="artifact://manifest/1",
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="manifest-run",
+        )
+        result = await service.list_executions(
+            workflow_type=None,
+            state=None,
+            entry="run",
+            owner_type="user",
+            owner_id=owner_id,
+            repo="Moon/Mind",
+            integration="github",
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert result.count == 1
+        assert len(result.items) == 1
+        assert result.items[0].workflow_id == matching.workflow_id
 
 
 @pytest.mark.asyncio

@@ -477,3 +477,72 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
         db_base.async_session_maker = original_session_maker
+
+
+@pytest.mark.asyncio
+async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_path):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_contract_submit.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "type": "task",
+                    "priority": 4,
+                    "maxAttempts": 3,
+                    "payload": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "targetRuntime": "codex",
+                        "requiredCapabilities": ["git"],
+                        "task": {
+                            "instructions": "Implement Temporal submit redirect coverage.",
+                            "runtime": {
+                                "mode": "codex",
+                                "model": "gpt-5.3-codex",
+                                "effort": "high",
+                            },
+                            "inputArtifactRef": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "publish": {"mode": "branch"},
+                        },
+                    },
+                },
+            )
+            assert create_response.status_code == 201
+            body = create_response.json()
+            assert body["source"] == "temporal"
+            assert body["taskId"] == body["workflowId"]
+            assert body["temporalRunId"] == body["runId"]
+            assert body["legacyRunId"] is None
+            assert body["redirectPath"] == f"/tasks/{body['taskId']}?source=temporal"
+            assert body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
+            assert body["memo"]["input_ref"] == "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            assert (
+                body["memo"]["summary"]
+                == "Implement Temporal submit redirect coverage."
+            )
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker

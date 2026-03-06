@@ -171,6 +171,9 @@ class TemporalExecutionService:
         failure_policy: str | None,
         initial_parameters: dict[str, Any] | None,
         idempotency_key: str | None,
+        repository: str | None = None,
+        integration: str | None = None,
+        summary: str | None = None,
     ) -> TemporalExecutionRecord:
         workflow_type_enum = self._parse_workflow_type(workflow_type)
         owner_type_enum, owner = self._resolve_owner_metadata(
@@ -213,7 +216,7 @@ class TemporalExecutionService:
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
             "title": resolved_title,
-            "summary": "Execution initialized.",
+            "summary": summary or "Execution initialized.",
         }
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
@@ -227,6 +230,10 @@ class TemporalExecutionService:
             "mm_updated_at": now.isoformat(),
             "mm_entry": WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
         }
+        if repository:
+            search_attributes["mm_repo"] = repository
+        if integration:
+            search_attributes["mm_integration"] = integration
 
         artifact_refs = [
             ref
@@ -287,13 +294,15 @@ class TemporalExecutionService:
     async def list_executions(
         self,
         *,
-        workflow_type: str | None,
-        state: str | None,
+        workflow_type: str | None = None,
+        state: str | None = None,
         entry: str | None = None,
         owner_type: str | None = None,
-        owner_id: UUID | str | None,
+        owner_id: UUID | str | None = None,
+        repo: str | None = None,
+        integration: str | None = None,
         page_size: int,
-        next_page_token: str | None,
+        next_page_token: str | None = None,
     ) -> TemporalExecutionListResult:
         offset = self._decode_page_token(next_page_token)
         owner = str(owner_id) if owner_id is not None else None
@@ -314,6 +323,8 @@ class TemporalExecutionService:
             entry=entry_value,
             owner_type=owner_type_value,
             owner_id=owner,
+            repo=repo,
+            integration=integration,
         )
         stmt = stmt.order_by(
             TemporalExecutionCanonicalRecord.updated_at.desc(),
@@ -336,6 +347,8 @@ class TemporalExecutionService:
             entry=entry_value,
             owner_type=owner_type_value,
             owner_id=owner,
+            repo=repo,
+            integration=integration,
         )
         count = int((await self._session.execute(count_stmt)).scalar_one())
 
@@ -1712,6 +1725,8 @@ class TemporalExecutionService:
         entry: str | None,
         owner_type: str | None,
         owner_id: str | None,
+        repo: str | None,
+        integration: str | None,
     ) -> Select[Any]:
         if model is TemporalExecutionRecord:
             stmt = stmt.where(
@@ -1730,6 +1745,12 @@ class TemporalExecutionService:
             )
         if owner_id:
             stmt = stmt.where(model.owner_id == owner_id)
+        if repo:
+            stmt = stmt.where(model.search_attributes["mm_repo"].as_string() == repo)
+        if integration:
+            stmt = stmt.where(
+                model.search_attributes["mm_integration"].as_string() == integration
+            )
         return stmt
 
     def _decode_page_token(self, token: str | None) -> int:
