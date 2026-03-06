@@ -62,8 +62,6 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
     assert _is_allowed_path("orchestrator/run-1")
-    assert _is_allowed_path("temporal")
-    assert _is_allowed_path("temporal/mm:123")
     assert _is_allowed_path("mm:123")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("mm:123e4567-e89b-12d3-a456-426614174000")
@@ -106,7 +104,6 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/create",
         "/tasks/orchestrator",
         "/tasks/orchestrator/new",
-        "/tasks/temporal",
         "/tasks/manifests",
         "/tasks/manifests/new",
         "/tasks/schedules",
@@ -126,7 +123,6 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/mm:workflow-123",
         f"/tasks/queue/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
-        "/tasks/temporal/mm:workflow-123",
         f"/tasks/manifests/{uuid4()}",
         f"/tasks/schedules/{uuid4()}",
     ):
@@ -146,6 +142,25 @@ def test_speckit_routes_return_404(client: TestClient) -> None:
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
+def test_temporal_source_root_still_renders_dashboard_shell(client: TestClient) -> None:
+    response = client.get("/tasks/temporal")
+
+    assert response.status_code == 200
+    assert "task-dashboard-config" in response.text
+
+
+def test_temporal_source_subroutes_return_404_until_first_class_source_exists(
+    client: TestClient,
+) -> None:
+    for path in (
+        "/tasks/temporal/new",
+        f"/tasks/temporal/{uuid4()}",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+
+
 def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/not-a-valid-dashboard-path/extra")
 
@@ -157,8 +172,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
         "/tasks/orchestrator, /tasks/orchestrator/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-        "/tasks/schedules, /tasks/schedules/new, /tasks/temporal, "
-        "or /tasks/settings."
+        "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
     )
 
 

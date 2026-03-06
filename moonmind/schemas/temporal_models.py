@@ -68,19 +68,6 @@ class UpdateExecutionRequest(BaseModel):
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
 
-class UpdateExecutionResponse(BaseModel):
-    """Outcome from an update command."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    accepted: bool = Field(..., alias="accepted")
-    applied: Literal["immediate", "next_safe_point", "continue_as_new"] = Field(
-        ..., alias="applied"
-    )
-    message: str = Field(..., alias="message")
-    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
-
-
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
 
@@ -297,6 +284,40 @@ class ExecutionModel(BaseModel):
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
     detail_href: str = Field(..., alias="detailHref")
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    stale_state: bool = Field(False, alias="staleState")
+    refreshed_at: datetime | None = Field(None, alias="refreshedAt")
+
+
+class ExecutionRefreshEnvelope(BaseModel):
+    """Compatibility metadata for patching one acted-on row and refetching lists."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    patched_execution: bool = Field(..., alias="patchedExecution")
+    list_stale: bool = Field(..., alias="listStale")
+    refetch_suggested: bool = Field(..., alias="refetchSuggested")
+    refreshed_at: datetime = Field(..., alias="refreshedAt")
+
+
+class UpdateExecutionResponse(BaseModel):
+    """Outcome from an update command."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: bool = Field(..., alias="accepted")
+    applied: Literal["immediate", "next_safe_point", "continue_as_new"] = Field(
+        ..., alias="applied"
+    )
+    message: str = Field(..., alias="message")
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
+    execution: ExecutionModel | None = Field(None, alias="execution")
+    refresh: ExecutionRefreshEnvelope | None = Field(None, alias="refresh")
 
 
 class ExecutionListResponse(BaseModel):
@@ -310,3 +331,9 @@ class ExecutionListResponse(BaseModel):
     count_mode: Literal["exact", "estimated_or_unknown"] = Field(
         "exact", alias="countMode"
     )
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    stale_state: bool = Field(False, alias="staleState")
+    degraded_count: bool = Field(False, alias="degradedCount")
+    refreshed_at: datetime | None = Field(None, alias="refreshedAt")

@@ -283,9 +283,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "post": "/api/system/worker-pause",
                 "pollIntervalMs": 5000,
             },
-            "taskCompatibilityList": "/api/tasks/list",
-            "taskCompatibilityDetail": "/api/tasks/{taskId}",
-            "taskResolution": "/api/tasks/{taskId}/resolution",
             "attachmentPolicy": {
                 "enabled": bool(settings.spec_workflow.agent_job_attachment_enabled),
                 **_build_default_attachment_policy(
@@ -296,6 +293,22 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                         "agent_job_attachment_allowed_content_types": settings.spec_workflow.agent_job_attachment_allowed_content_types,
                     }
                 ),
+            },
+            "taskCompatibilityList": "/api/tasks/list",
+            "taskCompatibilityDetail": "/api/tasks/{taskId}",
+            "taskResolution": "/api/tasks/{taskId}/resolution",
+            "temporalCompatibility": {
+                "enabled": bool(temporal_dashboard.enabled),
+                "uiQueryModel": "compatibility_adapter",
+                "list": "/api/executions",
+                "detail": "/api/executions/{workflowId}",
+                "actionExecutionField": "execution",
+                "actionRefreshField": "refresh",
+                "staleStateField": "staleState",
+                "refreshedAtField": "refreshedAt",
+                "countModeField": "countMode",
+                "degradedCountField": "degradedCount",
+                "backgroundRefetchMs": _POLL_INTERVALS_MS["list"],
             },
         },
     }

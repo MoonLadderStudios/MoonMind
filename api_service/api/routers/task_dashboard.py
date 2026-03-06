@@ -60,7 +60,6 @@ _STATIC_PATHS = {
     "manifests/new",
     "schedules",
     "schedules/new",
-    "temporal",
     "settings",
 }
 
@@ -159,7 +158,6 @@ def _is_allowed_path(path: str) -> bool:
             "proposals",
             "manifests",
             "schedules",
-            "temporal",
         )
     )
 
@@ -304,8 +302,7 @@ async def task_dashboard_route(
                     "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
                     "/tasks/orchestrator, /tasks/orchestrator/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/schedules/new, /tasks/temporal, "
-                    "or /tasks/settings."
+                    "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
                 ),
             },
         )
@@ -338,7 +335,7 @@ async def list_dashboard_skills(
     "/api/tasks/{task_id}/resolution",
     response_model=TaskSourceResolutionResponse,
 )
-async def resolve_dashboard_task_source(
+async def resolve_dashboard_task_resolution(
     task_id: str,
     *,
     source_hint: Literal["queue", "orchestrator", "temporal"] | None = Query(

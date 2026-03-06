@@ -62,6 +62,8 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
+ALLOWED_OWNER_TYPES: set[str] = {item.value for item in TemporalExecutionOwnerType}
+ALLOWED_ENTRY_VALUES: set[str] = set(WORKFLOW_ENTRY_BY_TYPE.values())
 ALLOWED_UPDATE_NAMES: frozenset[str] = frozenset(SUPPORTED_UPDATE_NAMES)
 ALLOWED_SIGNAL_NAMES: frozenset[str] = frozenset(SUPPORTED_SIGNAL_NAMES)
 ALLOWED_FAILURE_POLICIES: frozenset[str] = frozenset(SUPPORTED_FAILURE_POLICIES)
@@ -71,7 +73,6 @@ ALLOWED_ERROR_CATEGORIES: set[str] = {
     "execution_error",
     "system_error",
 }
-ALLOWED_OWNER_TYPES: set[str] = {"user", "system", "service"}
 ALLOWED_WAITING_REASONS: set[str] = {
     "approval_required",
     "external_callback",
@@ -91,6 +92,7 @@ ALLOWED_INTEGRATION_STATUSES: set[str] = {
 TERMINAL_INTEGRATION_STATUSES: set[str] = {"succeeded", "failed", "canceled"}
 _SEEN_PROVIDER_EVENT_LIMIT = 50
 _CORRELATION_EXPIRY_DAYS = 30
+PAGINATION_ORDERING = "mm_updated_at_desc__workflow_id_desc"
 CONTINUE_AS_NEW_CAUSES: set[str] = {
     "manual_rerun",
     "lifecycle_threshold",
@@ -227,7 +229,7 @@ class TemporalExecutionService:
             "mm_owner_type": owner_type_enum.value,
             "mm_owner_id": owner,
             "mm_state": MoonMindWorkflowState.INITIALIZING.value,
-            "mm_updated_at": now.isoformat(),
+            "mm_updated_at": _format_search_attribute_datetime(now),
             "mm_entry": WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
         }
         if repository:
@@ -262,6 +264,8 @@ class TemporalExecutionService:
             pending_parameters_patch=None,
             paused=False,
             awaiting_external=False,
+            waiting_reason=None,
+            attention_required=False,
             step_count=0,
             wait_cycle_count=0,
             rerun_count=0,
@@ -304,24 +308,33 @@ class TemporalExecutionService:
         page_size: int,
         next_page_token: str | None = None,
     ) -> TemporalExecutionListResult:
-        offset = self._decode_page_token(next_page_token)
         owner = str(owner_id) if owner_id is not None else None
         page_size = max(1, min(page_size, 200))
         workflow_type_enum = (
             self._parse_workflow_type(workflow_type) if workflow_type else None
         )
+        owner_type_enum = self._parse_owner_type(owner_type) if owner_type else None
         state_enum = self._parse_state(state) if state else None
         entry_value = self._parse_entry(entry) if entry else None
-        owner_type_value = self._parse_owner_type(owner_type) if owner_type else None
+        query_scope = self._page_token_scope(
+            workflow_type=workflow_type_enum,
+            owner_type=owner_type_enum,
+            state=state_enum,
+            owner_id=owner,
+            entry=entry_value,
+            repo=repo,
+            integration=integration,
+        )
+        offset = self._decode_page_token(next_page_token, expected_scope=query_scope)
 
         stmt = select(TemporalExecutionCanonicalRecord)
         stmt = self._apply_filters(
             stmt,
             model=TemporalExecutionCanonicalRecord,
             workflow_type=workflow_type_enum,
+            owner_type=owner_type_enum,
             state=state_enum,
             entry=entry_value,
-            owner_type=owner_type_value,
             owner_id=owner,
             repo=repo,
             integration=integration,
@@ -336,16 +349,20 @@ class TemporalExecutionService:
         has_more = len(rows) > page_size
         items = await self._sync_projections_best_effort(rows[:page_size])
 
-        next_token = self._encode_page_token(offset + page_size) if has_more else None
+        next_token = (
+            self._encode_page_token(offset + page_size, scope=query_scope)
+            if has_more
+            else None
+        )
 
         count_stmt = select(func.count()).select_from(TemporalExecutionCanonicalRecord)
         count_stmt = self._apply_filters(
             count_stmt,
             model=TemporalExecutionCanonicalRecord,
             workflow_type=workflow_type_enum,
+            owner_type=owner_type_enum,
             state=state_enum,
             entry=entry_value,
-            owner_type=owner_type_value,
             owner_id=owner,
             repo=repo,
             integration=integration,
@@ -364,21 +381,28 @@ class TemporalExecutionService:
         *,
         include_orphaned: bool = False,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
         record = await self._load_source_execution(
-            workflow_id,
+            canonical_workflow_id,
         )
         if record is None:
             raise TemporalExecutionNotFoundError(
-                f"Workflow execution {workflow_id} was not found"
+                f"Workflow execution {canonical_workflow_id} was not found"
             )
         if include_orphaned:
             projection = await self._load_projection_execution(
-                workflow_id,
+                canonical_workflow_id,
                 include_orphaned=True,
             )
             if projection is not None:
                 return projection
         return await self._sync_projection_best_effort(record)
+
+    def canonicalize_workflow_id(self, workflow_id: str) -> str:
+        candidate = TemporalExecutionRecord.canonicalize_identifier(workflow_id)
+        if candidate:
+            return candidate
+        raise TemporalExecutionValidationError("workflowId is required")
 
     async def update_execution(
         self,
@@ -476,11 +500,16 @@ class TemporalExecutionService:
                 record.artifact_refs = refs
             integration_state = self._integration_state(record)
             if integration_state is None:
-                record.awaiting_external = bool(record.paused)
+                self._clear_waiting_metadata(record)
                 if not record.paused:
                     self._set_state(record, MoonMindWorkflowState.EXECUTING)
                     self._clear_wait_metadata(record)
                 else:
+                    self._set_waiting_metadata(
+                        record,
+                        waiting_reason="operator_paused",
+                        attention_required=True,
+                    )
                     self._set_wait_metadata(
                         record,
                         waiting_reason="operator_paused",
@@ -504,12 +533,16 @@ class TemporalExecutionService:
                     "Approve requires payload.approval_type"
                 )
             record.paused = False
-            record.awaiting_external = False
+            self._clear_waiting_metadata(record)
             self._set_state(record, MoonMindWorkflowState.EXECUTING)
             self._update_summary(record, "Approval signal received.")
         elif signal_name == "Pause":
             record.paused = True
-            record.awaiting_external = True
+            self._set_waiting_metadata(
+                record,
+                waiting_reason="operator_paused",
+                attention_required=True,
+            )
             self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
             self._set_wait_metadata(
                 record,
@@ -519,7 +552,7 @@ class TemporalExecutionService:
             self._update_summary(record, "Execution paused.")
         elif signal_name == "Resume":
             record.paused = False
-            record.awaiting_external = False
+            self._clear_waiting_metadata(record)
             self._set_state(record, MoonMindWorkflowState.EXECUTING)
             self._update_summary(record, "Execution resumed.")
 
@@ -594,7 +627,7 @@ class TemporalExecutionService:
         )
 
         if normalized in TERMINAL_INTEGRATION_STATUSES:
-            record.awaiting_external = False
+            self._clear_waiting_metadata(record)
             if not record.paused:
                 self._set_state(record, MoonMindWorkflowState.EXECUTING)
             self._update_summary(
@@ -603,7 +636,11 @@ class TemporalExecutionService:
                 external_url=state.get("external_url"),
             )
         else:
-            record.awaiting_external = True
+            self._set_waiting_metadata(
+                record,
+                waiting_reason=self._integration_waiting_reason(state),
+                attention_required=False,
+            )
             self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
             self._update_summary(
                 record,
@@ -685,7 +722,7 @@ class TemporalExecutionService:
             )
 
         if normalized in TERMINAL_INTEGRATION_STATUSES:
-            record.awaiting_external = False
+            self._clear_waiting_metadata(record)
             if not record.paused:
                 self._set_state(record, MoonMindWorkflowState.EXECUTING)
             self._update_summary(
@@ -697,7 +734,11 @@ class TemporalExecutionService:
                 external_url=state.get("external_url"),
             )
         else:
-            record.awaiting_external = True
+            self._set_waiting_metadata(
+                record,
+                waiting_reason=self._integration_waiting_reason(state),
+                attention_required=False,
+            )
             self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
             self._update_summary(
                 record,
@@ -781,7 +822,7 @@ class TemporalExecutionService:
 
         reason_text = (reason or "Canceled by user.").strip() or "Canceled by user."
         record.paused = False
-        record.awaiting_external = False
+        self._clear_waiting_metadata(record)
         if graceful:
             self._set_state(
                 record,
@@ -860,17 +901,21 @@ class TemporalExecutionService:
         *,
         workflow_id: str,
         summary: str | None = None,
-        waiting_reason: str = "unknown_external",
-        attention_required: bool = False,
+        waiting_reason: str | None = None,
+        attention_required: bool | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
-        record.awaiting_external = True
+        self._set_waiting_metadata(
+            record,
+            waiting_reason=waiting_reason or "unknown_external",
+            attention_required=bool(attention_required),
+        )
         self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
         self._set_wait_metadata(
             record,
-            waiting_reason=waiting_reason,
-            attention_required=attention_required,
+            waiting_reason=waiting_reason or "unknown_external",
+            attention_required=bool(attention_required),
         )
         if summary:
             self._update_summary(record, summary)
@@ -916,6 +961,8 @@ class TemporalExecutionService:
             record.wait_cycle_count = (
                 int(record.wait_cycle_count or 0) + completed_wait_cycles
             )
+        if not completed_steps and not completed_wait_cycles:
+            return await self._sync_projection_best_effort(record)
         self._touch(record)
 
         if self._should_continue_as_new(record):
@@ -1154,7 +1201,13 @@ class TemporalExecutionService:
         record.step_count = 0
         record.wait_cycle_count = 0
         record.paused = False
-        record.awaiting_external = integration_wait_active
+        self._clear_waiting_metadata(record)
+        if integration_wait_active:
+            self._set_waiting_metadata(
+                record,
+                waiting_reason="external_completion",
+                attention_required=False,
+            )
         record.closed_at = None
         record.close_status = None
         record.pending_parameters_patch = None
@@ -1192,6 +1245,8 @@ class TemporalExecutionService:
             record.closed_at = None
 
         record.state = state
+        if state is not MoonMindWorkflowState.AWAITING_EXTERNAL:
+            self._clear_waiting_metadata(record)
         self._touch(record)
 
     def _touch(self, record: TemporalExecutionCanonicalRecord) -> None:
@@ -1201,7 +1256,7 @@ class TemporalExecutionService:
         attrs = dict(record.search_attributes or {})
         attrs["mm_owner_type"] = record.owner_type.value
         attrs["mm_state"] = record.state.value
-        attrs["mm_updated_at"] = now.isoformat()
+        attrs["mm_updated_at"] = _format_search_attribute_datetime(now)
         attrs["mm_entry"] = record.entry
         attrs["mm_owner_id"] = self._default_owner_id(record)
         integration_state = self._integration_state(record)
@@ -1251,7 +1306,7 @@ class TemporalExecutionService:
 
     def _set_wait_metadata(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
         *,
         waiting_reason: str,
         attention_required: bool,
@@ -1266,7 +1321,10 @@ class TemporalExecutionService:
         memo["attention_required"] = bool(attention_required)
         record.memo = memo
 
-    def _clear_wait_metadata(self, record: TemporalExecutionRecord) -> None:
+    def _clear_wait_metadata(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+    ) -> None:
         memo = dict(record.memo or {})
         memo.pop("waiting_reason", None)
         memo.pop("attention_required", None)
@@ -1319,6 +1377,11 @@ class TemporalExecutionService:
             return TemporalExecutionOwnerType.SYSTEM.value
         return record.owner_id or TemporalExecutionOwnerType.SYSTEM.value
 
+    def _integration_waiting_reason(self, state: dict[str, Any]) -> str:
+        if bool(state.get("callback_supported")):
+            return "external_callback"
+        return "external_completion"
+
     def _integration_state(
         self,
         record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
@@ -1353,6 +1416,30 @@ class TemporalExecutionService:
         if not normalized:
             raise TemporalExecutionValidationError("integration_name is required")
         return normalized
+
+    def _set_waiting_metadata(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+        *,
+        waiting_reason: str,
+        attention_required: bool,
+    ) -> None:
+        if waiting_reason not in ALLOWED_WAITING_REASONS:
+            supported = ", ".join(sorted(ALLOWED_WAITING_REASONS))
+            raise TemporalExecutionValidationError(
+                f"Unsupported waitingReason '{waiting_reason}'. Supported values: {supported}"
+            )
+        record.awaiting_external = True
+        record.waiting_reason = waiting_reason
+        record.attention_required = attention_required
+
+    def _clear_waiting_metadata(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+    ) -> None:
+        record.awaiting_external = False
+        record.waiting_reason = None
+        record.attention_required = False
 
     def _clean_text(self, value: Any) -> str | None:
         if value is None:
@@ -1492,11 +1579,15 @@ class TemporalExecutionService:
         record.integration_state = state
 
         if incoming_status in TERMINAL_INTEGRATION_STATUSES:
-            record.awaiting_external = False
+            self._clear_waiting_metadata(record)
             if not record.paused:
                 self._set_state(record, MoonMindWorkflowState.EXECUTING)
         else:
-            record.awaiting_external = True
+            self._set_waiting_metadata(
+                record,
+                waiting_reason=self._integration_waiting_reason(state),
+                attention_required=False,
+            )
             self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
 
         self._update_summary(
@@ -1594,54 +1685,24 @@ class TemporalExecutionService:
         except ValueError as exc:
             raise TemporalExecutionValidationError(f"Unsupported state: {raw}") from exc
 
-    def _parse_entry(self, raw: str) -> str:
-        value = str(raw or "").strip().lower()
-        if value not in set(WORKFLOW_ENTRY_BY_TYPE.values()):
-            supported = ", ".join(sorted(set(WORKFLOW_ENTRY_BY_TYPE.values())))
-            raise TemporalExecutionValidationError(
-                f"Unsupported entry: {raw}. Supported values: {supported}"
-            )
-        return value
-
-    def _parse_owner_type(self, raw: str) -> str:
-        value = str(raw or "").strip().lower()
-        if value not in ALLOWED_OWNER_TYPES:
+    def _parse_owner_type(self, raw: str) -> TemporalExecutionOwnerType:
+        candidate = str(raw).strip()
+        try:
+            return TemporalExecutionOwnerType(candidate)
+        except ValueError as exc:
             supported = ", ".join(sorted(ALLOWED_OWNER_TYPES))
             raise TemporalExecutionValidationError(
-                f"Unsupported ownerType: {raw}. Supported values: {supported}"
-            )
-        return value
+                f"Unsupported ownerType '{raw}'. Supported values: {supported}"
+            ) from exc
 
-    def _normalize_owner(
-        self,
-        *,
-        owner_type: str,
-        owner_id: UUID | str | None,
-    ) -> tuple[str, str]:
-        normalized_owner_type = self._parse_owner_type(owner_type)
-        if normalized_owner_type == "system":
-            owner = str(owner_id).strip() if owner_id is not None else "system"
-            return normalized_owner_type, owner or "system"
-
-        if owner_id is None:
-            raise TemporalExecutionValidationError(
-                f"owner_id is required when ownerType is {normalized_owner_type}"
-            )
-
-        owner = str(owner_id).strip()
-        if not owner:
-            raise TemporalExecutionValidationError(
-                f"owner_id is required when ownerType is {normalized_owner_type}"
-            )
-        return normalized_owner_type, owner
-
-    def _default_owner_type(self, record: TemporalExecutionRecord) -> str:
-        attrs = dict(record.search_attributes or {})
-        owner_type = str(attrs.get("mm_owner_type") or "").strip().lower()
-        if owner_type in ALLOWED_OWNER_TYPES:
-            return owner_type
-        owner_id = str(record.owner_id or "").strip().lower()
-        return "system" if owner_id == "system" or not owner_id else "user"
+    def _parse_entry(self, raw: str) -> str:
+        candidate = str(raw).strip()
+        if candidate in ALLOWED_ENTRY_VALUES:
+            return candidate
+        supported = ", ".join(sorted(ALLOWED_ENTRY_VALUES))
+        raise TemporalExecutionValidationError(
+            f"Unsupported entry '{raw}'. Supported values: {supported}"
+        )
 
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
         if workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
@@ -1671,7 +1732,10 @@ class TemporalExecutionService:
         self,
         workflow_id: str,
     ) -> TemporalExecutionCanonicalRecord | None:
-        return await self._session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
+        return await self._session.get(
+            TemporalExecutionCanonicalRecord, canonical_workflow_id
+        )
 
     async def _require_source_execution(
         self,
@@ -1690,7 +1754,8 @@ class TemporalExecutionService:
         *,
         include_orphaned: bool,
     ) -> TemporalExecutionRecord | None:
-        record = await self._session.get(TemporalExecutionRecord, workflow_id)
+        canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
+        record = await self._session.get(TemporalExecutionRecord, canonical_workflow_id)
         if (
             record is not None
             and not include_orphaned
@@ -1721,9 +1786,9 @@ class TemporalExecutionService:
         *,
         model: type[TemporalExecutionCanonicalRecord] | type[TemporalExecutionRecord],
         workflow_type: TemporalWorkflowType | None,
+        owner_type: TemporalExecutionOwnerType | None,
         state: MoonMindWorkflowState | None,
         entry: str | None,
-        owner_type: str | None,
         owner_id: str | None,
         repo: str | None,
         integration: str | None,
@@ -1735,14 +1800,12 @@ class TemporalExecutionService:
             )
         if workflow_type:
             stmt = stmt.where(model.workflow_type == workflow_type)
+        if owner_type:
+            stmt = stmt.where(model.owner_type == owner_type)
         if state:
             stmt = stmt.where(model.state == state)
         if entry:
             stmt = stmt.where(model.entry == entry)
-        if owner_type:
-            stmt = stmt.where(
-                model.owner_type == TemporalExecutionOwnerType(owner_type)
-            )
         if owner_id:
             stmt = stmt.where(model.owner_id == owner_id)
         if repo:
@@ -1753,7 +1816,9 @@ class TemporalExecutionService:
             )
         return stmt
 
-    def _decode_page_token(self, token: str | None) -> int:
+    def _decode_page_token(
+        self, token: str | None, *, expected_scope: dict[str, str | None]
+    ) -> int:
         if token is None:
             return 0
         try:
@@ -1762,15 +1827,41 @@ class TemporalExecutionService:
             offset = int(payload.get("offset", 0))
             if offset < 0:
                 raise ValueError("offset must be non-negative")
+            actual_scope = payload.get("scope")
+            if actual_scope != expected_scope:
+                raise ValueError("token scope mismatch")
             return offset
         except (ValueError, TypeError, json.JSONDecodeError, binascii.Error) as exc:
             raise TemporalExecutionValidationError("Invalid nextPageToken") from exc
 
-    def _encode_page_token(self, offset: int) -> str:
-        payload = {"offset": offset}
+    def _encode_page_token(self, offset: int, *, scope: dict[str, str | None]) -> str:
+        payload = {"offset": offset, "scope": scope}
         return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode(
             "ascii"
         )
+
+    def _page_token_scope(
+        self,
+        *,
+        workflow_type: TemporalWorkflowType | None,
+        owner_type: TemporalExecutionOwnerType | None,
+        state: MoonMindWorkflowState | None,
+        owner_id: str | None,
+        entry: str | None,
+        repo: str | None,
+        integration: str | None,
+    ) -> dict[str, str | None]:
+        return {
+            "endpoint": "executions:list",
+            "ordering": PAGINATION_ORDERING,
+            "workflow_type": workflow_type.value if workflow_type else None,
+            "owner_type": owner_type.value if owner_type else None,
+            "state": state.value if state else None,
+            "owner_id": owner_id,
+            "entry": entry,
+            "repo": repo,
+            "integration": integration,
+        }
 
     def _ensure_non_terminal(self, record: TemporalExecutionCanonicalRecord) -> None:
         if record.state not in NON_TERMINAL_STATES:
@@ -1951,6 +2042,8 @@ class TemporalExecutionService:
             ),
             "paused": source.paused,
             "awaiting_external": source.awaiting_external,
+            "waiting_reason": source.waiting_reason,
+            "attention_required": source.attention_required,
             "step_count": source.step_count,
             "wait_cycle_count": source.wait_cycle_count,
             "rerun_count": source.rerun_count,
@@ -1977,3 +2070,11 @@ class TemporalExecutionService:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _format_search_attribute_datetime(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    else:
+        value = value.astimezone(UTC)
+    return value.isoformat()
