@@ -775,15 +775,14 @@ class TemporalExecutionService:
         if continue_as_new_cause:
             memo["continue_as_new_cause"] = continue_as_new_cause
             memo["latest_temporal_run_id"] = record.run_id
+            attrs = dict(record.search_attributes or {})
+            attrs["mm_continue_as_new_cause"] = continue_as_new_cause
+            record.search_attributes = attrs
         if record.input_ref:
             memo["input_ref"] = record.input_ref
         if record.manifest_ref:
             memo["manifest_ref"] = record.manifest_ref
         record.memo = memo
-        if continue_as_new_cause:
-            attrs = dict(record.search_attributes or {})
-            attrs["mm_continue_as_new_cause"] = continue_as_new_cause
-            record.search_attributes = attrs
 
     def _parse_workflow_type(self, raw: str) -> TemporalWorkflowType:
         try:

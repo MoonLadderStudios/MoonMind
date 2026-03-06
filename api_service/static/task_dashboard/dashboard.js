@@ -8286,7 +8286,7 @@
     };
 
     await load();
-    startPolling(() => load(true), pollIntervals.detail);
+    startPolling(() => load(), pollIntervals.detail);
   }
 
   function renderTemporalArtifactsRows(artifacts) {
@@ -8476,7 +8476,7 @@
     };
 
     await load();
-    startPolling(() => load(true), pollIntervals.detail);
+    startPolling(() => load(), pollIntervals.detail);
   }
 
   async function renderSystemSettingsPage() {
@@ -8926,40 +8926,42 @@
         await renderTemporalDetailPage(candidateTaskId);
         return;
       }
-      try {
-        await fetchJson(
-          endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
-            id: candidateTaskId,
-          }),
-        );
-        await renderQueueDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        // fall through and probe orchestrator
+      const detailProbes = [
+        {
+          config: queueSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/api/queue/jobs/{id}",
+          params: { id: candidateTaskId },
+          render: renderQueueDetailPage,
+        },
+        {
+          config: orchestratorSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/orchestrator/tasks/{id}",
+          params: { id: candidateTaskId },
+          render: renderOrchestratorDetailPage,
+        },
+        {
+          config: temporalSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/api/executions/{workflowId}",
+          params: { workflowId: candidateTaskId },
+          render: renderTemporalDetailPage,
+        },
+      ];
+      for (const probe of detailProbes) {
+        try {
+          await fetchJson(
+            endpoint(probe.config[probe.endpointKey] || probe.endpointDefault, probe.params),
+          );
+          await probe.render(candidateTaskId);
+          return;
+        } catch (_error) {
+          // fall through and probe the next runtime source
+        }
       }
-      try {
-        await fetchJson(
-          endpoint(orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}", {
-            id: candidateTaskId,
-          }),
-        );
-        await renderOrchestratorDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        // fall through and probe Temporal
-      }
-      try {
-        await fetchJson(
-          endpoint(temporalSourceConfig.detail || "/api/executions/{workflowId}", {
-            workflowId: candidateTaskId,
-          }),
-        );
-        await renderTemporalDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        renderNotFound();
-        return;
-      }
+      renderNotFound();
+      return;
     }
     if (proposalDetailMatch) {
       await renderProposalDetailPage(proposalDetailMatch[1]);
