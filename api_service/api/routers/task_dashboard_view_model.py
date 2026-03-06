@@ -54,7 +54,6 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         # Accept both Temporal's raw status spelling and the normalized dashboard value.
         "canceled": "cancelled",
         "queued": "queued",
-        "running": "running",
         "awaiting_action": "awaiting_action",
         "cancelled": "cancelled",
     },
