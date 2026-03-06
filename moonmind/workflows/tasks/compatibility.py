@@ -25,14 +25,17 @@ from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.tasks.source_mapping import TaskSourceMappingService
 
 TaskSourceFilter = Literal["queue", "orchestrator", "temporal", "all"] | None
-TaskStatusFilter = Literal[
-    "queued",
-    "running",
-    "awaiting_action",
-    "succeeded",
-    "failed",
-    "cancelled",
-] | None
+TaskStatusFilter = (
+    Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "succeeded",
+        "failed",
+        "cancelled",
+    ]
+    | None
+)
 
 _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.INITIALIZING: "queued",
@@ -301,7 +304,9 @@ class TaskCompatibilityService:
         if orchestrator_statuses == ():
             return [], 0
         if orchestrator_statuses is not None:
-            stmt = stmt.where(db_models.OrchestratorRun.status.in_(orchestrator_statuses))
+            stmt = stmt.where(
+                db_models.OrchestratorRun.status.in_(orchestrator_statuses)
+            )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         stmt = stmt.order_by(
             db_models.OrchestratorRun.updated_at.desc(),
@@ -332,19 +337,27 @@ class TaskCompatibilityService:
         if entry:
             stmt = stmt.where(db_models.TemporalExecutionRecord.entry == entry)
         if workflow_type:
-            stmt = stmt.where(db_models.TemporalExecutionRecord.workflow_type == workflow_type)
+            stmt = stmt.where(
+                db_models.TemporalExecutionRecord.workflow_type == workflow_type
+            )
         temporal_states = self._temporal_states_for_filter(status_filter)
         if temporal_states == ():
             return [], 0
         if temporal_states is not None:
-            stmt = stmt.where(db_models.TemporalExecutionRecord.state.in_(temporal_states))
+            stmt = stmt.where(
+                db_models.TemporalExecutionRecord.state.in_(temporal_states)
+            )
         if not bool(getattr(user, "is_superuser", False)):
-            stmt = stmt.where(db_models.TemporalExecutionRecord.owner_id == str(user.id))
+            stmt = stmt.where(
+                db_models.TemporalExecutionRecord.owner_id == str(user.id)
+            )
         normalized_owner_id = str(owner_id or "").strip()
         if owner_type:
             stmt = stmt.where(self._temporal_owner_type_expression() == owner_type)
         if normalized_owner_id:
-            stmt = stmt.where(self._temporal_owner_id_expression() == normalized_owner_id)
+            stmt = stmt.where(
+                self._temporal_owner_id_expression() == normalized_owner_id
+            )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         stmt = stmt.order_by(
             db_models.TemporalExecutionRecord.updated_at.desc(),
@@ -448,7 +461,9 @@ class TaskCompatibilityService:
         return TaskCompatibilityRow(
             taskId=record.workflow_id,
             source="temporal",
-            entry=str(search_attributes.get("mm_entry") or record.entry or "").strip().lower()
+            entry=str(search_attributes.get("mm_entry") or record.entry or "")
+            .strip()
+            .lower()
             or None,
             title=title,
             summary=summary,
@@ -460,7 +475,9 @@ class TaskCompatibilityService:
             workflowType=record.workflow_type.value,
             ownerType=str(search_attributes.get("mm_owner_type") or "").strip().lower()
             or self._default_owner_type(record),
-            ownerId=str(search_attributes.get("mm_owner_id") or record.owner_id or "").strip()
+            ownerId=str(
+                search_attributes.get("mm_owner_id") or record.owner_id or ""
+            ).strip()
             or None,
             createdAt=record.started_at,
             startedAt=record.started_at,
@@ -540,7 +557,8 @@ class TaskCompatibilityService:
                 resume=can_resume,
                 deliverCallback=not is_terminal,
                 cancel=not is_terminal,
-                forceTerminate=bool(getattr(user, "is_superuser", False)) and not is_terminal,
+                forceTerminate=bool(getattr(user, "is_superuser", False))
+                and not is_terminal,
             ),
             debug=TaskDebugContext(
                 namespace=record.namespace,
@@ -681,7 +699,9 @@ class TaskCompatibilityService:
             runtime = str(task.get("runtime") or task.get("runtimeMode") or "").strip()
             if runtime:
                 return runtime
-        runtime = str(payload.get("runtime") or payload.get("runtimeMode") or "").strip()
+        runtime = str(
+            payload.get("runtime") or payload.get("runtimeMode") or ""
+        ).strip()
         return runtime or None
 
     def _extract_skill(self, payload: dict[str, Any]) -> str | None:
@@ -708,7 +728,9 @@ class TaskCompatibilityService:
         owner_type = str(attrs.get("mm_owner_type") or "").strip().lower()
         if owner_type in _ALLOWED_OWNER_TYPES:
             return owner_type
-        return "system" if not record.owner_id or record.owner_id == "system" else "user"
+        return (
+            "system" if not record.owner_id or record.owner_id == "system" else "user"
+        )
 
     def _queue_statuses_for_filter(
         self,
@@ -806,12 +828,13 @@ class TaskCompatibilityService:
             )
         )
         record_owner_id = func.lower(
-            func.trim(
-                func.coalesce(db_models.TemporalExecutionRecord.owner_id, "")
-            )
+            func.trim(func.coalesce(db_models.TemporalExecutionRecord.owner_id, ""))
         )
         return case(
-            (search_owner_type.in_(tuple(sorted(_ALLOWED_OWNER_TYPES))), search_owner_type),
+            (
+                search_owner_type.in_(tuple(sorted(_ALLOWED_OWNER_TYPES))),
+                search_owner_type,
+            ),
             (
                 or_(record_owner_id == "", record_owner_id == "system"),
                 "system",

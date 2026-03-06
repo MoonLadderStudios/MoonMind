@@ -40,10 +40,10 @@ from api_service.api.routers.spec_automation import router as spec_automation_ro
 from api_service.api.routers.system_worker_pause import (
     router as system_worker_pause_router,
 )
-from api_service.api.routers.task_dashboard import router as task_dashboard_router
 from api_service.api.routers.task_compatibility import (
     router as task_compatibility_router,
 )
+from api_service.api.routers.task_dashboard import router as task_dashboard_router
 from api_service.api.routers.task_proposals import router as task_proposals_router
 from api_service.api.routers.task_runs import router as task_runs_router
 from api_service.api.routers.task_step_templates import (

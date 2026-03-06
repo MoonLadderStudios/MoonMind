@@ -11,7 +11,11 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.executions import _get_service, _serialize_execution, router
+from api_service.api.routers.executions import (
+    _get_service,
+    _serialize_execution,
+    router,
+)
 from api_service.auth_providers import get_current_user
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 

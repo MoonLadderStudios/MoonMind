@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.api.routers.agent_queue import _get_service, list_jobs
 from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
-from api_service.db import models as db_models
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.schemas.agent_queue_models import JobListResponse

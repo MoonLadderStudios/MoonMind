@@ -7,10 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api_service.db import models as db_models
-from moonmind.workflows.tasks.compatibility import (
-    TaskCompatibilityService,
-    _ListCursor,
-)
+from moonmind.workflows.tasks.compatibility import TaskCompatibilityService, _ListCursor
 
 
 def _service() -> TaskCompatibilityService:

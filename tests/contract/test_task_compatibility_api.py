@@ -104,7 +104,9 @@ async def test_task_compatibility_temporal_list_and_detail_contract(tmp_path):
             assert manifest_row["taskId"] == manifest_row["workflowId"]
             assert manifest_row["title"] == "Compatibility Manifest"
 
-            detail_response = await client.get(f"/api/tasks/{run_execution['workflowId']}")
+            detail_response = await client.get(
+                f"/api/tasks/{run_execution['workflowId']}"
+            )
             assert detail_response.status_code == 200
             detail = detail_response.json()
             assert detail["taskId"] == run_execution["workflowId"]

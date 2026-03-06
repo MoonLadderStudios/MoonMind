@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.db.models import MoonMindWorkflowState, TemporalExecutionCloseStatus, User
+from api_service.db.models import (
+    MoonMindWorkflowState,
+    TemporalExecutionCloseStatus,
+    User,
+)
 from moonmind.config.settings import settings
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
@@ -60,11 +64,15 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
 
 
 def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
-    entry = str(search_attributes.get("mm_entry") or getattr(record, "entry", "")).strip()
+    entry = str(
+        search_attributes.get("mm_entry") or getattr(record, "entry", "")
+    ).strip()
     if entry:
         return entry.lower()
 
-    workflow_type = str(getattr(getattr(record, "workflow_type", None), "value", "")).lower()
+    workflow_type = str(
+        getattr(getattr(record, "workflow_type", None), "value", "")
+    ).lower()
     if workflow_type.endswith("manifestingest"):
         return "manifest"
     return "run"

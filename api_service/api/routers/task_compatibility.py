@@ -58,15 +58,17 @@ async def list_compatibility_tasks(
     ),
     entry: Literal["run", "manifest"] | None = Query(None, alias="entry"),
     workflow_type: str | None = Query(None, alias="workflowType"),
-    status_filter: Literal[
-        "queued",
-        "running",
-        "awaiting_action",
-        "succeeded",
-        "failed",
-        "cancelled",
-    ]
-    | None = Query(None, alias="status"),
+    status_filter: (
+        Literal[
+            "queued",
+            "running",
+            "awaiting_action",
+            "succeeded",
+            "failed",
+            "cancelled",
+        ]
+        | None
+    ) = Query(None, alias="status"),
     owner_type: Literal["user", "system", "service"] | None = Query(
         None, alias="ownerType"
     ),

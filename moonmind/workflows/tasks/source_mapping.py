@@ -89,17 +89,17 @@ class TaskSourceMappingService:
         owner_id = (
             str(getattr(job, "created_by_user_id", None))
             if getattr(job, "created_by_user_id", None) is not None
-            else str(getattr(job, "requested_by_user_id", None))
-            if getattr(job, "requested_by_user_id", None) is not None
-            else None
+            else (
+                str(getattr(job, "requested_by_user_id", None))
+                if getattr(job, "requested_by_user_id", None) is not None
+                else None
+            )
         )
         mapping = await self.upsert_mapping(
             task_id=str(job.id),
             source="queue",
             entry=(
-                "manifest"
-                if getattr(job, "type", None) == MANIFEST_JOB_TYPE
-                else "run"
+                "manifest" if getattr(job, "type", None) == MANIFEST_JOB_TYPE else "run"
             ),
             source_record_id=str(job.id),
             workflow_id=None,
@@ -130,7 +130,9 @@ class TaskSourceMappingService:
         attrs = dict(getattr(record, "search_attributes", None) or {})
         owner_type = str(attrs.get("mm_owner_type") or "").strip().lower() or None
         owner_id = (
-            str(attrs.get("mm_owner_id") or getattr(record, "owner_id", None) or "").strip()
+            str(
+                attrs.get("mm_owner_id") or getattr(record, "owner_id", None) or ""
+            ).strip()
             or None
         )
         mapping = await self.upsert_mapping(
@@ -196,8 +198,12 @@ class TaskSourceMappingService:
     ) -> dict[TaskSource, ResolvedTaskSource]:
         matches: dict[TaskSource, ResolvedTaskSource] = {}
 
-        temporal_record = await self._session.get(db_models.TemporalExecutionRecord, task_id)
-        if temporal_record is not None and self._is_temporal_visible(temporal_record, user):
+        temporal_record = await self._session.get(
+            db_models.TemporalExecutionRecord, task_id
+        )
+        if temporal_record is not None and self._is_temporal_visible(
+            temporal_record, user
+        ):
             matches["temporal"] = await self.upsert_temporal_execution(temporal_record)
 
         parsed_uuid = self._parse_uuid(task_id)
@@ -208,9 +214,13 @@ class TaskSourceMappingService:
         if queue_job is not None:
             matches["queue"] = await self.upsert_queue_job(queue_job)
 
-        orchestrator_run = await self._session.get(db_models.OrchestratorRun, parsed_uuid)
+        orchestrator_run = await self._session.get(
+            db_models.OrchestratorRun, parsed_uuid
+        )
         if orchestrator_run is not None:
-            matches["orchestrator"] = await self.upsert_orchestrator_run(orchestrator_run)
+            matches["orchestrator"] = await self.upsert_orchestrator_run(
+                orchestrator_run
+            )
         return matches
 
     def _serialize_mapping(
