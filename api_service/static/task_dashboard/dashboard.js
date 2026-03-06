@@ -134,11 +134,21 @@
     events: 1000,
   };
   const sourceConfig = config.sources || {};
+  const featureConfig = config.features || {};
   const queueSourceConfig =
     sourceConfig.queue && typeof sourceConfig.queue === "object" ? sourceConfig.queue : {};
   const orchestratorSourceConfig =
     sourceConfig.orchestrator && typeof sourceConfig.orchestrator === "object"
       ? sourceConfig.orchestrator
+      : {};
+  const temporalSourceConfig =
+    sourceConfig.temporal && typeof sourceConfig.temporal === "object"
+      ? sourceConfig.temporal
+      : {};
+  const temporalFeatureConfig =
+    featureConfig.temporalDashboard &&
+    typeof featureConfig.temporalDashboard === "object"
+      ? featureConfig.temporalDashboard
       : {};
   const proposalsSourceConfig =
     sourceConfig.proposals && typeof sourceConfig.proposals === "object"
@@ -1018,6 +1028,20 @@
     } catch (_error) {
       return String(value);
     }
+  }
+
+  function formatByteCount(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      return "-";
+    }
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function sanitizeCssToken(value, fallback = "") {
@@ -2847,7 +2871,23 @@
       stringifySkillArgs,
       buildQueueSubmissionDraftFromJob,
     };
-      window.__queueLayoutTest = {
+    window.__temporalDashboardTest = {
+      buildTemporalActionRequest,
+      buildTemporalArtifactCreatePayload,
+      buildTemporalArtifactEditUpdatePayload,
+      buildTemporalArtifactLinkPayload,
+      fetchTemporalArtifactMetadata,
+      resolveTemporalActionResultMessage,
+      resolveTemporalActionSurface,
+      resolveTemporalDetailModel,
+      resolveTemporalRunId,
+      resolveTemporalArtifactsRequest,
+      resolveTemporalArtifactPresentation,
+      completeTemporalArtifactUpload,
+      createTemporalArtifactPlaceholder,
+      uploadTemporalArtifactContent,
+    };
+    window.__queueLayoutTest = {
         queueFieldDefinitions,
         renderQueueFieldValue,
         renderQueueTable,
@@ -2864,6 +2904,9 @@
         parseQueuePaginationFromSearch,
         applyQueuePaginationToSearch,
         resetQueuePaginationState,
+      };
+      window.__temporalRunHistoryTest = {
+        resolveTemporalDetailContext,
       };
     }
 
@@ -7651,6 +7694,1051 @@
       .join("");
   }
 
+  function resolveTemporalRunId(execution) {
+    return String(
+      pick(execution, "runId") || pick(execution, "temporalRunId") || "",
+    ).trim();
+  }
+
+  function formatTemporalWorkflowType(workflowType) {
+    const raw = String(workflowType || "").trim();
+    if (!raw) {
+      return "-";
+    }
+    if (raw === "MoonMind.Run") {
+      return "Run";
+    }
+    if (raw === "MoonMind.ManifestIngest") {
+      return "Manifest Ingest";
+    }
+    return raw;
+  }
+
+  function deriveTemporalTitle(execution) {
+    return (
+      pick(pick(execution, "memo"), "title") ||
+      formatTemporalWorkflowType(pick(execution, "workflowType")) ||
+      pick(execution, "workflowId") ||
+      "Temporal execution"
+    );
+  }
+
+  function deriveTemporalSummary(execution) {
+    return (
+      pick(pick(execution, "memo"), "summary") ||
+      `Execution is ${String(pick(execution, "state") || "running").replaceAll("_", " ")}.`
+    );
+  }
+
+  function resolveTemporalWaitingContext(execution) {
+    const waitingReason =
+      pick(execution, "waitingReason") ||
+      pick(pick(execution, "memo"), "waitingReason") ||
+      pick(pick(execution, "searchAttributes"), "mm_waiting_reason");
+    const attentionRequired = Boolean(
+      pick(execution, "attentionRequired") ||
+        pick(pick(execution, "memo"), "attentionRequired"),
+    );
+    if (!waitingReason && !attentionRequired) {
+      return "";
+    }
+    return `${waitingReason || "Awaiting external input."}${
+      attentionRequired ? " Attention required." : ""
+    }`;
+  }
+
+  function resolveTemporalDetailModel(execution, workflowId, options = {}) {
+    const artifactsRequest = resolveTemporalArtifactsRequest(execution, workflowId);
+    const rawState = String(
+      pick(execution, "state") || pick(execution, "temporalStatus") || "",
+    )
+      .trim()
+      .toLowerCase();
+    return {
+      attentionRequired: Boolean(
+        pick(execution, "attentionRequired") ||
+          pick(pick(execution, "memo"), "attentionRequired"),
+      ),
+      closeStatus: pick(execution, "closeStatus") || "-",
+      debugFieldsEnabled: Object.prototype.hasOwnProperty.call(
+        options,
+        "debugFieldsEnabled",
+      )
+        ? Boolean(options.debugFieldsEnabled)
+        : Boolean(temporalFeatureConfig.debugFieldsEnabled),
+      namespace: pick(execution, "namespace") || "-",
+      rawState,
+      summary: deriveTemporalSummary(execution),
+      temporalRunId: artifactsRequest.temporalRunId || "-",
+      temporalStatus: pick(execution, "temporalStatus") || "-",
+      timelineRows: renderTemporalTimelineRows(execution),
+      title: deriveTemporalTitle(execution),
+      waitingContext: resolveTemporalWaitingContext(execution),
+      workflowId: pick(execution, "workflowId") || workflowId || "-",
+      workflowType: formatTemporalWorkflowType(pick(execution, "workflowType")),
+    };
+  }
+
+  const TEMPORAL_ACTION_LABELS = {
+    approve: "Approve task",
+    cancel: "Cancel task",
+    edit_inputs: "Edit inputs",
+    pause: "Pause task",
+    rename: "Rename task",
+    rerun: "Rerun task",
+    resume: "Resume task",
+  };
+
+  const TEMPORAL_ACTION_MATRIX = {
+    awaiting_external: ["approve", "pause", "resume", "cancel"],
+    canceled: ["rerun"],
+    cancelled: ["rerun"],
+    completed: ["rerun"],
+    executing: ["pause", "rename", "cancel"],
+    failed: ["rerun"],
+    finalizing: ["cancel"],
+    initializing: ["rename", "cancel"],
+    planning: ["rename", "cancel"],
+    running: ["pause", "rename", "cancel"],
+    succeeded: ["rerun"],
+  };
+
+  function resolveTemporalActionSurface(execution, options = {}) {
+    const actionsEnabled = Object.prototype.hasOwnProperty.call(options, "actionsEnabled")
+      ? Boolean(options.actionsEnabled)
+      : Boolean(temporalFeatureConfig.actionsEnabled);
+    if (!actionsEnabled) {
+      return [];
+    }
+    const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
+    const configuredActions = Array.isArray(pick(execution, "availableActions"))
+      ? pick(execution, "availableActions")
+          .map((value) => String(value || "").trim().toLowerCase())
+          .filter(Boolean)
+      : [];
+    let actions = TEMPORAL_ACTION_MATRIX[rawState] || [];
+    if (configuredActions.length > 0) {
+      actions = actions.filter((actionKey) => configuredActions.includes(actionKey));
+    }
+    return actions.map((actionKey) => ({
+      actionKey,
+      label: TEMPORAL_ACTION_LABELS[actionKey] || actionKey,
+    }));
+  }
+
+  function renderTemporalTimelineRows(execution) {
+    const rows = [
+      {
+        label: "Started",
+        timestamp: pick(execution, "startedAt"),
+        detail: "Execution created.",
+      },
+      {
+        label: "Last update",
+        timestamp: pick(execution, "updatedAt"),
+        detail: `State: ${String(pick(execution, "state") || "-").replaceAll("_", " ")}`,
+      },
+    ];
+
+    const waitingReason =
+      resolveTemporalWaitingContext(execution);
+    if (waitingReason) {
+      rows.push({
+        label: "Waiting",
+        timestamp: pick(execution, "updatedAt"),
+        detail: waitingReason,
+      });
+    }
+
+    if (pick(execution, "closedAt")) {
+      rows.push({
+        label: "Closed",
+        timestamp: pick(execution, "closedAt"),
+        detail: `Close status: ${pick(execution, "closeStatus") || pick(execution, "temporalStatus") || "-"}`,
+      });
+    }
+
+    return rows
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.label)}</td>
+            <td>${formatTimestamp(row.timestamp)}</td>
+            <td>${escapeHtml(row.detail)}</td>
+          </tr>
+        `,
+      )
+      .join("");
+  }
+
+  function resolveTemporalArtifactsRequest(execution, workflowId) {
+    const namespace = String(pick(execution, "namespace") || "").trim();
+    const resolvedWorkflowId = String(
+      pick(execution, "workflowId") || workflowId || "",
+    ).trim();
+    const temporalRunId = resolveTemporalRunId(execution);
+    return {
+      namespace,
+      workflowId: resolvedWorkflowId,
+      temporalRunId,
+      canFetch: Boolean(namespace && resolvedWorkflowId && temporalRunId),
+    };
+  }
+
+  function resolveTemporalArtifactPresentation(artifact) {
+    const links = Array.isArray(pick(artifact, "links")) ? pick(artifact, "links") : [];
+    const firstLink = links[0] || null;
+    const defaultReadRef = pick(artifact, "default_read_ref");
+    const previewRef = pick(artifact, "preview_artifact_ref");
+    const rawAccessAllowed = Boolean(pick(artifact, "raw_access_allowed"));
+    const previewArtifactId = pick(previewRef, "artifact_id");
+    const defaultArtifactId =
+      pick(defaultReadRef, "artifact_id") || pick(artifact, "artifact_id");
+    const rawArtifactId = pick(artifact, "artifact_id");
+    const rawDownloadArtifactId =
+      rawArtifactId === previewArtifactId && defaultArtifactId
+        ? defaultArtifactId
+        : rawArtifactId;
+    const accessNotes = [];
+    const actions = [];
+
+    if (previewArtifactId) {
+      actions.push({
+        artifactId: previewArtifactId,
+        label: "Open preview",
+        variant: "preview",
+      });
+      accessNotes.push("Preview available");
+    }
+    if (rawAccessAllowed && rawDownloadArtifactId) {
+      actions.push({
+        artifactId: rawDownloadArtifactId,
+        label: previewArtifactId ? "Download raw" : "Download",
+        variant: "download",
+      });
+    }
+    if (!rawAccessAllowed) {
+      accessNotes.push("Raw restricted");
+    }
+    if (!rawAccessAllowed && !previewArtifactId) {
+      accessNotes.push("No safe preview");
+    }
+
+    return {
+      accessNotes,
+      actions,
+      artifactId: pick(artifact, "artifact_id") || "",
+      artifactLabel:
+        (firstLink && (pick(firstLink, "label") || pick(firstLink, "link_type"))) ||
+        pick(artifact, "artifact_id") ||
+        "artifact",
+      contentType:
+        pick(defaultReadRef, "content_type") ||
+        pick(previewRef, "content_type") ||
+        pick(artifact, "content_type") ||
+        "-",
+      linkType: (firstLink && pick(firstLink, "link_type")) || "-",
+      size:
+        pick(defaultReadRef, "size_bytes") ||
+        pick(previewRef, "size_bytes") ||
+        pick(artifact, "size_bytes") ||
+        "-",
+      status: pick(artifact, "status") || "-",
+    };
+  }
+
+  function buildTemporalArtifactLinkPayload(execution, options = {}) {
+    const namespace = String(pick(execution, "namespace") || "").trim();
+    const workflowId = String(pick(execution, "workflowId") || "").trim();
+    const runId = resolveTemporalRunId(execution);
+    const linkType = String(options.linkType || "").trim();
+    if (!namespace || !workflowId || !runId || !linkType) {
+      throw new Error("Temporal artifact link payload requires namespace, workflowId, runId, and linkType.");
+    }
+    const payload = {
+      namespace,
+      workflow_id: workflowId,
+      run_id: runId,
+      link_type: linkType,
+    };
+    if (options.label) {
+      payload.label = String(options.label);
+    }
+    if (options.createdByActivityType) {
+      payload.created_by_activity_type = String(options.createdByActivityType);
+    }
+    if (options.createdByWorker) {
+      payload.created_by_worker = String(options.createdByWorker);
+    }
+    return payload;
+  }
+
+  function buildTemporalArtifactCreatePayload(execution, options = {}) {
+    const payload = {
+      content_type: options.contentType || null,
+      metadata:
+        options.metadata && typeof options.metadata === "object" ? options.metadata : {},
+    };
+    if (Number.isFinite(options.sizeBytes)) {
+      payload.size_bytes = Number(options.sizeBytes);
+    }
+    if (options.sha256) {
+      payload.sha256 = String(options.sha256);
+    }
+    if (options.retentionClass) {
+      payload.retention_class = String(options.retentionClass);
+    }
+    if (options.redactionLevel) {
+      payload.redaction_level = String(options.redactionLevel);
+    }
+    if (options.encryption) {
+      payload.encryption = String(options.encryption);
+    }
+    if (options.linkType) {
+      payload.link = buildTemporalArtifactLinkPayload(execution, options);
+    }
+    return payload;
+  }
+
+  function buildTemporalArtifactEditUpdatePayload(
+    previousArtifactRef,
+    nextArtifactRef,
+    options = {},
+  ) {
+    const previousArtifactId = String(
+      pick(previousArtifactRef, "artifact_id") || "",
+    ).trim();
+    const nextArtifactId = String(pick(nextArtifactRef, "artifact_id") || "").trim();
+    if (!nextArtifactId) {
+      throw new Error("A replacement artifact reference is required.");
+    }
+    if (previousArtifactId && previousArtifactId === nextArtifactId) {
+      throw new Error("Artifact edits must create a new artifact reference.");
+    }
+    const payload = {
+      updateName: "UpdateInputs",
+      inputArtifactRef: nextArtifactRef,
+    };
+    if (
+      options.parametersPatch &&
+      typeof options.parametersPatch === "object" &&
+      Object.keys(options.parametersPatch).length > 0
+    ) {
+      payload.parametersPatch = options.parametersPatch;
+    }
+    return payload;
+  }
+
+  async function createTemporalArtifactPlaceholder(execution, options = {}) {
+    return fetchJson(temporalSourceConfig.artifactCreate || "/api/artifacts", {
+      method: "POST",
+      body: JSON.stringify(buildTemporalArtifactCreatePayload(execution, options)),
+    });
+  }
+
+  async function uploadTemporalArtifactContent(
+    artifactId,
+    payload,
+    contentType = "application/octet-stream",
+  ) {
+    return fetchJson(
+      endpoint("/api/artifacts/{artifactId}/content", {
+        artifactId,
+      }),
+      {
+        method: "PUT",
+        body: payload,
+        headers: {
+          "Content-Type": contentType,
+        },
+      },
+    );
+  }
+
+  async function completeTemporalArtifactUpload(artifactId, parts = []) {
+    return fetchJson(
+      endpoint("/api/artifacts/{artifactId}/complete", {
+        artifactId,
+      }),
+      {
+        method: "POST",
+        body: JSON.stringify({ parts }),
+      },
+    );
+  }
+
+  async function fetchTemporalArtifactMetadata(artifactId, includeDownload = false) {
+    const metadataUrl = endpoint(
+      temporalSourceConfig.artifactMetadata || "/api/artifacts/{artifactId}",
+      {
+        artifactId,
+      },
+    );
+    return fetchJson(
+      includeDownload ? `${metadataUrl}?include_download=true` : metadataUrl,
+    );
+  }
+
+  function renderTemporalArtifactRows(artifacts) {
+    return (Array.isArray(artifacts) ? artifacts : [])
+      .map((artifact) => {
+        const presentation = resolveTemporalArtifactPresentation(artifact);
+        const actionButtons = presentation.actions
+          .map(
+            (action) => `
+              <button
+                type="button"
+                class="btn btn-secondary"
+                data-temporal-artifact-action="${escapeHtml(action.variant)}"
+                data-artifact-id="${escapeHtml(action.artifactId)}"
+              >
+                ${escapeHtml(action.label)}
+              </button>
+            `,
+          )
+          .join("<br />");
+
+        return `
+          <tr>
+            <td>
+              <div>${escapeHtml(presentation.artifactLabel)}</div>
+              <div class="small inline-code">${escapeHtml(presentation.artifactId)}</div>
+            </td>
+            <td>${escapeHtml(presentation.linkType)}</td>
+            <td>${escapeHtml(String(presentation.size))}</td>
+            <td>${escapeHtml(String(presentation.contentType))}</td>
+            <td>${escapeHtml(String(presentation.status))}</td>
+            <td>
+              ${actionButtons || "-"}
+              ${presentation.accessNotes.length ? `<div class="small">${escapeHtml(presentation.accessNotes.join(" | "))}</div>` : ""}
+            </td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function setTemporalArtifactFeedback(message, isError = false) {
+    const feedbackNode = document.getElementById("temporal-artifact-feedback");
+    if (!feedbackNode) {
+      return;
+    }
+    feedbackNode.textContent = String(message || "");
+    feedbackNode.className = isError ? "notice error" : "small";
+  }
+
+  function renderTemporalActionButtons(actions) {
+    return actions
+      .map(
+        (action) => `
+          <button
+            type="button"
+            class="btn btn-secondary"
+            data-temporal-action="${escapeHtml(action.actionKey)}"
+          >
+            ${escapeHtml(action.label)}
+          </button>
+        `,
+      )
+      .join("");
+  }
+
+  function setTemporalActionFeedback(message, isError = false) {
+    const feedbackNode = document.getElementById("temporal-action-feedback");
+    if (!feedbackNode) {
+      return;
+    }
+    feedbackNode.textContent = String(message || "");
+    feedbackNode.className = isError ? "notice error" : "small";
+  }
+
+  function buildTemporalApprovalPayload(options = {}) {
+    const payload =
+      options.payload && typeof options.payload === "object" && !Array.isArray(options.payload)
+        ? { ...options.payload }
+        : {};
+    if (!String(payload.approval_type || "").trim()) {
+      payload.approval_type = "human";
+    }
+    return payload;
+  }
+
+  function resolveTemporalActionResultMessage(actionRequest, responsePayload) {
+    const payload =
+      responsePayload && typeof responsePayload === "object" && !Array.isArray(responsePayload)
+        ? responsePayload
+        : null;
+    if (payload && Object.prototype.hasOwnProperty.call(payload, "accepted")) {
+      if (payload.accepted === false) {
+        const rejectionMessage =
+          String(payload.message || "").trim() ||
+          String(actionRequest.rejectedMessage || "").trim() ||
+          "Task action was rejected.";
+        const error = new Error(rejectionMessage);
+        error.code = "temporal_action_rejected";
+        error.payload = payload;
+        throw error;
+      }
+      const acceptedMessage = String(payload.message || "").trim();
+      if (acceptedMessage) {
+        return acceptedMessage;
+      }
+    }
+    return actionRequest.successMessage;
+  }
+
+  function buildTemporalActionRequest(workflowId, actionKey, options = {}) {
+    const normalizedAction = String(actionKey || "").trim().toLowerCase();
+    const normalizedWorkflowId = String(workflowId || "").trim();
+    if (!normalizedWorkflowId || !normalizedAction) {
+      throw new Error("Temporal action request requires workflowId and action.");
+    }
+
+    if (normalizedAction === "rename") {
+      const title = String(options.title || "").trim();
+      if (!title) {
+        throw new Error("Task title is required.");
+      }
+      return {
+        successMessage: "Task title updated.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              updateName: "SetTitle",
+              title,
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "rerun") {
+      return {
+        successMessage: "Task rerun requested.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              updateName: "RequestRerun",
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "edit_inputs") {
+      return {
+        successMessage: "Task inputs updated.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify(
+              buildTemporalArtifactEditUpdatePayload(
+                options.previousArtifactRef,
+                options.nextArtifactRef,
+                {
+                  parametersPatch: options.parametersPatch,
+                },
+              ),
+            ),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "approve") {
+      return {
+        successMessage: "Task approval sent.",
+        rejectedMessage: "Task approval was rejected.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              signalName: "Approve",
+              payload: buildTemporalApprovalPayload(options),
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "pause" || normalizedAction === "resume") {
+      return {
+        successMessage:
+          normalizedAction === "pause" ? "Task paused." : "Task resumed.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              signalName: normalizedAction === "pause" ? "Pause" : "Resume",
+              payload: options.payload || {},
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "cancel") {
+      return {
+        successMessage: "Task cancellation requested.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.cancel || "/api/executions/{workflowId}/cancel",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              graceful: true,
+              reason:
+                String(options.reason || "").trim() ||
+                "Cancelled from task dashboard",
+            }),
+          },
+        },
+      };
+    }
+
+    throw new Error(`Unsupported Temporal action: ${normalizedAction}`);
+  }
+
+  async function requestTemporalArtifactAccessUrl(artifactId) {
+    const presignEndpointTemplate =
+      temporalSourceConfig.artifactPresignDownload ||
+      "/api/artifacts/{artifactId}/presign-download";
+    const response = await fetchJson(
+      endpoint(presignEndpointTemplate, { artifactId }),
+      { method: "POST" },
+    );
+    const grantedUrl = String(response?.url || "").trim();
+    if (grantedUrl) {
+      return grantedUrl;
+    }
+    return endpoint(
+      temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download",
+      { artifactId },
+    );
+  }
+
+  function openTemporalArtifactAccessUrl(url, variant = "download") {
+    if (variant === "preview" && typeof window.open === "function") {
+      const previewWindow = window.open(url, "_blank", "noopener");
+      if (previewWindow) {
+        return;
+      }
+    }
+    if (window.location && typeof window.location.assign === "function") {
+      window.location.assign(url);
+      return;
+    }
+    if (window.location) {
+      window.location.href = url;
+    }
+  }
+
+  function requestDashboardTextInput(options = {}) {
+    const title = String(options.title || "Enter a value").trim() || "Enter a value";
+    const description = String(options.description || "").trim();
+    const label = String(options.label || "Value").trim() || "Value";
+    const confirmLabel = String(options.confirmLabel || "Save").trim() || "Save";
+    const cancelLabel = String(options.cancelLabel || "Cancel").trim() || "Cancel";
+    const initialValue = String(options.initialValue || "");
+    const placeholder = String(options.placeholder || "");
+    if (!document || typeof document.createElement !== "function" || !document.body) {
+      if (typeof window.prompt === "function") {
+        return Promise.resolve(window.prompt(title, initialValue));
+      }
+      return Promise.resolve(null);
+    }
+
+    return new Promise((resolve) => {
+      const previouslyFocused =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const overlay = document.createElement("div");
+      overlay.setAttribute("role", "presentation");
+      overlay.style.position = "fixed";
+      overlay.style.inset = "0";
+      overlay.style.zIndex = "999";
+      overlay.style.display = "flex";
+      overlay.style.alignItems = "center";
+      overlay.style.justifyContent = "center";
+      overlay.style.padding = "1rem";
+      overlay.style.background = "rgba(10, 8, 30, 0.45)";
+
+      const panel = document.createElement("div");
+      panel.className = "card stack";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-label", title);
+      panel.style.width = "min(32rem, 100%)";
+      panel.style.margin = "0";
+      panel.style.background = "rgb(var(--mm-panel))";
+
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      heading.style.margin = "0";
+      panel.appendChild(heading);
+
+      if (description) {
+        const descriptionNode = document.createElement("p");
+        descriptionNode.className = "small";
+        descriptionNode.textContent = description;
+        descriptionNode.style.margin = "0";
+        panel.appendChild(descriptionNode);
+      }
+
+      const labelNode = document.createElement("label");
+      labelNode.textContent = label;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = initialValue;
+      if (placeholder) {
+        input.placeholder = placeholder;
+      }
+      labelNode.appendChild(input);
+      panel.appendChild(labelNode);
+
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const confirmButton = document.createElement("button");
+      confirmButton.type = "button";
+      confirmButton.textContent = confirmLabel;
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.className = "secondary";
+      cancelButton.textContent = cancelLabel;
+      actions.appendChild(confirmButton);
+      actions.appendChild(cancelButton);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      const cleanup = (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        overlay.remove();
+        if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+          previouslyFocused.focus();
+        }
+        resolve(value);
+      };
+
+      confirmButton.addEventListener("click", () => cleanup(input.value));
+      cancelButton.addEventListener("click", () => cleanup(null));
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) {
+          cleanup(null);
+        }
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          cleanup(input.value);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cleanup(null);
+        }
+      });
+
+      const scheduleFocus =
+        typeof window.requestAnimationFrame === "function"
+          ? window.requestAnimationFrame.bind(window)
+          : (callback) => window.setTimeout(callback, 0);
+      scheduleFocus(() => {
+        input.focus();
+        input.select();
+      });
+    });
+  }
+
+  async function handleTemporalArtifactAction(button) {
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+    const artifactId = String(button.getAttribute("data-artifact-id") || "").trim();
+    const variant = String(
+      button.getAttribute("data-temporal-artifact-action") || "download",
+    )
+      .trim()
+      .toLowerCase();
+    if (!artifactId) {
+      return;
+    }
+
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    setTemporalArtifactFeedback(
+      variant === "preview" ? "Opening preview..." : "Starting download...",
+    );
+
+    try {
+      const url = await requestTemporalArtifactAccessUrl(artifactId);
+      openTemporalArtifactAccessUrl(url, variant);
+      setTemporalArtifactFeedback(
+        variant === "preview" ? "Preview opened." : "Download started.",
+      );
+    } catch (error) {
+      console.error("temporal artifact access failed", error);
+      setTemporalArtifactFeedback(
+        variant === "preview"
+          ? "Failed to open artifact preview."
+          : "Failed to start artifact download.",
+        true,
+      );
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  }
+
+  async function handleTemporalTaskAction(button, execution, reload) {
+    if (!(button instanceof HTMLButtonElement)) {
+      return;
+    }
+    const actionKey = String(button.getAttribute("data-temporal-action") || "").trim();
+    const workflowId = String(pick(execution, "workflowId") || "").trim();
+    if (!actionKey || !workflowId) {
+      return;
+    }
+
+    const requestOptions = {};
+    if (actionKey === "rename") {
+      const currentTitle = deriveTemporalTitle(execution);
+      const nextTitle = await requestDashboardTextInput({
+        title: "Rename task",
+        description: "Choose a new title for this Temporal task.",
+        label: "Task title",
+        confirmLabel: "Rename task",
+        initialValue: currentTitle,
+        placeholder: "Task title",
+      });
+      if (nextTitle === null) {
+        setTemporalActionFeedback("Rename cancelled.");
+        return;
+      }
+      requestOptions.title = String(nextTitle).trim();
+      if (!requestOptions.title) {
+        setTemporalActionFeedback("Task title is required.", true);
+        return;
+      }
+    }
+
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    setTemporalActionFeedback("Applying task action...");
+
+    try {
+      const actionRequest = buildTemporalActionRequest(
+        workflowId,
+        actionKey,
+        requestOptions,
+      );
+      const responsePayload = await fetchJson(
+        actionRequest.request.url,
+        actionRequest.request.options,
+      );
+      setTemporalActionFeedback(
+        resolveTemporalActionResultMessage(actionRequest, responsePayload),
+      );
+      if (typeof reload === "function") {
+        await reload();
+      }
+    } catch (error) {
+      console.error("temporal task action failed", error);
+      setTemporalActionFeedback(
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to apply task action.",
+        true,
+      );
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  }
+
+  async function renderTemporalDetailPage(workflowId) {
+    setView(
+      "Temporal Task Detail",
+      `Task ${workflowId}`,
+      "<p class='loading'>Loading Temporal execution...</p>",
+      { showAutoRefreshControls: true },
+    );
+
+    const load = async () => {
+      try {
+        const detailEndpoint = temporalSourceConfig.detail || "/api/executions/{workflowId}";
+        const execution = await fetchJson(
+          endpoint(detailEndpoint, {
+            workflowId,
+          }),
+        );
+        const artifactsRequest = resolveTemporalArtifactsRequest(execution, workflowId);
+        const artifactsEndpoint =
+          temporalSourceConfig.artifacts ||
+          "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts";
+        const artifactsPayload = artifactsRequest.canFetch
+          ? await fetchJson(
+              endpoint(artifactsEndpoint, {
+                namespace: artifactsRequest.namespace,
+                workflowId: artifactsRequest.workflowId,
+                temporalRunId: artifactsRequest.temporalRunId,
+              }),
+            )
+          : { artifacts: [] };
+        const artifacts = Array.isArray(artifactsPayload?.artifacts)
+          ? artifactsPayload.artifacts
+          : [];
+        const detail = resolveTemporalDetailModel(execution, workflowId);
+        const actionSurface = resolveTemporalActionSurface(execution);
+
+        setView(
+          "Temporal Task Detail",
+          detail.title,
+          `
+            <div id="temporal-detail-page">
+              <div class="grid-2">
+                <div class="card"><strong>Status:</strong> ${statusBadge("temporal", detail.rawState)}</div>
+                <div class="card"><strong>Source:</strong> Temporal</div>
+                <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(detail.workflowType)}</div>
+                <div class="card"><strong>Latest Run:</strong> <span class="inline-code">${escapeHtml(
+                  detail.temporalRunId,
+                )}</span></div>
+                <div class="card"><strong>Started:</strong> ${formatTimestamp(
+                  pick(execution, "startedAt"),
+                )}</div>
+                <div class="card"><strong>Updated:</strong> ${formatTimestamp(
+                  pick(execution, "updatedAt"),
+                )}</div>
+              </div>
+              <div class="stack">
+              <section>
+                <h3>Summary</h3>
+                <p>${escapeHtml(detail.summary)}</p>
+                ${
+                  detail.waitingContext
+                    ? `<div class="notice ok"><strong>Waiting context:</strong> ${escapeHtml(
+                        detail.waitingContext,
+                      )}</div>`
+                    : ""
+                }
+                <div class="grid-2">
+                  <div class="card"><strong>Task ID:</strong> <span class="inline-code">${escapeHtml(
+                    detail.workflowId,
+                  )}</span></div>
+                  ${
+                    detail.debugFieldsEnabled
+                      ? `
+                        <div class="card"><strong>Namespace:</strong> ${escapeHtml(detail.namespace)}</div>
+                        <div class="card"><strong>Temporal Status:</strong> ${escapeHtml(detail.temporalStatus)}</div>
+                        <div class="card"><strong>Close Status:</strong> ${escapeHtml(detail.closeStatus)}</div>
+                      `
+                      : ""
+                  }
+                </div>
+              </section>
+              ${
+                Boolean(temporalFeatureConfig.actionsEnabled)
+                  ? `
+                    <section>
+                      <h3>Task Actions</h3>
+                      <div id="temporal-action-feedback" class="small"></div>
+                      <div class="actions">${
+                        renderTemporalActionButtons(actionSurface) ||
+                        "<p class='small'>No task actions currently available.</p>"
+                      }</div>
+                    </section>
+                  `
+                  : ""
+              }
+              <section>
+                <h3>Execution Timeline</h3>
+                <table>
+                  <thead><tr><th>Event</th><th>Time</th><th>Detail</th></tr></thead>
+                  <tbody>${
+                    detail.timelineRows ||
+                    "<tr><td colspan='3' class='small'>No execution timeline available.</td></tr>"
+                  }</tbody>
+                </table>
+              </section>
+              <section>
+                <h3>Artifacts</h3>
+                <div id="temporal-artifact-feedback" class="small"></div>
+                <table>
+                  <thead><tr><th>Artifact</th><th>Link</th><th>Size</th><th>Content Type</th><th>Status</th><th>Access</th></tr></thead>
+                  <tbody>${
+                    renderTemporalArtifactRows(artifacts) ||
+                    "<tr><td colspan='6' class='small'>No artifacts.</td></tr>"
+                  }</tbody>
+                </table>
+              </section>
+              </div>
+            </div>
+          `,
+          { showAutoRefreshControls: true },
+        );
+        const detailPage = document.getElementById("temporal-detail-page");
+        if (detailPage) {
+          detailPage.addEventListener("click", async (event) => {
+            const target = event.target;
+            if (!(target instanceof Element)) {
+              return;
+            }
+            const button = target.closest("[data-temporal-artifact-action]");
+            if (button instanceof HTMLButtonElement) {
+              event.preventDefault();
+              await handleTemporalArtifactAction(button);
+              return;
+            }
+            const actionButton = target.closest("[data-temporal-action]");
+            if (!(actionButton instanceof HTMLButtonElement)) {
+              return;
+            }
+            event.preventDefault();
+            await handleTemporalTaskAction(actionButton, execution, load);
+          });
+        }
+      } catch (error) {
+        console.error("temporal detail load failed", error);
+        setView(
+          "Temporal Task Detail",
+          `Task ${workflowId}`,
+          "<div class='notice error'>Failed to load Temporal execution detail.</div>",
+          { showAutoRefreshControls: true },
+        );
+      }
+    };
+
+    await load();
+    startPolling(load, pollIntervals.detail);
+  }
+
   async function renderOrchestratorDetailPage(runId) {
     setView(
       "Orchestrator Task Detail",
@@ -8265,7 +9353,79 @@
     };
 
     await load();
-    startPolling(() => load(true), pollIntervals.detail);
+    startPolling(() => load(), pollIntervals.detail);
+  }
+
+  function renderTemporalArtifactsRows(artifacts) {
+    const normalizedArtifacts = Array.isArray(artifacts) ? artifacts : [];
+    return normalizedArtifacts
+      .map((artifact) => {
+        const artifactId = pick(artifact, "artifactId", "artifact_id") || "";
+        const contentType = pick(artifact, "contentType", "content_type") || "-";
+        const sizeBytes = pick(artifact, "sizeBytes", "size_bytes");
+        const linkItems = Array.isArray(pick(artifact, "links")) ? pick(artifact, "links") : [];
+        const firstLink = linkItems[0] || {};
+        const metadata = pick(artifact, "metadata") || {};
+        const label =
+          pick(firstLink, "label") ||
+          pick(metadata, "label") ||
+          artifactId ||
+          "-";
+        const linkType = pick(firstLink, "linkType", "link_type") || "-";
+        const downloadEndpointTemplate =
+          temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download";
+        const downloadHref = artifactId
+          ? endpoint(downloadEndpointTemplate, { artifactId })
+          : "";
+        const actionCell = downloadHref
+          ? `<a href="${escapeHtml(downloadHref)}" target="_blank" rel="noopener noreferrer">Download</a>`
+          : "-";
+        return `
+          <tr>
+            <td>${escapeHtml(String(label))}</td>
+            <td>${escapeHtml(formatByteCount(sizeBytes))}</td>
+            <td>${escapeHtml(String(contentType))}</td>
+            <td>${escapeHtml(String(linkType))}</td>
+            <td>${actionCell}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function resolveTemporalDetailContext(
+    execution,
+    workflowId,
+    sourceConfig = temporalSourceConfig,
+  ) {
+    const namespace = pick(execution, "namespace");
+    const taskId = pick(execution, "taskId") || workflowId;
+    const temporalRunId =
+      pick(execution, "temporalRunId") || pick(execution, "runId") || null;
+    const memo = pick(execution, "memo") || {};
+    const continueAsNewCause =
+      pick(execution, "continueAsNewCause")
+      || pick(memo, "continue_as_new_cause")
+      || "-";
+    const artifactsEndpointTemplate =
+      sourceConfig.artifacts
+      || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts";
+    const artifactsEndpoint =
+      namespace && temporalRunId
+        ? endpoint(artifactsEndpointTemplate, {
+            namespace,
+            workflowId,
+            temporalRunId,
+          })
+        : "";
+    return {
+      namespace,
+      taskId,
+      temporalRunId,
+      memo,
+      continueAsNewCause,
+      artifactsEndpoint,
+    };
   }
 
   async function renderSystemSettingsPage() {
@@ -8711,29 +9871,46 @@
         await renderOrchestratorDetailPage(candidateTaskId);
         return;
       }
-      try {
-        await fetchJson(
-          endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
-            id: candidateTaskId,
-          }),
-        );
-        await renderQueueDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        // fall through and probe orchestrator
-      }
-      try {
-        await fetchJson(
-          endpoint(orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}", {
-            id: candidateTaskId,
-          }),
-        );
-        await renderOrchestratorDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        renderNotFound();
+      if (explicitSource === "temporal") {
+        await renderTemporalDetailPage(candidateTaskId);
         return;
       }
+      const detailProbes = [
+        {
+          config: queueSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/api/queue/jobs/{id}",
+          params: { id: candidateTaskId },
+          render: renderQueueDetailPage,
+        },
+        {
+          config: orchestratorSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/orchestrator/tasks/{id}",
+          params: { id: candidateTaskId },
+          render: renderOrchestratorDetailPage,
+        },
+        {
+          config: temporalSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/api/executions/{workflowId}",
+          params: { workflowId: candidateTaskId },
+          render: renderTemporalDetailPage,
+        },
+      ];
+      for (const probe of detailProbes) {
+        try {
+          await fetchJson(
+            endpoint(probe.config[probe.endpointKey] || probe.endpointDefault, probe.params),
+          );
+          await probe.render(candidateTaskId);
+          return;
+        } catch (_error) {
+          // fall through and probe the next runtime source
+        }
+      }
+      renderNotFound();
+      return;
     }
     if (proposalDetailMatch) {
       await renderProposalDetailPage(proposalDetailMatch[1]);

@@ -1,29 +1,74 @@
-"""DOC-REQ traceability gate for the active top-level feature spec."""
+"""DOC-REQ traceability gates for contract-backed feature specs."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+import pytest
+
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_DIR_PATTERN = re.compile(r"^(?P<prefix>\d{3})-[a-z0-9-]+$")
+_FEATURES = (
+    (
+        "046-workflow-type-lifecycle",
+        Path("specs/046-workflow-type-lifecycle/spec.md"),
+        Path(
+            "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-activity-worker-topology",
+        Path("specs/047-activity-worker-topology/spec.md"),
+        Path(
+            "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-integrations-monitoring",
+        Path("specs/047-integrations-monitoring/spec.md"),
+        Path(
+            "specs/047-integrations-monitoring/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-temporal-artifact-presentation",
+        Path("specs/047-temporal-artifact-presentation/spec.md"),
+        Path(
+            "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "048-executions-api-contract",
+        Path("specs/048-executions-api-contract/spec.md"),
+        Path("specs/048-executions-api-contract/contracts/requirements-traceability.md"),
+    ),
+    (
+        "048-run-history-rerun",
+        Path("specs/048-run-history-rerun/spec.md"),
+        Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
+    ),
+)
 
 
-def test_active_doc_req_feature_traceability_contract() -> None:
-    feature_spec = _find_active_feature_spec()
-    assert feature_spec is not None, "Expected at least one top-level feature spec"
-
-    feature_traceability = (
-        feature_spec.parent / "contracts" / "requirements-traceability.md"
-    )
+@pytest.mark.parametrize(
+    ("feature_name", "feature_spec", "feature_traceability"),
+    _FEATURES,
+    ids=[feature_name for feature_name, *_ in _FEATURES],
+)
+def test_doc_req_traceability_contract(
+    feature_name: str,
+    feature_spec: Path,
+    feature_traceability: Path,
+) -> None:
     spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, f"Expected DOC-REQ entries in the newest feature spec {feature_spec}"
+    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_name} spec.md"
 
     assert feature_traceability.exists(), (
-        "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"
+        "Missing traceability file for DOC-REQ feature: "
+        f"{feature_traceability} ({feature_name})"
     )
 
     traceability_rows = _parse_traceability_rows(feature_traceability)
@@ -40,43 +85,6 @@ def test_active_doc_req_feature_traceability_contract() -> None:
         "Unexpected DOC-REQ traceability rows in "
         f"{feature_traceability}: {', '.join(extra_ids)}"
     )
-
-
-def test_find_active_feature_spec_selects_newest_prefix_even_without_doc_req(
-    tmp_path: Path,
-) -> None:
-    specs_root = tmp_path / "specs"
-    older_feature = specs_root / "047-older-feature"
-    newer_feature = specs_root / "048-newer-feature"
-    older_feature.mkdir(parents=True)
-    newer_feature.mkdir(parents=True)
-    (older_feature / "spec.md").write_text("# Spec\nDOC-REQ-001\n", encoding="utf-8")
-    (newer_feature / "spec.md").write_text("# Spec\nNo requirement IDs yet.\n", encoding="utf-8")
-
-    assert _find_active_feature_spec(specs_root) == newer_feature / "spec.md"
-
-
-def _find_active_feature_spec(specs_root: Path = Path("specs")) -> Path | None:
-    candidates: list[tuple[int, Path]] = []
-    for child in specs_root.iterdir():
-        if not child.is_dir():
-            continue
-
-        match = _FEATURE_DIR_PATTERN.fullmatch(child.name)
-        if match is None:
-            continue
-
-        spec_path = child / "spec.md"
-        if not spec_path.exists():
-            continue
-
-        candidates.append((int(match.group("prefix")), spec_path))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    return candidates[0][1]
 
 
 def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:

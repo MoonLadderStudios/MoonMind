@@ -209,6 +209,48 @@ def test_get_metadata_include_download() -> None:
         )
 
 
+def test_get_metadata_exposes_preview_and_raw_access_policy_fields() -> None:
+    """Metadata endpoint should surface preview/default-read policy fields."""
+
+    for test_client, service in _client_with_service():
+        artifact = _build_artifact()
+        link = _build_link(artifact.artifact_id)
+        preview_ref = SimpleNamespace(
+            artifact_ref_v=1,
+            artifact_id=f"{artifact.artifact_id}_preview",
+            sha256=artifact.sha256,
+            size_bytes=128,
+            content_type="text/plain",
+            encryption=artifact.encryption.value,
+        )
+        default_ref = SimpleNamespace(
+            artifact_ref_v=1,
+            artifact_id=artifact.artifact_id,
+            sha256=artifact.sha256,
+            size_bytes=artifact.size_bytes,
+            content_type=artifact.content_type,
+            encryption=artifact.encryption.value,
+        )
+        service.get_metadata.return_value = (
+            artifact,
+            [link],
+            False,
+            SimpleNamespace(
+                raw_access_allowed=False,
+                preview_artifact_ref=preview_ref,
+                default_read_ref=default_ref,
+            ),
+        )
+
+        response = test_client.get(f"/api/artifacts/{artifact.artifact_id}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["raw_access_allowed"] is False
+        assert body["preview_artifact_ref"]["artifact_id"] == preview_ref.artifact_id
+        assert body["default_read_ref"]["artifact_id"] == artifact.artifact_id
+
+
 def test_list_execution_artifacts_returns_collection() -> None:
     """Execution listing endpoint should return serialized artifact metadata."""
 
@@ -229,3 +271,4 @@ def test_list_execution_artifacts_returns_collection() -> None:
         payload = response.json()
         assert len(payload["artifacts"]) == 1
         assert payload["artifacts"][0]["artifact_id"] == artifact.artifact_id
+        assert payload["artifacts"][0]["links"][0]["label"] == "Final output"
