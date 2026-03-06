@@ -247,7 +247,9 @@ class TemporalActivityCatalog:
 
     def _validate(self) -> None:
         if len(self._activity_by_type) != len(self._activities):
-            raise TemporalActivityCatalogError("Activity type definitions must be unique")
+            raise TemporalActivityCatalogError(
+                "Activity type definitions must be unique"
+            )
         if len(self._fleet_by_name) != len(self._fleets):
             raise TemporalActivityCatalogError("Fleet definitions must be unique")
 

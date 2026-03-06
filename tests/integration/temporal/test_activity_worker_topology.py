@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -161,7 +161,10 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 principal="user-1",
                 content_type="text/plain",
             )
-            assert artifact_bindings["artifact.create"].task_queue == "mm.activity.artifacts"
+            assert (
+                artifact_bindings["artifact.create"].task_queue
+                == "mm.activity.artifacts"
+            )
             assert artifact_ref.artifact_id.startswith("art_")
 
             llm_bindings = {
@@ -247,8 +250,13 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 cmd="printf 'sandbox ok'",
                 principal="user-1",
             )
-            assert sandbox_bindings["sandbox.run_command"].task_queue == "mm.activity.sandbox"
-            assert sandbox_bindings["mm.skill.execute"].task_queue == "mm.activity.sandbox"
+            assert (
+                sandbox_bindings["sandbox.run_command"].task_queue
+                == "mm.activity.sandbox"
+            )
+            assert (
+                sandbox_bindings["mm.skill.execute"].task_queue == "mm.activity.sandbox"
+            )
             assert sandbox_result.exit_code == 0
 
             integration_bindings = {

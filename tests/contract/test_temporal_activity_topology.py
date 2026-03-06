@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.workflows.skills.skill_plan_contracts import ContractValidationError
-from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definition
-from moonmind.workflows.temporal import build_activity_invocation_envelope
-from moonmind.workflows.temporal import build_compact_activity_result
-from moonmind.workflows.temporal import build_default_activity_catalog
+from moonmind.workflows.skills.skill_plan_contracts import (
+    ContractValidationError,
+    parse_skill_definition,
+)
+from moonmind.workflows.temporal import (
+    build_activity_invocation_envelope,
+    build_compact_activity_result,
+    build_default_activity_catalog,
+)
 
 
 def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> None:
@@ -38,7 +42,9 @@ def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> No
     }
 
 
-def test_shared_envelope_contract_requires_idempotency_for_side_effecting_inputs() -> None:
+def test_shared_envelope_contract_requires_idempotency_for_side_effecting_inputs() -> (
+    None
+):
     with pytest.raises(ContractValidationError, match="idempotency_key"):
         build_activity_invocation_envelope(
             correlation_id="corr-1",
@@ -76,4 +82,3 @@ def test_explicit_skill_binding_requires_declared_operational_reason() -> None:
                 },
             }
         )
-

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -25,14 +25,14 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.activity_runtime import (
+    TemporalActivityRuntimeError,
     TemporalJulesActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
-    TemporalActivityRuntimeError,
+    build_activity_bindings,
     build_activity_execution_context,
     build_activity_invocation_envelope,
-    build_activity_bindings,
     build_compact_activity_result,
     build_observability_summary,
 )
@@ -149,7 +149,9 @@ class _FakeJulesClient:
         self.closed = True
 
 
-async def test_artifact_activity_create_returns_ref_and_upload_descriptor(tmp_path: Path):
+async def test_artifact_activity_create_returns_ref_and_upload_descriptor(
+    tmp_path: Path,
+):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -221,7 +223,9 @@ async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Pa
             assert b'"plan_version": "1.0"' in payload
 
 
-async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(tmp_path: Path):
+async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
+    tmp_path: Path,
+):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -383,9 +387,10 @@ async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
                 patch_ref=patch_artifact.artifact_id,
                 principal="user-1",
             )
-            assert Path(patched_workspace, "sample.txt").read_text(
-                encoding="utf-8"
-            ) == "patched\n"
+            assert (
+                Path(patched_workspace, "sample.txt").read_text(encoding="utf-8")
+                == "patched\n"
+            )
 
             report_ref = await activities.sandbox_run_tests(
                 workspace_ref=patched_workspace,
@@ -487,9 +492,7 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                 skill_activities=TemporalSkillActivities(
                     dispatcher=SkillActivityDispatcher()
                 ),
-                sandbox_activities=TemporalSandboxActivities(
-                    artifact_service=service
-                ),
+                sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalJulesActivities(
                     artifact_service=service,
                     client_factory=_FakeJulesClient,

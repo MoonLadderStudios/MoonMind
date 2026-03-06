@@ -9,18 +9,15 @@ import json
 import os
 import shlex
 import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-import tempfile
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from moonmind.config.settings import settings
-from moonmind.schemas.jules_models import (
-    JulesCreateTaskRequest,
-    JulesGetTaskRequest,
-)
+from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
@@ -137,7 +134,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "integration.jules.start": ("integrations", "integration_jules_start"),
     "integration.jules.status": ("integrations", "integration_jules_status"),
-    "integration.jules.fetch_result": ("integrations", "integration_jules_fetch_result"),
+    "integration.jules.fetch_result": (
+        "integrations",
+        "integration_jules_fetch_result",
+    ),
 }
 
 
@@ -342,7 +342,9 @@ class TemporalPlanActivities:
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> PlanGenerateActivityResult:
         if self._planner is None:
-            raise TemporalActivityRuntimeError("plan.generate planner is not configured")
+            raise TemporalActivityRuntimeError(
+                "plan.generate planner is not configured"
+            )
 
         inputs_payload: Any = None
         if inputs_ref is not None:
@@ -384,13 +386,16 @@ class TemporalPlanActivities:
         if snapshot is not None:
             metadata = payload.setdefault("metadata", {})
             if not isinstance(metadata, dict):
-                raise TemporalActivityRuntimeError("plan metadata must be a JSON object")
+                raise TemporalActivityRuntimeError(
+                    "plan metadata must be a JSON object"
+                )
             metadata.setdefault("title", "Generated Plan")
             metadata.setdefault(
                 "created_at",
-                datetime.now(UTC).replace(microsecond=0).isoformat().replace(
-                    "+00:00", "Z"
-                ),
+                datetime.now(UTC)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
             )
             registry_meta = metadata.setdefault("registry_snapshot", {})
             if not isinstance(registry_meta, dict):
@@ -433,7 +438,9 @@ class TemporalPlanActivities:
             principal=principal,
         )
         if not isinstance(plan_payload, Mapping):
-            raise TemporalActivityRuntimeError("plan artifact payload must be a JSON object")
+            raise TemporalActivityRuntimeError(
+                "plan artifact payload must be a JSON object"
+            )
         if not isinstance(registry_payload, Mapping):
             raise TemporalActivityRuntimeError(
                 "registry snapshot artifact payload must be a JSON object"
@@ -443,7 +450,9 @@ class TemporalPlanActivities:
             registry_payload,
             artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
         )
-        validated = validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
+        validated = validate_plan_payload(
+            payload=plan_payload, registry_snapshot=snapshot
+        )
         return await _write_json_artifact(
             self._artifact_service,
             principal=principal,
@@ -475,7 +484,11 @@ class TemporalSkillActivities:
     ) -> SkillResult:
         resolved_snapshot = registry_snapshot
         if resolved_snapshot is None:
-            if artifact_service is None or principal is None or registry_snapshot_ref is None:
+            if (
+                artifact_service is None
+                or principal is None
+                or registry_snapshot_ref is None
+            ):
                 raise TemporalActivityRuntimeError(
                     "skill execution requires a registry snapshot or an artifact-backed registry reference"
                 )
@@ -563,7 +576,9 @@ class TemporalSandboxActivities:
             principal=principal,
             allow_restricted_raw=True,
         )
-        await _maybe_call_heartbeat(heartbeat, {"phase": "patch.read", "bytes": len(patch_payload)})
+        await _maybe_call_heartbeat(
+            heartbeat, {"phase": "patch.read", "bytes": len(patch_payload)}
+        )
 
         with tempfile.NamedTemporaryFile(delete=False) as patch_file:
             patch_file.write(patch_payload)
@@ -610,9 +625,7 @@ class TemporalSandboxActivities:
     ) -> SandboxCommandResult:
         cwd = Path(workspace_ref).resolve()
         if not cwd.exists():
-            raise TemporalActivityRuntimeError(
-                f"workspace does not exist: {cwd}"
-            )
+            raise TemporalActivityRuntimeError(f"workspace does not exist: {cwd}")
 
         if isinstance(cmd, str):
             command = ("bash", "-lc", cmd)
@@ -949,7 +962,9 @@ def build_activity_bindings(
             continue
 
         try:
-            implementation_key, attr_name = _ACTIVITY_HANDLER_ATTRS[definition.activity_type]
+            implementation_key, attr_name = _ACTIVITY_HANDLER_ATTRS[
+                definition.activity_type
+            ]
         except KeyError as exc:
             raise TemporalActivityRuntimeError(
                 f"Activity '{definition.activity_type}' has no runtime binding metadata"

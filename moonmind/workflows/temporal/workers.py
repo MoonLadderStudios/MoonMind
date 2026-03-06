@@ -13,10 +13,10 @@ from moonmind.workflows.temporal.activity_catalog import (
     INTEGRATIONS_FLEET,
     LLM_FLEET,
     SANDBOX_FLEET,
+    WORKFLOW_FLEET,
     TemporalActivityCatalog,
     TemporalActivityCatalogError,
     TemporalWorkerFleet,
-    WORKFLOW_FLEET,
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.activity_runtime import (

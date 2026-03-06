@@ -6,9 +6,9 @@ These models implement the runtime contracts described in
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-import re
 from typing import Any, Mapping
 
 ARTIFACT_REF_PREFIX = "art:sha256:"
@@ -483,9 +483,7 @@ class ObservabilitySummary:
         _ensure_non_empty(self.activity_id, field_name="activity_id")
         _ensure_positive_int(self.attempt, field_name="attempt")
         _ensure_non_empty(self.correlation_id, field_name="correlation_id")
-        _ensure_non_empty(
-            self.idempotency_key_hash, field_name="idempotency_key_hash"
-        )
+        _ensure_non_empty(self.idempotency_key_hash, field_name="idempotency_key_hash")
         if self.outcome not in OBSERVABILITY_OUTCOMES:
             raise ContractValidationError(
                 "invalid_result",

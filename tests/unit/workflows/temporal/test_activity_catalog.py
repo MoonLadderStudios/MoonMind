@@ -64,9 +64,15 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         catalog.resolve_activity("sandbox.checkout_repo").task_queue
         == SANDBOX_TASK_QUEUE
     )
-    assert catalog.resolve_activity("sandbox.apply_patch").task_queue == SANDBOX_TASK_QUEUE
-    assert catalog.resolve_activity("sandbox.run_command").task_queue == SANDBOX_TASK_QUEUE
-    assert catalog.resolve_activity("sandbox.run_tests").task_queue == SANDBOX_TASK_QUEUE
+    assert (
+        catalog.resolve_activity("sandbox.apply_patch").task_queue == SANDBOX_TASK_QUEUE
+    )
+    assert (
+        catalog.resolve_activity("sandbox.run_command").task_queue == SANDBOX_TASK_QUEUE
+    )
+    assert (
+        catalog.resolve_activity("sandbox.run_tests").task_queue == SANDBOX_TASK_QUEUE
+    )
     assert (
         catalog.resolve_activity("integration.jules.start").task_queue
         == INTEGRATIONS_TASK_QUEUE
@@ -87,7 +93,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     integration_route = catalog.resolve_skill(
         _skill_definition(capabilities=["integration:jules"])
     )
-    artifact_route = catalog.resolve_skill(_skill_definition(capabilities=["artifacts"]))
+    artifact_route = catalog.resolve_skill(
+        _skill_definition(capabilities=["artifacts"])
+    )
 
     assert llm_route.fleet == LLM_FLEET
     assert llm_route.task_queue == LLM_TASK_QUEUE

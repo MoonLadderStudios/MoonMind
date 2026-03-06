@@ -161,7 +161,10 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                 if binding.activity_type == "mm.skill.execute"
             ]
             assert len(mm_skill_bindings) == 1
-            assert mm_skill_bindings[0].task_queue == settings.temporal.activity_sandbox_task_queue
+            assert (
+                mm_skill_bindings[0].task_queue
+                == settings.temporal.activity_sandbox_task_queue
+            )
         finally:
             await session.close()
             await engine.dispose()
