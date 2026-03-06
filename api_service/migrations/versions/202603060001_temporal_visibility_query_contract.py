@@ -10,7 +10,6 @@ from alembic import op
 revision: str = "202603060001"
 down_revision: str | None = "202603050002"
 branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
@@ -75,9 +74,9 @@ def upgrade() -> None:
             resolved_owner_type = "system"
 
         resolved_owner_id = existing_owner_id or search_owner_id
-        if not resolved_owner_id or resolved_owner_id == "unknown":
-            resolved_owner_id = "system" if resolved_owner_type == "system" else ""
-        if not resolved_owner_id:
+        if resolved_owner_type == "system":
+            resolved_owner_id = "system"
+        elif not resolved_owner_id or resolved_owner_id == "unknown":
             resolved_owner_type = "system"
             resolved_owner_id = "system"
 

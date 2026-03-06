@@ -1111,10 +1111,18 @@ class TemporalExecutionService:
         self, record: TemporalExecutionRecord
     ) -> tuple[str, str]:
         attrs = dict(record.search_attributes or {})
-        candidate_owner_type = str(
-            attrs.get("mm_owner_type") or record.owner_type or ""
-        ).strip()
-        candidate_owner_id = str(attrs.get("mm_owner_id") or record.owner_id or "").strip()
+        search_owner_type = str(attrs.get("mm_owner_type") or "").strip()
+        candidate_owner_type = (
+            search_owner_type
+            if search_owner_type in ALLOWED_OWNER_TYPES
+            else str(record.owner_type or "").strip()
+        )
+
+        search_owner_id = str(attrs.get("mm_owner_id") or "").strip()
+        if search_owner_id and search_owner_id != "unknown":
+            candidate_owner_id = search_owner_id
+        else:
+            candidate_owner_id = str(record.owner_id or "").strip()
 
         if candidate_owner_type not in ALLOWED_OWNER_TYPES:
             if candidate_owner_id and candidate_owner_id != "unknown":
@@ -1124,9 +1132,6 @@ class TemporalExecutionService:
 
         if candidate_owner_type == "system":
             return ("system", "system")
-
-        if not candidate_owner_id or candidate_owner_id == "unknown":
-            candidate_owner_id = str(record.owner_id or "").strip()
 
         if not candidate_owner_id or candidate_owner_id == "unknown":
             return ("system", "system")

@@ -698,6 +698,39 @@ async def test_describe_execution_canonicalizes_legacy_alias_and_repairs_drift(t
 
 
 @pytest.mark.asyncio
+async def test_describe_execution_prefers_valid_search_attribute_owner_identity(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="search-attr-owner-id",
+        )
+
+        created.owner_type = "unknown"
+        created.owner_id = "unknown"
+        created.search_attributes = {
+            "mm_owner_type": "bogus",
+            "mm_owner_id": "user-123",
+        }
+        await session.commit()
+
+        described = await service.describe_execution(created.workflow_id)
+
+        assert described.owner_type == "user"
+        assert described.owner_id == "user-123"
+        assert described.search_attributes["mm_owner_type"] == "user"
+        assert described.search_attributes["mm_owner_id"] == "user-123"
+
+
+@pytest.mark.asyncio
 async def test_list_executions_repairs_waiting_metadata_before_serialization(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
