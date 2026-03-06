@@ -57,9 +57,7 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
-ALLOWED_OWNER_TYPES: set[str] = {
-    item.value for item in TemporalExecutionOwnerType
-}
+ALLOWED_OWNER_TYPES: set[str] = {item.value for item in TemporalExecutionOwnerType}
 ALLOWED_ENTRY_VALUES: set[str] = set(WORKFLOW_ENTRY_BY_TYPE.values())
 ALLOWED_UPDATE_NAMES: set[str] = {"UpdateInputs", "SetTitle", "RequestRerun"}
 ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
@@ -1676,9 +1674,7 @@ class TemporalExecutionService:
         include_orphaned: bool,
     ) -> TemporalExecutionRecord | None:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
-        record = await self._session.get(
-            TemporalExecutionRecord, canonical_workflow_id
-        )
+        record = await self._session.get(TemporalExecutionRecord, canonical_workflow_id)
         if (
             record is not None
             and not include_orphaned
