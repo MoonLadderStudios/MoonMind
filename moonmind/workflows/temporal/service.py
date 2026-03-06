@@ -469,7 +469,10 @@ class TemporalExecutionService:
             "correlation_id": (
                 str(correlation_id).strip() if correlation_id else uuid4().hex
             ),
-            "external_operation_id": str(external_operation_id).strip(),
+            "external_operation_id": self._require_text(
+                external_operation_id,
+                field_name="external_operation_id",
+            ),
             "normalized_status": normalized,
             "provider_status": self._clean_text(provider_status),
             "started_at": now.isoformat(),
@@ -1093,6 +1096,12 @@ class TemporalExecutionService:
             return None
         text = str(value).strip()
         return text or None
+
+    def _require_text(self, value: Any, *, field_name: str) -> str:
+        text = self._clean_text(value)
+        if text is None:
+            raise TemporalExecutionValidationError(f"{field_name} is required")
+        return text
 
     def _merge_refs(
         self,

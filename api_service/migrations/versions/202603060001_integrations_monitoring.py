@@ -8,10 +8,10 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202603060001"
-down_revision: str | None = "202603050002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "202603060001"  # noqa: F401
+down_revision: str | None = "202603050002"  # noqa: F401
+branch_labels: Union[str, Sequence[str], None] = None  # noqa: F401
+depends_on: Union[str, Sequence[str], None] = None  # noqa: F401
 
 
 def _json_variant() -> sa.JSON:

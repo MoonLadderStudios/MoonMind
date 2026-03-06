@@ -458,6 +458,45 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
 
 
 @pytest.mark.asyncio
+async def test_configure_integration_monitoring_rejects_blank_external_operation_id(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Run with invalid integration id",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="external_operation_id is required",
+        ):
+            await service.configure_integration_monitoring(
+                workflow_id=created.workflow_id,
+                integration_name="jules",
+                correlation_id=None,
+                external_operation_id="   ",
+                normalized_status="running",
+                provider_status="running",
+                callback_supported=True,
+                callback_correlation_key=None,
+                recommended_poll_seconds=30,
+                external_url=None,
+                provider_summary={},
+                result_refs=[],
+            )
+
+
+@pytest.mark.asyncio
 async def test_ingest_integration_callback_deduplicates_provider_event_ids(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
