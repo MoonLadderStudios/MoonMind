@@ -54,6 +54,11 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
 
 ALLOWED_UPDATE_NAMES: set[str] = {"UpdateInputs", "SetTitle", "RequestRerun"}
 ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
+ALLOWED_FAILURE_POLICIES: set[str] = {
+    "fail_fast",
+    "continue_and_report",
+    "best_effort",
+}
 ALLOWED_ERROR_CATEGORIES: set[str] = {
     "user_error",
     "integration_error",
@@ -122,6 +127,12 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
+
+        if failure_policy and failure_policy not in ALLOWED_FAILURE_POLICIES:
+            supported = ", ".join(sorted(ALLOWED_FAILURE_POLICIES))
+            raise TemporalExecutionValidationError(
+                f"Unsupported failurePolicy '{failure_policy}'. Supported values: {supported}"
+            )
 
         if idempotency_key:
             existing = await self._find_by_create_idempotency(
