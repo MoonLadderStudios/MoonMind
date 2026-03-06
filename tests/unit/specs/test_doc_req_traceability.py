@@ -44,6 +44,7 @@ _FEATURES = (
     ),
 )
 
+
 @pytest.mark.parametrize(
     ("feature_name", "feature_spec", "feature_traceability"),
     _FEATURES,
