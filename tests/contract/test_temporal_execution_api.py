@@ -230,7 +230,10 @@ async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path):
             assert rerun_body["continueAsNewCause"] == "manual_rerun"
             assert rerun_body["execution"]["workflowId"] == created["workflowId"]
             assert rerun_body["execution"]["runId"] != created["runId"]
-            assert rerun_body["execution"]["temporalRunId"] == rerun_body["execution"]["runId"]
+            assert (
+                rerun_body["execution"]["temporalRunId"]
+                == rerun_body["execution"]["runId"]
+            )
             assert rerun_body["execution"]["continueAsNewCause"] == "manual_rerun"
             assert rerun_body["refresh"] == {
                 "uiQueryModel": "compatibility_adapter",

@@ -64,7 +64,9 @@ def _assert_spec_traceability(spec_path: Path) -> None:
 
 def _doc_req_ids_from_text(spec_path: Path) -> set[str]:
     spec_text = spec_path.read_text(encoding="utf-8")
-    return {f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)}
+    return {
+        f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
+    }
 
 
 def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:

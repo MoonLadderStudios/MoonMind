@@ -748,7 +748,9 @@ async def test_record_progress_noop_does_not_change_recency(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_describe_execution_canonicalizes_legacy_alias_and_repairs_drift(tmp_path):
+async def test_describe_execution_canonicalizes_legacy_alias_and_repairs_drift(
+    tmp_path,
+):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 
@@ -789,7 +791,9 @@ async def test_describe_execution_canonicalizes_legacy_alias_and_repairs_drift(t
 
 
 @pytest.mark.asyncio
-async def test_describe_execution_prefers_valid_search_attribute_owner_identity(tmp_path):
+async def test_describe_execution_prefers_valid_search_attribute_owner_identity(
+    tmp_path,
+):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 
