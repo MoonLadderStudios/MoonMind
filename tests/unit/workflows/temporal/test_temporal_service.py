@@ -67,7 +67,9 @@ async def test_create_execution_rejects_unsupported_workflow_type(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 
-        with pytest.raises(TemporalExecutionValidationError, match="Unsupported workflow type"):
+        with pytest.raises(
+            TemporalExecutionValidationError, match="Unsupported workflow type"
+        ):
             await service.create_execution(
                 workflow_type="MoonMind.Unknown",
                 owner_id=uuid4(),

@@ -60,7 +60,10 @@ def test_create_execution_surfaces_domain_validation_errors(
             "message": "Unsupported workflow type: MoonMind.Unknown",
         }
     }
-    assert service.create_execution.await_args.kwargs["workflow_type"] == "MoonMind.Unknown"
+    assert (
+        service.create_execution.await_args.kwargs["workflow_type"]
+        == "MoonMind.Unknown"
+    )
 
 
 def test_list_executions_rejects_non_admin_cross_owner_queries(

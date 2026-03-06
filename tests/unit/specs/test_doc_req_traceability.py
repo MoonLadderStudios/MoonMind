@@ -23,8 +23,7 @@ def test_active_doc_req_feature_traceability_contract() -> None:
     assert doc_req_ids, f"Expected DOC-REQ entries in {feature_spec}"
 
     assert feature_traceability.exists(), (
-        "Missing traceability file for DOC-REQ feature: "
-        f"{feature_traceability}"
+        "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"
     )
 
     traceability_rows = _parse_traceability_rows(feature_traceability)
