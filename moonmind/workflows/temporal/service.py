@@ -1710,7 +1710,9 @@ class TemporalExecutionService:
         if entry:
             stmt = stmt.where(model.entry == entry)
         if owner_type:
-            stmt = stmt.where(model.owner_type == TemporalExecutionOwnerType(owner_type))
+            stmt = stmt.where(
+                model.owner_type == TemporalExecutionOwnerType(owner_type)
+            )
         if owner_id:
             stmt = stmt.where(model.owner_id == owner_id)
         return stmt

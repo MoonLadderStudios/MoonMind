@@ -1274,6 +1274,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         assert len(manifest_page.items) == 1
         assert manifest_page.items[0].entry == "manifest"
 
+
 @pytest.mark.asyncio
 async def test_polling_backoff_resets_after_status_change_and_updates_visibility(
     tmp_path,
