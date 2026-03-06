@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
+    MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.schemas.agent_queue_models import CreateJobRequest
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
     CreateExecutionRequest,
+    ExecutionActionCapabilityModel,
+    ExecutionDebugFieldsModel,
     ExecutionListResponse,
     ExecutionModel,
     ExecutionRefreshEnvelope,
@@ -35,6 +40,22 @@ from moonmind.workflows.temporal import (
 )
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
+_TEMPORAL_SOURCE = "temporal"
+_ALLOWED_OWNER_TYPES = {"user", "system", "service"}
+_DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
+    MoonMindWorkflowState.INITIALIZING: "queued",
+    MoonMindWorkflowState.PLANNING: "running",
+    MoonMindWorkflowState.EXECUTING: "running",
+    MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
+    MoonMindWorkflowState.FINALIZING: "running",
+    MoonMindWorkflowState.SUCCEEDED: "succeeded",
+    MoonMindWorkflowState.FAILED: "failed",
+    MoonMindWorkflowState.CANCELED: "cancelled",
+}
+
+_MAX_TASK_TITLE_LENGTH = 120
+_MAX_TASK_SUMMARY_LENGTH = 180
+_TASK_SUMMARY_ELLIPSIS = "..."
 
 
 def _enum_value(value: object | None) -> str | None:
@@ -50,20 +71,6 @@ def _is_execution_admin(user: User | None) -> bool:
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
-
-
-def _dashboard_status(state: str) -> str:
-    mapping = {
-        "initializing": "queued",
-        "planning": "queued",
-        "executing": "running",
-        "awaiting_external": "awaiting_action",
-        "finalizing": "running",
-        "succeeded": "succeeded",
-        "failed": "failed",
-        "canceled": "cancelled",
-    }
-    return mapping.get(state, "queued")
 
 
 def _canonicalize_execution_identifier(raw_identifier: str) -> tuple[str, bool]:
@@ -83,9 +90,34 @@ def _mark_execution_alias_usage(
 
 def _compatibility_refreshed_at(record) -> datetime:
     updated_at = record.updated_at
+    if isinstance(updated_at, str):
+        updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
     if updated_at.tzinfo is not None:
         return updated_at
     return updated_at.replace(tzinfo=UTC)
+
+
+def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
+    owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
+    if owner_type in _ALLOWED_OWNER_TYPES:
+        return owner_type
+    owner_id = str(record.owner_id or "").strip().lower()
+    return "system" if owner_id == "system" or not owner_id else "user"
+
+
+def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
+    entry = str(
+        search_attributes.get("mm_entry") or getattr(record, "entry", "")
+    ).strip()
+    if entry:
+        return entry.lower()
+
+    workflow_type = str(
+        getattr(getattr(record, "workflow_type", None), "value", "")
+    ).lower()
+    if workflow_type.endswith("manifestingest"):
+        return "manifest"
+    return "run"
 
 
 async def _get_service(
@@ -121,7 +153,7 @@ def _serialize_execution(
     search_attributes = dict(record.search_attributes or {})
     integration_state = getattr(record, "integration_state", None)
     state_value = _enum_value(record.state) or ""
-    owner_type_value = _enum_value(record.owner_type) or "system"
+    owner_type_value = _enum_value(getattr(record, "owner_type", None)) or "system"
     workflow_type_value = _enum_value(record.workflow_type) or ""
     continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
         "mm_continue_as_new_cause"
@@ -137,27 +169,66 @@ def _serialize_execution(
     }:
         temporal_status = "failed"
 
+    raw_state = state_value
+    owner_type = _normalize_owner_type(record, search_attributes)
+    owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
+    entry = _resolve_execution_entry(record, search_attributes)
+    title = str(memo.get("title") or "").strip() or workflow_type_value
+    summary = str(memo.get("summary") or "").strip() or "Execution updated."
+    waiting_reason = (
+        str(getattr(record, "waiting_reason", "") or "").strip()
+        or str(memo.get("waiting_reason") or "").strip()
+        or (
+            str(memo.get("summary") or "").strip() if raw_state == "awaiting_external" else ""
+        )
+    )
+    attention_required = bool(
+        getattr(record, "attention_required", False) or memo.get("attention_required") or False
+    )
+    if raw_state == "awaiting_external":
+        attention_required = True
+    dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(record.state, "queued")
+    actions = _build_action_capabilities(record)
+    debug_fields = _build_debug_fields(
+        record=record,
+        temporal_status=temporal_status,
+        close_status=close_status,
+        waiting_reason=waiting_reason,
+        attention_required=attention_required,
+    )
+
     return ExecutionModel(
-        namespace=record.namespace,
         task_id=record.workflow_id,
+        namespace=record.namespace,
+        source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,
         run_id=record.run_id,
         temporal_run_id=record.run_id,
+        legacy_run_id=None,
         workflow_type=workflow_type_value,
-        entry=record.entry,
-        owner_type=owner_type_value,
-        owner_id=record.owner_id or "system",
+        entry=entry or record.entry,
+        owner_type=owner_type,
+        owner_id=owner_id,
+        title=title,
+        summary=summary,
+        status=dashboard_status,
+        dashboard_status=dashboard_status,
         state=state_value,
+        raw_state=raw_state,
         temporal_status=temporal_status,
         close_status=close_status,
-        title=str(memo.get("title") or ""),
-        summary=str(memo.get("summary") or ""),
-        waiting_reason=record.waiting_reason,
-        attention_required=bool(record.attention_required),
-        dashboard_status=_dashboard_status(state_value),
+        waiting_reason=str(waiting_reason) if waiting_reason else None,
+        attention_required=attention_required,
         search_attributes=search_attributes,
         memo=memo,
-        artifact_refs=list(record.artifact_refs or []) if include_artifact_refs else [],
+        artifact_refs=(
+            list(record.artifact_refs or []) if include_artifact_refs else []
+        ),
+        artifacts_count=len(record.artifact_refs or []),
+        created_at=record.started_at,
+        actions=actions,
+        debug_fields=debug_fields,
+        redirect_path=f"/tasks/{record.workflow_id}?source=temporal",
         integration=(
             dict(integration_state) if isinstance(integration_state, dict) else None
         ),
@@ -166,10 +237,261 @@ def _serialize_execution(
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,
+        detail_href=f"/tasks/{record.workflow_id}",
         ui_query_model="compatibility_adapter",
         stale_state=False,
         refreshed_at=_compatibility_refreshed_at(record),
     )
+
+
+def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
+    raw_state = str(record.state.value).strip().lower()
+    if not settings.temporal_dashboard.actions_enabled:
+        return ExecutionActionCapabilityModel(
+            disabled_reasons={
+                action: "actions_disabled"
+                for action in (
+                    "setTitle",
+                    "updateInputs",
+                    "rerun",
+                    "approve",
+                    "pause",
+                    "resume",
+                    "cancel",
+                )
+            }
+        )
+
+    state_actions = {
+        "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "executing": {
+            "can_set_title",
+            "can_update_inputs",
+            "can_pause",
+            "can_cancel",
+        },
+        "awaiting_external": {"can_approve", "can_pause", "can_resume", "can_cancel"},
+        "finalizing": {"can_cancel"},
+        "succeeded": {"can_rerun"},
+        "failed": {"can_rerun"},
+        "canceled": {"can_rerun"},
+    }
+    enabled = state_actions.get(raw_state, set())
+    capability_values = {
+        "can_set_title": "canSetTitle",
+        "can_update_inputs": "canUpdateInputs",
+        "can_rerun": "canRerun",
+        "can_approve": "canApprove",
+        "can_pause": "canPause",
+        "can_resume": "canResume",
+        "can_cancel": "canCancel",
+    }
+    disabled_reasons = {
+        alias: "state_not_eligible"
+        for field_name, alias in capability_values.items()
+        if field_name not in enabled
+    }
+    return ExecutionActionCapabilityModel(
+        can_set_title="can_set_title" in enabled,
+        can_update_inputs="can_update_inputs" in enabled,
+        can_rerun="can_rerun" in enabled,
+        can_approve="can_approve" in enabled,
+        can_pause="can_pause" in enabled,
+        can_resume="can_resume" in enabled,
+        can_cancel="can_cancel" in enabled,
+        disabled_reasons=disabled_reasons,
+    )
+
+
+def _build_debug_fields(
+    *,
+    record,
+    temporal_status: str,
+    close_status: str | None,
+    waiting_reason: str | None,
+    attention_required: bool,
+) -> ExecutionDebugFieldsModel | None:
+    if not settings.temporal_dashboard.debug_fields_enabled:
+        return None
+    return ExecutionDebugFieldsModel(
+        workflow_id=record.workflow_id,
+        temporal_run_id=record.run_id,
+        legacy_run_id=None,
+        namespace=record.namespace,
+        temporal_status=temporal_status,
+        raw_state=record.state.value,
+        close_status=close_status,
+        waiting_reason=waiting_reason,
+        attention_required=attention_required,
+    )
+
+
+def _coerce_artifact_ref(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if isinstance(value, dict):
+        for key in ("artifactId", "artifact_id", "id"):
+            candidate = str(value.get(key) or "").strip()
+            if candidate:
+                return candidate
+    return None
+
+
+def _invalid_task_request(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "invalid_execution_request",
+            "message": message,
+        },
+    )
+
+
+def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _invalid_task_request(f"{field_name} must be a JSON array of strings.")
+
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise _invalid_task_request(
+                f"{field_name} must be a JSON array of strings."
+            )
+        candidate = item.strip()
+        if candidate:
+            normalized.append(candidate)
+    return normalized
+
+
+def _coerce_step_count(value: Any) -> int:
+    if value is None:
+        return 0
+    if not isinstance(value, list):
+        raise _invalid_task_request("payload.task.steps must be a JSON array.")
+    return len(value)
+
+
+def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
+    explicit = str(task_payload.get("title") or "").strip()
+    if explicit:
+        return explicit
+    instructions = str(task_payload.get("instructions") or "").strip()
+    if not instructions:
+        return None
+    first_line = instructions.splitlines()[0].strip()
+    if not first_line:
+        return None
+    return first_line[:_MAX_TASK_TITLE_LENGTH]
+
+
+def _derive_task_summary(
+    task_payload: dict[str, Any], input_artifact_ref: str | None
+) -> str:
+    instructions = str(task_payload.get("instructions") or "").strip()
+    if instructions:
+        normalized = " ".join(instructions.split())
+        if len(normalized) > _MAX_TASK_SUMMARY_LENGTH:
+            preview_length = _MAX_TASK_SUMMARY_LENGTH - len(_TASK_SUMMARY_ELLIPSIS)
+            return f"{normalized[:preview_length]}{_TASK_SUMMARY_ELLIPSIS}"
+        return normalized
+    if input_artifact_ref:
+        return f"Task instructions stored in artifact {input_artifact_ref}."
+    return "Execution initialized."
+
+
+async def _create_execution_from_task_request(
+    *,
+    request: CreateJobRequest,
+    service: TemporalExecutionService,
+    user: User,
+) -> ExecutionModel:
+    if str(request.type).strip().lower() != "task":
+        raise _invalid_task_request(
+            "Only task-shaped submit requests can be mapped to Temporal executions."
+        )
+
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else {}
+    if not task_payload:
+        raise _invalid_task_request(
+            "Task-shaped Temporal submit requests require payload.task."
+        )
+
+    required_capabilities = _coerce_string_list(
+        payload.get("requiredCapabilities"),
+        field_name="payload.requiredCapabilities",
+    )
+    step_count = _coerce_step_count(task_payload.get("steps"))
+
+    repository = str(payload.get("repository") or "").strip() or None
+    integration = (
+        str(
+            payload.get("integration")
+            or (payload.get("metadata") or {}).get("integration")
+            or ""
+        ).strip()
+        or None
+    )
+    input_artifact_ref = _coerce_artifact_ref(
+        task_payload.get("inputArtifactRef") or payload.get("inputArtifactRef")
+    )
+    plan_artifact_ref = _coerce_artifact_ref(
+        task_payload.get("planArtifactRef") or payload.get("planArtifactRef")
+    )
+    manifest_artifact_ref = _coerce_artifact_ref(
+        task_payload.get("manifestArtifactRef") or payload.get("manifestArtifactRef")
+    )
+    runtime_payload = (
+        task_payload.get("runtime")
+        if isinstance(task_payload.get("runtime"), dict)
+        else {}
+    )
+    initial_parameters = {
+        "requestType": request.type,
+        "repository": repository,
+        "requiredCapabilities": required_capabilities,
+        "priority": request.priority,
+        "maxAttempts": request.max_attempts,
+        "targetRuntime": payload.get("targetRuntime") or runtime_payload.get("mode"),
+        "model": runtime_payload.get("model"),
+        "effort": runtime_payload.get("effort"),
+        "publishMode": ((task_payload.get("publish") or {}).get("mode")),
+        "proposeTasks": bool(task_payload.get("proposeTasks")),
+        "stepCount": step_count,
+    }
+
+    try:
+        record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=user.id,
+            title=_derive_task_title(task_payload),
+            input_artifact_ref=input_artifact_ref,
+            plan_artifact_ref=plan_artifact_ref,
+            manifest_artifact_ref=manifest_artifact_ref,
+            failure_policy=None,
+            initial_parameters=initial_parameters,
+            idempotency_key=task_payload.get("idempotencyKey")
+            or payload.get("idempotencyKey"),
+            repository=repository,
+            integration=integration,
+            summary=_derive_task_summary(task_payload, input_artifact_ref),
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_execution_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return _serialize_execution(record)
 
 
 async def _get_owned_execution(
@@ -192,7 +514,12 @@ async def _get_owned_execution(
     if _is_execution_admin(user):
         return record
 
-    if record.owner_type.value != "user" or record.owner_id != _owner_id(user):
+    record_owner_type = _enum_value(getattr(record, "owner_type", None))
+    if record_owner_type is None:
+        record_owner_type = _normalize_owner_type(
+            record, dict(getattr(record, "search_attributes", None) or {})
+        )
+    if record_owner_type != "user" or record.owner_id != _owner_id(user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -206,23 +533,40 @@ async def _get_owned_execution(
 
 @router.post("", response_model=ExecutionModel, status_code=status.HTTP_201_CREATED)
 async def create_execution(
-    payload: CreateExecutionRequest,
+    payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
     try:
+        if "type" in payload and "payload" in payload:
+            request = CreateJobRequest.model_validate(payload)
+            return await _create_execution_from_task_request(
+                request=request,
+                service=service,
+                user=user,
+            )
+
+        request = CreateExecutionRequest.model_validate(payload)
         record = await service.create_execution(
-            workflow_type=payload.workflow_type,
+            workflow_type=request.workflow_type,
             owner_id=user.id,
             owner_type="user",
-            title=payload.title,
-            input_artifact_ref=payload.input_artifact_ref,
-            plan_artifact_ref=payload.plan_artifact_ref,
-            manifest_artifact_ref=payload.manifest_artifact_ref,
-            failure_policy=payload.failure_policy,
-            initial_parameters=payload.initial_parameters,
-            idempotency_key=payload.idempotency_key,
+            title=request.title,
+            input_artifact_ref=request.input_artifact_ref,
+            plan_artifact_ref=request.plan_artifact_ref,
+            manifest_artifact_ref=request.manifest_artifact_ref,
+            failure_policy=request.failure_policy,
+            initial_parameters=request.initial_parameters,
+            idempotency_key=request.idempotency_key,
         )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_execution_request",
+                "message": str(exc),
+            },
+        ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -243,6 +587,8 @@ async def list_executions(
     state: Optional[str] = Query(None, alias="state"),
     owner_id: Optional[str] = Query(None, alias="ownerId"),
     entry: Optional[str] = Query(None, alias="entry"),
+    repo: Optional[str] = Query(None, alias="repo"),
+    integration: Optional[str] = Query(None, alias="integration"),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     service: TemporalExecutionService = Depends(_get_service),
@@ -252,6 +598,7 @@ async def list_executions(
         effective_owner_type = owner_type
         effective_owner = owner_id
     else:
+        normalized_owner_type = str(owner_type or "").strip().lower()
         if owner_type is not None and owner_type != "user":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -268,16 +615,18 @@ async def list_executions(
                     "message": "Cannot list executions for another user.",
                 },
             )
-        effective_owner_type = "user"
         effective_owner = _owner_id(user)
+        effective_owner_type = "user" if normalized_owner_type == "user" else None
 
     try:
         result = await service.list_executions(
             workflow_type=workflow_type,
-            owner_type=effective_owner_type,
             state=state,
-            owner_id=effective_owner,
             entry=entry,
+            owner_type=effective_owner_type,
+            owner_id=effective_owner,
+            repo=repo,
+            integration=integration,
             page_size=page_size,
             next_page_token=next_page_token,
         )
@@ -298,7 +647,7 @@ async def list_executions(
         next_page_token=result.next_page_token,
         count=result.count,
         count_mode="exact",
-        degraded_count=0,
+        degraded_count=False,
         refreshed_at=max(
             (_compatibility_refreshed_at(item) for item in result.items),
             default=None,

@@ -1,0 +1,518 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Executions API Contract
+  version: "0.1.0"
+  description: >
+    Contract-first execution lifecycle API for Temporal-managed work. This schema
+    documents the stable `/api/executions` adapter surface rather than the current
+    projection-backed implementation detail.
+servers:
+  - url: /
+tags:
+  - name: executions
+    description: Execution lifecycle operations
+paths:
+  /api/executions:
+    post:
+      tags: [executions]
+      operationId: createExecution
+      summary: Create a Temporal-backed execution
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExecutionRequest"
+      responses:
+        "201":
+          description: Execution created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionModel"
+        "401":
+          description: Authentication required
+        "403":
+          description: Authorization failure
+        "422":
+          description: Domain or framework validation error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/DomainErrorResponse"
+                  - $ref: "#/components/schemas/FrameworkValidationError"
+    get:
+      tags: [executions]
+      operationId: listExecutions
+      summary: List executions visible to the caller
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: workflowType
+          schema:
+            $ref: "#/components/schemas/WorkflowType"
+        - in: query
+          name: state
+          schema:
+            $ref: "#/components/schemas/ExecutionState"
+        - in: query
+          name: ownerId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: nextPageToken
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of execution results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionListResponse"
+        "401":
+          description: Authentication required
+        "403":
+          description: Unauthorized owner scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainErrorResponse"
+        "422":
+          description: Invalid pagination token or framework validation error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/DomainErrorResponse"
+                  - $ref: "#/components/schemas/FrameworkValidationError"
+  /api/executions/{workflowId}:
+    get:
+      tags: [executions]
+      operationId: describeExecution
+      summary: Fetch one execution by workflowId
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Execution found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionModel"
+        "401":
+          description: Authentication required
+        "403":
+          description: Authorization failure
+        "404":
+          description: Execution not found or hidden by ownership rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainErrorResponse"
+  /api/executions/{workflowId}/update:
+    post:
+      tags: [executions]
+      operationId: updateExecution
+      summary: Apply a workflow update
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateExecutionRequest"
+      responses:
+        "200":
+          description: Update accepted or terminal no-op response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateExecutionResponse"
+        "401":
+          description: Authentication required
+        "403":
+          description: Authorization failure
+        "404":
+          description: Execution not found or hidden by ownership rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainErrorResponse"
+        "422":
+          description: Domain or framework validation error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/DomainErrorResponse"
+                  - $ref: "#/components/schemas/FrameworkValidationError"
+  /api/executions/{workflowId}/signal:
+    post:
+      tags: [executions]
+      operationId: signalExecution
+      summary: Send an asynchronous execution signal
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalExecutionRequest"
+      responses:
+        "202":
+          description: Signal accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionModel"
+        "401":
+          description: Authentication required
+        "403":
+          description: Authorization failure
+        "404":
+          description: Execution not found or hidden by ownership rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainErrorResponse"
+        "409":
+          description: Signal rejected by lifecycle rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainErrorResponse"
+        "422":
+          description: Framework validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FrameworkValidationError"
+  /api/executions/{workflowId}/cancel:
+    post:
+      tags: [executions]
+      operationId: cancelExecution
+      summary: Cancel or force-terminate an execution
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelExecutionRequest"
+      responses:
+        "202":
+          description: Cancel accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionModel"
+        "401":
+          description: Authentication required
+        "403":
+          description: Authorization failure
+        "404":
+          description: Execution not found or hidden by ownership rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainErrorResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    WorkflowType:
+      type: string
+      enum:
+        - MoonMind.Run
+        - MoonMind.ManifestIngest
+    ExecutionState:
+      type: string
+      enum:
+        - initializing
+        - planning
+        - executing
+        - awaiting_external
+        - finalizing
+        - succeeded
+        - failed
+        - canceled
+    TemporalStatus:
+      type: string
+      enum:
+        - running
+        - completed
+        - failed
+        - canceled
+    CountMode:
+      type: string
+      enum:
+        - exact
+        - estimated_or_unknown
+    FailurePolicy:
+      type: string
+      enum:
+        - fail_fast
+        - continue_and_report
+        - best_effort
+    UpdateName:
+      type: string
+      enum:
+        - UpdateInputs
+        - SetTitle
+        - RequestRerun
+    SignalName:
+      type: string
+      enum:
+        - ExternalEvent
+        - Approve
+        - Pause
+        - Resume
+    DomainError:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      additionalProperties: false
+    DomainErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          $ref: "#/components/schemas/DomainError"
+      additionalProperties: false
+    FrameworkValidationError:
+      type: object
+      description: FastAPI/Pydantic validation error shape outside the stable domain contract.
+      additionalProperties: true
+    CreateExecutionRequest:
+      type: object
+      required:
+        - workflowType
+      properties:
+        workflowType:
+          $ref: "#/components/schemas/WorkflowType"
+        title:
+          type:
+            - string
+            - "null"
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        planArtifactRef:
+          type:
+            - string
+            - "null"
+        manifestArtifactRef:
+          type:
+            - string
+            - "null"
+        failurePolicy:
+          anyOf:
+            - $ref: "#/components/schemas/FailurePolicy"
+            - type: "null"
+        initialParameters:
+          type: object
+          additionalProperties: true
+          default: {}
+        idempotencyKey:
+          type:
+            - string
+            - "null"
+      additionalProperties: false
+    UpdateExecutionRequest:
+      type: object
+      properties:
+        updateName:
+          $ref: "#/components/schemas/UpdateName"
+          default: UpdateInputs
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        planArtifactRef:
+          type:
+            - string
+            - "null"
+        parametersPatch:
+          type:
+            - object
+            - "null"
+          additionalProperties: true
+        title:
+          type:
+            - string
+            - "null"
+        idempotencyKey:
+          type:
+            - string
+            - "null"
+      additionalProperties: false
+    UpdateExecutionResponse:
+      type: object
+      required:
+        - accepted
+        - applied
+        - message
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum:
+            - immediate
+            - next_safe_point
+            - continue_as_new
+        message:
+          type: string
+      additionalProperties: false
+    SignalExecutionRequest:
+      type: object
+      required:
+        - signalName
+      properties:
+        signalName:
+          $ref: "#/components/schemas/SignalName"
+        payload:
+          type: object
+          additionalProperties: true
+          default: {}
+        payloadArtifactRef:
+          type:
+            - string
+            - "null"
+      additionalProperties: false
+    CancelExecutionRequest:
+      type: object
+      properties:
+        reason:
+          type:
+            - string
+            - "null"
+        graceful:
+          type: boolean
+          default: true
+      additionalProperties: false
+    ExecutionModel:
+      type: object
+      required:
+        - namespace
+        - workflowId
+        - runId
+        - workflowType
+        - state
+        - temporalStatus
+        - searchAttributes
+        - memo
+        - artifactRefs
+        - startedAt
+        - updatedAt
+      properties:
+        namespace:
+          type: string
+        workflowId:
+          type: string
+        runId:
+          type: string
+        workflowType:
+          $ref: "#/components/schemas/WorkflowType"
+        state:
+          $ref: "#/components/schemas/ExecutionState"
+        temporalStatus:
+          $ref: "#/components/schemas/TemporalStatus"
+        closeStatus:
+          type:
+            - string
+            - "null"
+        searchAttributes:
+          type: object
+          additionalProperties: true
+        memo:
+          type: object
+          additionalProperties: true
+        artifactRefs:
+          type: array
+          items:
+            type: string
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+      additionalProperties: false
+    ExecutionListResponse:
+      type: object
+      required:
+        - items
+        - countMode
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionModel"
+        nextPageToken:
+          type:
+            - string
+            - "null"
+        count:
+          type:
+            - integer
+            - "null"
+        countMode:
+          $ref: "#/components/schemas/CountMode"
+      additionalProperties: false

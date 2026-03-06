@@ -41,9 +41,16 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "rolled_back": "succeeded",
         "failed": "failed",
     },
+    "proposals": {
+        "open": "queued",
+        "promoted": "succeeded",
+        "dismissed": "cancelled",
+        "accepted": "succeeded",
+        "rejected": "failed",
+    },
     "temporal": {
         "initializing": "queued",
-        "planning": "queued",
+        "planning": "running",
         "executing": "running",
         "awaiting_external": "awaiting_action",
         "finalizing": "running",
@@ -51,15 +58,11 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "succeeded": "succeeded",
         "completed": "succeeded",
         "failed": "failed",
+        # Accept both Temporal's raw status spelling and the normalized dashboard value.
         "canceled": "cancelled",
+        "queued": "queued",
+        "awaiting_action": "awaiting_action",
         "cancelled": "cancelled",
-    },
-    "proposals": {
-        "open": "queued",
-        "promoted": "succeeded",
-        "dismissed": "cancelled",
-        "accepted": "succeeded",
-        "rejected": "failed",
     },
 }
 
@@ -132,6 +135,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     """Build runtime config consumed by dashboard JavaScript."""
 
     supported_task_runtimes = _build_supported_task_runtimes()
+    temporal_dashboard = settings.temporal_dashboard
     configured_runtime = (
         str(os.environ.get("MOONMIND_WORKER_RUNTIME", "")).strip().lower()
     )
@@ -208,19 +212,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "approve": "/orchestrator/tasks/{id}/approvals",
                 "retry": "/orchestrator/tasks/{id}/retry",
             },
-            "temporal": {
-                "list": "/api/executions",
-                "create": "/api/executions",
-                "detail": "/api/executions/{workflowId}",
-                "update": "/api/executions/{workflowId}/update",
-                "signal": "/api/executions/{workflowId}/signal",
-                "cancel": "/api/executions/{workflowId}/cancel",
-                "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
-                "artifactCreate": "/api/artifacts",
-                "artifactMetadata": "/api/artifacts/{artifactId}",
-                "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
-                "artifactDownload": "/api/artifacts/{artifactId}/download",
-            },
             "proposals": {
                 "list": "/api/proposals",
                 "detail": "/api/proposals/{id}",
@@ -242,16 +233,29 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "runNow": "/api/recurring-tasks/{id}/run",
                 "runs": "/api/recurring-tasks/{id}/runs?limit=200",
             },
+            "temporal": {
+                "list": temporal_dashboard.list_endpoint,
+                "create": temporal_dashboard.create_endpoint,
+                "detail": temporal_dashboard.detail_endpoint,
+                "update": temporal_dashboard.update_endpoint,
+                "signal": temporal_dashboard.signal_endpoint,
+                "cancel": temporal_dashboard.cancel_endpoint,
+                "artifacts": temporal_dashboard.artifacts_endpoint,
+                "artifactCreate": temporal_dashboard.artifact_create_endpoint,
+                "artifactMetadata": temporal_dashboard.artifact_metadata_endpoint,
+                "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
+                "artifactDownload": temporal_dashboard.artifact_download_endpoint,
+            },
         },
         "features": {
             "temporalDashboard": {
-                "enabled": True,
-                "listEnabled": True,
-                "detailEnabled": True,
-                "actionsEnabled": False,
-                "submitEnabled": False,
-                "debugFieldsEnabled": False,
-            },
+                "enabled": bool(temporal_dashboard.enabled),
+                "listEnabled": bool(temporal_dashboard.list_enabled),
+                "detailEnabled": bool(temporal_dashboard.detail_enabled),
+                "actionsEnabled": bool(temporal_dashboard.actions_enabled),
+                "submitEnabled": bool(temporal_dashboard.submit_enabled),
+                "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
+            }
         },
         "system": {
             "defaultQueue": "agent_jobs",
@@ -264,6 +268,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultPublishMode": default_publish_mode,
             "defaultProposeTasks": bool(settings.spec_workflow.enable_task_proposals),
             "queueEnv": "MOONMIND_QUEUE",
+            "taskSourceResolver": "/api/tasks/{taskId}/source",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": supported_task_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
@@ -289,8 +294,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                     }
                 ),
             },
+            "taskCompatibilityList": "/api/tasks/list",
+            "taskCompatibilityDetail": "/api/tasks/{taskId}",
+            "taskResolution": "/api/tasks/{taskId}/resolution",
             "temporalCompatibility": {
-                "enabled": True,
+                "enabled": bool(temporal_dashboard.enabled),
                 "uiQueryModel": "compatibility_adapter",
                 "list": "/api/executions",
                 "detail": "/api/executions/{workflowId}",

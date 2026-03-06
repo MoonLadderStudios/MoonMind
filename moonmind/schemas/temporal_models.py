@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
+
+SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest")
+SUPPORTED_FAILURE_POLICIES = (
+    "fail_fast",
+    "continue_and_report",
+    "best_effort",
+)
+SUPPORTED_UPDATE_NAMES = ("UpdateInputs", "SetTitle", "RequestRerun")
+SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Approve", "Pause", "Resume")
 
 NormalizedIntegrationStatus = Literal[
     "queued",
@@ -22,31 +31,24 @@ class CreateExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    workflow_type: Literal["MoonMind.Run", "MoonMind.ManifestIngest"] = Field(
-        ..., alias="workflowType"
+    workflow_type: str = Field(
+        ...,
+        alias="workflowType",
+        json_schema_extra={"enum": SUPPORTED_WORKFLOW_TYPES},
     )
     title: Optional[str] = Field(None, alias="title")
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
-    failure_policy: Optional[
-        Literal["fail_fast", "continue_and_report", "best_effort"]
-    ] = Field(None, alias="failurePolicy")
+    failure_policy: Optional[str] = Field(
+        None,
+        alias="failurePolicy",
+        json_schema_extra={"enum": SUPPORTED_FAILURE_POLICIES},
+    )
     initial_parameters: dict[str, Any] = Field(
         default_factory=dict, alias="initialParameters"
     )
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
-
-    @model_validator(mode="after")
-    def _validate_required_fields(self) -> "CreateExecutionRequest":
-        if (
-            self.workflow_type == "MoonMind.ManifestIngest"
-            and not self.manifest_artifact_ref
-        ):
-            raise ValueError(
-                "manifestArtifactRef is required when workflowType is MoonMind.ManifestIngest"
-            )
-        return self
 
 
 class UpdateExecutionRequest(BaseModel):
@@ -54,8 +56,10 @@ class UpdateExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    update_name: Literal["UpdateInputs", "SetTitle", "RequestRerun"] = Field(
-        "UpdateInputs", alias="updateName"
+    update_name: str = Field(
+        "UpdateInputs",
+        alias="updateName",
+        json_schema_extra={"enum": SUPPORTED_UPDATE_NAMES},
     )
     input_artifact_ref: Optional[str] = Field(None, alias="inputArtifactRef")
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
@@ -69,8 +73,10 @@ class SignalExecutionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    signal_name: Literal["ExternalEvent", "Approve", "Pause", "Resume"] = Field(
-        ..., alias="signalName"
+    signal_name: str = Field(
+        ...,
+        alias="signalName",
+        json_schema_extra={"enum": SUPPORTED_SIGNAL_NAMES},
     )
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     payload_artifact_ref: Optional[str] = Field(None, alias="payloadArtifactRef")
@@ -184,38 +190,65 @@ class CancelExecutionRequest(BaseModel):
     graceful: bool = Field(True, alias="graceful")
 
 
+class ExecutionActionCapabilityModel(BaseModel):
+    """State-aware Temporal action visibility returned to the dashboard."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    can_set_title: bool = Field(False, alias="canSetTitle")
+    can_update_inputs: bool = Field(False, alias="canUpdateInputs")
+    can_rerun: bool = Field(False, alias="canRerun")
+    can_approve: bool = Field(False, alias="canApprove")
+    can_pause: bool = Field(False, alias="canPause")
+    can_resume: bool = Field(False, alias="canResume")
+    can_cancel: bool = Field(False, alias="canCancel")
+    disabled_reasons: dict[str, str] = Field(
+        default_factory=dict, alias="disabledReasons"
+    )
+
+
+class ExecutionDebugFieldsModel(BaseModel):
+    """Optional debug metadata gated by Temporal dashboard settings."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workflow_id: str = Field(..., alias="workflowId")
+    temporal_run_id: str = Field(..., alias="temporalRunId")
+    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId")
+    namespace: str = Field(..., alias="namespace")
+    temporal_status: str = Field(..., alias="temporalStatus")
+    raw_state: str = Field(..., alias="rawState")
+    close_status: Optional[str] = Field(None, alias="closeStatus")
+    waiting_reason: Optional[str] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
+
+
 class ExecutionModel(BaseModel):
     """Materialized execution view returned by lifecycle APIs."""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    namespace: str = Field(..., alias="namespace")
+    source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: str = Field(..., alias="taskId")
+    namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
     temporal_run_id: str = Field(..., alias="temporalRunId")
+    legacy_run_id: Optional[str] = Field(None, alias="legacyRunId")
     workflow_type: str = Field(..., alias="workflowType")
     entry: Literal["run", "manifest"] = Field(..., alias="entry")
     owner_type: Literal["user", "system", "service"] = Field(..., alias="ownerType")
     owner_id: str = Field(..., alias="ownerId")
-    state: str = Field(..., alias="state")
-    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
-        ..., alias="temporalStatus"
-    )
-    close_status: Optional[str] = Field(None, alias="closeStatus")
     title: str = Field(..., alias="title")
     summary: str = Field(..., alias="summary")
-    waiting_reason: Optional[
-        Literal[
-            "approval_required",
-            "external_callback",
-            "external_completion",
-            "operator_paused",
-            "retry_backoff",
-            "unknown_external",
-        ]
-    ] = Field(None, alias="waitingReason")
-    attention_required: bool = Field(..., alias="attentionRequired")
+    status: Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "succeeded",
+        "failed",
+        "cancelled",
+    ] = Field(..., alias="status")
     dashboard_status: Literal[
         "queued",
         "running",
@@ -224,17 +257,33 @@ class ExecutionModel(BaseModel):
         "failed",
         "cancelled",
     ] = Field(..., alias="dashboardStatus")
+    state: str = Field(..., alias="state")
+    raw_state: str = Field(..., alias="rawState")
+    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+        ..., alias="temporalStatus"
+    )
+    close_status: Optional[str] = Field(None, alias="closeStatus")
+    waiting_reason: Optional[str] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
     search_attributes: dict[str, Any] = Field(
         default_factory=dict, alias="searchAttributes"
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    actions: ExecutionActionCapabilityModel = Field(
+        default_factory=ExecutionActionCapabilityModel, alias="actions"
+    )
+    debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
+    redirect_path: Optional[str] = Field(None, alias="redirectPath")
+    artifacts_count: int = Field(0, alias="artifactsCount")
+    created_at: datetime = Field(..., alias="createdAt")
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
+    detail_href: str = Field(..., alias="detailHref")
     ui_query_model: Literal["compatibility_adapter"] = Field(
         "compatibility_adapter", alias="uiQueryModel"
     )

@@ -30,6 +30,15 @@ def test_normalize_status_maps_temporal_executing_to_running() -> None:
     assert normalize_status("temporal", "executing") == "running"
 
 
+def test_normalize_status_maps_temporal_planning_to_running() -> None:
+    assert normalize_status("temporal", "planning") == "running"
+
+
+def test_normalize_status_maps_temporal_canceled_spellings_to_cancelled() -> None:
+    assert normalize_status("temporal", "canceled") == "cancelled"
+    assert normalize_status("temporal", "cancelled") == "cancelled"
+
+
 def test_normalize_status_fallback_for_unknown_source() -> None:
     assert normalize_status("unknown-source", "anything") == "queued"
 
@@ -125,13 +134,18 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["schedules"]["runs"]
         == "/api/recurring-tasks/{id}/runs?limit=200"
     )
-    assert "speckit" not in config["sources"]
-    assert "temporal" in config["sources"]
-    assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
-    assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
-    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
     assert config["sources"]["temporal"]["list"] == "/api/executions"
+    assert config["sources"]["temporal"]["create"] == "/api/executions"
     assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
+    assert (
+        config["sources"]["temporal"]["update"] == "/api/executions/{workflowId}/update"
+    )
+    assert (
+        config["sources"]["temporal"]["signal"] == "/api/executions/{workflowId}/signal"
+    )
+    assert (
+        config["sources"]["temporal"]["cancel"] == "/api/executions/{workflowId}/cancel"
+    )
     assert (
         config["sources"]["temporal"]["artifacts"]
         == "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts"
@@ -149,11 +163,17 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/artifacts/{artifactId}/download"
     )
-    assert config["features"]["temporalDashboard"]["enabled"] is True
-    assert config["features"]["temporalDashboard"]["detailEnabled"] is True
-    assert config["features"]["temporalDashboard"]["actionsEnabled"] is False
-    assert config["features"]["temporalDashboard"]["submitEnabled"] is False
-    assert config["features"]["temporalDashboard"]["debugFieldsEnabled"] is False
+    assert "speckit" not in config["sources"]
+    assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
+    assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
+    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
+    temporal_dashboard = config["features"]["temporalDashboard"]
+    assert temporal_dashboard["enabled"] is True
+    assert temporal_dashboard["listEnabled"] is True
+    assert temporal_dashboard["detailEnabled"] is True
+    assert temporal_dashboard["actionsEnabled"] is False
+    assert temporal_dashboard["submitEnabled"] is False
+    assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
@@ -163,6 +183,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["system"]["defaultTaskModelByRuntime"]["codex"]
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
+    assert config["system"]["taskSourceResolver"] == "/api/tasks/{taskId}/source"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
@@ -185,6 +206,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_compat["countModeField"] == "countMode"
     assert temporal_compat["degradedCountField"] == "degradedCount"
     assert temporal_compat["backgroundRefetchMs"] == config["pollIntervalsMs"]["list"]
+    assert config["system"]["taskResolution"] == "/api/tasks/{taskId}/resolution"
     attachment_policy = config["system"]["attachmentPolicy"]
     assert attachment_policy["enabled"] is True
     assert attachment_policy["maxCount"] >= 1
@@ -257,6 +279,10 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultPublishMode"] == "branch"
 
 
+def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
+    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+
+
 def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "enabled")
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
@@ -266,6 +292,42 @@ def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> N
     config = build_runtime_config("/tasks")
 
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
+
+
+def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
+    monkeypatch.setattr(settings.temporal_dashboard, "enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "list_enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "detail_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "list_endpoint",
+        "/api/temporal/executions",
+    )
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "artifact_download_endpoint",
+        "/api/temporal/artifacts/{artifactId}/download",
+    )
+
+    config = build_runtime_config("/tasks")
+
+    assert config["features"]["temporalDashboard"] == {
+        "enabled": False,
+        "listEnabled": False,
+        "detailEnabled": True,
+        "actionsEnabled": True,
+        "submitEnabled": True,
+        "debugFieldsEnabled": True,
+    }
+    assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"
+    assert (
+        config["sources"]["temporal"]["artifactDownload"]
+        == "/api/temporal/artifacts/{artifactId}/download"
+    )
+    assert "temporal" not in config["system"]["supportedTaskRuntimes"]
 
 
 def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
