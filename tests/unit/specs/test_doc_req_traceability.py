@@ -25,6 +25,7 @@ _VALIDATION_COLUMN_NAMES = (
 )
 _EMPTY_VALIDATION_VALUES = {"", "-", "tbd", "todo", "n/a", "na", "none"}
 
+
 def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
     features: list[tuple[str, Path, Path]] = []
     for path in sorted(Path("specs").iterdir()):

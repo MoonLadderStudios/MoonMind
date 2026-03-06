@@ -179,11 +179,15 @@ def _serialize_execution(
         str(getattr(record, "waiting_reason", "") or "").strip()
         or str(memo.get("waiting_reason") or "").strip()
         or (
-            str(memo.get("summary") or "").strip() if raw_state == "awaiting_external" else ""
+            str(memo.get("summary") or "").strip()
+            if raw_state == "awaiting_external"
+            else ""
         )
     )
     attention_required = bool(
-        getattr(record, "attention_required", False) or memo.get("attention_required") or False
+        getattr(record, "attention_required", False)
+        or memo.get("attention_required")
+        or False
     )
     if raw_state == "awaiting_external":
         attention_required = True
