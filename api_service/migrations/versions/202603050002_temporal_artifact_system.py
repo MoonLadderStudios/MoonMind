@@ -8,8 +8,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202603050001"
-down_revision: Union[str, None] = "202603010001"
+revision: str = "202603050002"
+down_revision: Union[str, None] = "202603050001"
 branch_labels: Union[str, Sequence[str], None] = None
 
 
