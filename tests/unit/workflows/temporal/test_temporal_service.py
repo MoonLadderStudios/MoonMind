@@ -472,6 +472,8 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
         )
         paused = await service.describe_execution(created.workflow_id)
         assert paused.state is MoonMindWorkflowState.AWAITING_EXTERNAL
+        assert paused.memo["waiting_reason"] == "operator_paused"
+        assert paused.memo["attention_required"] is True
 
         await service.signal_execution(
             workflow_id=created.workflow_id,
@@ -481,6 +483,7 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
         )
         resumed = await service.describe_execution(created.workflow_id)
         assert resumed.state is MoonMindWorkflowState.EXECUTING
+        assert "waiting_reason" not in resumed.memo
 
         await service.signal_execution(
             workflow_id=created.workflow_id,
@@ -1222,10 +1225,23 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             initial_parameters={},
             idempotency_key="owner-b-0",
         )
+        await service.create_execution(
+            workflow_type="MoonMind.ManifestIngest",
+            owner_id=owner_a,
+            title="manifest-0",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref="artifact://manifest/owner-a",
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="owner-a-manifest-0",
+        )
 
         first_page = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
+            entry=None,
+            owner_type="user",
             owner_id=owner_a,
             page_size=2,
             next_page_token=None,
@@ -1237,12 +1253,26 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         second_page = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
+            entry=None,
+            owner_type="user",
             owner_id=owner_a,
             page_size=2,
             next_page_token=first_page.next_page_token,
         )
         assert len(second_page.items) == 1
         assert second_page.count == 3
+
+        manifest_page = await service.list_executions(
+            workflow_type=None,
+            state=None,
+            entry="manifest",
+            owner_type="user",
+            owner_id=owner_a,
+            page_size=10,
+            next_page_token=None,
+        )
+        assert len(manifest_page.items) == 1
+        assert manifest_page.items[0].entry == "manifest"
 
 
 @pytest.mark.asyncio

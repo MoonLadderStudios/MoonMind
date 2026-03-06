@@ -176,6 +176,12 @@
       : {};
   const systemConfig = config.system || {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
+  const taskCompatibilityListEndpoint = String(
+    systemConfig.taskCompatibilityList || "/api/tasks/list",
+  );
+  const taskResolutionEndpoint = String(
+    systemConfig.taskResolution || "/api/tasks/{taskId}/resolution",
+  );
   const supportedWorkerRuntimes =
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
     systemConfig.supportedWorkerRuntimes.length > 0
@@ -1011,11 +1017,30 @@
   function buildUnifiedTaskDetailRoute(rawId, source) {
     const safeId = normalizeDashboardDetailSegment(rawId);
     const normalizedSource = String(source || "").trim().toLowerCase();
-    const sourceParam = normalizedSource ? `?source=${encodeURIComponent(normalizedSource)}` : "";
+    const sourceParam =
+      normalizedSource && normalizedSource !== "temporal"
+        ? `?source=${encodeURIComponent(normalizedSource)}`
+        : "";
     if (!safeId) {
       return "/tasks/list";
     }
     return `/tasks/${safeId}${sourceParam}`;
+  }
+
+  async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
+    const normalizedTaskId = normalizeDashboardDetailSegment(taskId);
+    if (!normalizedTaskId) {
+      throw new Error("Task id is required for source resolution.");
+    }
+    const normalizedSourceHint = String(sourceHint || "").trim().toLowerCase();
+    const resolutionUrl = new URL(
+      endpoint(taskResolutionEndpoint, { taskId: normalizedTaskId }),
+      window.location.origin,
+    );
+    if (normalizedSourceHint) {
+      resolutionUrl.searchParams.set("source", normalizedSourceHint);
+    }
+    return fetchJson(`${resolutionUrl.pathname}${resolutionUrl.search}`);
   }
 
   function formatTimestamp(value) {
@@ -3048,6 +3073,79 @@
     }));
   }
 
+  function toTemporalRows(items) {
+    return items.map((item) => {
+      const workflowId = pick(item, "taskId") || pick(item, "workflowId") || "";
+      const rawState = pick(item, "rawState") || pick(item, "state") || "initializing";
+      return {
+        source: "temporal",
+        sourceLabel: "Temporal",
+        id: workflowId,
+        queueName: "-",
+        runtimeMode: null,
+        skillId: null,
+        rawStatus: rawState,
+        title:
+          pick(item, "title") ||
+          pick(item, "summary") ||
+          pick(item, "workflowType") ||
+          "Temporal Execution",
+        summary: pick(item, "summary") || "",
+        entry: pick(item, "entry") || "",
+        workflowType: pick(item, "workflowType") || "",
+        temporalStatus: pick(item, "temporalStatus") || "",
+        closeStatus: pick(item, "closeStatus") || "",
+        ownerType: pick(item, "ownerType") || "",
+        ownerId: pick(item, "ownerId") || "",
+        waitingReason: pick(item, "waitingReason") || "",
+        attentionRequired: Boolean(pick(item, "attentionRequired")),
+        createdAt: pick(item, "createdAt") || pick(item, "startedAt"),
+        startedAt: pick(item, "startedAt"),
+        finishedAt: pick(item, "closedAt"),
+        updatedAt: pick(item, "updatedAt"),
+        link: buildUnifiedTaskDetailRoute(workflowId, "temporal"),
+      };
+    });
+  }
+
+  function toCompatibilityRows(items) {
+    return items.map((item) => {
+      const source = String(pick(item, "source") || "queue").trim().toLowerCase();
+      const taskId = pick(item, "taskId") || "";
+      const rawStatus =
+        pick(item, "rawState") || pick(item, "status") || "queued";
+      const detailHref = pick(item, "detailHref") || buildUnifiedTaskDetailRoute(taskId, source);
+      return {
+        source,
+        sourceLabel:
+          source === "orchestrator"
+            ? "Orchestrator"
+            : source === "temporal"
+              ? "Temporal"
+              : "Task",
+        id: taskId,
+        queueName: pick(item, "queueName") || (source === "queue" ? defaultQueueName : "-"),
+        runtimeMode: pick(item, "runtimeMode") || null,
+        skillId: pick(item, "skillId") || null,
+        publishMode: pick(item, "publishMode") || null,
+        rawStatus,
+        title: pick(item, "title") || "Task",
+        summary: pick(item, "summary") || "",
+        entry: pick(item, "entry") || "",
+        workflowType: pick(item, "workflowType") || "",
+        temporalStatus: pick(item, "temporalStatus") || "",
+        closeStatus: pick(item, "closeStatus") || "",
+        ownerType: pick(item, "ownerType") || "",
+        ownerId: pick(item, "ownerId") || "",
+        createdAt: pick(item, "createdAt"),
+        startedAt: pick(item, "startedAt") || pick(item, "createdAt"),
+        finishedAt: pick(item, "closedAt"),
+        updatedAt: pick(item, "updatedAt"),
+        link: detailHref,
+      };
+    });
+  }
+
   function sortRows(rows) {
     return rows.sort((left, right) => {
       const leftTime = Date.parse(left.startedAt || left.createdAt || 0) || 0;
@@ -3059,7 +3157,7 @@
   async function renderActivePage() {
     setView(
       "Active Tasks",
-      `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+      `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading active runs...</p>",
       { showAutoRefreshControls: true },
     );
@@ -3118,6 +3216,18 @@
             ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
+        {
+          source: "temporal-active",
+          call: () =>
+            fetchJson(
+              `${temporalSourceConfig.list || "/api/executions"}?pageSize=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
+          transform: (payload) =>
+            toTemporalRows(payload?.items || []).filter((row) => {
+              const normalized = normalizeStatus("temporal", row.rawStatus);
+              return normalized === "queued" || normalized === "running" || normalized === "awaiting_action";
+            }),
+        },
       ];
 
       const settled = await Promise.allSettled(requests.map((req) => req.call()));
@@ -3136,7 +3246,7 @@
       }
       setView(
         "Active Tasks",
-        `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+        `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`,
         renderActivePageContent(rows, errors),
         { showAutoRefreshControls: true },
       );
@@ -3156,7 +3266,7 @@
     );
     setView(
       "Tasks List",
-      `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
+      `Unified queue, orchestrator, and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading tasks...</p>",
       { showAutoRefreshControls: true },
     );
@@ -3169,7 +3279,7 @@
       source:
         initialFilterRuntime === ORCHESTRATOR_RUNTIME
           ? "orchestrator"
-          : ["queue", "orchestrator"].includes(initialSource)
+          : ["queue", "orchestrator", "temporal"].includes(initialSource)
             ? initialSource
             : "",
     };
@@ -3249,7 +3359,7 @@
             return false;
           }
           const publishMode =
-            extractPublishModeFromPayload(row.payload || {}) || defaultPublishMode;
+            String(row.publishMode || "").trim().toLowerCase() || defaultPublishMode;
           if (publishMode !== filterState.publishMode) {
             return false;
           }
@@ -3270,6 +3380,19 @@
             paginationState.limit === value ? "selected" : ""
           }>${escapeHtml(value)}</option>`,
       ).join("");
+      const sourceOptions = [
+        ["", "(all)"],
+        ["queue", "queue"],
+        ["orchestrator", "orchestrator"],
+        ["temporal", "temporal"],
+      ]
+        .map(
+          ([value, label]) =>
+            `<option value="${escapeHtml(value)}" ${
+              filterState.source === value ? "selected" : ""
+            }>${escapeHtml(label)}</option>`,
+        )
+        .join("");
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -3296,19 +3419,24 @@
       return `
         <form id="queue-filter-form">
           <div class="grid-2">
+            <label>Source
+              <select name="source">
+                ${sourceOptions}
+              </select>
+            </label>
             <label>Runtime
               <select name="runtime">
                 <option value="">(all)</option>
                 ${runtimeOptions}
               </select>
             </label>
+          </div>
+          <div class="grid-2">
             <label>Skill
               <input name="skill" placeholder="auto, speckit-orchestrate, ..." value="${escapeHtml(
                 filterState.skill,
               )}" />
             </label>
-          </div>
-          <div class="grid-2">
             <label>Stage Status
               <select name="stageStatus">
                 <option value="">(all)</option>
@@ -3388,7 +3516,7 @@
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
       setView(
         "Tasks List",
-        `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
+        `Unified queue, orchestrator, and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`,
         `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
           filteredRows,
         )}`,
@@ -3403,6 +3531,7 @@
         return;
       }
       const runtimeField = filterForm.elements.namedItem("runtime");
+      const sourceField = filterForm.elements.namedItem("source");
       const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
@@ -3410,6 +3539,15 @@
       const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
       const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
+      if (sourceField) {
+        sourceField.addEventListener("change", () => {
+          filterState.source = String(sourceField.value || "").trim().toLowerCase();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue source filter update failed", error);
+          });
+        });
+      }
       if (runtimeField) {
         runtimeField.addEventListener("change", () => {
           filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
@@ -3521,30 +3659,27 @@
 
     const load = async () => {
       const params = new URLSearchParams();
-      params.set("limit", String(paginationState.limit));
+      params.set("pageSize", String(paginationState.limit));
       if (paginationState.cursor) {
         params.set("cursor", paginationState.cursor);
       }
+      if (filterState.source) {
+        params.set("source", filterState.source);
+      }
+      if (filterState.stageStatus) {
+        params.set("status", filterState.stageStatus);
+      }
       syncPaginationQueryParams();
-      const queueListEndpoint = queueSourceConfig.list || "/api/tasks";
-      const [payload, orchestratorPayload] = await Promise.all([
-        fetchJson(withQueueSummaryFlag(`${queueListEndpoint}?${params.toString()}`)),
-        fetchJson(
-          `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=${paginationState.limit}`,
-        ).catch(() => ({ runs: [], tasks: [] })),
-      ]);
+      const payload = await fetchJson(
+        `${taskCompatibilityListEndpoint}?${params.toString()}`,
+      );
       if (!pageActive) {
         return;
       }
       const items = Array.isArray(payload?.items) ? payload.items : [];
       const payloadNextCursor = payload && typeof payload === "object"
-        ? String(payload.next_cursor || payload.nextCursor || "").trim() || null
+        ? String(payload.nextCursor || payload.next_cursor || "").trim() || null
         : null;
-      const orchestratorItems = Array.isArray(orchestratorPayload?.tasks)
-        ? orchestratorPayload.tasks
-        : Array.isArray(orchestratorPayload?.runs)
-          ? orchestratorPayload.runs
-          : [];
       paginationState.nextCursor = payloadNextCursor;
       paginationState.hasMore = Boolean(payloadNextCursor);
       if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
@@ -3557,10 +3692,7 @@
       const pageIndex = paginationState.cursorStack.length;
       paginationState.pageStart = items.length > 0 ? pageIndex * paginationState.limit + 1 : 0;
       paginationState.pageEnd = pageIndex * paginationState.limit + items.length;
-      currentRows = sortRows([
-        ...toQueueRows(items),
-        ...toOrchestratorRows(orchestratorItems),
-      ]);
+      currentRows = sortRows(toCompatibilityRows(items));
       renderQueueList(currentRows);
       refreshTelemetryIfStale().catch(() => {
         console.warn("queue telemetry refresh failed");
@@ -9874,6 +10006,26 @@
       if (explicitSource === "temporal") {
         await renderTemporalDetailPage(candidateTaskId);
         return;
+      }
+      try {
+        const resolution = await resolveUnifiedTaskSource(candidateTaskId, explicitSource);
+        const resolvedSource = String(pick(resolution, "source") || "")
+          .trim()
+          .toLowerCase();
+        if (resolvedSource === "queue") {
+          await renderQueueDetailPage(candidateTaskId);
+          return;
+        }
+        if (resolvedSource === "orchestrator") {
+          await renderOrchestratorDetailPage(candidateTaskId);
+          return;
+        }
+        if (resolvedSource === "temporal") {
+          await renderTemporalDetailPage(candidateTaskId);
+          return;
+        }
+      } catch (_error) {
+        // Fall back to direct runtime probes when the resolution endpoint is unavailable.
       }
       const detailProbes = [
         {

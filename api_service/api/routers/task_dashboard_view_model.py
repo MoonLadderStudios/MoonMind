@@ -43,7 +43,7 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
     },
     "temporal": {
         "initializing": "queued",
-        "planning": "queued",
+        "planning": "running",
         "executing": "running",
         "awaiting_external": "awaiting_action",
         "finalizing": "running",
@@ -51,7 +51,10 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "succeeded": "succeeded",
         "completed": "succeeded",
         "failed": "failed",
+        # Accept both Temporal's raw status spelling and the normalized dashboard value.
         "canceled": "cancelled",
+        "queued": "queued",
+        "awaiting_action": "awaiting_action",
         "cancelled": "cancelled",
     },
     "proposals": {
@@ -278,6 +281,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "post": "/api/system/worker-pause",
                 "pollIntervalMs": 5000,
             },
+            "taskCompatibilityList": "/api/tasks/list",
+            "taskCompatibilityDetail": "/api/tasks/{taskId}",
+            "taskResolution": "/api/tasks/{taskId}/resolution",
             "attachmentPolicy": {
                 "enabled": bool(settings.spec_workflow.agent_job_attachment_enabled),
                 **_build_default_attachment_policy(
