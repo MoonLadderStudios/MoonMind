@@ -47,9 +47,12 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "executing": "running",
         "awaiting_external": "awaiting_action",
         "finalizing": "running",
+        "running": "running",
         "succeeded": "succeeded",
+        "completed": "succeeded",
         "failed": "failed",
         "canceled": "cancelled",
+        "cancelled": "cancelled",
     },
     "proposals": {
         "open": "queued",
@@ -213,9 +216,10 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "signal": "/api/executions/{workflowId}/signal",
                 "cancel": "/api/executions/{workflowId}/cancel",
                 "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+                "artifactCreate": "/api/artifacts",
                 "artifactMetadata": "/api/artifacts/{artifactId}",
-                "artifactDownload": "/api/artifacts/{artifactId}/download",
                 "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
+                "artifactDownload": "/api/artifacts/{artifactId}/download",
             },
             "proposals": {
                 "list": "/api/proposals",
@@ -237,6 +241,16 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "update": "/api/recurring-tasks/{id}",
                 "runNow": "/api/recurring-tasks/{id}/run",
                 "runs": "/api/recurring-tasks/{id}/runs?limit=200",
+            },
+        },
+        "features": {
+            "temporalDashboard": {
+                "enabled": True,
+                "listEnabled": True,
+                "detailEnabled": True,
+                "actionsEnabled": False,
+                "submitEnabled": False,
+                "debugFieldsEnabled": False,
             },
         },
         "system": {

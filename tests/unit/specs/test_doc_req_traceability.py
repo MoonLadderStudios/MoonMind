@@ -35,6 +35,13 @@ _FEATURES = (
         Path("specs/048-run-history-rerun/spec.md"),
         Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
     ),
+    (
+        "047-temporal-artifact-presentation",
+        Path("specs/047-temporal-artifact-presentation/spec.md"),
+        Path(
+            "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
+        ),
+    ),
 )
 
 
