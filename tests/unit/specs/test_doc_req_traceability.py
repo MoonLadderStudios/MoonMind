@@ -40,7 +40,9 @@ _FEATURES = (
     (
         "048-executions-api-contract",
         Path("specs/048-executions-api-contract/spec.md"),
-        Path("specs/048-executions-api-contract/contracts/requirements-traceability.md"),
+        Path(
+            "specs/048-executions-api-contract/contracts/requirements-traceability.md"
+        ),
     ),
     (
         "048-run-history-rerun",

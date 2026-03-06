@@ -167,7 +167,10 @@ class TemporalExecutionService:
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
 
-        if failure_policy is not None and failure_policy not in ALLOWED_FAILURE_POLICIES:
+        if (
+            failure_policy is not None
+            and failure_policy not in ALLOWED_FAILURE_POLICIES
+        ):
             supported = ", ".join(sorted(ALLOWED_FAILURE_POLICIES))
             raise TemporalExecutionValidationError(
                 f"Unsupported failurePolicy '{failure_policy}'. Supported values: {supported}"
