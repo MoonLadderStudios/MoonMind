@@ -53,19 +53,13 @@ from moonmind.agents.codex_worker.self_heal import (
     is_failure_retryable,
 )
 from moonmind.config.settings import settings
-from moonmind.jules.status import (
-    JulesStatusSnapshot,
-    normalize_jules_status,
-)
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
+from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.schemas.jules_models import (
-    JulesCreateTaskRequest,
-    JulesGetTaskRequest,
-)
+from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
@@ -10353,14 +10347,8 @@ class CodexWorker:
                 status_snapshot = self._normalize_jules_status(polled.status)
                 current_status = status_snapshot.normalized_status
                 current_provider_status = status_snapshot.provider_status
-                if (
-                    current_status != last_status
-                    or current_provider_status
-                    != (
-                        provider_status_history[-1]
-                        if provider_status_history
-                        else None
-                    )
+                if current_status != last_status or current_provider_status != (
+                    provider_status_history[-1] if provider_status_history else None
                 ):
                     status_history.append(current_status)
                     provider_status_history.append(current_provider_status)

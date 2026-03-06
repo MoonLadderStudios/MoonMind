@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
+
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest

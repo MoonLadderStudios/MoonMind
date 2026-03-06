@@ -6941,8 +6941,7 @@ async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_mis
         == "provider-side cancellation unsupported; MoonMind canceled without remote cancel"
     )
     assert any(
-        event["message"] == "runtime.jules.cancel.unsupported"
-        for event in queue.events
+        event["message"] == "runtime.jules.cancel.unsupported" for event in queue.events
     )
 
 
