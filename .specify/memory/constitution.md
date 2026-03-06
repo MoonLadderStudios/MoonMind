@@ -1,24 +1,52 @@
+<!--
+Sync Impact Report
+- Governance metadata changes: last amended 2026-03-06; ratification date unchanged and not tracked in this file.
+- Modified principles:
+  - I. One-Click Agent Deployment -> I. One-Click Agent Deployment
+    (amended to require local-first Docker Compose deployment with no essential
+    external public-cloud dependency)
+- Added sections: None.
+- Removed sections: None.
+- Templates requiring updates:
+  - ✅ No template changes required; `/mnt/d/code/MoonMind/.specify/templates/plan-template.md`
+    already instructs plans to derive gates from the constitution.
+  - ✅ No prompt changes required; `/mnt/d/code/MoonMind/.codex/prompts/speckit.plan.md`
+    and `/mnt/d/code/MoonMind/.gemini/commands/speckit.plan.toml` already load the
+    constitution directly.
+- Follow-up TODOs: None.
+-->
 # MoonMind Constitution
 
 ## Core Principles
 
 ### I. One-Click Agent Deployment
 
-MoonMind MUST provide a “fresh clone → running system” path that is simple, documented, and reliable.
+MoonMind MUST provide a “fresh clone → running system” path that is simple,
+documented, reliable, and local-first in any environment that supports Docker
+Compose.
 
 Non-negotiable rules:
 
-- The repo MUST define a canonical “one-click” operator path (for MoonMind, Docker Compose is the default target).
+- The repo MUST define a canonical “one-click” operator path. For MoonMind, that
+  path is `docker compose`.
+- The core system MUST be deployable in any environment with Docker Compose
+  without requiring essential dependencies from an external public cloud.
 - A default deployment MUST start successfully using only:
-  - documented prerequisites (e.g., Docker), and
+  - documented prerequisites (Docker Engine and Docker Compose, or equivalent),
+    and
   - a minimal, clearly documented set of required secrets (if any).
+- Core development, testing, and baseline runtime flows MUST remain available
+  against repo-managed or operator-managed local services. External SaaS or public
+  cloud services MAY be supported, but only as optional integrations or explicit
+  operator choices.
 - All non-secret configuration MUST have smart defaults (safe, functional, and predictable).
 - Optional integrations MUST be either:
   - disabled by default with safe no-op behavior, or
   - enabled by default only if they do not require secrets and do not increase operational risk.
 - Any missing prerequisite MUST fail fast with an actionable error message (what is missing + how to fix it).
 
-Rationale: MoonMind is an operator tool. Setup friction is a feature-killer.
+Rationale: MoonMind is an operator tool. Setup friction and mandatory cloud
+coupling are feature-killers.
 
 ### II. Avoid Vendor Lock-In
 
