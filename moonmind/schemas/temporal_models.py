@@ -7,14 +7,14 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SUPPORTED_WORKFLOW_TYPES = ["MoonMind.Run", "MoonMind.ManifestIngest"]
-SUPPORTED_FAILURE_POLICIES = [
+SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest")
+SUPPORTED_FAILURE_POLICIES = (
     "fail_fast",
     "continue_and_report",
     "best_effort",
-]
-SUPPORTED_UPDATE_NAMES = ["UpdateInputs", "SetTitle", "RequestRerun"]
-SUPPORTED_SIGNAL_NAMES = ["ExternalEvent", "Approve", "Pause", "Resume"]
+)
+SUPPORTED_UPDATE_NAMES = ("UpdateInputs", "SetTitle", "RequestRerun")
+SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Approve", "Pause", "Resume")
 
 
 class CreateExecutionRequest(BaseModel):

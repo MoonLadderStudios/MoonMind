@@ -10,8 +10,8 @@ _FEATURE_DIR_PATTERN = re.compile(r"^(?P<prefix>\d{3})-[a-z0-9-]+$")
 
 
 def test_active_doc_req_feature_traceability_contract() -> None:
-    feature_spec = _find_active_doc_req_feature_spec()
-    assert feature_spec is not None, "Expected at least one DOC-REQ feature spec"
+    feature_spec = _find_active_feature_spec()
+    assert feature_spec is not None, "Expected at least one top-level feature spec"
 
     feature_traceability = (
         feature_spec.parent / "contracts" / "requirements-traceability.md"
@@ -20,7 +20,7 @@ def test_active_doc_req_feature_traceability_contract() -> None:
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_spec}"
+    assert doc_req_ids, f"Expected DOC-REQ entries in the newest feature spec {feature_spec}"
 
     assert feature_traceability.exists(), (
         "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"
@@ -42,9 +42,23 @@ def test_active_doc_req_feature_traceability_contract() -> None:
     )
 
 
-def _find_active_doc_req_feature_spec() -> Path | None:
+def test_find_active_feature_spec_selects_newest_prefix_even_without_doc_req(
+    tmp_path: Path,
+) -> None:
+    specs_root = tmp_path / "specs"
+    older_feature = specs_root / "047-older-feature"
+    newer_feature = specs_root / "048-newer-feature"
+    older_feature.mkdir(parents=True)
+    newer_feature.mkdir(parents=True)
+    (older_feature / "spec.md").write_text("# Spec\nDOC-REQ-001\n", encoding="utf-8")
+    (newer_feature / "spec.md").write_text("# Spec\nNo requirement IDs yet.\n", encoding="utf-8")
+
+    assert _find_active_feature_spec(specs_root) == newer_feature / "spec.md"
+
+
+def _find_active_feature_spec(specs_root: Path = Path("specs")) -> Path | None:
     candidates: list[tuple[int, Path]] = []
-    for child in Path("specs").iterdir():
+    for child in specs_root.iterdir():
         if not child.is_dir():
             continue
 
@@ -54,10 +68,6 @@ def _find_active_doc_req_feature_spec() -> Path | None:
 
         spec_path = child / "spec.md"
         if not spec_path.exists():
-            continue
-
-        spec_text = spec_path.read_text(encoding="utf-8")
-        if not _DOC_REQ_PATTERN.search(spec_text):
             continue
 
         candidates.append((int(match.group("prefix")), spec_path))

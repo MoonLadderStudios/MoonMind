@@ -128,6 +128,28 @@ async def test_create_execution_rejects_unsupported_failure_policy(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_empty_failure_policy(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported failurePolicy",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy="",
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_returns_existing_record_after_idempotency_race(
     tmp_path, monkeypatch
 ):
