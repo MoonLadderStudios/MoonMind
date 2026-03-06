@@ -1,11 +1,11 @@
-import sys
 from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
-    import logging
+    pass
+
 
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
@@ -41,28 +41,42 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: Dict[str, Any]) -> Dict[str, Any]:
-        workflow.logger.info("Starting MoonMind.Run workflow", extra={"input_payload": input_payload})
+        workflow.logger.info(
+            "Starting MoonMind.Run workflow", extra={"input_payload": input_payload}
+        )
 
         # Basic input validation and initialization
         if not isinstance(input_payload, dict):
             raise ValueError("input_payload must be a dictionary")
 
-        workflow_type = input_payload.get("workflowType") or input_payload.get("workflow_type")
+        workflow_type = input_payload.get("workflowType") or input_payload.get(
+            "workflow_type"
+        )
         if not workflow_type:
-             raise ValueError("workflowType is required")
+            raise ValueError("workflowType is required")
 
         self._workflow_type = workflow_type
         self._entry = "run"
         self._title = input_payload.get("title")
         self._owner_id = input_payload.get("ownerId") or input_payload.get("owner_id")
-        self._owner_type = input_payload.get("ownerType") or input_payload.get("owner_type")
+        self._owner_type = input_payload.get("ownerType") or input_payload.get(
+            "owner_type"
+        )
 
-        parameters = input_payload.get("initialParameters") or input_payload.get("initial_parameters") or {}
+        parameters = (
+            input_payload.get("initialParameters")
+            or input_payload.get("initial_parameters")
+            or {}
+        )
         self._repo = parameters.get("repo")
         self._integration = parameters.get("integration")
 
-        input_ref = input_payload.get("inputArtifactRef") or input_payload.get("input_artifact_ref")
-        plan_ref = input_payload.get("planArtifactRef") or input_payload.get("plan_artifact_ref")
+        input_ref = input_payload.get("inputArtifactRef") or input_payload.get(
+            "input_artifact_ref"
+        )
+        plan_ref = input_payload.get("planArtifactRef") or input_payload.get(
+            "plan_artifact_ref"
+        )
 
         self._state = "initializing"
         self._update_search_attributes()
@@ -83,12 +97,19 @@ class MoonMindRunWorkflow:
                     "principal": self._owner_id or "system",
                     "inputs_ref": input_ref,
                     "parameters": parameters,
-                    "execution_ref": {"workflow_id": workflow.info().workflow_id, "run_id": workflow.info().run_id}
+                    "execution_ref": {
+                        "workflow_id": workflow.info().workflow_id,
+                        "run_id": workflow.info().run_id,
+                    },
                 },
                 start_to_close_timeout=timedelta(minutes=15),
-                task_queue="mm-llm"
+                task_queue="mm-llm",
             )
-            plan_ref = plan_result.get("plan_ref") if isinstance(plan_result, dict) else getattr(plan_result, "plan_ref", None)
+            plan_ref = (
+                plan_result.get("plan_ref")
+                if isinstance(plan_result, dict)
+                else getattr(plan_result, "plan_ref", None)
+            )
 
         self._state = "executing"
         self._update_search_attributes()
@@ -103,7 +124,7 @@ class MoonMindRunWorkflow:
                 "timeout_seconds": 300,
             },
             start_to_close_timeout=timedelta(minutes=10),
-            task_queue="mm-sandbox"
+            task_queue="mm-sandbox",
         )
 
         if self._integration:
@@ -121,12 +142,14 @@ class MoonMindRunWorkflow:
                     "parameters": parameters,
                 },
                 start_to_close_timeout=timedelta(minutes=5),
-                task_queue="mm-integrations"
+                task_queue="mm-integrations",
             )
 
             # Simulate a wait cycle loop
             self._wait_cycle_count += 1
-            await workflow.wait_condition(lambda: self._resume_requested or self._cancel_requested)
+            await workflow.wait_condition(
+                lambda: self._resume_requested or self._cancel_requested
+            )
             self._resume_requested = False
             self._awaiting_external = False
 
@@ -140,10 +163,7 @@ class MoonMindRunWorkflow:
         self._close_status = "completed"
         self._update_search_attributes()
 
-        return {
-            "status": "success",
-            "message": "Workflow completed successfully"
-        }
+        return {"status": "success", "message": "Workflow completed successfully"}
 
     def _update_search_attributes(self) -> None:
         attributes: dict[str, Any] = {

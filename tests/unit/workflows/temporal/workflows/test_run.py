@@ -1,25 +1,27 @@
-import asyncio
 import unittest
-from datetime import timedelta
 from typing import Any, Dict
 
 from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
 
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"plan_ref": "artifact://plan/123"}
 
+
 @activity.defn(name="sandbox.command")
 async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"exit_code": 0, "stdout": "executing", "stderr": ""}
 
+
 @activity.defn(name="integration.start")
 async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"correlation_id": "corr-123"}
+
 
 class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
     async def test_moonmind_run_workflow(self) -> None:
@@ -58,8 +60,8 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     "title": "Test Run",
                     "initialParameters": {
                         "repo": "moonladder/moonmind",
-                        "integration": "github"
-                    }
+                        "integration": "github",
+                    },
                 }
 
                 # Start workflow
