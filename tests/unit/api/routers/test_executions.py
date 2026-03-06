@@ -16,9 +16,7 @@ from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.config.settings import settings
 
 
-def _override_user_dependencies(
-    app: FastAPI, *, is_superuser: bool
-) -> SimpleNamespace:
+def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNamespace:
     mock_user = SimpleNamespace(
         id=uuid4(),
         email="executions@example.com",

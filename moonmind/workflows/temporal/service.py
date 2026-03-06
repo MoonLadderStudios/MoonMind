@@ -1640,9 +1640,7 @@ class TemporalExecutionService:
         if owner_id:
             stmt = stmt.where(model.owner_id == owner_id)
         if repo:
-            stmt = stmt.where(
-                model.search_attributes["mm_repo"].as_string() == repo
-            )
+            stmt = stmt.where(model.search_attributes["mm_repo"].as_string() == repo)
         if integration:
             stmt = stmt.where(
                 model.search_attributes["mm_integration"].as_string() == integration
