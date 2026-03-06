@@ -253,6 +253,19 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                     }
                 ),
             },
+            "temporalCompatibility": {
+                "enabled": True,
+                "uiQueryModel": "compatibility_adapter",
+                "list": "/api/executions",
+                "detail": "/api/executions/{workflowId}",
+                "actionExecutionField": "execution",
+                "actionRefreshField": "refresh",
+                "staleStateField": "staleState",
+                "refreshedAtField": "refreshedAt",
+                "countModeField": "countMode",
+                "degradedCountField": "degradedCount",
+                "backgroundRefetchMs": _POLL_INTERVALS_MS["list"],
+            },
         },
     }
 

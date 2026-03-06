@@ -129,6 +129,19 @@ def test_speckit_routes_return_404(client: TestClient) -> None:
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
+def test_temporal_source_routes_return_404_until_first_class_source_exists(
+    client: TestClient,
+) -> None:
+    for path in (
+        "/tasks/temporal",
+        "/tasks/temporal/new",
+        f"/tasks/temporal/{uuid4()}",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+
+
 def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/not-a-valid-dashboard-path")
 

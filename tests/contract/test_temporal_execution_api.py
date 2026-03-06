@@ -65,11 +65,21 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
 
             describe_response = await client.get(f"/api/executions/{workflow_id}")
             assert describe_response.status_code == 200
-            assert describe_response.json()["state"] == "initializing"
-            assert describe_response.json()["temporalStatus"] == "running"
+            describe_body = describe_response.json()
+            assert describe_body["taskId"] == workflow_id
+            assert describe_body["workflowId"] == workflow_id
+            assert describe_body["entry"] == "run"
+            assert describe_body["ownerType"] == "user"
+            assert describe_body["ownerId"] == str(shared_user_id)
+            assert describe_body["title"] == "Contract run"
+            assert describe_body["summary"] == "Execution initialized."
+            assert describe_body["dashboardStatus"] == "queued"
+            assert describe_body["state"] == "initializing"
+            assert describe_body["temporalStatus"] == "running"
+            assert describe_body["artifactRefs"] == ["artifact://input/123"]
 
             update_response = await client.post(
-                f"/api/executions/{workflow_id}/update",
+                f"/api/executions/task:{workflow_id}/update",
                 json={
                     "updateName": "SetTitle",
                     "title": "Renamed title",
@@ -77,30 +87,56 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
                 },
             )
             assert update_response.status_code == 200
-            assert update_response.json()["accepted"] is True
+            update_body = update_response.json()
+            assert update_response.headers.get("Deprecation") == "true"
+            assert (
+                update_response.headers.get("X-MoonMind-Canonical-WorkflowId")
+                == workflow_id
+            )
+            assert update_body["accepted"] is True
+            assert update_body["execution"]["taskId"] == workflow_id
+            assert update_body["execution"]["workflowId"] == workflow_id
+            assert update_body["execution"]["uiQueryModel"] == "compatibility_adapter"
+            assert update_body["refresh"] == {
+                "uiQueryModel": "compatibility_adapter",
+                "patchedExecution": True,
+                "listStale": True,
+                "refetchSuggested": True,
+                "refreshedAt": update_body["refresh"]["refreshedAt"],
+            }
 
             pause_response = await client.post(
                 f"/api/executions/{workflow_id}/signal",
                 json={"signalName": "Pause"},
             )
             assert pause_response.status_code == 202
-            assert pause_response.json()["state"] == "awaiting_external"
+            pause_body = pause_response.json()
+            assert pause_body["state"] == "awaiting_external"
+            assert pause_body["waitingReason"] == "operator_paused"
+            assert pause_body["attentionRequired"] is True
+            assert pause_body["dashboardStatus"] == "awaiting_action"
 
             resume_response = await client.post(
                 f"/api/executions/{workflow_id}/signal",
                 json={"signalName": "Resume"},
             )
             assert resume_response.status_code == 202
-            assert resume_response.json()["state"] == "executing"
+            resume_body = resume_response.json()
+            assert resume_body["state"] == "executing"
+            assert resume_body["waitingReason"] is None
+            assert resume_body["attentionRequired"] is False
+            assert resume_body["dashboardStatus"] == "running"
 
             cancel_response = await client.post(
                 f"/api/executions/{workflow_id}/cancel",
                 json={"reason": "stop"},
             )
             assert cancel_response.status_code == 202
-            assert cancel_response.json()["state"] == "canceled"
-            assert cancel_response.json()["temporalStatus"] == "canceled"
-            assert cancel_response.json()["closeStatus"] == "canceled"
+            cancel_body = cancel_response.json()
+            assert cancel_body["state"] == "canceled"
+            assert cancel_body["temporalStatus"] == "canceled"
+            assert cancel_body["closeStatus"] == "canceled"
+            assert cancel_body["dashboardStatus"] == "cancelled"
 
             post_cancel_update = await client.post(
                 f"/api/executions/{workflow_id}/update",
@@ -171,6 +207,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
                     json={
                         "workflowType": "MoonMind.Run",
                         "title": f"Run-{idx}",
+                        "inputArtifactRef": f"artifact://input/{idx}",
                         "idempotencyKey": f"list-{idx}",
                     },
                 )
@@ -181,18 +218,36 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
 
             first_page = await client.get(
                 "/api/executions",
-                params={"workflowType": "MoonMind.Run", "pageSize": 2},
+                params={
+                    "workflowType": "MoonMind.Run",
+                    "ownerType": "user",
+                    "entry": "run",
+                    "pageSize": 2,
+                },
             )
             assert first_page.status_code == 200
             first_body = first_page.json()
             assert len(first_body["items"]) == 2
             assert first_body["count"] == 3
+            assert first_body["uiQueryModel"] == "compatibility_adapter"
+            assert first_body["staleState"] is False
+            assert first_body["degradedCount"] is False
+            assert first_body["refreshedAt"]
             assert first_body["nextPageToken"]
+            assert all(
+                item["taskId"] == item["workflowId"]
+                for item in first_body["items"]
+            )
+            assert all(item["ownerType"] == "user" for item in first_body["items"])
+            assert all(item["entry"] == "run" for item in first_body["items"])
+            assert all(item["artifactRefs"] == [] for item in first_body["items"])
 
             second_page = await client.get(
                 "/api/executions",
                 params={
                     "workflowType": "MoonMind.Run",
+                    "ownerType": "user",
+                    "entry": "run",
                     "pageSize": 2,
                     "nextPageToken": first_body["nextPageToken"],
                 },
@@ -203,12 +258,38 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
 
             canceled_only = await client.get(
                 "/api/executions",
-                params={"workflowType": "MoonMind.Run", "state": "canceled"},
+                params={
+                    "workflowType": "MoonMind.Run",
+                    "ownerType": "user",
+                    "entry": "run",
+                    "state": "canceled",
+                },
             )
             assert canceled_only.status_code == 200
             canceled_body = canceled_only.json()
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
+            assert canceled_body["items"][0]["dashboardStatus"] == "cancelled"
+
+            stale_token = await client.get(
+                "/api/executions",
+                params={
+                    "workflowType": "MoonMind.Run",
+                    "ownerType": "user",
+                    "entry": "run",
+                    "state": "canceled",
+                    "pageSize": 2,
+                    "nextPageToken": first_body["nextPageToken"],
+                },
+            )
+            assert stale_token.status_code == 422
+            assert stale_token.json()["detail"]["code"] == "invalid_execution_query"
+
+            forbidden = await client.get(
+                "/api/executions",
+                params={"ownerType": "system"},
+            )
+            assert forbidden.status_code == 403
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

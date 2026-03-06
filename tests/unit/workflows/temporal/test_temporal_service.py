@@ -54,12 +54,38 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         )
 
         assert record.workflow_id.startswith("mm:")
+        assert record.owner_type == "user"
+        assert record.owner_id == str(owner_id)
         assert record.state is MoonMindWorkflowState.INITIALIZING
+        assert record.search_attributes["mm_owner_type"] == "user"
         assert record.search_attributes["mm_owner_id"] == str(owner_id)
         assert record.search_attributes["mm_state"] == "initializing"
         assert record.search_attributes["mm_entry"] == "run"
         assert record.memo["title"] == "My run"
         assert record.memo["input_ref"] == "artifact://input/1"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_without_owner_uses_system_visibility_identity(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=None,
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="system-create-1",
+        )
+
+        assert record.owner_type == "system"
+        assert record.owner_id == "system"
+        assert record.search_attributes["mm_owner_type"] == "system"
+        assert record.search_attributes["mm_owner_id"] == "system"
 
 
 @pytest.mark.asyncio
@@ -80,11 +106,14 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             owner_id = uuid4()
             key = "create-race"
 
-            async def race_precheck(*, idempotency_key, owner_id, workflow_type):
+            async def race_precheck(
+                *, idempotency_key, owner_type, owner_id, workflow_type
+            ):
                 if idempotency_key == key:
                     await winner_service.create_execution(
                         workflow_type="MoonMind.Run",
                         owner_id=owner_id,
+                        owner_type=owner_type,
                         title="winner",
                         input_artifact_ref=None,
                         plan_artifact_ref=None,
@@ -238,6 +267,8 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
         )
         paused = await service.describe_execution(created.workflow_id)
         assert paused.state is MoonMindWorkflowState.AWAITING_EXTERNAL
+        assert paused.waiting_reason == "operator_paused"
+        assert paused.attention_required is True
 
         await service.signal_execution(
             workflow_id=created.workflow_id,
@@ -247,6 +278,8 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
         )
         resumed = await service.describe_execution(created.workflow_id)
         assert resumed.state is MoonMindWorkflowState.EXECUTING
+        assert resumed.waiting_reason is None
+        assert resumed.attention_required is False
 
         await service.signal_execution(
             workflow_id=created.workflow_id,
@@ -257,6 +290,7 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
         signaled = await service.describe_execution(created.workflow_id)
         assert "artifact://events/1" in (signaled.artifact_refs or [])
         assert signaled.state is MoonMindWorkflowState.EXECUTING
+        assert signaled.waiting_reason is None
 
 
 @pytest.mark.asyncio
@@ -502,21 +536,210 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
 
         first_page = await service.list_executions(
             workflow_type="MoonMind.Run",
+            owner_type="user",
             state=None,
             owner_id=owner_a,
+            entry="run",
             page_size=2,
             next_page_token=None,
         )
         assert len(first_page.items) == 2
         assert first_page.next_page_token is not None
         assert first_page.count == 3
+        assert all(item.owner_type == "user" for item in first_page.items)
+        assert all(item.entry == "run" for item in first_page.items)
 
         second_page = await service.list_executions(
             workflow_type="MoonMind.Run",
+            owner_type="user",
             state=None,
             owner_id=owner_a,
+            entry="run",
             page_size=2,
             next_page_token=first_page.next_page_token,
         )
         assert len(second_page.items) == 1
         assert second_page.count == 3
+
+
+@pytest.mark.asyncio
+async def test_list_executions_rejects_page_token_scope_changes(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+
+        first = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="first",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="scope-first",
+        )
+        second = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="second",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="scope-second",
+        )
+        await service.cancel_execution(
+            workflow_id=first.workflow_id,
+            reason=None,
+            graceful=True,
+        )
+
+        first_page = await service.list_executions(
+            workflow_type="MoonMind.Run",
+            owner_type="user",
+            state=None,
+            owner_id=owner_id,
+            entry="run",
+            page_size=1,
+            next_page_token=None,
+        )
+
+        assert first_page.next_page_token is not None
+        assert first_page.items[0].workflow_id in {
+            first.workflow_id,
+            second.workflow_id,
+        }
+
+        with pytest.raises(
+            TemporalExecutionValidationError, match="Invalid nextPageToken"
+        ):
+            await service.list_executions(
+                workflow_type="MoonMind.Run",
+                owner_type="user",
+                state="canceled",
+                owner_id=owner_id,
+                entry="run",
+                page_size=1,
+                next_page_token=first_page.next_page_token,
+            )
+
+
+@pytest.mark.asyncio
+async def test_record_progress_noop_does_not_change_recency(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        original_updated_at = created.updated_at
+        original_mm_updated_at = created.search_attributes["mm_updated_at"]
+
+        unchanged = await service.record_progress(
+            workflow_id=created.workflow_id,
+            completed_steps=0,
+            completed_wait_cycles=0,
+        )
+
+        assert unchanged.updated_at == original_updated_at
+        assert unchanged.search_attributes["mm_updated_at"] == original_mm_updated_at
+
+
+@pytest.mark.asyncio
+async def test_describe_execution_canonicalizes_legacy_alias_and_repairs_drift(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="drifted-record",
+        )
+
+        created.owner_type = "service"
+        created.owner_id = "unknown"
+        created.entry = "manifest"
+        created.memo = {"title": "", "summary": ""}
+        created.search_attributes = {
+            "mm_owner_type": "unknown",
+            "mm_owner_id": "unknown",
+        }
+        await session.commit()
+
+        described = await service.describe_execution(f"task:{created.workflow_id}")
+
+        assert described.workflow_id == created.workflow_id
+        assert described.owner_type == "system"
+        assert described.owner_id == "system"
+        assert described.entry == "run"
+        assert described.memo["title"] == "Run"
+        assert described.memo["summary"] == "Execution initialized."
+        assert described.search_attributes["mm_owner_type"] == "system"
+        assert described.search_attributes["mm_owner_id"] == "system"
+        assert described.search_attributes["mm_entry"] == "run"
+        assert described.search_attributes["mm_state"] == "initializing"
+
+
+@pytest.mark.asyncio
+async def test_list_executions_repairs_waiting_metadata_before_serialization(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Waiting run",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="awaiting-repair",
+        )
+
+        await service.mark_execution_awaiting_external(
+            workflow_id=created.workflow_id,
+            waiting_reason="approval_required",
+            attention_required=True,
+        )
+
+        drifted = await service.describe_execution(created.workflow_id)
+        drifted.awaiting_external = False
+        drifted.waiting_reason = None
+        drifted.search_attributes = {}
+        await session.commit()
+
+        page = await service.list_executions(
+            workflow_type="MoonMind.Run",
+            owner_type="user",
+            state="awaiting_external",
+            owner_id=created.owner_id,
+            entry="run",
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert len(page.items) == 1
+        repaired = page.items[0]
+        assert repaired.awaiting_external is True
+        assert repaired.waiting_reason == "unknown_external"
+        assert repaired.attention_required is True
+        assert repaired.search_attributes["mm_state"] == "awaiting_external"
+        assert repaired.search_attributes["mm_entry"] == "run"

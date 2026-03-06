@@ -55,18 +55,6 @@ class UpdateExecutionRequest(BaseModel):
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
 
-class UpdateExecutionResponse(BaseModel):
-    """Outcome from an update command."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    accepted: bool = Field(..., alias="accepted")
-    applied: Literal["immediate", "next_safe_point", "continue_as_new"] = Field(
-        ..., alias="applied"
-    )
-    message: str = Field(..., alias="message")
-
-
 class SignalExecutionRequest(BaseModel):
     """Request payload for asynchronous workflow signals."""
 
@@ -94,14 +82,39 @@ class ExecutionModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     namespace: str = Field(..., alias="namespace")
+    task_id: str = Field(..., alias="taskId")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
     workflow_type: str = Field(..., alias="workflowType")
+    entry: Literal["run", "manifest"] = Field(..., alias="entry")
+    owner_type: Literal["user", "system", "service"] = Field(..., alias="ownerType")
+    owner_id: str = Field(..., alias="ownerId")
     state: str = Field(..., alias="state")
     temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")
+    title: str = Field(..., alias="title")
+    summary: str = Field(..., alias="summary")
+    waiting_reason: Optional[
+        Literal[
+            "approval_required",
+            "external_callback",
+            "external_completion",
+            "operator_paused",
+            "retry_backoff",
+            "unknown_external",
+        ]
+    ] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(..., alias="attentionRequired")
+    dashboard_status: Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "succeeded",
+        "failed",
+        "cancelled",
+    ] = Field(..., alias="dashboardStatus")
     search_attributes: dict[str, Any] = Field(
         default_factory=dict, alias="searchAttributes"
     )
@@ -110,6 +123,39 @@ class ExecutionModel(BaseModel):
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    stale_state: bool = Field(False, alias="staleState")
+    refreshed_at: datetime | None = Field(None, alias="refreshedAt")
+
+
+class ExecutionRefreshEnvelope(BaseModel):
+    """Compatibility metadata for patching one acted-on row and refetching lists."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    patched_execution: bool = Field(..., alias="patchedExecution")
+    list_stale: bool = Field(..., alias="listStale")
+    refetch_suggested: bool = Field(..., alias="refetchSuggested")
+    refreshed_at: datetime = Field(..., alias="refreshedAt")
+
+
+class UpdateExecutionResponse(BaseModel):
+    """Outcome from an update command."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    accepted: bool = Field(..., alias="accepted")
+    applied: Literal["immediate", "next_safe_point", "continue_as_new"] = Field(
+        ..., alias="applied"
+    )
+    message: str = Field(..., alias="message")
+    execution: ExecutionModel | None = Field(None, alias="execution")
+    refresh: ExecutionRefreshEnvelope | None = Field(None, alias="refresh")
 
 
 class ExecutionListResponse(BaseModel):
@@ -123,3 +169,9 @@ class ExecutionListResponse(BaseModel):
     count_mode: Literal["exact", "estimated_or_unknown"] = Field(
         "exact", alias="countMode"
     )
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    stale_state: bool = Field(False, alias="staleState")
+    degraded_count: bool = Field(False, alias="degradedCount")
+    refreshed_at: datetime | None = Field(None, alias="refreshedAt")
