@@ -27,7 +27,7 @@
 | DOC-REQ-014 | `docs/OrchestratorTaskRuntime.md` §5.5 | Dispatch/worker runtime must introduce `orchestrator_task` queue jobs while remaining backward-compatible with legacy `orchestrator_run` jobs. |
 | DOC-REQ-015 | `docs/OrchestratorTaskRuntime.md` §5.6.1, §6 Phase 4 | Executor state persistence must use a state-sink abstraction with DB primary sink, artifact fallback sink, and reconciliation from artifact snapshots when DB recovers. |
 | DOC-REQ-016 | `docs/OrchestratorTaskRuntime.md` §5.6.2 | During queue API heartbeat/lease failures caused by DB outage, the orchestrator worker must continue execution best-effort and reconcile terminal status once connectivity returns. |
-| DOC-REQ-017 | `docs/OrchestratorTaskRuntime.md` §5.7 | Security/policy controls must preserve approval-token gates, block arbitrary command injection via skill args, and align orchestrator route auth with task dashboard auth patterns. |
+| DOC-REQ-017 | `docs/OrchestratorTaskRuntime.md` §5.7 | Security/policy controls must preserve approval-token gates, block arbitrary command injection via skill args, and align orchestrator route auth with Mission Control auth patterns. |
 | DOC-REQ-018 | `docs/OrchestratorTaskRuntime.md` §7 Testing Strategy | Delivery must include validation coverage for dashboard, API aliases/contracts, executor state sink behavior, and queue worker compatibility behavior. |
 | DOC-REQ-019 | Runtime scope guard from task objective | Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests. |
 

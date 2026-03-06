@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
+from moonmind.config.settings import settings
+from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
@@ -124,16 +126,23 @@ def _plan_payload(*, registry_artifact_id: str, registry_digest: str) -> dict:
 
 
 class _FakeJulesClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        create_status: str = "pending",
+        get_status: str = "completed",
+    ) -> None:
         self.created: list[object] = []
         self.lookups: list[object] = []
         self.closed = False
+        self._create_status = create_status
+        self._get_status = get_status
 
     async def create_task(self, request):
         self.created.append(request)
         return JulesTaskResponse(
             taskId="task-001",
-            status="pending",
+            status=self._create_status,
             url="https://jules.test/task-001",
         )
 
@@ -141,7 +150,7 @@ class _FakeJulesClient:
         self.lookups.append(request)
         return JulesTaskResponse(
             taskId=request.task_id,
-            status="completed",
+            status=self._get_status,
             url="https://jules.test/task-001",
         )
 
@@ -462,12 +471,19 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
             assert started.external_id == "task-001"
             assert started.tracking_ref is not None
+            assert started.provider_status == "pending"
+            assert started.normalized_status == "queued"
+            assert started.callback_supported is False
+            assert started.external_url == "https://jules.test/task-001"
 
             status = await activities.integration_jules_status(
                 external_id="task-001",
                 principal="user-1",
             )
             assert status.status == "completed"
+            assert status.provider_status == "completed"
+            assert status.normalized_status == "succeeded"
+            assert status.terminal is True
 
             fetched = await activities.integration_jules_fetch_result(
                 external_id="task-001",
@@ -508,6 +524,108 @@ async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
             assert first.external_id == second.external_id
             assert len(fake_client.created) == 1
             assert fake_client.created[0].metadata["idempotencyKey"] == "idem-jules-1"
+
+
+async def test_jules_start_requires_description_or_inputs_ref(tmp_path: Path):
+    fake_client = _FakeJulesClient()
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalJulesActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            with pytest.raises(
+                TemporalActivityRuntimeError,
+                match="requires parameters.description or inputs_ref",
+            ):
+                await activities.integration_jules_start(
+                    principal="user-1",
+                    parameters={"title": "missing description"},
+                )
+
+            assert fake_client.created == []
+
+
+async def test_jules_start_embeds_correlation_metadata(tmp_path: Path):
+    fake_client = _FakeJulesClient()
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalJulesActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            await activities.integration_jules_start(
+                principal="user-1",
+                correlation_id="corr-jules-1",
+                parameters={"title": "with correlation", "description": "verify"},
+            )
+
+            assert fake_client.created[0].metadata["correlationId"] == "corr-jules-1"
+
+
+async def test_jules_fetch_result_writes_failure_summary_artifact(tmp_path: Path):
+    fake_client = _FakeJulesClient(get_status="failed")
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalJulesActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            fetched = await activities.integration_jules_fetch_result(
+                external_id="task-001",
+                principal="user-1",
+                execution_ref=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-1",
+                    run_id="run-1",
+                    link_type="output.summary",
+                ),
+            )
+
+            assert len(fetched) == 2
+            _artifact, summary_payload = await service.read(
+                artifact_id=fetched[1].artifact_id,
+                principal="user-1",
+            )
+            summary = json.loads(summary_payload.decode("utf-8"))
+            assert summary["providerStatus"] == "failed"
+            assert summary["normalizedStatus"] == "failed"
+            assert summary["externalId"] == "task-001"
+
+
+async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch):
+    monkeypatch.delenv("JULES_ENABLED", raising=False)
+    monkeypatch.delenv("JULES_API_URL", raising=False)
+    monkeypatch.delenv("JULES_API_KEY", raising=False)
+    monkeypatch.setattr(settings.jules, "jules_enabled", False)
+    monkeypatch.setattr(settings.jules, "jules_api_url", None)
+    monkeypatch.setattr(settings.jules, "jules_api_key", None)
+
+    activities = TemporalJulesActivities()
+
+    with pytest.raises(
+        TemporalActivityRuntimeError,
+        match=JULES_RUNTIME_DISABLED_MESSAGE,
+    ):
+        await activities.integration_jules_status(external_id="task-001")
 
 
 async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path):

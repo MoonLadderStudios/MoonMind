@@ -56,7 +56,9 @@ if command -v node >/dev/null 2>&1; then
     for test_file in \
         tests/task_dashboard/test_queue_layouts.js \
         tests/task_dashboard/test_temporal_dashboard.js \
-        tests/task_dashboard/test_submit_runtime.js
+        tests/task_dashboard/test_submit_runtime.js \
+        tests/task_dashboard/test_temporal_detail_runtime.js \
+        tests/task_dashboard/test_temporal_run_history.js
     do
         node "$test_file"
     done

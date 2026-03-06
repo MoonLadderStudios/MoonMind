@@ -17,7 +17,7 @@ MoonMind needs a clearer “what happened?” summary at the end of every queue 
 * **Failure** (and which stage failed) vs
 * **Cancelled**
 
-This document introduces a **Finisher System** that always produces a structured, non-secret **finish summary** for each job and exposes it in the Tasks Dashboard. The existing proposals system remains intact, but becomes a **subset** of finishing behavior: proposals are surfaced as a “finisher output” and linked from the finished run.
+This document introduces a **Finisher System** that always produces a structured, non-secret **finish summary** for each job and exposes it in the Mission Control. The existing proposals system remains intact, but becomes a **subset** of finishing behavior: proposals are surfaced as a “finisher output” and linked from the finished run.
 
 ---
 

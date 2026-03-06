@@ -1,0 +1,536 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Integrations Monitoring API
+  version: 0.1.0
+  description: >
+    Runtime-facing contract for configuring and monitoring external provider work
+    inside Temporal executions. Provider activity payload schemas are included in
+    components to keep workflow/activity contracts aligned with the API layer.
+x-runtime-mode: runtime
+servers:
+  - url: http://localhost:5000
+paths:
+  /api/executions/{workflowId}/integration:
+    post:
+      summary: Configure external integration monitoring for an execution
+      operationId: configureExecutionIntegration
+      tags: [executions, integrations]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigureIntegrationMonitoringRequest'
+      responses:
+        '202':
+          description: Monitoring state accepted and execution moved into or through external wait handling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/executions/{workflowId}/integration/poll:
+    post:
+      summary: Record one provider polling observation for an execution (internal reconciliation/test surface)
+      operationId: recordExecutionIntegrationPoll
+      tags: [executions, integrations]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PollIntegrationRequest'
+      responses:
+        '202':
+          description: Poll result accepted and execution monitoring state updated while workflow-owned durable timers remain authoritative
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/integrations/{integrationName}/callbacks/{callbackCorrelationKey}:
+    post:
+      summary: Ingest a validated provider callback and signal the target execution
+      operationId: ingestIntegrationCallback
+      tags: [integrations]
+      parameters:
+        - $ref: '#/components/parameters/IntegrationName'
+        - $ref: '#/components/parameters/CallbackCorrelationKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationCallbackRequest'
+      responses:
+        '202':
+          description: Callback accepted and correlated execution updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '404':
+          description: No active correlation record matched the callback target
+        '409':
+          description: Callback rejected because it failed validation, dedupe, or lifecycle guards
+  /api/executions/{workflowId}/cancel:
+    post:
+      summary: Request cancellation for a monitored or active execution
+      operationId: cancelExecution
+      tags: [executions]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelExecutionRequest'
+      responses:
+        '202':
+          description: Cancellation request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '404':
+          description: Execution not found
+components:
+  parameters:
+    WorkflowId:
+      name: workflowId
+      in: path
+      required: true
+      schema:
+        type: string
+    IntegrationName:
+      name: integrationName
+      in: path
+      required: true
+      schema:
+        type: string
+    CallbackCorrelationKey:
+      name: callbackCorrelationKey
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    ValidationError:
+      description: Request payload or lifecycle validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    NormalizedIntegrationStatus:
+      type: string
+      enum:
+        - queued
+        - running
+        - succeeded
+        - failed
+        - canceled
+        - unknown
+    ArtifactRef:
+      type: object
+      additionalProperties: false
+      properties:
+        artifact_ref_v:
+          type: integer
+        artifact_id:
+          type: string
+        sha256:
+          type: string
+          nullable: true
+        size_bytes:
+          type: integer
+          nullable: true
+        content_type:
+          type: string
+          nullable: true
+    ConfigureIntegrationMonitoringRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - integrationName
+        - externalOperationId
+        - normalizedStatus
+        - callbackSupported
+      properties:
+        integrationName:
+          type: string
+        correlationId:
+          type: string
+          nullable: true
+        externalOperationId:
+          type: string
+        normalizedStatus:
+          $ref: '#/components/schemas/NormalizedIntegrationStatus'
+        providerStatus:
+          type: string
+          nullable: true
+        callbackSupported:
+          type: boolean
+        callbackCorrelationKey:
+          type: string
+          nullable: true
+        recommendedPollSeconds:
+          type: integer
+          minimum: 1
+          nullable: true
+        externalUrl:
+          type: string
+          nullable: true
+        providerSummary:
+          type: object
+          additionalProperties: true
+        resultRefs:
+          type: array
+          items:
+            type: string
+    PollIntegrationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - normalizedStatus
+      properties:
+        normalizedStatus:
+          $ref: '#/components/schemas/NormalizedIntegrationStatus'
+        providerStatus:
+          type: string
+          nullable: true
+        observedAt:
+          type: string
+          format: date-time
+          nullable: true
+        recommendedPollSeconds:
+          type: integer
+          minimum: 1
+          nullable: true
+        externalUrl:
+          type: string
+          nullable: true
+        providerSummary:
+          type: object
+          additionalProperties: true
+        resultRefs:
+          type: array
+          items:
+            type: string
+        completedWaitCycles:
+          type: integer
+          minimum: 0
+          default: 1
+    IntegrationCallbackRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - eventType
+      properties:
+        source:
+          type: string
+          nullable: true
+        eventType:
+          type: string
+        externalOperationId:
+          type: string
+          nullable: true
+        providerEventId:
+          type: string
+          nullable: true
+        normalizedStatus:
+          $ref: '#/components/schemas/NormalizedIntegrationStatus'
+        providerStatus:
+          type: string
+          nullable: true
+        observedAt:
+          type: string
+          format: date-time
+          nullable: true
+        externalUrl:
+          type: string
+          nullable: true
+        providerSummary:
+          type: object
+          additionalProperties: true
+        payloadArtifactRef:
+          type: string
+          nullable: true
+    CancelExecutionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          nullable: true
+        graceful:
+          type: boolean
+          default: true
+    IntegrationStateModel:
+      type: object
+      additionalProperties: false
+      required:
+        - integrationName
+        - correlationId
+        - externalOperationId
+        - normalizedStatus
+        - startedAt
+        - lastObservedAt
+        - monitorAttemptCount
+        - callbackSupported
+      properties:
+        integrationName:
+          type: string
+        correlationId:
+          type: string
+        externalOperationId:
+          type: string
+        normalizedStatus:
+          $ref: '#/components/schemas/NormalizedIntegrationStatus'
+        providerStatus:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        lastObservedAt:
+          type: string
+          format: date-time
+        monitorAttemptCount:
+          type: integer
+          minimum: 0
+        callbackSupported:
+          type: boolean
+        resultRefs:
+          type: array
+          items:
+            type: string
+        callbackCorrelationKey:
+          type: string
+          nullable: true
+        providerEventIdsSeen:
+          type: array
+          items:
+            type: string
+        nextPollAt:
+          type: string
+          format: date-time
+          nullable: true
+        pollIntervalSeconds:
+          type: integer
+          nullable: true
+        externalUrl:
+          type: string
+          nullable: true
+        providerSummary:
+          type: object
+          additionalProperties: true
+    ExecutionModel:
+      type: object
+      additionalProperties: false
+      required:
+        - namespace
+        - workflowId
+        - runId
+        - workflowType
+        - state
+        - temporalStatus
+        - searchAttributes
+        - memo
+        - artifactRefs
+        - startedAt
+        - updatedAt
+      properties:
+        namespace:
+          type: string
+        workflowId:
+          type: string
+        runId:
+          type: string
+        workflowType:
+          type: string
+        state:
+          type: string
+        temporalStatus:
+          type: string
+          enum: [running, completed, failed, canceled]
+        closeStatus:
+          type: string
+          nullable: true
+        searchAttributes:
+          type: object
+          additionalProperties: true
+        memo:
+          type: object
+          additionalProperties: true
+        artifactRefs:
+          type: array
+          items:
+            type: string
+        integration:
+          allOf:
+            - $ref: '#/components/schemas/IntegrationStateModel'
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+    ErrorResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ProviderStartRequest:
+      type: object
+      description: Activity payload for `integration.<provider>.start`
+      additionalProperties: false
+      required:
+        - correlation_id
+        - idempotency_key
+      properties:
+        correlation_id:
+          type: string
+        idempotency_key:
+          type: string
+        input_refs:
+          type: array
+          items:
+            oneOf:
+              - type: string
+              - $ref: '#/components/schemas/ArtifactRef'
+        parameters:
+          type: object
+          additionalProperties: true
+        callback_metadata:
+          type: object
+          additionalProperties: true
+    ProviderStartResponse:
+      type: object
+      description: Activity result for `integration.<provider>.start`
+      additionalProperties: false
+      required:
+        - external_operation_id
+        - normalized_status
+        - callback_supported
+      properties:
+        external_operation_id:
+          type: string
+        normalized_status:
+          $ref: '#/components/schemas/NormalizedIntegrationStatus'
+        provider_status:
+          type: string
+          nullable: true
+        callback_supported:
+          type: boolean
+        callback_correlation_key:
+          type: string
+          nullable: true
+        recommended_poll_seconds:
+          type: integer
+          nullable: true
+        external_url:
+          type: string
+          nullable: true
+        provider_summary:
+          type: object
+          additionalProperties: true
+    ProviderStatusRequest:
+      type: object
+      description: Activity payload for `integration.<provider>.status`
+      additionalProperties: false
+      required:
+        - external_operation_id
+      properties:
+        external_operation_id:
+          type: string
+    ProviderStatusResponse:
+      type: object
+      description: Activity result for `integration.<provider>.status`
+      additionalProperties: false
+      required:
+        - normalized_status
+        - terminal
+      properties:
+        normalized_status:
+          $ref: '#/components/schemas/NormalizedIntegrationStatus'
+        provider_status:
+          type: string
+          nullable: true
+        terminal:
+          type: boolean
+        recommended_poll_seconds:
+          type: integer
+          nullable: true
+        external_url:
+          type: string
+          nullable: true
+        provider_summary:
+          type: object
+          additionalProperties: true
+    ProviderFetchResultRequest:
+      type: object
+      description: Activity payload for `integration.<provider>.fetch_result`
+      additionalProperties: false
+      required:
+        - external_operation_id
+      properties:
+        external_operation_id:
+          type: string
+        output_destination_hints:
+          type: object
+          additionalProperties: true
+    ProviderFetchResultResponse:
+      type: object
+      description: Activity result for `integration.<provider>.fetch_result`
+      additionalProperties: false
+      properties:
+        output_refs:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+          nullable: true
+        diagnostics_ref:
+          type: string
+          nullable: true
+    ProviderCancelRequest:
+      type: object
+      description: Activity payload for `integration.<provider>.cancel`
+      additionalProperties: false
+      required:
+        - external_operation_id
+      properties:
+        external_operation_id:
+          type: string
+    ProviderCancelResponse:
+      type: object
+      description: Activity result for `integration.<provider>.cancel`
+      additionalProperties: false
+      required:
+        - accepted
+      properties:
+        accepted:
+          type: boolean
+        final_provider_status:
+          type: string
+          nullable: true
+        summary:
+          type: string
+          nullable: true

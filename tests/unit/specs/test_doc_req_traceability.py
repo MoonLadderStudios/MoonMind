@@ -1,29 +1,78 @@
-"""DOC-REQ traceability gate for the active activity-worker-topology feature."""
+"""DOC-REQ traceability gates for contract-backed feature specs."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+import pytest
+
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPEC = Path("specs/047-activity-worker-topology/spec.md")
-_FEATURE_TRACEABILITY = Path(
-    "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+_FEATURES = (
+    (
+        "046-workflow-type-lifecycle",
+        Path("specs/046-workflow-type-lifecycle/spec.md"),
+        Path(
+            "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-activity-worker-topology",
+        Path("specs/047-activity-worker-topology/spec.md"),
+        Path(
+            "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-integrations-monitoring",
+        Path("specs/047-integrations-monitoring/spec.md"),
+        Path(
+            "specs/047-integrations-monitoring/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "048-run-history-rerun",
+        Path("specs/048-run-history-rerun/spec.md"),
+        Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
+    ),
+    (
+        "047-temporal-artifact-presentation",
+        Path("specs/047-temporal-artifact-presentation/spec.md"),
+        Path(
+            "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "048-source-truth-projection",
+        Path("specs/048-source-truth-projection/spec.md"),
+        Path(
+            "specs/048-source-truth-projection/contracts/requirements-traceability.md"
+        ),
+    ),
 )
 
 
-def test_activity_worker_topology_doc_req_traceability_contract() -> None:
-    spec_text = _FEATURE_SPEC.read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    ("feature_name", "feature_spec", "feature_traceability"),
+    _FEATURES,
+    ids=[feature_name for feature_name, *_ in _FEATURES],
+)
+def test_doc_req_traceability_contract(
+    feature_name: str,
+    feature_spec: Path,
+    feature_traceability: Path,
+) -> None:
+    spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, "Expected DOC-REQ entries in 047 spec.md"
+    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_name} spec.md"
 
-    assert _FEATURE_TRACEABILITY.exists(), (
-        "Missing traceability file for DOC-REQ feature: " f"{_FEATURE_TRACEABILITY}"
+    assert feature_traceability.exists(), (
+        "Missing traceability file for DOC-REQ feature: "
+        f"{feature_traceability} ({feature_name})"
     )
-
-    traceability_rows = _parse_traceability_rows(_FEATURE_TRACEABILITY)
+    traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 
     missing_ids = sorted(doc_req_ids - traceability_ids)
@@ -31,11 +80,11 @@ def test_activity_worker_topology_doc_req_traceability_contract() -> None:
 
     assert not missing_ids, (
         "Missing DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(missing_ids)}"
+        f"{feature_traceability}: {', '.join(missing_ids)}"
     )
     assert not extra_ids, (
         "Unexpected DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(extra_ids)}"
+        f"{feature_traceability}: {', '.join(extra_ids)}"
     )
 
 

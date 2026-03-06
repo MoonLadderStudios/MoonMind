@@ -54,9 +54,12 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "executing": "running",
         "awaiting_external": "awaiting_action",
         "finalizing": "running",
+        "running": "running",
         "succeeded": "succeeded",
+        "completed": "succeeded",
         "failed": "failed",
         "canceled": "cancelled",
+        "cancelled": "cancelled",
     },
 }
 

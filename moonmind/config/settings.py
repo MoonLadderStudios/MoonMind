@@ -171,9 +171,30 @@ class TemporalSettings(BaseSettings):
         env="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
         ge=1,
     )
+    integration_poll_initial_seconds: int = Field(
+        5,
+        env="TEMPORAL_INTEGRATION_POLL_INITIAL_SECONDS",
+        ge=1,
+    )
+    integration_poll_max_seconds: int = Field(
+        300,
+        env="TEMPORAL_INTEGRATION_POLL_MAX_SECONDS",
+        ge=1,
+    )
+    integration_poll_jitter_ratio: float = Field(
+        0.2,
+        env="TEMPORAL_INTEGRATION_POLL_JITTER_RATIO",
+        ge=0.0,
+        le=1.0,
+    )
     run_continue_as_new_step_threshold: int = Field(
         500,
         env="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
+        ge=1,
+    )
+    run_continue_as_new_wait_cycle_threshold: int = Field(
+        200,
+        env="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
         ge=1,
     )
     manifest_continue_as_new_phase_threshold: int = Field(

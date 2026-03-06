@@ -35,6 +35,12 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_TASK_ID_SEGMENT = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT = re.compile(
+    r"^mm:[A-Za-z0-9][A-Za-z0-9._:-]{0,123}$"
+)
 _STATIC_PATHS = {
     "list",
     "queue",
@@ -107,6 +113,12 @@ def _is_allowed_path(path: str) -> bool:
         return False
     if path in _BLOCKED_TOP_LEVEL_TASK_IDS:
         return False
+    if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
+        return True
+    if _SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT.fullmatch(path) or (
+        path.startswith("mm:") and _is_safe_detail_segment(path)
+    ):
+        return True
     if path in _STATIC_PATHS:
         return True
     if "/" not in path and _is_safe_detail_segment(path):

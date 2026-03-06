@@ -52,13 +52,20 @@ def _build_execution_record(*, state: MoonMindWorkflowState) -> SimpleNamespace:
             "mm_owner_id": "user-123",
             "mm_owner_type": "user",
             "mm_repo": "Moon/Mind",
+            "mm_continue_as_new_cause": "manual_rerun",
         },
-        memo={"title": "Temporal task", "summary": "Waiting on review."},
+        memo={
+            "title": "Temporal task",
+            "summary": "Waiting on review.",
+            "continue_as_new_cause": "manual_rerun",
+            "latest_temporal_run_id": "run-123",
+        },
         artifact_refs=["art_123"],
         started_at=now,
         updated_at=now,
         closed_at=None,
         owner_id="user-123",
+        integration_state=None,
     )
 
 
@@ -213,9 +220,12 @@ def test_describe_execution_includes_actions_and_debug_fields(
     assert response.status_code == 200
     body = response.json()
     assert body["taskId"] == "mm:workflow-123"
+    assert body["source"] == "temporal"
     assert body["dashboardStatus"] == "awaiting_action"
     assert body["rawState"] == "awaiting_external"
     assert body["temporalRunId"] == "run-123"
+    assert body["latestRunView"] is True
+    assert body["continueAsNewCause"] == "manual_rerun"
     assert body["legacyRunId"] is None
     assert body["waitingReason"] == "Waiting on review."
     assert body["attentionRequired"] is True

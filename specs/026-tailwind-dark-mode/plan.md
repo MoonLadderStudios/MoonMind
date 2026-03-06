@@ -7,7 +7,7 @@
 
 ## Summary
 
-Phase 3 delivers runtime dark mode for the task dashboard by adding a token-driven dark palette, a user-visible theme toggle, preference persistence, and no-flash first paint behavior while keeping existing FastAPI routing and semantic UI classes intact. Implementation is constrained to dashboard template/JS/CSS assets and generated CSS output. Validation focuses on persistence precedence (user over system), first-render correctness, and readability across tables/forms/live output while preserving purple-primary accent hierarchy with restrained warm highlights.
+Phase 3 delivers runtime dark mode for the Mission Control by adding a token-driven dark palette, a user-visible theme toggle, preference persistence, and no-flash first paint behavior while keeping existing FastAPI routing and semantic UI classes intact. Implementation is constrained to dashboard template/JS/CSS assets and generated CSS output. Validation focuses on persistence precedence (user over system), first-render correctness, and readability across tables/forms/live output while preserving purple-primary accent hierarchy with restrained warm highlights.
 
 ## Technical Context
 

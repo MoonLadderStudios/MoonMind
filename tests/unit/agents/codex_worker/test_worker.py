@@ -6379,11 +6379,13 @@ async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     assert len(records) == 1
     record = records[0]
     assert record.task_id == "task-123"
-    assert record.status == "completed"
+    assert record.status == "succeeded"
+    assert record.provider_status == "completed"
     assert record.url == "https://github.com/example/repo/pull/42"
     assert record.failed is False
     assert record.error is None
-    assert record.status_history == ("pending", "running", "completed")
+    assert record.status_history == ("queued", "running", "succeeded")
+    assert record.provider_status_history == ("pending", "running", "completed")
 
 
 async def test_finish_reports_include_jules_runtime_artifact(
@@ -6434,14 +6436,16 @@ async def test_finish_reports_include_jules_runtime_artifact(
             step_index=0,
             total_steps=1,
             task_id="task-123",
-            status="completed",
+            status="succeeded",
+            provider_status="completed",
             url="https://github.com/example/repo/pull/42",
             submitted_at=started_at.isoformat(),
             last_polled_at=finished_at.isoformat(),
             completed_at=finished_at.isoformat(),
             failed=False,
             error=None,
-            status_history=("pending", "running", "completed"),
+            status_history=("queued", "running", "succeeded"),
+            provider_status_history=("pending", "running", "completed"),
         )
     ]
 
@@ -6479,8 +6483,13 @@ async def test_finish_reports_include_jules_runtime_artifact(
     runtime_report_path = tmp_path / "artifacts" / "reports" / "jules_runtime.json"
     runtime_payload = json.loads(runtime_report_path.read_text(encoding="utf-8"))
     assert runtime_payload["provider"] == "jules"
+    assert runtime_payload["providerCancelSupported"] is False
     assert runtime_payload["taskCount"] == 1
+    assert runtime_payload["latestStatus"] == "succeeded"
+    assert runtime_payload["latestProviderStatus"] == "completed"
     assert runtime_payload["tasks"][0]["taskId"] == "task-123"
+    assert runtime_payload["tasks"][0]["status"] == "succeeded"
+    assert runtime_payload["tasks"][0]["providerStatus"] == "completed"
 
 
 async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
@@ -6764,10 +6773,12 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
                 "runtime": "jules",
                 "externalTaskId": "task-resume-1",
                 "status": "running",
+                "providerStatus": "running",
                 "url": "https://jules.example.test/tasks/task-resume-1",
                 "submittedAt": datetime.now(UTC).isoformat(),
                 "lastPolledAt": datetime.now(UTC).isoformat(),
                 "statusHistory": ["pending", "running"],
+                "providerStatusHistory": ["pending", "running"],
             },
             "task": {
                 "instructions": "Resume existing Jules task",
@@ -6821,6 +6832,232 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     last_state = queue.runtime_state_updates[-1]["runtime_state"]
     assert isinstance(last_state, dict)
     assert last_state.get("externalTaskId") == "task-resume-1"
+    assert last_state.get("status") == "succeeded"
+    assert last_state.get("providerStatus") == "completed"
+
+
+async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Jules worker cancellation should not fake provider-side cancellation support."""
+
+    class _FakeJulesTask:
+        def __init__(self, *, task_id: str, status: str, url: str | None) -> None:
+            self.task_id = task_id
+            self.status = status
+            self.url = url
+
+    class _FakeJulesClient:
+        def __init__(self, **kwargs) -> None:
+            _ = kwargs
+
+        async def create_task(self, request):
+            _ = request
+            return _FakeJulesTask(
+                task_id="task-cancel-1",
+                status="pending",
+                url="https://jules.example.test/tasks/task-cancel-1",
+            )
+
+        async def get_task(self, request):
+            _ = request
+            return _FakeJulesTask(
+                task_id="task-cancel-1",
+                status="running",
+                url="https://jules.example.test/tasks/task-cancel-1",
+            )
+
+        async def resolve_task(self, request):
+            raise AssertionError("worker must not call resolve_task for cancellation")
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.JulesClient",
+        _FakeJulesClient,
+    )
+
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "jules",
+            "task": {
+                "instructions": "Cancel this Jules task",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "jules"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job, None])
+    queue.cancel_requested_at = datetime.now(UTC).isoformat()
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-jules",
+            worker_token=None,
+            poll_interval_ms=1,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="jules",
+            worker_capabilities=("jules", "git", "gh"),
+            allowed_types=("task",),
+            jules_enabled=True,
+            jules_api_url="https://jules.example.test",
+            jules_api_key="test-key",
+            jules_poll_interval_seconds=30.0,
+            jules_max_inflight=15,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    first_tick = await worker.run_once()
+    assert first_tick is True
+
+    second_tick = await worker.run_once()
+    assert second_tick is True
+    assert queue.completed == []
+    assert queue.failed == []
+    assert len(queue.cancel_acks) == 1
+    assert queue.cancel_acks[0][1] == "cancellation requested"
+    finish_summary = queue.cancel_ack_finish_payloads[0]["finishSummary"]
+    assert isinstance(finish_summary, dict)
+    assert finish_summary["finishOutcome"]["code"] == "CANCELLED"
+    assert finish_summary["finishOutcome"]["reason"] == "cancellation requested"
+    assert finish_summary["externalRuntime"]["providerCancelSupported"] is False
+    assert finish_summary["externalRuntime"]["tasks"][0]["status"] == "canceled"
+    assert finish_summary["externalRuntime"]["tasks"][0]["providerStatus"] == "pending"
+    assert (
+        finish_summary["externalRuntime"]["tasks"][0]["error"]
+        == "provider-side cancellation unsupported; MoonMind canceled without remote cancel"
+    )
+    assert any(
+        event["message"] == "runtime.jules.cancel.unsupported" for event in queue.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_jules_worker_resume_preserves_canceled_checkpoint_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _FakeJulesTask:
+        def __init__(self, *, task_id: str, status: str, url: str | None) -> None:
+            self.task_id = task_id
+            self.status = status
+            self.url = url
+
+    class _FakeJulesClient:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        async def create_task(self, request):
+            _ = request
+            return _FakeJulesTask(
+                task_id="task-unexpected",
+                status="pending",
+                url="https://jules.example.test/tasks/task-unexpected",
+            )
+
+        async def get_task(self, request):
+            raise AssertionError(
+                "resumed canceled checkpoints must not re-poll provider status"
+            )
+
+        async def resolve_task(self, request):
+            _ = request
+            return _FakeJulesTask(task_id="cancelled", status="cancelled", url=None)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.JulesClient",
+        _FakeJulesClient,
+    )
+
+    submitted_at = datetime.now(UTC).isoformat()
+    completed_at = datetime.now(UTC).isoformat()
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "jules",
+            "runtimeState": {
+                "runtime": "jules",
+                "externalTaskId": "task-canceled-1",
+                "status": "canceled",
+                "providerStatus": "pending",
+                "url": "https://jules.example.test/tasks/task-canceled-1",
+                "submittedAt": submitted_at,
+                "lastPolledAt": submitted_at,
+                "completedAt": completed_at,
+                "statusHistory": ["pending", "running", "canceled"],
+                "providerStatusHistory": ["pending", "running", "pending"],
+                "error": (
+                    "provider-side cancellation unsupported; "
+                    "MoonMind canceled without remote cancel"
+                ),
+            },
+            "task": {
+                "instructions": "Resume canceled Jules task",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "jules"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job, None, None])
+    queue.cancel_requested_at = completed_at
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-jules",
+            worker_token=None,
+            poll_interval_ms=1,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="jules",
+            worker_capabilities=("jules", "git", "gh"),
+            allowed_types=("task",),
+            jules_enabled=True,
+            jules_api_url="https://jules.example.test",
+            jules_api_key="test-key",
+            jules_poll_interval_seconds=0.001,
+            jules_max_inflight=15,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    first_tick = await worker.run_once()
+    assert first_tick is True
+    state = worker._jules_inflight_runs[job.id]
+    assert state.jules_status == "canceled"
+    assert state.jules_provider_status == "pending"
+
+    second_tick = await worker.run_once()
+    assert second_tick is True
+    assert len(queue.cancel_acks) == 1
+    finish_summary = queue.cancel_ack_finish_payloads[0]["finishSummary"]
+    assert isinstance(finish_summary, dict)
+    assert finish_summary["finishOutcome"]["code"] == "CANCELLED"
+    assert finish_summary["externalRuntime"]["tasks"][0]["status"] == "canceled"
+    assert finish_summary["externalRuntime"]["tasks"][0]["providerStatus"] == "pending"
 
 
 @pytest.fixture
@@ -8264,6 +8501,78 @@ async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None
 
     assert config.default_codex_model == "gpt-5.3-codex"
     assert config.default_codex_effort == "xhigh"
+
+
+async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
+    """Gemini worker config should default to the supported production model."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.default_gemini_model == "gemini-3.1-pro"
+
+
+async def test_config_from_env_parses_gemini_allowed_tools(monkeypatch) -> None:
+    """Gemini allowed tools should parse from a comma-separated env override."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv(
+        "MOONMIND_GEMINI_ALLOWED_TOOLS",
+        "run_shell_command, activate_skill,run_shell_command,write_file",
+    )
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.gemini_allowed_tools == (
+        "run_shell_command",
+        "activate_skill",
+        "write_file",
+    )
+
+
+async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
+    tmp_path: Path,
+) -> None:
+    """Gemini runtime commands should allow worker-required tools in non-interactive mode."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="gemini",
+        gemini_allowed_tools=(
+            "activate_skill",
+            "run_shell_command",
+            "replace",
+            "write_file",
+        ),
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    command = worker._build_non_codex_runtime_command(
+        runtime_mode="gemini",
+        instruction="resolve the task",
+        model="gemini-2.5-pro",
+        effort="high",
+    )
+
+    assert command[:3] == ["gemini", "--prompt", "resolve the task"]
+    assert "--allowed-tools" in command
+    allowed_tools_index = command.index("--allowed-tools")
+    assert command[allowed_tools_index + 1] == (
+        "activate_skill,run_shell_command,replace,write_file"
+    )
+    assert command[-4:] == ["--model", "gemini-2.5-pro", "--effort", "high"]
 
 
 async def test_resolve_task_auth_context_includes_git_identity_without_token(

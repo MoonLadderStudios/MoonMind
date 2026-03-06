@@ -46,7 +46,7 @@ This document narrows several open items from the lifecycle doc so frontend and 
 - Memo registry for list/detail presentation.
 - Canonical list/detail field model for Temporal-backed rows.
 - Allowed filters, sort order, recency rules, pagination, and counts.
-- Compatibility mapping into current task dashboard status/grouping semantics.
+- Compatibility mapping into current Mission Control status/grouping semantics.
 - Migration rules for adapter APIs and unified task surfaces.
 
 ### 3.2 Out of scope
@@ -403,7 +403,7 @@ Implementation guidance:
 
 ---
 
-## 10. Compatibility status mapping for the current task dashboard
+## 10. Compatibility status mapping for the current Mission Control
 
 The current dashboard uses broad normalized task statuses such as:
 
@@ -426,7 +426,7 @@ Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provi
 | Exact Temporal-backed state | Compatibility dashboard status | Notes |
 | --- | --- | --- |
 | `initializing` | `queued` | Not yet materially executing user work. |
-| `planning` | `queued` | Still pre-execution from a task dashboard perspective. |
+| `planning` | `queued` | Still pre-execution from a Mission Control perspective. |
 | `executing` | `running` | Active execution. |
 | `awaiting_external` | `awaiting_action` | Compatibility grouping only; detail must still show exact `awaiting_external`. |
 | `finalizing` | `running` | Still in-flight, not terminal. |
@@ -438,7 +438,7 @@ Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provi
 
 `awaiting_external` does **not** always mean the current user must take action.
 
-For current task dashboard compatibility surfaces, it maps to `awaiting_action` because that is the nearest existing grouped status. Exact detail views must still show `awaiting_external` so the product can later distinguish:
+For current Mission Control compatibility surfaces, it maps to `awaiting_action` because that is the nearest existing grouped status. Exact detail views must still show `awaiting_external` so the product can later distinguish:
 
 - approval required,
 - webhook wait,
@@ -688,7 +688,6 @@ If the projection and Temporal-backed canonical execution metadata drift, the sy
 
 ### 15.3 Transitional gaps to retire
 
-- use of `"unknown"` as a non-user owner placeholder in the current adapter/projection layer
 - compatibility dashboards that collapse all waiting states into a generic action-required label
 - any task-oriented payload that hides `workflowId` in raw/debug-only metadata
 
@@ -713,8 +712,7 @@ This document is operationally done when:
 
 ## 17. Open follow-ups
 
-1. Implement `mm_owner_type` and remove `"unknown"` from the adapter/projection layer.
-2. Add `entry` and `ownerType` filters to the public adapter API.
-3. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields to adapter payloads.
-4. Decide when `mm_repo` and `mm_integration` become required for specific workflow families.
-5. Decide whether `/api/executions` remains an adapter surface or evolves into a stable public product API after task compatibility layers retire.
+1. Add `entry` and `ownerType` filters to the public adapter API.
+2. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields to adapter payloads.
+3. Decide when `mm_repo` and `mm_integration` become required for specific workflow families.
+4. Decide whether `/api/executions` remains an adapter surface or evolves into a stable public product API after task compatibility layers retire.
