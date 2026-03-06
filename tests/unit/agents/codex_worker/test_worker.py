@@ -6950,6 +6950,12 @@ async def test_jules_worker_resume_preserves_canceled_checkpoint_status(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    class _FakeJulesTask:
+        def __init__(self, *, task_id: str, status: str, url: str | None) -> None:
+            self.task_id = task_id
+            self.status = status
+            self.url = url
+
     class _FakeJulesClient:
         def __init__(self, *args, **kwargs):
             _ = (args, kwargs)
