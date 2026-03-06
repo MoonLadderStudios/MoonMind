@@ -123,21 +123,39 @@ Rules:
 - `runId` must not replace `workflowId` as the primary product handle.
 - UI detail pages may show `runId`, but should label it as run/debug metadata.
 
+### 5.2.1 Compatibility identifier bridge
+
+MoonMind's current dashboard contract is still task-oriented (`/tasks/list`, `/tasks/:taskId`), so this document makes the identifier bridge explicit.
+
+Rules:
+
+- for any Temporal-backed row exposed through a task-oriented compatibility surface, `taskId` **must equal** `workflowId`;
+- task-oriented APIs may return both `taskId` and `workflowId` during migration, but they must carry the same durable value for Temporal-backed work;
+- compatibility adapters must not mint a second opaque identifier for the same Temporal execution;
+- if MoonMind temporarily accepts a legacy alias, the server must resolve it and redirect/canonicalize to the `workflowId`-based route;
+- `runId` must never be used as the route identifier for task-oriented detail pages.
+
+This keeps the current task UI stable without introducing an alias table that would become another migration dependency.
+
 ### 5.3 Canonical list row fields
 
 A Temporal-backed list row should be expressible with the following stable fields:
 
 - `workflowId`
+- `taskId?` (required only on task-oriented compatibility surfaces; equal to `workflowId`)
 - `workflowType`
 - `entry` (`run` or `manifest`)
 - `state` (`mm_state` exact value)
 - `temporalStatus` (`running | completed | failed | canceled`)
 - `title`
 - `summary`
+- `ownerType`
 - `ownerId`
 - `updatedAt`
 - `startedAt`
 - `closedAt?`
+- `waitingReason?`
+- `attentionRequired?`
 - `dashboardStatus` (compatibility grouping only)
 
 Adapter APIs may still return raw `searchAttributes` and `memo` blobs, but UI consumers should prefer stable top-level fields when available.
@@ -149,6 +167,8 @@ A Temporal-backed detail model may additionally include:
 - `runId`
 - `closeStatus`
 - `artifactRefs[]`
+- `waitingReason?`
+- `attentionRequired?`
 - raw `searchAttributes`
 - raw `memo`
 - optional debug metadata or reconciliation metadata
@@ -174,7 +194,8 @@ All MoonMind-owned Search Attributes for this query model follow these rules:
 
 | Name | Type | Required | Lifecycle owner | Update rule | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `mm_owner_id` | keyword | Yes | API/workflow start path | Set at start; treat as immutable for v1 | User UUID/string for user-owned runs. Current implementation uses `"unknown"` when no owner is present. |
+| `mm_owner_type` | keyword | Yes | API/workflow start path | Set at start; treat as immutable for v1 | `user`, `system`, or `service`. Distinguishes end-user-owned runs from operator/platform-owned runs. |
+| `mm_owner_id` | keyword | Yes | API/workflow start path | Set at start; treat as immutable for v1 | Principal identifier. For `user`, use the user UUID/string. For `system`, use the reserved value `system`. For `service`, use a stable bounded service name. |
 | `mm_state` | keyword | Yes | Workflow lifecycle logic | Update on every domain state transition | Exact MoonMind lifecycle state. |
 | `mm_updated_at` | datetime | Yes | Workflow lifecycle logic | Update on every meaningful user-visible mutation | Default recency and sort key. |
 | `mm_entry` | keyword | Yes | Workflow start path | Set at start; immutable | `run` or `manifest`. |
@@ -222,6 +243,21 @@ Rules:
   - failed / terminated / timed out -> `failed`
   - canceled -> `canceled`
 
+#### `mm_owner_type`
+
+Allowed values for v1:
+
+- `user`
+- `system`
+- `service`
+
+Rules:
+
+- `mm_owner_type` and `mm_owner_id` must always be populated together.
+- `unknown` is not an allowed target-state owner identifier.
+- standard end-user list/detail surfaces must only expose executions where `mm_owner_type = user` and `mm_owner_id` matches the authenticated principal, unless an explicit operator/admin path says otherwise.
+- operator/admin surfaces may list `system` and `service` executions, but must preserve exact owner metadata rather than collapsing those rows into user-owned views.
+
 ### 6.6 Stronger v1 decision on `mm_entry`
 
 Earlier drafts described `mm_entry` as optional. MoonMind now treats it as **required for v1** because:
@@ -265,6 +301,7 @@ Earlier drafts described `mm_entry` as optional. MoonMind now treats it as **req
 The allowed exact-match filter set for Temporal-managed list queries is:
 
 - `workflowType`
+- `ownerType`
 - `ownerId`
 - `state`
 - `entry`
@@ -284,6 +321,7 @@ These already exist in the current `/api/executions` adapter surface.
 #### Required next
 
 - `entry`
+- `ownerType`
 
 This should be added before the dashboard starts depending on Temporal-backed list filtering in earnest.
 
@@ -312,8 +350,9 @@ Ownership is not just a filter; it is part of authorization.
 Rules:
 
 - standard users are implicitly scoped to their own executions,
+- standard users must not see `system` or `service` executions on user-facing task pages unless a product surface is explicitly designed for that purpose,
 - non-admin callers must not query another user’s executions,
-- admin/operator callers may filter by `ownerId` or omit it.
+- admin/operator callers may filter by `ownerType`, `ownerId`, or omit them.
 
 The UI should not offer an arbitrary owner picker to normal end users.
 
@@ -406,6 +445,28 @@ For current task dashboard compatibility surfaces, it maps to `awaiting_action` 
 - external completion wait,
 - paused by operator.
 
+### 10.4 Required wait metadata
+
+To avoid misleading users, Temporal-backed rows in `awaiting_external` should also expose:
+
+- `waitingReason`: bounded value describing why progress is blocked
+- `attentionRequired`: boolean indicating whether the current operator/user is expected to act
+
+Allowed `waitingReason` values for v1:
+
+- `approval_required`
+- `external_callback`
+- `external_completion`
+- `operator_paused`
+- `retry_backoff`
+- `unknown_external`
+
+Rules:
+
+- `waitingReason` should be set whenever `state = awaiting_external`;
+- `attentionRequired = true` only when progress is blocked on a human/operator action exposed by the current product surface;
+- compatibility dashboards may keep the broad `awaiting_action` bucket temporarily, but they must not imply user action is required when `attentionRequired = false`.
+
 ---
 
 ## 11. Pagination and count strategy
@@ -465,6 +526,19 @@ During migration, a unified page should do one of the following:
 
 It must not reuse Temporal page tokens as if they were universal task-list tokens.
 
+### 11.6 Freshness and degraded-read behavior
+
+During migration, MoonMind should assume list surfaces can be temporarily less fresh than the detail/action response that just mutated one execution.
+
+Rules:
+
+- the response from a successful update, signal, cancel, or rerun action is the authoritative immediate view for that execution;
+- list pages should patch the acted-on row from the action response when possible, then trigger a background refetch for the active query;
+- clients must not infer that unrelated rows were refreshed just because one action completed;
+- if `countMode != exact`, the UI must not present a precise total or page count as authoritative;
+- when `count` is omitted, pagination should rely only on `nextPageToken` and visible rows, not on synthetic totals;
+- list/detail views should expose a visible refresh timestamp or equivalent stale-state indicator on operator-facing surfaces.
+
 ---
 
 ## 12. Canonical adapter projection for UI consumers
@@ -475,14 +549,18 @@ When an adapter API exposes Temporal-backed data to UI consumers, it should prom
 
 - `workflowId`
 - `runId`
+- `taskId`
 - `workflowType`
 - `entry`
+- `ownerType`
 - `ownerId`
 - `state`
 - `temporalStatus`
 - `closeStatus`
 - `title`
 - `summary`
+- `waitingReason`
+- `attentionRequired`
 - `updatedAt`
 - `startedAt`
 - `closedAt`
@@ -538,9 +616,11 @@ If MoonMind adds a first-class `temporal` source to the dashboard, the minimum r
 
 If the dashboard continues to stay task-oriented for now, compatibility adapters must still preserve:
 
-- `workflowId` somewhere in the payload or debug metadata,
+- `taskId == workflowId` for Temporal-backed rows,
+- `workflowId` as a first-class field rather than only in debug metadata,
 - exact Temporal-backed `state` and `temporalStatus`,
 - the canonical `updatedAt` ordering semantics,
+- `waitingReason` / `attentionRequired` when `state = awaiting_external`,
 - the `dashboardStatus` mapping defined above.
 
 ---
@@ -554,6 +634,7 @@ During migration, any app DB projection or adapter cache that mirrors Temporal-m
 - `workflowId`
 - `runId`
 - `workflowType`
+- `mm_owner_type`
 - `mm_owner_id`
 - `mm_state`
 - `mm_updated_at`
@@ -581,9 +662,9 @@ If the projection and Temporal-backed canonical execution metadata drift, the sy
 
 ## 15. Implementation status against this document
 
-### 15.1 Already implemented
+### 15.1 Implemented today in the current adapter/projection layer
 
-- required Search Attributes: `mm_owner_id`, `mm_state`, `mm_updated_at`, `mm_entry`
+- Search Attribute-style projection fields: `mm_owner_id`, `mm_state`, `mm_updated_at`, `mm_entry`
 - required Memo fields: `title`, `summary`
 - optional Memo refs: `input_ref`, `manifest_ref`
 - exact list filters: `workflowType`, `state`, `ownerId`
@@ -593,14 +674,23 @@ If the projection and Temporal-backed canonical execution metadata drift, the sy
 - update/signal/cancel adapter endpoints
 - Continue-As-New behavior for rerun-style updates while preserving `workflowId`
 
-### 15.2 Not yet implemented or not yet finalized
+### 15.2 Not yet implemented in true Temporal Visibility-backed query execution
 
 - Visibility-native query/count as the actual backend for `/api/executions`
+- `mm_owner_type` as a first-class Visibility field
+- `ownerType` filter on the public adapter API
 - `entry` filter on the public adapter API
 - `repo` and `integration` filters
 - first-class `temporal` dashboard source
+- task-surface enforcement of `taskId == workflowId` for Temporal-backed rows
 - canonical top-level `title` / `summary` / `entry` fields on adapter list rows
-- a non-user owner sentinel better than `unknown`
+- canonical top-level `ownerType`, `waitingReason`, and `attentionRequired` fields
+
+### 15.3 Transitional gaps to retire
+
+- use of `"unknown"` as a non-user owner placeholder in the current adapter/projection layer
+- compatibility dashboards that collapse all waiting states into a generic action-required label
+- any task-oriented payload that hides `workflowId` in raw/debug-only metadata
 
 ---
 
@@ -614,14 +704,17 @@ This document is operationally done when:
 4. Compatibility status mapping is fixed.
 5. Pagination token rules and count semantics are fixed.
 6. Adapter/projection layers are explicitly bound to these semantics.
-7. The UI path for Temporal-backed rows is chosen: compatibility-only for now, or first-class `temporal` source.
+7. The identifier bridge for task-oriented surfaces is fixed (`taskId == workflowId` for Temporal-backed rows).
+8. Owner semantics are fixed (`mm_owner_type` + `mm_owner_id`, no `unknown` in the target contract).
+9. Waiting-state metadata is fixed (`waitingReason` + `attentionRequired`).
+10. The UI path for Temporal-backed rows is chosen: compatibility-only for now, or first-class `temporal` source.
 
 ---
 
 ## 17. Open follow-ups
 
-1. Replace `unknown` with a stronger sentinel such as `system` for non-user-owned executions.
-2. Decide whether the current dashboard should continue to collapse `awaiting_external` into `awaiting_action`, or introduce a distinct waiting label.
-3. Decide when `entry` becomes a required public API filter, not just an internal Search Attribute.
+1. Implement `mm_owner_type` and remove `"unknown"` from the adapter/projection layer.
+2. Add `entry` and `ownerType` filters to the public adapter API.
+3. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields to adapter payloads.
 4. Decide when `mm_repo` and `mm_integration` become required for specific workflow families.
 5. Decide whether `/api/executions` remains an adapter surface or evolves into a stable public product API after task compatibility layers retire.
