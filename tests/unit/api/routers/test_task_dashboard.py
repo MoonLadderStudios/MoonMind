@@ -22,6 +22,10 @@ from api_service.api.routers.task_dashboard import (
 from moonmind.workflows.agent_queue.service import QueueJobPage
 
 
+def _build_mock_temporal_service() -> AsyncMock:
+    return AsyncMock()
+
+
 @contextmanager
 def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
@@ -37,7 +41,7 @@ def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     app.dependency_overrides[_get_service] = lambda: mock_service
-    app.dependency_overrides[_get_temporal_service] = lambda: AsyncMock()
+    app.dependency_overrides[_get_temporal_service] = _build_mock_temporal_service
 
     with TestClient(app) as test_client:
         yield test_client, mock_service

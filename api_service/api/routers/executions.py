@@ -33,6 +33,10 @@ from moonmind.workflows.temporal import (
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 
+_MAX_TASK_TITLE_LENGTH = 120
+_MAX_TASK_SUMMARY_LENGTH = 180
+_TASK_SUMMARY_ELLIPSIS = "..."
+
 
 def _is_execution_admin(user: User | None) -> bool:
     return bool(user and getattr(user, "is_superuser", False))
@@ -223,6 +227,42 @@ def _coerce_artifact_ref(value: Any) -> str | None:
     return None
 
 
+def _invalid_task_request(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "invalid_execution_request",
+            "message": message,
+        },
+    )
+
+
+def _coerce_string_list(value: Any, *, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _invalid_task_request(f"{field_name} must be a JSON array of strings.")
+
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise _invalid_task_request(
+                f"{field_name} must be a JSON array of strings."
+            )
+        candidate = item.strip()
+        if candidate:
+            normalized.append(candidate)
+    return normalized
+
+
+def _coerce_step_count(value: Any) -> int:
+    if value is None:
+        return 0
+    if not isinstance(value, list):
+        raise _invalid_task_request("payload.task.steps must be a JSON array.")
+    return len(value)
+
+
 def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
@@ -233,7 +273,7 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     first_line = instructions.splitlines()[0].strip()
     if not first_line:
         return None
-    return first_line[:120]
+    return first_line[:_MAX_TASK_TITLE_LENGTH]
 
 
 def _derive_task_summary(
@@ -242,8 +282,9 @@ def _derive_task_summary(
     instructions = str(task_payload.get("instructions") or "").strip()
     if instructions:
         normalized = " ".join(instructions.split())
-        if len(normalized) > 180:
-            return f"{normalized[:177]}..."
+        if len(normalized) > _MAX_TASK_SUMMARY_LENGTH:
+            preview_length = _MAX_TASK_SUMMARY_LENGTH - len(_TASK_SUMMARY_ELLIPSIS)
+            return f"{normalized[:preview_length]}{_TASK_SUMMARY_ELLIPSIS}"
         return normalized
     if input_artifact_ref:
         return f"Task instructions stored in artifact {input_artifact_ref}."
@@ -257,24 +298,22 @@ async def _create_execution_from_task_request(
     user: User,
 ) -> ExecutionModel:
     if str(request.type).strip().lower() != "task":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "invalid_execution_request",
-                "message": "Only task-shaped submit requests can be mapped to Temporal executions.",
-            },
+        raise _invalid_task_request(
+            "Only task-shaped submit requests can be mapped to Temporal executions."
         )
 
     payload = request.payload if isinstance(request.payload, dict) else {}
     task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else {}
     if not task_payload:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "invalid_execution_request",
-                "message": "Task-shaped Temporal submit requests require payload.task.",
-            },
+        raise _invalid_task_request(
+            "Task-shaped Temporal submit requests require payload.task."
         )
+
+    required_capabilities = _coerce_string_list(
+        payload.get("requiredCapabilities"),
+        field_name="payload.requiredCapabilities",
+    )
+    step_count = _coerce_step_count(task_payload.get("steps"))
 
     repository = str(payload.get("repository") or "").strip() or None
     integration = (
@@ -302,7 +341,7 @@ async def _create_execution_from_task_request(
     initial_parameters = {
         "requestType": request.type,
         "repository": repository,
-        "requiredCapabilities": list(payload.get("requiredCapabilities") or []),
+        "requiredCapabilities": required_capabilities,
         "priority": request.priority,
         "maxAttempts": request.max_attempts,
         "targetRuntime": payload.get("targetRuntime") or runtime_payload.get("mode"),
@@ -310,7 +349,7 @@ async def _create_execution_from_task_request(
         "effort": runtime_payload.get("effort"),
         "publishMode": ((task_payload.get("publish") or {}).get("mode")),
         "proposeTasks": bool(task_payload.get("proposeTasks")),
-        "stepCount": len(task_payload.get("steps") or []),
+        "stepCount": step_count,
     }
 
     try:
@@ -456,7 +495,7 @@ async def list_executions(
                 },
             )
         effective_owner = _owner_id(user)
-        effective_owner_type = "user"
+        effective_owner_type = "user" if owner_type == "user" else None
 
     try:
         result = await service.list_executions(

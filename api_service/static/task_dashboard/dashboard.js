@@ -8395,6 +8395,111 @@
     return `<div class="actions" data-temporal-actions>${buttons.join("")}</div>`;
   }
 
+  async function fetchTemporalDetailData(workflowId) {
+    const execution = await fetchJson(
+      endpoint(
+        temporalSourceConfig.detail || "/api/executions/{workflowId}",
+        { workflowId },
+      ),
+    );
+    const latestWorkflowId = String(pick(execution, "workflowId") || workflowId).trim();
+    const latestRunId = String(pick(execution, "temporalRunId", "runId") || "").trim();
+    const artifacts = latestRunId
+      ? await fetchJson(
+          endpoint(
+            temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+            {
+              namespace: pick(execution, "namespace") || "moonmind",
+              workflowId: latestWorkflowId,
+              temporalRunId: latestRunId,
+            },
+          ),
+        ).catch(() => ({ artifacts: [] }))
+      : { artifacts: [] };
+    return { execution, latestWorkflowId, latestRunId, artifacts };
+  }
+
+  function renderTemporalDebugSection(execution, latestWorkflowId) {
+    if (!temporalDebugFieldsEnabled) {
+      return "";
+    }
+    return `
+      <section>
+        <h3>Debug Metadata</h3>
+        <div class="grid-2">
+          <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
+          <div class="card"><strong>Temporal Run ID:</strong> <code>${escapeHtml(String(pick(execution, "temporalRunId", "runId") || "-"))}</code></div>
+          <div class="card"><strong>Namespace:</strong> ${escapeHtml(String(pick(execution, "namespace") || "-"))}</div>
+          <div class="card"><strong>Temporal Status:</strong> ${escapeHtml(String(pick(execution, "temporalStatus") || "-"))}</div>
+          <div class="card"><strong>Raw State:</strong> ${escapeHtml(String(pick(execution, "state") || "-"))}</div>
+          <div class="card"><strong>Close Status:</strong> ${escapeHtml(String(pick(execution, "closeStatus") || "-"))}</div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderTemporalDetailMarkup(detail) {
+    const {
+      execution,
+      latestWorkflowId,
+      latestRunId,
+      artifacts,
+      memo,
+      waitingReason,
+      detailTitle,
+      attentionRequired,
+      noticeHtml,
+      debugFields,
+    } = detail;
+    return `
+      ${noticeHtml}
+      <div class="grid-2">
+        <div class="card"><strong>Status:</strong> ${statusBadge("temporal", pick(execution, "state"))}</div>
+        <div class="card"><strong>Source:</strong> Temporal</div>
+        <div class="card"><strong>Title:</strong> ${escapeHtml(detailTitle)}</div>
+        <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(pick(execution, "workflowType") || "-"))}</div>
+        <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
+        <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
+        <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
+        <div class="card"><strong>Closed:</strong> ${escapeHtml(formatTimestamp(pick(execution, "closedAt")))}</div>
+        <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
+      </div>
+      <section>
+        <h3>Summary</h3>
+        <p>${escapeHtml(String(pick(memo, "summary") || "-"))}</p>
+      </section>
+      ${
+        waitingReason
+          ? `<section><h3>Waiting Reason</h3><p>${escapeHtml(waitingReason)}</p></section>`
+          : ""
+      }
+      ${
+        attentionRequired
+          ? "<section><h3>Attention Required</h3><p>This task is waiting for external input before it can continue.</p></section>"
+          : ""
+      }
+      ${renderTemporalActionButtons(execution)}
+      <section>
+        <h3>Timeline</h3>
+        <table>
+          <thead><tr><th>Stage</th><th>Timestamp</th><th>Detail</th></tr></thead>
+          <tbody>${buildTemporalTimeline(execution)}</tbody>
+        </table>
+      </section>
+      <section>
+        <h3>Artifacts</h3>
+        <table>
+          <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>${
+            renderTemporalArtifactRows(artifacts?.artifacts || []) ||
+            "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
+          }</tbody>
+        </table>
+      </section>
+      ${debugFields}
+    `;
+  }
+
   async function renderTemporalDetailPage(workflowId) {
     setView(
       "Temporal Task Detail",
@@ -8546,26 +8651,8 @@
 
     const load = async (silent = false) => {
       try {
-        const execution = await fetchJson(
-          endpoint(
-            temporalSourceConfig.detail || "/api/executions/{workflowId}",
-            { workflowId },
-          ),
-        );
-        const latestWorkflowId = String(pick(execution, "workflowId") || workflowId).trim();
-        const latestRunId = String(pick(execution, "temporalRunId", "runId") || "").trim();
-        const artifacts = latestRunId
-          ? await fetchJson(
-              endpoint(
-                temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
-                {
-                  namespace: pick(execution, "namespace") || "moonmind",
-                  workflowId: latestWorkflowId,
-                  temporalRunId: latestRunId,
-                },
-              ),
-            ).catch(() => ({ artifacts: [] }))
-          : { artifacts: [] };
+        const { execution, latestWorkflowId, latestRunId, artifacts } =
+          await fetchTemporalDetailData(workflowId);
         const memo = pick(execution, "memo") || {};
         const waitingReason = temporalWaitingReason(execution);
         const detailTitle = resolveTemporalWorkflowTitle(
@@ -8576,74 +8663,25 @@
           pick(execution, "attentionRequired")
             || String(pick(execution, "state") || "").trim().toLowerCase() === "awaiting_external",
         );
-        const debugFields = temporalDebugFieldsEnabled
-          ? `
-              <section>
-                <h3>Debug Metadata</h3>
-                <div class="grid-2">
-                  <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
-                  <div class="card"><strong>Temporal Run ID:</strong> <code>${escapeHtml(String(pick(execution, "temporalRunId", "runId") || "-"))}</code></div>
-                  <div class="card"><strong>Namespace:</strong> ${escapeHtml(String(pick(execution, "namespace") || "-"))}</div>
-                  <div class="card"><strong>Temporal Status:</strong> ${escapeHtml(String(pick(execution, "temporalStatus") || "-"))}</div>
-                  <div class="card"><strong>Raw State:</strong> ${escapeHtml(String(pick(execution, "state") || "-"))}</div>
-                  <div class="card"><strong>Close Status:</strong> ${escapeHtml(String(pick(execution, "closeStatus") || "-"))}</div>
-                </div>
-              </section>
-            `
-          : "";
+        const debugFields = renderTemporalDebugSection(execution, latestWorkflowId);
         const noticeHtml = detailNotice
           ? `<div class="notice ${escapeHtml(detailNoticeLevel)}">${escapeHtml(detailNotice)}</div>`
           : "";
         setView(
           "Temporal Task Detail",
           detailTitle,
-          `
-            ${noticeHtml}
-            <div class="grid-2">
-              <div class="card"><strong>Status:</strong> ${statusBadge("temporal", pick(execution, "state"))}</div>
-              <div class="card"><strong>Source:</strong> Temporal</div>
-              <div class="card"><strong>Title:</strong> ${escapeHtml(detailTitle)}</div>
-              <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(pick(execution, "workflowType") || "-"))}</div>
-              <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
-              <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
-              <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
-              <div class="card"><strong>Closed:</strong> ${escapeHtml(formatTimestamp(pick(execution, "closedAt")))}</div>
-              <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
-            </div>
-            <section>
-              <h3>Summary</h3>
-              <p>${escapeHtml(String(pick(memo, "summary") || "-"))}</p>
-            </section>
-            ${
-              waitingReason
-                ? `<section><h3>Waiting Reason</h3><p>${escapeHtml(waitingReason)}</p></section>`
-                : ""
-            }
-            ${
-              attentionRequired
-                ? "<section><h3>Attention Required</h3><p>This task is waiting for external input before it can continue.</p></section>"
-                : ""
-            }
-            ${renderTemporalActionButtons(execution)}
-            <section>
-              <h3>Timeline</h3>
-              <table>
-                <thead><tr><th>Stage</th><th>Timestamp</th><th>Detail</th></tr></thead>
-                <tbody>${buildTemporalTimeline(execution)}</tbody>
-              </table>
-            </section>
-            <section>
-              <h3>Artifacts</h3>
-              <table>
-                <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
-                <tbody>${
-                  renderTemporalArtifactRows(artifacts?.artifacts || []) ||
-                  "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
-                }</tbody>
-              </table>
-            </section>
-            ${debugFields}
-          `,
+          renderTemporalDetailMarkup({
+            execution,
+            latestWorkflowId,
+            latestRunId,
+            artifacts,
+            memo,
+            waitingReason,
+            detailTitle,
+            attentionRequired,
+            noticeHtml,
+            debugFields,
+          }),
           { showAutoRefreshControls: true },
         );
         attachTemporalActionHandlers(execution, load);

@@ -16,7 +16,9 @@ from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.config.settings import settings
 
 
-def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> None:
+def _override_user_dependencies(
+    app: FastAPI, *, is_superuser: bool
+) -> SimpleNamespace:
     mock_user = SimpleNamespace(
         id=uuid4(),
         email="executions@example.com",
@@ -34,6 +36,7 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> None:
         user_dependencies = {get_current_user()}
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
+    return mock_user
 
 
 def _build_execution_record(*, state: MoonMindWorkflowState) -> SimpleNamespace:
@@ -117,6 +120,77 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "execution_forbidden"
     mock_service.list_executions.assert_not_awaited()
+
+
+def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.list_executions.return_value = SimpleNamespace(
+        items=[],
+        next_page_token=None,
+        count=0,
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    mock_user = _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions")
+
+    assert response.status_code == 200
+    kwargs = mock_service.list_executions.await_args.kwargs
+    assert kwargs["owner_id"] == str(mock_user.id)
+    assert kwargs["owner_type"] is None
+
+
+def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.list_executions.return_value = SimpleNamespace(
+        items=[],
+        next_page_token=None,
+        count=0,
+    )
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    mock_user = _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as client:
+        response = client.get("/api/executions", params={"ownerType": "user"})
+
+    assert response.status_code == 200
+    kwargs = mock_service.list_executions.await_args.kwargs
+    assert kwargs["owner_id"] == str(mock_user.id)
+    assert kwargs["owner_type"] == "user"
+
+
+def test_create_task_shaped_execution_rejects_invalid_required_capabilities() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=False)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "requiredCapabilities": 1,
+                    "task": {
+                        "instructions": "Ship the Temporal integration.",
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "payload.requiredCapabilities must be a JSON array of strings."
+    )
+    mock_service.create_execution.assert_not_awaited()
 
 
 def test_describe_execution_includes_actions_and_debug_fields(
