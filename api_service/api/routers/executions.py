@@ -153,7 +153,6 @@ def _serialize_execution(
     search_attributes = dict(record.search_attributes or {})
     integration_state = getattr(record, "integration_state", None)
     state_value = _enum_value(record.state) or ""
-    owner_type_value = _enum_value(getattr(record, "owner_type", None)) or "system"
     workflow_type_value = _enum_value(record.workflow_type) or ""
     continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
         "mm_continue_as_new_cause"
