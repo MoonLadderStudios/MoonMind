@@ -6,7 +6,7 @@ Last Updated: 2026-03-05
 
 ## 1. Purpose
 
-This document defines the **high-level architecture** of MoonMind's task system and Tasks Dashboard.
+This document defines the **high-level architecture** of MoonMind's task system and Mission Control.
 
 It intentionally stays broad. Detailed UI behavior, route-level contracts, payload examples, and page interaction rules are documented in `docs/TaskUiArchitecture.md`.
 
@@ -23,9 +23,9 @@ MoonMind's task system has expanded beyond a single queue submit/list flow. The 
 - Shared task preset/template catalog support for task authoring workflows.
 - Queue run operations (cancellation, live sessions, operator controls/messages) surfaced in the dashboard.
 
-The broader platform is also introducing a Temporal foundation for durable workflow execution, but the task dashboard remains the primary product surface and still operates over queue/orchestrator APIs during this migration phase.
+The broader platform is also introducing a Temporal foundation for durable workflow execution, but the Mission Control remains the primary product surface and still operates over queue/orchestrator APIs during this migration phase.
 
-The Tasks Dashboard is now the primary control-plane UI for these task-adjacent workflows.
+The Mission Control is now the primary control-plane UI for these task-adjacent workflows.
 
 ---
 
@@ -33,7 +33,7 @@ The Tasks Dashboard is now the primary control-plane UI for these task-adjacent 
 
 ```mermaid
 flowchart LR
-  U[Authenticated User] --> D[Tasks Dashboard UI]
+  U[Authenticated User] --> D[Mission Control UI]
   D --> Q[Agent Queue APIs]
   D --> O[Orchestrator APIs]
   D --> P[Task Proposal APIs]
@@ -61,7 +61,7 @@ flowchart LR
 
 ## 4. Dashboard Responsibilities (Broad)
 
-The Tasks Dashboard provides one place to:
+The Mission Control provides one place to:
 
 - Monitor active and historical work across queue and orchestrator systems.
 - Submit new work requests (queue task, orchestrator task, manifest run).

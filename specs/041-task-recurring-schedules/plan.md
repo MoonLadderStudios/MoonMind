@@ -13,7 +13,7 @@ Deliver the recurring scheduling system described in `docs/TaskRecurringSchedule
 **Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Alembic migrations, Pydantic v2 models, existing Agent Queue service/repository, manifest service integration  
 **Storage**: PostgreSQL as source of truth (`recurring_task_definitions`, `recurring_task_runs`), SQLite in unit/integration-style tests  
 **Testing**: `./tools/test_unit.sh` for unit/contract suites; `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests` for orchestrator integration validation  
-**Target Platform**: Docker Compose deployment (`api`, `scheduler`, queue workers) and Tasks Dashboard routes under `/tasks/schedules*`  
+**Target Platform**: Docker Compose deployment (`api`, `scheduler`, queue workers) and Mission Control routes under `/tasks/schedules*`  
 **Project Type**: Web API + dashboard frontend + background scheduler daemon  
 **Performance Goals**: Meet SC-003 dispatch latency target (due occurrences dispatched within one poll interval plus jitter under normal load) while preserving one logical dispatch artifact per occurrence  
 **Constraints**: Minute-level cron only, timezone/DST correctness, no raw secret material in schedule definitions, HA-safe idempotent dispatch, effectively-once enqueue semantics (not exactly-once worker execution), deferred optional manifest YAML schedule import for v1, runtime-mode delivery with production code and tests  

@@ -3,7 +3,7 @@
 **Feature Branch**: `025-tailwind-dashboard`  
 **Created**: 2026-02-18  
 **Status**: Draft  
-**Input**: Implement phase 2 of the Tailwind Style System for the tasks dashboard (tokenize colors, purple/cyan gradients, brand alignment).
+**Input**: Implement phase 2 of the Tailwind Style System for the Mission Control (tokenize colors, purple/cyan gradients, brand alignment).
 
 ## User Scenarios & Testing *(mandatory)*
 

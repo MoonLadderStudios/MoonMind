@@ -2,7 +2,7 @@
 
 ## Scope
 
-Defines runtime behavior for theme selection and application on task dashboard routes under `/tasks`.
+Defines runtime behavior for theme selection and application on Mission Control routes under `/tasks`.
 
 ## API Surface Impact
 

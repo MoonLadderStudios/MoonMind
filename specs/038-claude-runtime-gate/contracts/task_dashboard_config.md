@@ -1,4 +1,4 @@
-# Contract — Task Dashboard Runtime Config
+# Contract — Mission Control Runtime Config
 
 ## Endpoint
 `GET /api/task-dashboard/config` (internally uses `build_runtime_config(initial_path)`)

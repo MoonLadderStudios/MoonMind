@@ -49,7 +49,7 @@
   - `last_run_job_id` (UUID, nullable): Most recent queue job.
   - `last_run_status` (string, nullable): Job outcome for dashboard linking.
 
-## Tasks Dashboard Category Metadata
+## Mission Control Category Metadata
 - **Fields**:
   - `category` (string): `Manifests` (new tab/filter).
   - `submitForm`: { `manifestName`, `manifestSource`, `action`, `dryRun`, `priority` }.

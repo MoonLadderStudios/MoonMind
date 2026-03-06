@@ -6,9 +6,9 @@ Last Updated: 2026-03-06
 
 ## 1. Purpose
 
-Define how the existing MoonMind Tasks Dashboard integrates **Temporal-managed executions** and related artifact flows without replacing the current task-oriented product surface in one step.
+Define how the existing MoonMind Mission Control integrates **Temporal-managed executions** and related artifact flows without replacing the current task-oriented product surface in one step.
 
-This document is intentionally **UI- and integration-focused**. It does not redefine the full Temporal architecture, worker topology, artifact storage internals, or the general task dashboard architecture. Instead, it defines:
+This document is intentionally **UI- and integration-focused**. It does not redefine the full Temporal architecture, worker topology, artifact storage internals, or the general Mission Control architecture. Instead, it defines:
 
 - how Temporal-backed work appears inside `/tasks*`
 - which routes, runtime config entries, and source adapters the dashboard needs
@@ -52,7 +52,7 @@ The current canonical routes remain:
 - `/tasks/new`
 - `/tasks/:taskId`
 
-The current unified detail flow is source-aware but only supports queue and orchestrator detail behavior. The current task dashboard architecture also explicitly keeps task compatibility surfaces as the active product contract during migration.
+The current unified detail flow is source-aware but only supports queue and orchestrator detail behavior. The current Mission Control architecture also explicitly keeps task compatibility surfaces as the active product contract during migration.
 
 Separately, the repo now already exposes Temporal-facing API surfaces:
 
