@@ -6,8 +6,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # Alembic revision identifiers.
-revision = "202603060001"
-down_revision = "202603050002"
+revision = "202603060004"
+down_revision = "202603060003"
 
 
 def upgrade() -> None:

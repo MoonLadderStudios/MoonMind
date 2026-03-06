@@ -14,8 +14,13 @@ import sys
 raise SystemExit(main(["--fleet", sys.argv[1], "--describe-json"]))
 PY
 
+if [ -n "${TEMPORAL_WORKER_COMMAND:-}" ]; then
+  exec sh -lc "$TEMPORAL_WORKER_COMMAND"
+fi
+
 if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
 
-exec python -m moonmind.workflows.temporal.workers --fleet "$FLEET"
+echo "No Temporal worker runtime command configured for fleet '$FLEET'." >&2
+exit 64

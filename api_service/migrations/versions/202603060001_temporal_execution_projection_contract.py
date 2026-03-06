@@ -123,9 +123,8 @@ def upgrade() -> None:
         (temporal_executions.c.owner_id == "system", 0),
         else_=1,
     )
-    rows = (
-        bind.execution_options(stream_results=True)
-        .execute(
+    rows = list(
+        bind.execute(
             sa.select(
                 temporal_executions.c.workflow_id,
                 temporal_executions.c.workflow_type,
@@ -137,8 +136,7 @@ def upgrade() -> None:
                 temporal_executions.c.started_at,
                 temporal_executions.c.updated_at,
             ).order_by(owner_priority, temporal_executions.c.workflow_id)
-        )
-        .mappings()
+        ).mappings()
     )
 
     now = datetime.now(UTC)

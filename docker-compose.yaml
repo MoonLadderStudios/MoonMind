@@ -80,7 +80,7 @@ services:
       - MODEL_CONTEXT_PROTOCOL_PORT=5000
       - MODEL_CONTEXT_PROTOCOL_HOST=0.0.0.0
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
@@ -100,6 +100,7 @@ services:
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
+      - temporal-network
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
@@ -169,8 +170,10 @@ services:
       temporal-db:
         condition: service_healthy
     networks:
-      - temporal-network
-      - local-network
+      temporal-network:
+        aliases:
+          - temporal-internal
+      local-network:
     restart: unless-stopped
 
   minio:
@@ -188,12 +191,13 @@ services:
       - minio-data:/data
     networks:
       - local-network
+      - temporal-network
     restart: unless-stopped
 
   temporal-namespace-init:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
     environment:
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       - TEMPORAL_NAMESPACE_RETENTION_DAYS=${TEMPORAL_NAMESPACE_RETENTION_DAYS:-}
       - TEMPORAL_RETENTION_MAX_STORAGE_GB=${TEMPORAL_RETENTION_MAX_STORAGE_GB:-100}
@@ -241,7 +245,7 @@ services:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
     profiles: ["temporal-tools"]
     environment:
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
     command: sh -lc "sleep infinity"
     depends_on:
       temporal:
@@ -257,7 +261,7 @@ services:
     image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.34.0}
     profiles: ["temporal-ui"]
     environment:
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
     ports:
       - "${TEMPORAL_UI_HOST_PORT:-8088}:8080"
     depends_on:
@@ -278,7 +282,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       - TEMPORAL_WORKER_FLEET=workflow
       - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
@@ -312,7 +316,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       - TEMPORAL_WORKER_FLEET=artifacts
       - TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE=${TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE:-mm.activity.artifacts}
@@ -353,7 +357,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       - TEMPORAL_WORKER_FLEET=llm
       - TEMPORAL_ACTIVITY_LLM_TASK_QUEUE=${TEMPORAL_ACTIVITY_LLM_TASK_QUEUE:-mm.activity.llm}
@@ -391,7 +395,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       - TEMPORAL_WORKER_FLEET=sandbox
       - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
@@ -428,7 +432,7 @@ services:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal:7233}
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
       - TEMPORAL_WORKER_FLEET=integrations
       - TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE=${TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE:-mm.activity.integrations}

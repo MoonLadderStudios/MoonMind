@@ -8,8 +8,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "202603060002"
-down_revision: str | None = "202603060001"
+revision: str = "202603060006"
+down_revision: str | None = "202603060005"
 __all__: Sequence[str] = ("revision", "down_revision")
 
 

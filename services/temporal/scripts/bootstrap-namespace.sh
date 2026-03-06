@@ -5,6 +5,12 @@ log() {
   printf '[temporal-bootstrap] %s\n' "$*"
 }
 
+run_temporal_cli() {
+  temporal "$@" \
+    --client-connect-timeout 5s \
+    --command-timeout 5s
+}
+
 TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-temporal:7233}"
 TEMPORAL_NAMESPACE="${TEMPORAL_NAMESPACE:-moonmind}"
 TEMPORAL_NAMESPACE_RETENTION_DAYS="${TEMPORAL_NAMESPACE_RETENTION_DAYS:-}"
@@ -75,11 +81,11 @@ attempt=0
 while :; do
   attempt=$((attempt + 1))
   if [ "$CLI_KIND" = "temporal" ]; then
-    if temporal operator cluster health --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
+    if run_temporal_cli operator cluster health --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
       break
     fi
   else
-    if tctl --address "$TEMPORAL_ADDRESS" cluster health >/dev/null 2>&1; then
+    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 cluster health >/dev/null 2>&1; then
       break
     fi
   fi
@@ -97,36 +103,36 @@ log "Temporal is healthy. Ensuring namespace ${TEMPORAL_NAMESPACE}."
 if [ "$CLI_KIND" = "temporal" ]; then
   retention_hours=$((EFFECTIVE_RETENTION_DAYS * 24))
 
-  if temporal operator namespace describe \
+  if run_temporal_cli operator namespace describe \
     --address "$TEMPORAL_ADDRESS" \
     --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
     log "Namespace exists; updating retention to ${retention_hours}h."
-    temporal operator namespace update \
+    run_temporal_cli operator namespace update \
       --address "$TEMPORAL_ADDRESS" \
       --namespace "$TEMPORAL_NAMESPACE" \
       --retention "${retention_hours}h"
   else
     log "Namespace does not exist; creating with retention ${retention_hours}h."
-    temporal operator namespace create \
+    run_temporal_cli operator namespace create \
       --address "$TEMPORAL_ADDRESS" \
       --namespace "$TEMPORAL_NAMESPACE" \
       --description "MoonMind runtime workflows" \
       --retention "${retention_hours}h"
   fi
 else
-  if tctl --address "$TEMPORAL_ADDRESS" namespace describe --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1 \
-    || tctl --address "$TEMPORAL_ADDRESS" namespace describe "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
+  if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace describe --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1 \
+    || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace describe "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
     log "Namespace exists; updating retention to ${EFFECTIVE_RETENTION_DAYS} days."
-    tctl --address "$TEMPORAL_ADDRESS" namespace update \
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace update \
       --namespace "$TEMPORAL_NAMESPACE" \
       --rd "${EFFECTIVE_RETENTION_DAYS}" \
       >/dev/null 2>&1 \
-      || tctl --address "$TEMPORAL_ADDRESS" namespace update \
+      || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace update \
         --namespace "$TEMPORAL_NAMESPACE" \
         --retention "${EFFECTIVE_RETENTION_DAYS}"
   else
     log "Namespace does not exist; creating with retention ${EFFECTIVE_RETENTION_DAYS} days."
-    tctl --address "$TEMPORAL_ADDRESS" namespace register \
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace register \
       --rd "${EFFECTIVE_RETENTION_DAYS}" \
       --description "MoonMind runtime workflows" \
       --namespace "$TEMPORAL_NAMESPACE"
