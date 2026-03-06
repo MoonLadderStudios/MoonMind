@@ -272,9 +272,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
             assert body["temporalRunId"] == body["runId"]
             assert body["legacyRunId"] is None
             assert body["redirectPath"] == f"/tasks/{body['taskId']}?source=temporal"
-            assert (
-                body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
-            )
+            assert body["searchAttributes"]["mm_repo"] == "MoonLadderStudios/MoonMind"
             assert body["memo"]["input_ref"] == "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"
             assert (
                 body["memo"]["summary"]

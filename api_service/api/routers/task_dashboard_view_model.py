@@ -248,9 +248,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "detailEnabled": bool(temporal_dashboard.detail_enabled),
                 "actionsEnabled": bool(temporal_dashboard.actions_enabled),
                 "submitEnabled": bool(temporal_dashboard.submit_enabled),
-                "debugFieldsEnabled": bool(
-                    temporal_dashboard.debug_fields_enabled
-                ),
+                "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             }
         },
         "system": {

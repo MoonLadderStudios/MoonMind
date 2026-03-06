@@ -9,11 +9,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from moonmind.schemas.agent_queue_models import CreateJobRequest
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import TemporalExecutionCloseStatus, User
 from moonmind.config.settings import settings
+from moonmind.schemas.agent_queue_models import CreateJobRequest
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     CreateExecutionRequest,
@@ -85,7 +85,9 @@ def _serialize_execution(record) -> ExecutionModel:
     raw_state = record.state.value
     waiting_reason = None
     if raw_state == "awaiting_external":
-        waiting_reason = str(dict(record.memo or {}).get("summary") or "").strip() or None
+        waiting_reason = (
+            str(dict(record.memo or {}).get("summary") or "").strip() or None
+        )
     attention_required = raw_state == "awaiting_external"
     actions = _build_action_capabilities(record)
     debug_fields = _build_debug_fields(
@@ -234,7 +236,9 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     return first_line[:120]
 
 
-def _derive_task_summary(task_payload: dict[str, Any], input_artifact_ref: str | None) -> str:
+def _derive_task_summary(
+    task_payload: dict[str, Any], input_artifact_ref: str | None
+) -> str:
     instructions = str(task_payload.get("instructions") or "").strip()
     if instructions:
         normalized = " ".join(instructions.split())
@@ -273,11 +277,14 @@ async def _create_execution_from_task_request(
         )
 
     repository = str(payload.get("repository") or "").strip() or None
-    integration = str(
-        payload.get("integration")
-        or (payload.get("metadata") or {}).get("integration")
-        or ""
-    ).strip() or None
+    integration = (
+        str(
+            payload.get("integration")
+            or (payload.get("metadata") or {}).get("integration")
+            or ""
+        ).strip()
+        or None
+    )
     input_artifact_ref = _coerce_artifact_ref(
         task_payload.get("inputArtifactRef") or payload.get("inputArtifactRef")
     )
@@ -288,7 +295,9 @@ async def _create_execution_from_task_request(
         task_payload.get("manifestArtifactRef") or payload.get("manifestArtifactRef")
     )
     runtime_payload = (
-        task_payload.get("runtime") if isinstance(task_payload.get("runtime"), dict) else {}
+        task_payload.get("runtime")
+        if isinstance(task_payload.get("runtime"), dict)
+        else {}
     )
     initial_parameters = {
         "requestType": request.type,
@@ -314,7 +323,8 @@ async def _create_execution_from_task_request(
             manifest_artifact_ref=manifest_artifact_ref,
             failure_policy=None,
             initial_parameters=initial_parameters,
-            idempotency_key=task_payload.get("idempotencyKey") or payload.get("idempotencyKey"),
+            idempotency_key=task_payload.get("idempotencyKey")
+            or payload.get("idempotencyKey"),
             repository=repository,
             integration=integration,
             summary=_derive_task_summary(task_payload, input_artifact_ref),

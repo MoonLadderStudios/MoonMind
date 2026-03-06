@@ -119,20 +119,15 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     )
     assert config["sources"]["temporal"]["list"] == "/api/executions"
     assert config["sources"]["temporal"]["create"] == "/api/executions"
+    assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
     assert (
-        config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
+        config["sources"]["temporal"]["update"] == "/api/executions/{workflowId}/update"
     )
     assert (
-        config["sources"]["temporal"]["update"]
-        == "/api/executions/{workflowId}/update"
+        config["sources"]["temporal"]["signal"] == "/api/executions/{workflowId}/signal"
     )
     assert (
-        config["sources"]["temporal"]["signal"]
-        == "/api/executions/{workflowId}/signal"
-    )
-    assert (
-        config["sources"]["temporal"]["cancel"]
-        == "/api/executions/{workflowId}/cancel"
+        config["sources"]["temporal"]["cancel"] == "/api/executions/{workflowId}/cancel"
     )
     assert (
         config["sources"]["temporal"]["artifacts"]

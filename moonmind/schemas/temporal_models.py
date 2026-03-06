@@ -151,9 +151,7 @@ class ExecutionModel(BaseModel):
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"
     )
-    debug_fields: Optional[ExecutionDebugFieldsModel] = Field(
-        None, alias="debugFields"
-    )
+    debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
     redirect_path: Optional[str] = Field(None, alias="redirectPath")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")

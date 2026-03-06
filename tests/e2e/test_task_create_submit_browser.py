@@ -295,7 +295,10 @@ def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server
                             "temporalStatus": "running",
                             "waitingReason": "Waiting on approval.",
                             "attentionRequired": True,
-                            "memo": {"title": "Temporal task", "summary": "Waiting on approval."},
+                            "memo": {
+                                "title": "Temporal task",
+                                "summary": "Waiting on approval.",
+                            },
                             "startedAt": "2026-03-06T10:00:00Z",
                             "updatedAt": "2026-03-06T11:00:00Z",
                             "actions": {
@@ -353,7 +356,9 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                         content_type="application/json",
                         body=json.dumps(
                             {
-                                "artifact_ref": {"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"},
+                                "artifact_ref": {
+                                    "artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+                                },
                                 "upload": {
                                     "mode": "single",
                                     "upload_url": f"{base_url}/api/artifacts/art_01ARZ3NDEKTSV4RRFFQ69G5FAV/content",
@@ -373,14 +378,18 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                     route.fulfill(
                         status=200,
                         content_type="application/json",
-                        body=json.dumps({"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"}),
+                        body=json.dumps(
+                            {"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+                        ),
                     ),
                 )[1],
             )
             page.route(
                 f"{base_url}/api/executions",
                 lambda route: (
-                    artifact_calls.__setitem__("execution", artifact_calls["execution"] + 1),
+                    artifact_calls.__setitem__(
+                        "execution", artifact_calls["execution"] + 1
+                    ),
                     route.fulfill(
                         status=201,
                         content_type="application/json",
@@ -395,7 +404,10 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                                 "state": "initializing",
                                 "dashboardStatus": "queued",
                                 "temporalStatus": "running",
-                                "memo": {"title": "Temporal task", "summary": "Execution initialized."},
+                                "memo": {
+                                    "title": "Temporal task",
+                                    "summary": "Execution initialized.",
+                                },
                                 "redirectPath": "/tasks/mm:workflow-123?source=temporal",
                             }
                         ),
@@ -409,7 +421,9 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                     route.fulfill(
                         status=200,
                         content_type="application/json",
-                        body=json.dumps({"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"}),
+                        body=json.dumps(
+                            {"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+                        ),
                     ),
                 )[1],
             )
@@ -429,7 +443,10 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
                             "state": "initializing",
                             "dashboardStatus": "queued",
                             "temporalStatus": "running",
-                            "memo": {"title": "Temporal task", "summary": "Execution initialized."},
+                            "memo": {
+                                "title": "Temporal task",
+                                "summary": "Execution initialized.",
+                            },
                         }
                     ),
                 ),
@@ -446,15 +463,23 @@ def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
             page.goto(f"{base_url}/tasks/create")
             page.wait_for_selector("#queue-submit-form")
             runtime_options = page.locator('select[name="runtime"] option')
-            assert "temporal" not in [runtime_options.nth(i).get_attribute("value") for i in range(runtime_options.count())]
+            assert "temporal" not in [
+                runtime_options.nth(i).get_attribute("value")
+                for i in range(runtime_options.count())
+            ]
             page.fill(
                 'textarea[data-step-field="instructions"][data-step-index="0"]',
                 "Implement Temporal submit redirect coverage. " * 200,
             )
             page.fill('input[name="repository"]', "MoonLadderStudios/MoonMind")
             page.locator("#queue-submit-form button[type='submit']").click()
-            page.wait_for_url(f"**/tasks/mm:workflow-123?source=temporal")
-            assert artifact_calls == {"create": 1, "upload": 1, "link": 1, "execution": 1}
+            page.wait_for_url("**/tasks/mm:workflow-123?source=temporal")
+            assert artifact_calls == {
+                "create": 1,
+                "upload": 1,
+                "link": 1,
+                "execution": 1,
+            }
             browser.close()
     finally:
         settings.temporal_dashboard.submit_enabled = original_submit_enabled
