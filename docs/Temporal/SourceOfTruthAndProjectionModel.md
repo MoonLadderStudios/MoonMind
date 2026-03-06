@@ -148,7 +148,7 @@ The current `TemporalExecutionService` acts as a **state machine + visibility fa
 Additional staging-only realities that should not be normalized into the target contract:
 
 - the current `/api/executions` adapter returns `countMode="exact"` from the projection-backed read path
-- the current projection/service still uses `"unknown"` as a placeholder owner value in some paths until `mm_owner_type` and stricter owner semantics are fully wired
+- the current projection/service remains projection-authoritative for create/update/signal/cancel semantics even though ownership metadata and projection sync markers are now explicitly tracked
 
 ---
 
@@ -183,13 +183,14 @@ The repository already contains a concrete projection-backed execution layer.
 
 `TemporalExecutionRecord` is currently an app-local row keyed by `workflow_id` and includes:
 
-- identity: `workflow_id`, `run_id`, `namespace`, `workflow_type`, `owner_id`, `entry`
+- identity: `workflow_id`, `run_id`, `namespace`, `workflow_type`, `owner_id`, `owner_type`, `entry`
 - lifecycle: `state`, `close_status`, `paused`, `awaiting_external`
 - list/detail metadata: `search_attributes`, `memo`
 - refs: `artifact_refs`, `input_ref`, `plan_ref`, `manifest_ref`
 - mutable execution context: `parameters`, `pending_parameters_patch`
 - operational counters: `step_count`, `wait_cycle_count`, `rerun_count`
 - idempotency/cache helpers: `create_idempotency_key`, `last_update_idempotency_key`, `last_update_response`
+- projection sync metadata: `projection_version`, `last_synced_at`, `sync_state`, `sync_error`, `source_mode`
 - timestamps: `started_at`, `updated_at`, `closed_at`
 
 ### 7.2 `TemporalExecutionService`
@@ -238,7 +239,7 @@ This is a valid **prototype API shape**, but in the final Temporal-backed archit
 | `memo.title` / `memo.summary` | workflow / Temporal Memo | cached copy | projection may denormalize for compatibility APIs |
 | `artifact_refs` | workflow + artifact linkage | cached copy | large blobs remain outside workflow history |
 | input/plan/manifest refs | workflow inputs + artifact system | cached copy | safe to mirror for compatibility/detail pages |
-| ownership filter (`mm_owner_type` + `mm_owner_id`) | MoonMind auth policy mirrored into Temporal | cached copy | MoonMind owns auth; Temporal stores the searchable mirror; `"unknown"` is a staging placeholder, not target-state contract |
+| ownership filter (`mm_owner_type` + `mm_owner_id`) | MoonMind auth policy mirrored into Temporal | cached copy | MoonMind owns auth; Temporal stores the searchable mirror; projection rows now mirror explicit owner type and owner id values |
 | create/update idempotency behavior | MoonMind API contract | local helper state allowed | dedupe is an API concern, not a Temporal history replacement |
 | page tokens / count semantics for Temporal list APIs | Temporal Visibility read path | local fallback only | avoid baking DB-offset assumptions into final Temporal-backed APIs |
 
@@ -283,9 +284,9 @@ The primary projection row must **not** become:
 - the audit source for per-run replay or debugging
 - a place to reintroduce legacy queue semantics for Temporal task queues
 
-### 9.4 Recommended future metadata for the projection row
+### 9.4 Projection sync metadata
 
-The current schema is already useful, but the final projection model will likely benefit from additional sync metadata such as:
+The current schema now includes explicit sync metadata:
 
 - `projection_version`
 - `last_synced_at`
@@ -293,7 +294,7 @@ The current schema is already useful, but the final projection model will likely
 - `sync_error`
 - `source_mode` (`projection_only | mixed | temporal_authoritative`)
 
-These are **recommended extensions**, not claims about the current schema.
+That metadata is still a projection concern, not a claim that the projection has become authoritative.
 
 ---
 

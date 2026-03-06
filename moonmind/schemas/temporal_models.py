@@ -208,28 +208,56 @@ class ExecutionModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    namespace: str = Field(..., alias="namespace")
+    source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: str = Field(..., alias="taskId")
+    namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")
     temporal_run_id: str = Field(..., alias="temporalRunId")
     workflow_type: str = Field(..., alias="workflowType")
+    entry: Literal["run", "manifest"] = Field(..., alias="entry")
+    owner_type: Literal["user", "system", "service"] = Field(..., alias="ownerType")
+    owner_id: str = Field(..., alias="ownerId")
+    title: str = Field(..., alias="title")
+    summary: str = Field(..., alias="summary")
+    status: Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "succeeded",
+        "failed",
+        "cancelled",
+    ] = Field(..., alias="status")
+    dashboard_status: Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "succeeded",
+        "failed",
+        "cancelled",
+    ] = Field(..., alias="dashboardStatus")
+    raw_state: str = Field(..., alias="rawState")
     state: str = Field(..., alias="state")
     temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
         ..., alias="temporalStatus"
     )
     close_status: Optional[str] = Field(None, alias="closeStatus")
+    waiting_reason: Optional[str] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
     search_attributes: dict[str, Any] = Field(
         default_factory=dict, alias="searchAttributes"
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
+    artifacts_count: int = Field(0, alias="artifactsCount")
+    created_at: datetime = Field(..., alias="createdAt")
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
+    detail_href: str = Field(..., alias="detailHref")
 
 
 class ExecutionListResponse(BaseModel):

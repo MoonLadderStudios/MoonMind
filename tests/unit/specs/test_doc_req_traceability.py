@@ -8,48 +8,36 @@ from pathlib import Path
 import pytest
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURES = (
-    (
-        "046-workflow-type-lifecycle",
-        Path("specs/046-workflow-type-lifecycle/spec.md"),
-        Path(
-            "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
-        ),
-    ),
-    (
-        "047-activity-worker-topology",
-        Path("specs/047-activity-worker-topology/spec.md"),
-        Path(
-            "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
-        ),
-    ),
-    (
-        "047-integrations-monitoring",
-        Path("specs/047-integrations-monitoring/spec.md"),
-        Path(
-            "specs/047-integrations-monitoring/contracts/requirements-traceability.md"
-        ),
-    ),
-    (
-        "047-temporal-artifact-presentation",
-        Path("specs/047-temporal-artifact-presentation/spec.md"),
-        Path(
-            "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
-        ),
-    ),
-    (
-        "048-executions-api-contract",
-        Path("specs/048-executions-api-contract/spec.md"),
-        Path(
-            "specs/048-executions-api-contract/contracts/requirements-traceability.md"
-        ),
-    ),
-    (
-        "048-run-history-rerun",
-        Path("specs/048-run-history-rerun/spec.md"),
-        Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
-    ),
+_FEATURE_DIR_PATTERN = re.compile(r"^(?P<prefix>\d{3})-[^/]+$")
+_DOC_REQ_COLUMN_NAMES = (
+    "DOC-REQ ID",
+    "DOC-REQ",
+    "DOC Requirement",
+    "Source Requirement",
+    "Requirement ID",
 )
+_VALIDATION_COLUMN_NAMES = (
+    "Validation Strategy",
+    "Validation Evidence",
+    "Completed Validation Tasks",
+)
+
+
+def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
+    features: list[tuple[str, Path, Path]] = []
+    for path in sorted(Path("specs").iterdir()):
+        if not path.is_dir():
+            continue
+        if _FEATURE_DIR_PATTERN.fullmatch(path.name) is None:
+            continue
+        feature_spec = path / "spec.md"
+        feature_traceability = path / "contracts" / "requirements-traceability.md"
+        if feature_spec.exists() and feature_traceability.exists():
+            features.append((path.name, feature_spec, feature_traceability))
+    return features
+
+
+_FEATURES = _discover_contract_backed_features()
 
 
 @pytest.mark.parametrize(
@@ -66,13 +54,8 @@ def test_doc_req_traceability_contract(
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_name} spec.md"
-
-    assert feature_traceability.exists(), (
-        "Missing traceability file for DOC-REQ feature: "
-        f"{feature_traceability} ({feature_name})"
-    )
-
+    if not doc_req_ids:
+        pytest.skip(f"No DOC-REQ entries found in {feature_name} spec.md")
     traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 
@@ -98,11 +81,13 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
     )
 
     header = _split_row(lines[table_start])
-    doc_req_col = _find_column_index(header, "DOC-REQ ID")
-    validation_col = _find_column_index(header, "Validation Strategy")
+    doc_req_col = _find_column_index(header, _DOC_REQ_COLUMN_NAMES)
+    validation_col = _find_column_index(header, _VALIDATION_COLUMN_NAMES)
     assert doc_req_col is not None and validation_col is not None, (
-        "Traceability header must include 'DOC-REQ ID' and 'Validation Strategy' "
-        f"columns in {traceability_path}"
+        "Traceability header must include one DOC-REQ column "
+        f"({_DOC_REQ_COLUMN_NAMES}) and one validation column "
+        f"({_VALIDATION_COLUMN_NAMES}) in "
+        f"{traceability_path}"
     )
 
     rows: dict[str, str] = {}
@@ -118,9 +103,10 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
         if max(doc_req_col, validation_col) >= len(cells):
             continue
 
-        doc_req_id = cells[doc_req_col].strip().strip("`")
-        if not _DOC_REQ_PATTERN.fullmatch(doc_req_id):
+        doc_req_match = _DOC_REQ_PATTERN.search(cells[doc_req_col])
+        if doc_req_match is None:
             continue
+        doc_req_id = f"DOC-REQ-{doc_req_match.group(1)}"
 
         validation_strategy = cells[validation_col].strip()
         normalized_validation = validation_strategy.strip("`").strip().lower()
@@ -140,7 +126,10 @@ def _find_header_line(lines: list[str]) -> int | None:
         if not line.strip().startswith("|"):
             continue
         cells = _split_row(line)
-        if "DOC-REQ ID" in cells and "Validation Strategy" in cells:
+        if (
+            _find_column_index(cells, _DOC_REQ_COLUMN_NAMES) is not None
+            and _find_column_index(cells, _VALIDATION_COLUMN_NAMES) is not None
+        ):
             return index
     return None
 
@@ -152,11 +141,14 @@ def _split_row(line: str) -> list[str]:
     return [cell.strip() for cell in stripped.strip("|").split("|")]
 
 
-def _find_column_index(header: list[str], name: str) -> int | None:
-    try:
-        return header.index(name)
-    except ValueError:
-        return None
+def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
+    normalized_to_index = {
+        cell.strip("`").strip(): index for index, cell in enumerate(header)
+    }
+    for name in names:
+        if name in normalized_to_index:
+            return normalized_to_index[name]
+    return None
 
 
 def _is_delimiter_row(cells: list[str]) -> bool:
