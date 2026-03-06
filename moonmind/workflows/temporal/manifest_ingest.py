@@ -49,7 +49,6 @@ MANIFEST_UPDATE_NAMES: set[str] = {
     "CancelNodes",
     "RetryNodes",
 }
-_TERMINAL_NODE_STATES = {"succeeded", "failed", "canceled"}
 _MUTABLE_NODE_STATES = {"pending", "ready", "running"}
 
 
@@ -645,7 +644,3 @@ def _coerce_runtime_nodes(
         node if isinstance(node, ManifestNodeModel) else ManifestNodeModel.model_validate(node)
         for node in nodes
     ]
-    requested_by_model = RequestedByModel.model_validate(requested_by)
-    execution_policy_model = ManifestExecutionPolicyModel.model_validate(
-        execution_policy
-    )

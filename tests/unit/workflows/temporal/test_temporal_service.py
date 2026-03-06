@@ -230,6 +230,41 @@ async def test_request_rerun_rejected_for_terminal_execution(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(TemporalExecutionValidationError) as exc_info:
+            await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="Pause",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                new_manifest_artifact_ref=None,
+                mode=None,
+                max_concurrency=None,
+                node_ids=None,
+                idempotency_key=None,
+            )
+
+        assert "only supported for MoonMind.ManifestIngest" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

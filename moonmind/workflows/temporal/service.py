@@ -64,10 +64,13 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
-ALLOWED_UPDATE_NAMES: set[str] = {
+BASE_UPDATE_NAMES: set[str] = {
     "UpdateInputs",
     "SetTitle",
     "RequestRerun",
+}
+ALLOWED_UPDATE_NAMES: set[str] = {
+    *BASE_UPDATE_NAMES,
     *MANIFEST_UPDATE_NAMES,
 }
 ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
@@ -313,6 +316,14 @@ class TemporalExecutionService:
                 f"Unsupported update name: {update_name}"
             )
         record = await self.describe_execution(workflow_id)
+        if (
+            update_name in MANIFEST_UPDATE_NAMES
+            and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
+        ):
+            raise TemporalExecutionValidationError(
+                f"Update {update_name} is only supported for "
+                "MoonMind.ManifestIngest workflows"
+            )
 
         if idempotency_key and idempotency_key == record.last_update_idempotency_key:
             cached = record.last_update_response
@@ -362,6 +373,10 @@ class TemporalExecutionService:
                 input_artifact_ref=input_artifact_ref,
                 plan_artifact_ref=plan_artifact_ref,
                 parameters_patch=parameters_patch,
+            )
+        else:
+            raise TemporalExecutionValidationError(
+                f"Unsupported update name: {update_name}"
             )
 
         if idempotency_key:

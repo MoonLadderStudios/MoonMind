@@ -299,68 +299,29 @@ class ManifestsService:
             initial_parameters=parameters,
             idempotency_key=idempotency_key,
         )
+        if execution.manifest_ref and execution.manifest_ref != manifest_artifact_ref:
+            await self._artifact_service.soft_delete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+            )
+            await self._update_manifest_run_metadata(
+                record,
+                execution=execution,
+                manifest_artifact_ref=execution.manifest_ref,
+            )
+            return self._temporal_submission_from_execution(
+                execution,
+                manifest_artifact_ref=execution.manifest_ref,
+            )
         try:
-            manifest_activities = TemporalManifestActivities(
-                artifact_service=self._artifact_service
-            )
-            execution_ref = {
-                "namespace": execution.namespace,
-                "workflow_id": execution.workflow_id,
-                "run_id": execution.run_id,
-                "link_type": "output.primary",
-                "label": record.name,
-            }
-            manifest_text = await manifest_activities.manifest_read(
-                principal=principal,
-                manifest_ref=manifest_artifact_ref,
-            )
-            compile_result = await manifest_activities.manifest_compile(
-                principal=principal,
-                manifest_ref=manifest_artifact_ref,
-                manifest_payload=manifest_text,
-                action=action,
-                options=options,
-                requested_by=execution.parameters["requestedBy"],
-                execution_policy=execution.parameters["executionPolicy"],
-                execution_ref=execution_ref,
-            )
-            execution.plan_ref = compile_result.plan_ref.artifact_id
-            child_nodes = plan_nodes_to_runtime_nodes(
-                compile_result.nodes,
-                requested_by=execution.parameters["requestedBy"],
-            )
-            child_starts = await start_manifest_child_runs(
-                execution_service=self._execution_service,
-                parent_execution=execution,
-                requested_by=execution.parameters["requestedBy"],
-                nodes=child_nodes,
-                limit=min(
-                    len(child_nodes),
-                    int(execution.parameters["executionPolicy"]["maxConcurrency"]),
-                ),
-            )
-            starts_by_node = {item.node_id: item for item in child_starts}
-            for node in child_nodes:
-                start = starts_by_node.get(node.node_id)
-                if start is None:
-                    continue
-                node.state = "running"
-                node.child_workflow_id = start.workflow_id
-                node.child_run_id = start.run_id
-                node.started_at = datetime.now(UTC)
-            summary_ref, run_index_ref = (
-                await manifest_activities.manifest_write_summary(
+            compile_result, child_nodes, summary_ref, run_index_ref = (
+                await self._bootstrap_temporal_manifest_execution(
                     principal=principal,
-                    workflow_id=execution.workflow_id,
-                    state="executing",
-                    phase="executing",
-                    manifest_ref=manifest_artifact_ref,
-                    plan_ref=execution.plan_ref,
-                    nodes=[
-                        node.model_dump(by_alias=True, mode="json")
-                        for node in child_nodes
-                    ],
-                    execution_ref=execution_ref,
+                    record=record,
+                    action=action,
+                    options=options,
+                    execution=execution,
+                    manifest_artifact_ref=manifest_artifact_ref,
                 )
             )
         except ManifestIngestValidationError as exc:
@@ -388,25 +349,107 @@ class ManifestsService:
         execution.search_attributes["mm_updated_at"] = datetime.now(UTC).isoformat()
         execution.updated_at = datetime.now(UTC)
 
-        if execution.manifest_ref and execution.manifest_ref != manifest_artifact_ref:
-            await self._artifact_service.soft_delete(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-            )
-            manifest_artifact_ref = execution.manifest_ref
-        else:
-            await self._artifact_service.link_artifact(
-                artifact_id=artifact.artifact_id,
-                principal=principal,
-                execution_ref={
-                    "namespace": execution.namespace,
-                    "workflow_id": execution.workflow_id,
-                    "run_id": execution.run_id,
-                    "link_type": "input.manifest",
-                    "label": record.name,
-                },
-            )
+        await self._artifact_service.link_artifact(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            execution_ref={
+                "namespace": execution.namespace,
+                "workflow_id": execution.workflow_id,
+                "run_id": execution.run_id,
+                "link_type": "input.manifest",
+                "label": record.name,
+            },
+        )
+        await self._update_manifest_run_metadata(
+            record,
+            execution=execution,
+            manifest_artifact_ref=manifest_artifact_ref,
+        )
+        return self._temporal_submission_from_execution(
+            execution,
+            manifest_artifact_ref=manifest_artifact_ref,
+        )
 
+    async def _bootstrap_temporal_manifest_execution(
+        self,
+        *,
+        principal: str,
+        record: ManifestRecord,
+        action: str,
+        options: dict[str, Any] | None,
+        execution,
+        manifest_artifact_ref: str,
+    ):
+        assert self._artifact_service is not None
+        assert self._execution_service is not None
+
+        manifest_activities = TemporalManifestActivities(
+            artifact_service=self._artifact_service
+        )
+        execution_ref = {
+            "namespace": execution.namespace,
+            "workflow_id": execution.workflow_id,
+            "run_id": execution.run_id,
+            "link_type": "output.primary",
+            "label": record.name,
+        }
+        manifest_text = await manifest_activities.manifest_read(
+            principal=principal,
+            manifest_ref=manifest_artifact_ref,
+        )
+        compile_result = await manifest_activities.manifest_compile(
+            principal=principal,
+            manifest_ref=manifest_artifact_ref,
+            manifest_payload=manifest_text,
+            action=action,
+            options=options,
+            requested_by=execution.parameters["requestedBy"],
+            execution_policy=execution.parameters["executionPolicy"],
+            execution_ref=execution_ref,
+        )
+        execution.plan_ref = compile_result.plan_ref.artifact_id
+        child_nodes = plan_nodes_to_runtime_nodes(
+            compile_result.nodes,
+            requested_by=execution.parameters["requestedBy"],
+        )
+        child_starts = await start_manifest_child_runs(
+            execution_service=self._execution_service,
+            parent_execution=execution,
+            requested_by=execution.parameters["requestedBy"],
+            nodes=child_nodes,
+            limit=min(
+                len(child_nodes),
+                int(execution.parameters["executionPolicy"]["maxConcurrency"]),
+            ),
+        )
+        starts_by_node = {item.node_id: item for item in child_starts}
+        for node in child_nodes:
+            start = starts_by_node.get(node.node_id)
+            if start is None:
+                continue
+            node.state = "running"
+            node.child_workflow_id = start.workflow_id
+            node.child_run_id = start.run_id
+            node.started_at = datetime.now(UTC)
+        summary_ref, run_index_ref = await manifest_activities.manifest_write_summary(
+            principal=principal,
+            workflow_id=execution.workflow_id,
+            state="executing",
+            phase="executing",
+            manifest_ref=manifest_artifact_ref,
+            plan_ref=execution.plan_ref,
+            nodes=[node.model_dump(by_alias=True, mode="json") for node in child_nodes],
+            execution_ref=execution_ref,
+        )
+        return compile_result, child_nodes, summary_ref, run_index_ref
+
+    async def _update_manifest_run_metadata(
+        self,
+        record: ManifestRecord,
+        *,
+        execution,
+        manifest_artifact_ref: str | None,
+    ) -> None:
         record.last_run_job_id = None
         record.last_run_source = "temporal"
         record.last_run_status = execution.state.value
@@ -418,6 +461,13 @@ class ManifestsService:
         record.updated_at = datetime.now(UTC)
         await self._session.flush()
         await self._session.commit()
+
+    def _temporal_submission_from_execution(
+        self,
+        execution,
+        *,
+        manifest_artifact_ref: str | None,
+    ) -> ManifestRunSubmission:
         return ManifestRunSubmission(
             source="temporal",
             status=execution.state.value,

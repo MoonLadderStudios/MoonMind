@@ -223,6 +223,70 @@ async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
             assert record.last_run_status == "executing"
 
 
+async def test_submit_manifest_run_reuses_idempotent_execution_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    """submit_manifest_run should return the original Temporal submission for idempotent retries."""
+
+    async with manifest_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "temporal-artifacts"),
+            )
+            execution_service = TemporalExecutionService(session)
+            service = ManifestsService(
+                session,
+                None,
+                execution_service=execution_service,
+                artifact_service=artifact_service,
+            )
+
+            user_id = uuid4()
+            await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
+            first = await service.submit_manifest_run(
+                name="demo",
+                action="run",
+                options={"dryRun": True},
+                user_id=user_id,
+                idempotency_key="manifest-demo-repeat",
+            )
+            first_execution_count = (
+                await execution_service.list_executions(
+                    workflow_type=None,
+                    state=None,
+                    owner_id=None,
+                    page_size=200,
+                    next_page_token=None,
+                )
+            ).count
+
+            second = await service.submit_manifest_run(
+                name="demo",
+                action="run",
+                options={"dryRun": True},
+                user_id=user_id,
+                idempotency_key="manifest-demo-repeat",
+            )
+            second_execution_count = (
+                await execution_service.list_executions(
+                    workflow_type=None,
+                    state=None,
+                    owner_id=None,
+                    page_size=200,
+                    next_page_token=None,
+                )
+            ).count
+
+            assert second.workflow_id == first.workflow_id
+            assert second.run_id == first.run_id
+            assert second.manifest_artifact_ref == first.manifest_artifact_ref
+            assert second_execution_count == first_execution_count
+
+            execution = await execution_service.describe_execution(first.workflow_id)
+            assert execution.manifest_ref == first.manifest_artifact_ref
+
+
 async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
     tmp_path: Path,
 ) -> None:

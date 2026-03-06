@@ -44,6 +44,10 @@ def _owner_id(user: User | None) -> str | None:
     return str(value) if value is not None else None
 
 
+def _manifest_attr(manifest_status, field: str, default=None):
+    return getattr(manifest_status, field, default) if manifest_status else default
+
+
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalExecutionService:
@@ -95,24 +99,20 @@ def _serialize_execution(record) -> ExecutionModel:
         search_attributes=search_attributes,
         memo=memo,
         artifact_refs=list(record.artifact_refs or []),
-        manifest_artifact_ref=(
-            manifest_status.manifest_artifact_ref if manifest_status else record.manifest_ref
+        manifest_artifact_ref=_manifest_attr(
+            manifest_status, "manifest_artifact_ref", record.manifest_ref
         ),
-        plan_artifact_ref=manifest_status.plan_artifact_ref if manifest_status else None,
-        summary_artifact_ref=(
-            manifest_status.summary_artifact_ref if manifest_status else None
+        plan_artifact_ref=_manifest_attr(manifest_status, "plan_artifact_ref"),
+        summary_artifact_ref=_manifest_attr(manifest_status, "summary_artifact_ref"),
+        run_index_artifact_ref=_manifest_attr(manifest_status, "run_index_artifact_ref"),
+        checkpoint_artifact_ref=_manifest_attr(
+            manifest_status, "checkpoint_artifact_ref"
         ),
-        run_index_artifact_ref=(
-            manifest_status.run_index_artifact_ref if manifest_status else None
-        ),
-        checkpoint_artifact_ref=(
-            manifest_status.checkpoint_artifact_ref if manifest_status else None
-        ),
-        requested_by=manifest_status.requested_by if manifest_status else None,
-        execution_policy=manifest_status.execution_policy if manifest_status else None,
-        phase=manifest_status.phase if manifest_status else None,
-        paused=manifest_status.paused if manifest_status else None,
-        counts=manifest_status.counts if manifest_status else None,
+        requested_by=_manifest_attr(manifest_status, "requested_by"),
+        execution_policy=_manifest_attr(manifest_status, "execution_policy"),
+        phase=_manifest_attr(manifest_status, "phase"),
+        paused=_manifest_attr(manifest_status, "paused"),
+        counts=_manifest_attr(manifest_status, "counts"),
         latest_run_view=True,
         continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,
