@@ -1272,7 +1272,7 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
             repository="Moon/Mind",
             integration="github",
         )
-        other_repo = await service.create_execution(
+        await service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=owner_id,
             title="Other repo",
