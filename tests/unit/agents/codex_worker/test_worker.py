@@ -6945,6 +6945,115 @@ async def test_jules_worker_cancellation_stays_truthful_when_provider_cancel_mis
     )
 
 
+@pytest.mark.asyncio
+async def test_jules_worker_resume_preserves_canceled_checkpoint_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _FakeJulesClient:
+        def __init__(self, *args, **kwargs):
+            _ = (args, kwargs)
+
+        async def create_task(self, request):
+            _ = request
+            return _FakeJulesTask(
+                task_id="task-unexpected",
+                status="pending",
+                url="https://jules.example.test/tasks/task-unexpected",
+            )
+
+        async def get_task(self, request):
+            raise AssertionError(
+                "resumed canceled checkpoints must not re-poll provider status"
+            )
+
+        async def resolve_task(self, request):
+            _ = request
+            return _FakeJulesTask(task_id="cancelled", status="cancelled", url=None)
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.JulesClient",
+        _FakeJulesClient,
+    )
+
+    submitted_at = datetime.now(UTC).isoformat()
+    completed_at = datetime.now(UTC).isoformat()
+    job = ClaimedJob(
+        id=uuid4(),
+        type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "jules",
+            "runtimeState": {
+                "runtime": "jules",
+                "externalTaskId": "task-canceled-1",
+                "status": "canceled",
+                "providerStatus": "pending",
+                "url": "https://jules.example.test/tasks/task-canceled-1",
+                "submittedAt": submitted_at,
+                "lastPolledAt": submitted_at,
+                "completedAt": completed_at,
+                "statusHistory": ["pending", "running", "canceled"],
+                "providerStatusHistory": ["pending", "running", "pending"],
+                "error": (
+                    "provider-side cancellation unsupported; "
+                    "MoonMind canceled without remote cancel"
+                ),
+            },
+            "task": {
+                "instructions": "Resume canceled Jules task",
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": "jules"},
+                "git": {"startingBranch": "main", "newBranch": None},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    queue = FakeQueueClient(jobs=[job, None, None])
+    queue.cancel_requested_at = completed_at
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(
+        config=CodexWorkerConfig(
+            moonmind_url="http://localhost:5000",
+            worker_id="worker-jules",
+            worker_token=None,
+            poll_interval_ms=1,
+            lease_seconds=120,
+            workdir=tmp_path,
+            worker_runtime="jules",
+            worker_capabilities=("jules", "git", "gh"),
+            allowed_types=("task",),
+            jules_enabled=True,
+            jules_api_url="https://jules.example.test",
+            jules_api_key="test-key",
+            jules_poll_interval_seconds=0.001,
+            jules_max_inflight=15,
+        ),
+        queue_client=queue,
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+
+    first_tick = await worker.run_once()
+    assert first_tick is True
+    state = worker._jules_inflight_runs[job.id]
+    assert state.jules_status == "canceled"
+    assert state.jules_provider_status == "pending"
+
+    second_tick = await worker.run_once()
+    assert second_tick is True
+    assert len(queue.cancel_acks) == 1
+    finish_summary = queue.cancel_ack_finish_payloads[0]["finishSummary"]
+    assert isinstance(finish_summary, dict)
+    assert finish_summary["finishOutcome"]["code"] == "CANCELLED"
+    assert finish_summary["externalRuntime"]["tasks"][0]["status"] == "canceled"
+    assert finish_summary["externalRuntime"]["tasks"][0]["providerStatus"] == "pending"
+
+
 @pytest.fixture
 def codex_worker_components(
     tmp_path: Path,

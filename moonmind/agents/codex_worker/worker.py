@@ -3064,12 +3064,15 @@ class CodexWorker:
         if checkpoint is not None:
             jules_task_id = str(checkpoint.get("externalTaskId") or "").strip()
             status_snapshot = self._normalize_jules_status(checkpoint.get("status"))
-            provider_status = (
-                str(checkpoint.get("providerStatus") or "").strip()
-                or status_snapshot.provider_status
-            )
-            if provider_status != status_snapshot.provider_status:
-                status_snapshot = self._normalize_jules_status(provider_status)
+            provider_status = str(checkpoint.get("providerStatus") or "").strip()
+            if provider_status:
+                provider_snapshot = self._normalize_jules_status(provider_status)
+                provider_status = provider_snapshot.provider_status
+                # Preserve locally-recorded terminal states such as unsupported
+                # cancellation over stale provider status snapshots on resume.
+                if not status_snapshot.terminal:
+                    status_snapshot = provider_snapshot
+            else:
                 provider_status = status_snapshot.provider_status
             jules_status = status_snapshot.normalized_status
             jules_task_url = str(checkpoint.get("url") or "").strip() or None
