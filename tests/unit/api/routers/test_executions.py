@@ -260,7 +260,10 @@ def test_list_executions_rejects_non_admin_cross_owner_queries(
     response = test_client.get("/api/executions", params={"ownerId": str(uuid4())})
 
     assert response.status_code == 403
-    assert response.json()["detail"]["message"] == "Cannot list executions for another user."
+    assert (
+        response.json()["detail"]["message"]
+        == "Cannot list executions for another user."
+    )
     service.list_executions.assert_not_awaited()
 
 

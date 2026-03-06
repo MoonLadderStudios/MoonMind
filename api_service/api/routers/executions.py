@@ -138,13 +138,10 @@ def _serialize_execution(record) -> ExecutionModel:
     entry = _resolve_execution_entry(record, search_attributes)
     title = str(memo.get("title") or "").strip() or record.workflow_type.value
     summary = str(memo.get("summary") or "").strip() or "Execution updated."
-    waiting_reason = (
-        str(memo.get("waiting_reason") or "").strip()
-        or (
-            str(memo.get("summary") or "").strip()
-            if raw_state == "awaiting_external"
-            else ""
-        )
+    waiting_reason = str(memo.get("waiting_reason") or "").strip() or (
+        str(memo.get("summary") or "").strip()
+        if raw_state == "awaiting_external"
+        else ""
     )
     attention_required = bool(memo.get("attention_required") or False)
     if raw_state == "awaiting_external":

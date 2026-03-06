@@ -1642,6 +1642,7 @@ class TemporalExecutionService:
             return owner_type
         owner_id = str(record.owner_id or "").strip().lower()
         return "system" if owner_id == "system" or not owner_id else "user"
+
     def _default_title_for_type(self, workflow_type: TemporalWorkflowType) -> str:
         if workflow_type is TemporalWorkflowType.MANIFEST_INGEST:
             return "Manifest Ingest"

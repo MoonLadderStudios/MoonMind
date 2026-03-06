@@ -25,14 +25,14 @@ from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
 from moonmind.workflows.orchestrator.skill_executor import list_runnable_skill_names
 from moonmind.workflows.skills.resolver import list_available_skill_names
-from moonmind.workflows.temporal import (
-    TemporalExecutionNotFoundError,
-    TemporalExecutionService,
-)
 from moonmind.workflows.tasks.source_mapping import (
     TaskResolutionAmbiguousError,
     TaskResolutionNotFoundError,
     TaskSourceMappingService,
+)
+from moonmind.workflows.temporal import (
+    TemporalExecutionNotFoundError,
+    TemporalExecutionService,
 )
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
@@ -93,6 +93,7 @@ class DashboardTaskSourceResponse(BaseModel):
     source: str = Field(..., alias="source")
     source_label: str = Field(..., alias="sourceLabel")
     detail_path: str = Field(..., alias="detailPath")
+
 
 class TaskSourceResolutionResponse(BaseModel):
     """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
@@ -409,6 +410,8 @@ async def list_dashboard_tasks(
         service=service,
         _user=_user,
     )
+
+
 @router.get(
     "/api/tasks/{task_id}/source",
     response_model=DashboardTaskSourceResponse,
@@ -436,7 +439,7 @@ async def resolve_dashboard_task_source(
                 "code": "task_source_not_found",
                 "message": f"Task {task_id} was not found in dashboard sources.",
             },
-    )
+        )
     return resolved
 
 
