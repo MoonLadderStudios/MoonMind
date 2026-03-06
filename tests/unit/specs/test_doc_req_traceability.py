@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gate for the active workflow-type-lifecycle feature."""
+"""DOC-REQ traceability gates for active spec features."""
 
 from __future__ import annotations
 
@@ -6,24 +6,51 @@ import re
 from pathlib import Path
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPEC = Path("specs/046-workflow-type-lifecycle/spec.md")
-_FEATURE_TRACEABILITY = Path(
+_WORKFLOW_TYPE_LIFECYCLE_SPEC = Path("specs/046-workflow-type-lifecycle/spec.md")
+_WORKFLOW_TYPE_LIFECYCLE_TRACEABILITY = Path(
     "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+)
+_TEMPORAL_ARTIFACT_PRESENTATION_SPEC = Path(
+    "specs/047-temporal-artifact-presentation/spec.md"
+)
+_TEMPORAL_ARTIFACT_PRESENTATION_TRACEABILITY = Path(
+    "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
 )
 
 
 def test_workflow_type_lifecycle_doc_req_traceability_contract() -> None:
-    spec_text = _FEATURE_SPEC.read_text(encoding="utf-8")
+    _assert_doc_req_traceability_contract(
+        spec_path=_WORKFLOW_TYPE_LIFECYCLE_SPEC,
+        traceability_path=_WORKFLOW_TYPE_LIFECYCLE_TRACEABILITY,
+        feature_label="046 workflow-type-lifecycle",
+    )
+
+
+def test_temporal_artifact_presentation_doc_req_traceability_contract() -> None:
+    _assert_doc_req_traceability_contract(
+        spec_path=_TEMPORAL_ARTIFACT_PRESENTATION_SPEC,
+        traceability_path=_TEMPORAL_ARTIFACT_PRESENTATION_TRACEABILITY,
+        feature_label="047 temporal-artifact-presentation",
+    )
+
+
+def _assert_doc_req_traceability_contract(
+    *,
+    spec_path: Path,
+    traceability_path: Path,
+    feature_label: str,
+) -> None:
+    spec_text = spec_path.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, "Expected DOC-REQ entries in 046 spec.md"
+    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_label} spec.md"
 
-    assert _FEATURE_TRACEABILITY.exists(), (
-        "Missing traceability file for DOC-REQ feature: " f"{_FEATURE_TRACEABILITY}"
+    assert traceability_path.exists(), (
+        "Missing traceability file for DOC-REQ feature: " f"{traceability_path}"
     )
 
-    traceability_rows = _parse_traceability_rows(_FEATURE_TRACEABILITY)
+    traceability_rows = _parse_traceability_rows(traceability_path)
     traceability_ids = set(traceability_rows)
 
     missing_ids = sorted(doc_req_ids - traceability_ids)
@@ -31,11 +58,11 @@ def test_workflow_type_lifecycle_doc_req_traceability_contract() -> None:
 
     assert not missing_ids, (
         "Missing DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(missing_ids)}"
+        f"{traceability_path}: {', '.join(missing_ids)}"
     )
     assert not extra_ids, (
         "Unexpected DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(extra_ids)}"
+        f"{traceability_path}: {', '.join(extra_ids)}"
     )
 
 

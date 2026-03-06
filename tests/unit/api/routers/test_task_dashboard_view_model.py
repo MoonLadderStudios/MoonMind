@@ -22,6 +22,10 @@ def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
     assert normalize_status("orchestrator", "awaiting_approval") == "awaiting_action"
 
 
+def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
+    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+
+
 def test_normalize_status_fallback_for_unknown_source() -> None:
     assert normalize_status("unknown-source", "anything") == "queued"
 
@@ -121,6 +125,30 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
+    assert config["sources"]["temporal"]["list"] == "/api/executions"
+    assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
+    assert (
+        config["sources"]["temporal"]["artifacts"]
+        == "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts"
+    )
+    assert config["sources"]["temporal"]["artifactCreate"] == "/api/artifacts"
+    assert (
+        config["sources"]["temporal"]["artifactMetadata"]
+        == "/api/artifacts/{artifactId}"
+    )
+    assert (
+        config["sources"]["temporal"]["artifactPresignDownload"]
+        == "/api/artifacts/{artifactId}/presign-download"
+    )
+    assert (
+        config["sources"]["temporal"]["artifactDownload"]
+        == "/api/artifacts/{artifactId}/download"
+    )
+    assert config["features"]["temporalDashboard"]["enabled"] is True
+    assert config["features"]["temporalDashboard"]["detailEnabled"] is True
+    assert config["features"]["temporalDashboard"]["actionsEnabled"] is False
+    assert config["features"]["temporalDashboard"]["submitEnabled"] is False
+    assert config["features"]["temporalDashboard"]["debugFieldsEnabled"] is False
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")
