@@ -8266,6 +8266,78 @@ async def test_config_from_env_uses_codex_fallback_env_vars(monkeypatch) -> None
     assert config.default_codex_effort == "xhigh"
 
 
+async def test_config_from_env_defaults_gemini_model(monkeypatch) -> None:
+    """Gemini worker config should default to the supported production model."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.default_gemini_model == "gemini-3.1-pro"
+
+
+async def test_config_from_env_parses_gemini_allowed_tools(monkeypatch) -> None:
+    """Gemini allowed tools should parse from a comma-separated env override."""
+
+    monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
+    monkeypatch.setenv(
+        "MOONMIND_GEMINI_ALLOWED_TOOLS",
+        "run_shell_command, activate_skill,run_shell_command,write_file",
+    )
+
+    config = CodexWorkerConfig.from_env()
+
+    assert config.gemini_allowed_tools == (
+        "run_shell_command",
+        "activate_skill",
+        "write_file",
+    )
+
+
+async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
+    tmp_path: Path,
+) -> None:
+    """Gemini runtime commands should allow worker-required tools in non-interactive mode."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_runtime="gemini",
+        gemini_allowed_tools=(
+            "activate_skill",
+            "run_shell_command",
+            "replace",
+            "write_file",
+        ),
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    command = worker._build_non_codex_runtime_command(
+        runtime_mode="gemini",
+        instruction="resolve the task",
+        model="gemini-2.5-pro",
+        effort="high",
+    )
+
+    assert command[:3] == ["gemini", "--prompt", "resolve the task"]
+    assert "--allowed-tools" in command
+    allowed_tools_index = command.index("--allowed-tools")
+    assert command[allowed_tools_index + 1] == (
+        "activate_skill,run_shell_command,replace,write_file"
+    )
+    assert command[-4:] == ["--model", "gemini-2.5-pro", "--effort", "high"]
+
+
 async def test_resolve_task_auth_context_includes_git_identity_without_token(
     tmp_path: Path, monkeypatch
 ) -> None:

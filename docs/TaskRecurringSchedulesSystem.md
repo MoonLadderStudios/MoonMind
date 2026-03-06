@@ -40,7 +40,7 @@ It also provides a concrete implementation for the manifest scheduling intent de
 
 ```mermaid
 flowchart LR
-  UI[Tasks Dashboard<br/>/tasks/schedules] --> API[FastAPI<br/>/api/recurring-tasks]
+  UI[Mission Control<br/>/tasks/schedules] --> API[FastAPI<br/>/api/recurring-tasks]
   API --> DB[(Postgres)]
   Scheduler[moonmind-scheduler<br/>poll + lock + dispatch] --> DB
   Scheduler --> Queue[Agent Queue<br/>agent_jobs]
@@ -349,7 +349,7 @@ Auth:
 
 ## 9. Dashboard Integration
 
-The Tasks Dashboard is already a thin client over REST endpoints , so schedules follow the same pattern:
+The Mission Control is already a thin client over REST endpoints , so schedules follow the same pattern:
 
 ### 9.1 Routes
 

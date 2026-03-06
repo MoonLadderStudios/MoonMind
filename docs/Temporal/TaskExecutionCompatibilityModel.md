@@ -80,7 +80,7 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
    Temporal implementation docs, worker code, and execution APIs should use Temporal language precisely.
 
 3. **A Temporal-backed task is not a fake queue item.**  
-   It may render in the task dashboard, but it must not inherit queue-order semantics or leasing semantics.
+   It may render in the Mission Control, but it must not inherit queue-order semantics or leasing semantics.
 
 4. **Identifiers are opaque.**  
    Clients must not parse source, entry type, or lifecycle meaning from the textual shape of an ID.
@@ -98,7 +98,7 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 
 ## 6. Source model
 
-### 6.1 Execution sources for the task dashboard
+### 6.1 Execution sources for the Mission Control
 
 For task list/detail purposes, the execution sources are:
 
@@ -606,7 +606,7 @@ This document is considered successfully implemented for a Temporal-backed flow 
 
 ## 17. Open decisions to lock next
 
-1. Whether the task dashboard should eventually expose run history for a single `workflowId` or only the latest run by default
+1. Whether the Mission Control should eventually expose run history for a single `workflowId` or only the latest run by default
 2. Whether `awaiting_external` needs a first-class `waitKind` field sooner rather than later
 3. Whether Temporal-backed manifest views become simple task filters or keep a distinct route shell longer
 4. When `/api/executions` should graduate from adapter-first surface to a more openly documented public API

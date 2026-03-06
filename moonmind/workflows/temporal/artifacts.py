@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -1560,10 +1561,10 @@ class TemporalArtifactService:
         artifact_id: str,
         principal: str,
         reason: str | None,
-    ) -> None:
+    ) -> db_models.TemporalArtifactPin:
         artifact = await self._repository.get_artifact(artifact_id)
         self._assert_mutation_access(artifact, principal=principal)
-        await self._repository.pin_artifact(
+        pin = await self._repository.pin_artifact(
             artifact_id=artifact_id,
             principal=principal,
             reason=reason,
@@ -1571,6 +1572,7 @@ class TemporalArtifactService:
         artifact.retention_class = db_models.TemporalArtifactRetentionClass.PINNED
         artifact.expires_at = None
         await self._repository.commit()
+        return pin
 
     async def unpin(
         self,
@@ -1709,6 +1711,137 @@ class TemporalArtifactService:
         preview = await self._repository.get_artifact(str(preview_id))
         return build_artifact_ref(preview)
 
+    async def write_integration_event_artifact(
+        self,
+        *,
+        principal: str,
+        execution: ExecutionRef,
+        integration_name: str,
+        correlation_id: str,
+        payload: bytes,
+        content_type: str = "application/json",
+        event_type: str | None = None,
+        metadata_json: dict[str, Any] | None = None,
+        redaction_level: db_models.TemporalArtifactRedactionLevel = db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+    ) -> ArtifactRef:
+        """Persist one raw integration callback/event payload as an artifact."""
+
+        metadata = dict(metadata_json or {})
+        metadata.update(
+            {
+                "integration_name": integration_name,
+                "correlation_id": correlation_id,
+                "event_type": event_type,
+                "artifact_kind": "integration_event",
+            }
+        )
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(payload),
+            link=ExecutionRef(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                link_type="debug.trace",
+                label=execution.label or f"{integration_name}:callback",
+            ),
+            metadata_json=metadata,
+            redaction_level=redaction_level,
+        )
+        artifact = await self.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=payload,
+            content_type=content_type,
+        )
+        return build_artifact_ref(artifact)
+
+    async def write_integration_result_artifact(
+        self,
+        *,
+        principal: str,
+        execution: ExecutionRef,
+        integration_name: str,
+        correlation_id: str,
+        payload: dict[str, Any] | bytes,
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> ArtifactRef:
+        """Persist one integration result envelope using standard output retention."""
+
+        encoded = (
+            payload
+            if isinstance(payload, bytes)
+            else json.dumps(payload, sort_keys=True).encode("utf-8")
+        )
+        metadata = {
+            "integration_name": integration_name,
+            "correlation_id": correlation_id,
+            "artifact_kind": "integration_result",
+        }
+        metadata.update(metadata_json or {})
+        artifact, _upload = await self.create(
+            principal=principal,
+            content_type=content_type,
+            size_bytes=len(encoded),
+            link=ExecutionRef(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                link_type="output.primary",
+                label=execution.label or f"{integration_name}:result",
+            ),
+            metadata_json=metadata,
+            redaction_level=db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        )
+        artifact = await self.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=principal,
+            payload=encoded,
+            content_type=content_type,
+        )
+        return build_artifact_ref(artifact)
+
+    async def write_integration_failure_artifact(
+        self,
+        *,
+        principal: str,
+        execution: ExecutionRef,
+        integration_name: str,
+        correlation_id: str,
+        external_operation_id: str,
+        normalized_status: str,
+        provider_status: str | None,
+        summary: str,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> ArtifactRef:
+        """Persist a compact provider failure summary with restricted preview semantics."""
+
+        payload = {
+            "integrationName": integration_name,
+            "correlationId": correlation_id,
+            "externalOperationId": external_operation_id,
+            "normalizedStatus": normalized_status,
+            "providerStatus": provider_status,
+            "summary": summary,
+            "diagnostics": diagnostics or {},
+        }
+        return await self.write_integration_result_artifact(
+            principal=principal,
+            execution=ExecutionRef(
+                namespace=execution.namespace,
+                workflow_id=execution.workflow_id,
+                run_id=execution.run_id,
+                link_type="output.summary",
+                label=execution.label or f"{integration_name}:failure",
+            ),
+            integration_name=integration_name,
+            correlation_id=correlation_id,
+            payload=payload,
+            metadata_json={"artifact_kind": "integration_failure"},
+        )
+
 
 class TemporalArtifactActivities:
     """Activity-friendly facade used by Temporal workflow/activity code."""
@@ -1716,9 +1849,11 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
-    async def artifact_create(self, *, principal: str, **kwargs: Any) -> ArtifactRef:
-        artifact, _ = await self._service.create(principal=principal, **kwargs)
-        return build_artifact_ref(artifact)
+    async def artifact_create(
+        self, *, principal: str, **kwargs: Any
+    ) -> tuple[ArtifactRef, ArtifactUploadDescriptor]:
+        artifact, upload = await self._service.create(principal=principal, **kwargs)
+        return build_artifact_ref(artifact), upload
 
     async def artifact_read(
         self,
@@ -1781,10 +1916,62 @@ class TemporalArtifactActivities:
             policy=policy,
         )
 
-    async def artifact_sweep_lifecycle(
+    async def artifact_lifecycle_sweep(
         self,
         *,
         principal: str,
         run_id: str | None = None,
     ) -> LifecycleSweepSummary:
         return await self._service.sweep_lifecycle(principal=principal, run_id=run_id)
+
+    async def artifact_sweep_lifecycle(
+        self,
+        *,
+        principal: str,
+        run_id: str | None = None,
+    ) -> LifecycleSweepSummary:
+        """Backward-compatible alias for the canonical lifecycle sweep activity."""
+
+        return await self.artifact_lifecycle_sweep(
+            principal=principal,
+            run_id=run_id,
+        )
+
+    async def artifact_link(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        execution_ref: dict[str, Any] | ExecutionRef,
+    ) -> str:
+        link = await self._service.link_artifact(
+            artifact_id=artifact_id,
+            principal=principal,
+            execution_ref=execution_ref,
+        )
+        return str(link.id)
+
+    async def artifact_pin(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        reason: str | None = None,
+    ) -> str:
+        pin = await self._service.pin(
+            artifact_id=artifact_id,
+            principal=principal,
+            reason=reason,
+        )
+        return str(pin.id)
+
+    async def artifact_unpin(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+    ) -> None:
+        await self._service.unpin(
+            artifact_id=artifact_id,
+            principal=principal,
+        )

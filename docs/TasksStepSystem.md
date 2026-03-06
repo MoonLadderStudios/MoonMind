@@ -276,7 +276,7 @@ Existing task artifacts continue:
 
 ---
 
-## 10. Task Dashboard UI Changes
+## 10. Mission Control UI Changes
 
 ### 10.1 Queue Submit UI (`/tasks/queue/new`)
 

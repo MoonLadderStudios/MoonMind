@@ -73,7 +73,7 @@ As a task owner, I can inspect and download submitted attachments from the queue
 - **DOC-REQ-005** (Source: `docs/TasksImageSystem.md`, Worker Changes): Worker prepare downloads attachments, writes manifest/context artifacts, records task context attachment summary data, and emits lifecycle events.
 - **DOC-REQ-006** (Source: `docs/TasksImageSystem.md`, Prompt Injection): Runtime instruction composition injects an `INPUT ATTACHMENTS` block before `WORKSPACE`.
 - **DOC-REQ-007** (Source: `docs/TasksImageSystem.md`, Image Context Generation): Vision context generation remains toggleable via runtime settings while preserving deterministic artifact output in prepare flows.
-- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md`, dashboard attachment references; `docs/TasksImageSystem.md`, Tasks Dashboard UI Changes): Dashboard create/detail experiences support attachment upload plus preview/download visibility.
+- **DOC-REQ-008** (Source: `docs/TaskQueueSystem.md`, dashboard attachment references; `docs/TasksImageSystem.md`, Mission Control UI Changes): Dashboard create/detail experiences support attachment upload plus preview/download visibility.
 - **DOC-REQ-009** (Source: `docs/TasksImageSystem.md`, resolved Phase 1 scope): `captions` input remains explicitly deferred in Phase 1 and unsupported payloads fail-fast.
 - **DOC-REQ-010** (Source: task objective provided in this feature request): Completion deliverables include production runtime code changes; docs/spec-only output is insufficient.
 - **DOC-REQ-011** (Source: task objective provided in this feature request): Completion deliverables include validation tests executed via `./tools/test_unit.sh`.

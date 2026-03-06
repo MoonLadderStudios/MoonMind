@@ -26,6 +26,10 @@ def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
     assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
 
 
+def test_normalize_status_maps_temporal_executing_to_running() -> None:
+    assert normalize_status("temporal", "executing") == "running"
+
+
 def test_normalize_status_fallback_for_unknown_source() -> None:
     assert normalize_status("unknown-source", "anything") == "queued"
 
@@ -149,6 +153,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["features"]["temporalDashboard"]["actionsEnabled"] is False
     assert config["features"]["temporalDashboard"]["submitEnabled"] is False
     assert config["features"]["temporalDashboard"]["debugFieldsEnabled"] is False
+    assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")

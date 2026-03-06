@@ -10,7 +10,7 @@
    - `curl -X POST /api/queue/jobs` with the payload; confirm response returns `jobId`.
 
 3. **Monitor the run**
-   - Open Tasks Dashboard → `Manifests` category (new tab) to view status.
+   - Open Mission Control → `Manifests` category (new tab) to view status.
    - Stream events via `/api/queue/jobs/{jobId}/events/stream` (or poll `/api/queue/jobs/{jobId}/events`) and download artifacts once available.
 
 4. **Implement worker configuration**

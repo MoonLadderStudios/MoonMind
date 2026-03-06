@@ -57,6 +57,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("orchestrator/run-1")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("mm:123e4567-e89b-12d3-a456-426614174000")
+    assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB")
     assert _is_allowed_path("new")
     assert _is_allowed_path("manifests")
     assert _is_allowed_path("manifests/new")
@@ -79,7 +80,7 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 
     assert response.status_code == 200
     body = response.text
-    assert "Tasks Dashboard" in body
+    assert "Mission Control" in body
     assert "task-dashboard-config" in body
     assert "/static/task_dashboard/dashboard.js" in body
     assert "viewport-fit=cover" in body
@@ -110,6 +111,7 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         f"/tasks/{uuid4()}",
         f"/tasks/mm:{uuid4()}",
+        "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
         f"/tasks/queue/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
         f"/tasks/manifests/{uuid4()}",

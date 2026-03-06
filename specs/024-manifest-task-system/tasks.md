@@ -60,15 +60,15 @@
 
 ---
 
-## Phase 5: User Story 3 - Tasks Dashboard & Security Visibility (Priority: P3)
+## Phase 5: User Story 3 - Mission Control & Security Visibility (Priority: P3)
 
-**Goal**: Show how manifest runs appear in the Tasks Dashboard and enforce a security model that prevents raw secrets in queue payloads, logs, and artifacts.
+**Goal**: Show how manifest runs appear in the Mission Control and enforce a security model that prevents raw secrets in queue payloads, logs, and artifacts.
 
 **Independent Test**: A designer can mock the new category/submit flow and a security reviewer can audit payload/secret handling using this doc.
 
 ### Implementation for User Story 3
 
-- [X] T016 [US3] Create the Tasks Dashboard section covering the new "Manifests" category, submit form fields, and detail view expectations referencing SSE event streams.
+- [X] T016 [US3] Create the Mission Control section covering the new "Manifests" category, submit form fields, and detail view expectations referencing SSE event streams.
 - [X] T017 [US3] Describe the manifest registry CRUD endpoints (`GET/PUT/POST /api/manifests...`) and how submission returns queue job IDs for UI linking.
 - [X] T018 [US3] Write the security model detailing token-free payload rules, env-variable fast path, future Vault references, and logging/artifact redaction requirements.
 

@@ -25,6 +25,8 @@ This design uses Temporal concepts directly:
 * Search Attributes + Memo ([Temporal Docs][1])
 * System limits that drive architecture decisions (payload/event-history/concurrency/update limits) ([Temporal Docs][2])
 
+This document describes the **Temporal-managed manifest path** specifically. During migration, MoonMind may still also have queue-backed manifest flows elsewhere in the product. Those should not be relabeled as Temporal-backed until the execution substrate has actually moved.
+
 ---
 
 ## 2. Problem statement
@@ -43,9 +45,10 @@ Temporal is the primary workflow manager and scheduler, so manifest ingest shoul
 
 ## 3. Non-goals
 
-* Backward compatibility with old Celery/“Agent Queue” concepts.
+* Preserving old Celery/“Agent Queue” naming or semantics inside the Temporal-native implementation.
 * Maintaining legacy naming like “worker task / orchestrator task / manifest job” inside the new system.
 * Implementing a custom queue semantics layer on top of Temporal Task Queues (Temporal Task Queues are FIFO polling queues used for dispatch/routing). ([Temporal Docs][1])
+* Claiming that every current manifest submission path in MoonMind already runs through `MoonMind.ManifestIngest` or that queue-backed manifest flows disappear immediately on adoption of this design.
 
 ---
 
@@ -80,6 +83,11 @@ Rationale:
 * It benefits from Temporal visibility, retention, and debugging.
 
 (“Workflow Type” / “Workflow Execution” are Temporal-native concepts; we don’t invent a parallel taxonomy.) ([Temporal Docs][1])
+
+Migration note:
+
+* Temporal-managed manifest executions should appear as `source=temporal`, `entry=manifest` in compatibility surfaces.
+* Queue-backed manifest jobs remain `source=queue` until they are actually migrated.
 
 ---
 
@@ -202,24 +210,36 @@ Proposed Queries:
 
 (For large node lists, these query results should be backed by Artifact Store indexes rather than returning massive payloads.)
 
+`GetStatus()` should distinguish:
+
+* canonical workflow lifecycle state (`initializing`, `executing`, `finalizing`, `succeeded`, `failed`, `canceled`)
+* finer-grained manifest ingest phase for UI/debugging, if needed
+
 ---
 
 ## 7. Manifest lifecycle
 
 ### 7.1 States
 
-Manifest ingest Workflow Execution states (domain-level):
+Manifest ingest should use the **shared MoonMind workflow state model** already defined by the Temporal lifecycle and visibility docs.
 
-* `RECEIVED` (workflow started, manifest_ref recorded)
-* `VALIDATED`
-* `COMPILED` (plan_ref stored)
-* `RUNNING`
-* `PAUSED`
-* `COMPLETED`
-* `FAILED`
-* `CANCELED`
+Canonical `mm_state` values:
 
-These should be mirrored into Search Attributes for UI filtering (see §10). ([Temporal Docs][1])
+* `initializing`
+* `executing`
+* `finalizing`
+* `succeeded`
+* `failed`
+* `canceled`
+
+Interpretation for manifest ingest:
+
+* `initializing`: manifest ref accepted; read/parse/validate/compile in progress
+* `executing`: child execution orchestration in progress
+* `finalizing`: summary/index aggregation in progress
+* `succeeded` / `failed` / `canceled`: terminal states
+
+If the product needs more granular progress labels such as “validated” or “compiled”, expose those as bounded phase metadata in Memo, query results, or summary artifacts rather than redefining the canonical workflow state taxonomy.
 
 ---
 
@@ -253,9 +273,10 @@ Reason:
 * Task Queues are a routing mechanism: workers poll task queues for tasks. ([Temporal Docs][1])
 * `MoonMind.Run` can schedule:
 
-  * “LLM Activities” on `mm.activity.llm`
-  * “CPU/IO Activities” on `mm.activity.default`
-  * “Sandbox Activities” on `mm.activity.sandbox`
+  * LLM/model-facing Activities on `mm.activity.llm`
+  * repo/command/sandbox Activities on `mm.activity.sandbox`
+  * integration Activities on `mm.activity.integrations`
+  * artifact IO Activities on `mm.activity.artifacts`
 
 The manifest (or compiled plan) can contain **runtime hints**, but the actual selection mechanism is “which Activity Type and Task Queue does the workflow schedule”.
 
@@ -270,10 +291,12 @@ This avoids forcing a single runtime choice at the Workflow level and supports m
   * `mm.workflow` (hosts `MoonMind.ManifestIngest`, `MoonMind.Run`)
 * Activity task queues:
 
-  * `mm.activity.default` (general CPU/IO)
-  * `mm.activity.llm` (LLM calls, GPU-backed if needed)
-  * `mm.activity.integrations` (external APIs)
   * `mm.activity.artifacts` (artifact read/write)
+  * `mm.activity.llm` (LLM calls, GPU-backed if needed)
+  * `mm.activity.sandbox` (repo/command/sandbox operations)
+  * `mm.activity.integrations` (external APIs)
+
+Provider- or domain-specific sub-queues are deferred, not default. Add them only when stronger isolation or separate scaling is required.
 
 Reminder: Task Queue is FIFO and polled by workers; it’s not a business-level “priority queue” abstraction. ([Temporal Docs][1])
 
@@ -338,7 +361,7 @@ Implementation:
 Two modes:
 
 * **FAIL_FAST**: on first node failure, stop scheduling new nodes, request cancel on running children, finalize as FAILED.
-* **BEST_EFFORT**: continue scheduling independent nodes, finalize as COMPLETED_WITH_ERRORS (domain) but workflow can still “complete successfully” from Temporal’s perspective if desired.
+* **BEST_EFFORT**: continue scheduling independent nodes, write an explicit summary artifact describing partial failure, and choose terminal close semantics deliberately rather than inventing an undocumented pseudo-state.
 
 Retries:
 
@@ -413,28 +436,26 @@ Temporal glossary: **Parent Close Policy** determines what happens to a Child Wo
 
 Temporal glossary: Search Attributes are indexed names used in list filters for Workflow Executions. ([Temporal Docs][1])
 
-**Manifest ingest workflow Search Attributes:**
+For v1, this design should align with the shared Visibility registry rather than inventing a second naming system.
 
-* `mm.ManifestId` = WorkflowId (or external manifest ID)
-* `mm.ManifestDigest` = sha256
-* `mm.Status` = RECEIVED/VALIDATED/COMPILED/RUNNING/PAUSED/COMPLETED/FAILED
-* `mm.RequestedBy` = user/service
-* `mm.Source` = upload/git/integration
-* `mm.TotalNodes` = int
-* `mm.CompletedNodes` = int
-* `mm.FailedNodes` = int
+Required shared fields for `MoonMind.ManifestIngest`:
 
-**Run workflow Search Attributes:**
+* `mm_owner_type`
+* `mm_owner_id`
+* `mm_state`
+* `mm_updated_at`
+* `mm_entry = "manifest"`
 
-* `mm.ManifestId` = parent manifest ingest workflow id
-* `mm.NodeId` = node id
-* `mm.Status` = RUNNING/COMPLETED/FAILED/etc.
-* `mm.Runtime` = llm/default/sandbox (optional)
+Optional bounded fields already allowed by the shared registry may include:
 
-This enables:
+* `mm_repo`
+* `mm_integration`
 
-* List all runs started by a manifest via `mm.ManifestId = ...`
-* Paginate accurately using Temporal Visibility APIs (and the returned page tokens).
+Rules:
+
+* do **not** introduce ad hoc Search Attribute names such as `mm.ManifestId` or `mm.Status`
+* do **not** store large manifests, prompts, or unbounded user text in Search Attributes
+* if manifest-specific indexed lineage becomes necessary, standardize a bounded field such as `mm_manifest_ingest_id` by updating the shared Visibility contract first
 
 ### 13.2 Memo (non-indexed)
 
@@ -442,8 +463,12 @@ Temporal glossary: Memo is non-indexed user metadata returned on list/describe. 
 Use Memo for:
 
 * small human-readable summary
-* “latest plan_ref”
+* `manifest_ref` / `plan_ref` when safe
+* bounded ingest-phase metadata for detail views
 * UI display hints (not used for filtering)
+* small progress counters when the product needs them but they are not yet part of the indexed registry
+
+Memo should stay small and display-oriented. Do not place secrets, full manifest bodies, large prompts, or unbounded user text in Memo.
 
 ### 13.3 A canonical “Run Index” artifact
 
@@ -455,7 +480,8 @@ To avoid relying purely on visibility reads (which have rate limits), write an i
 This index is:
 
 * produced incrementally during execution
-* used by UI for pagination/counts without merging multiple sources
+* used by UI/detail views for stable per-manifest lineage without merging multiple sources
+* a better near-term source for “runs started by this manifest” than inventing undocumented Search Attribute names
 
 ---
 
@@ -467,7 +493,13 @@ Manifest ingest must enforce:
 2. **Caller is authorized to read the manifest artifact** and any referenced artifacts.
 3. **Run workflows inherit authorization context** (principal, tenant, org) as immutable workflow input metadata + Search Attributes.
 
-Artifact access control is enforced by the Artifact System (per your Artifact System Design), with signed URLs or brokered reads. (Manifest ingest never embeds secrets in workflow history.)
+Artifact access control is enforced by the Artifact System (per your Artifact System Design), with signed URLs or brokered reads.
+
+Additional guardrails:
+
+* never place raw credentials, signed URLs, prompts with secrets, or full manifest contents into workflow history
+* never place secrets or high-cardinality payloads into Search Attributes or Memo
+* keep authorization lineage bounded and immutable so visibility/filtering can rely on it safely
 
 ---
 
@@ -497,21 +529,23 @@ Optional (future):
 
 The UI should **not** infer totals by merging unrelated lists. Instead:
 
-* The ingest workflow computes `TotalNodes` directly from the compiled plan and stores it as a Search Attribute (`mm.TotalNodes`). ([Temporal Docs][1])
-* Each `MoonMind.Run` execution is tagged with `mm.ManifestId` so the UI can list runs for a manifest via a single indexed filter query. ([Temporal Docs][1])
+* The ingest workflow computes total nodes directly from the compiled plan and writes them into summary artifacts and/or bounded detail metadata.
+* The manifest ingest execution itself is listed through the shared Temporal Visibility model (`mm_entry=manifest` plus the standard execution fields).
+* Child-run listings for a manifest should come from the canonical `run_index_ref` artifact until a shared manifest-lineage Search Attribute is explicitly standardized.
 * For fast pagination, the UI can:
 
   1. Use Temporal Visibility pagination for “live truth”, respecting visibility read rate limits. ([Temporal Docs][2])
-  2. Or read the “run index” artifact for a stable snapshot view (especially if Temporal visibility reads are costly).
+  2. Or read the “run index” artifact for a stable per-manifest snapshot view (especially if Temporal visibility reads are costly or lineage fields are not yet standardized).
 
-This eliminates the class of bugs where “page totals” are computed from one source while “next page” cursor is driven by another source.
+This eliminates the class of bugs where “page totals” are computed from one source while “next page” cursor is driven by another source, or where the UI invents its own cross-source notion of manifest lineage.
 
 ---
 
 ## 17. Open questions
 
 1. **Manifest schema**: How expressive should dependencies be (simple DAG vs conditionals vs dynamic fan-out)?
-2. **Node execution mapping**: Is every node always a `MoonMind.Run` child workflow, or do we allow “inline” nodes as Activities for very small units?
+2. **Node execution mapping (future extension)**: Do we ever introduce inline activity-only nodes later, or keep the v1 rule that manifest nodes execute as child workflows?
 3. **Delta semantics on UpdateManifest**: Do we allow changing existing node definitions, or only append new nodes?
-4. **Failure semantics**: Should overall ingest Workflow Execution fail when any node fails, or should it complete successfully with errors and rely on summary artifacts?
-5. **Sharding strategy**: At what size do we require Continue-As-New vs hierarchical shard ingests?
+4. **Failure semantics**: In `BEST_EFFORT` mode, should the Temporal execution close as `succeeded` with errors recorded in summary artifacts, or close as `failed` once any node failure occurs?
+5. **Visibility lineage**: When do we standardize a bounded manifest-lineage Search Attribute (for example `mm_manifest_ingest_id`) instead of relying on the run index artifact for child-run lookup?
+6. **Sharding strategy**: At what size do we require Continue-As-New vs hierarchical shard ingests?

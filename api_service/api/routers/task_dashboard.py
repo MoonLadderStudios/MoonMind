@@ -94,7 +94,9 @@ def _is_allowed_path(path: str) -> bool:
         return False
     if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
         return True
-    if _SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT.fullmatch(path):
+    if _SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT.fullmatch(path) or (
+        path.startswith("mm:") and _is_safe_detail_segment(path)
+    ):
         return True
     if path in _STATIC_PATHS:
         return True
