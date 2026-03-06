@@ -22,10 +22,12 @@ This document is intentionally **UI- and integration-focused**. It does not rede
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/Temporal/TaskExecutionCompatibilityModel.md`
+- `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/TaskArchitecture.md`
 - `docs/TaskUiArchitecture.md`
 
-If a future dedicated Visibility / UI Query Model doc is added, that doc should own the exact Search Attribute, filter, token, and count semantics. Until then, this document defines the dashboard-side assumptions.
+This document is intentionally downstream of the Temporal compatibility and Visibility docs. Those documents own canonical identifier, status, Search Attribute, filter, token, and count semantics. This document only defines how the dashboard consumes those contracts.
 
 ## 3. Current Baseline
 
@@ -120,7 +122,7 @@ Rules:
 
 ## 6. Runtime Config Contract
 
-`build_runtime_config()` should add a new source entry and a new status map for Temporal-backed executions.
+`build_runtime_config()` should add a new source entry for Temporal-backed executions. If the dashboard still relies on client-side compatibility mapping during migration, it may also expose a transitional Temporal status map, but adapter-supplied normalized fields remain preferred.
 
 ### 6.1 New `sources.temporal` block
 
@@ -136,7 +138,7 @@ Proposed runtime config contract:
       "update": "/api/executions/{workflowId}/update",
       "signal": "/api/executions/{workflowId}/signal",
       "cancel": "/api/executions/{workflowId}/cancel",
-      "artifacts": "/api/executions/{namespace}/{workflowId}/{runId}/artifacts",
+      "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
       "artifactCreate": "/api/artifacts",
       "artifactMetadata": "/api/artifacts/{artifactId}",
       "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
@@ -146,9 +148,16 @@ Proposed runtime config contract:
 }
 ```
 
-### 6.2 New `statusMaps.temporal`
+### 6.2 Transitional `statusMaps.temporal`
 
-Initial normalized mapping:
+Preferred UI contract for Temporal-backed rows/details:
+
+- `dashboardStatus` is the compatibility status used for list badges and broad filters.
+- `rawState` preserves the exact MoonMind workflow state.
+- `temporalStatus` and `closeStatus` remain available for advanced/detail views.
+- `waitingReason` and `attentionRequired` remain available whenever `rawState=awaiting_external`.
+
+If the dashboard still needs a client-side fallback mapping during migration, it should mirror the canonical compatibility mapping owned by `docs/Temporal/VisibilityAndUiQueryModel.md`:
 
 ```json
 {
@@ -156,7 +165,7 @@ Initial normalized mapping:
     "initializing": "queued",
     "planning": "queued",
     "executing": "running",
-    "awaiting_external": "running",
+    "awaiting_external": "awaiting_action",
     "finalizing": "running",
     "succeeded": "succeeded",
     "failed": "failed",
@@ -167,9 +176,9 @@ Initial normalized mapping:
 
 Notes:
 
-- `mm_state` is the primary dashboard-facing domain state for Temporal-backed rows.
-- `temporalStatus` is still retained for advanced metadata and terminal-state consistency checks.
-- `awaiting_external` is intentionally normalized to `running` in v1 unless a stronger user-action-specific signal exists. We should not imply “awaiting user action” unless the execution contract explicitly distinguishes that case.
+- Prefer server-supplied normalized fields over recreating dashboard semantics in `dashboard.js`.
+- The dashboard must preserve `rawState`, `temporalStatus`, and `closeStatus` even when it renders a broader `dashboardStatus`.
+- `awaiting_external` does not automatically mean the current user must act; pair the compatibility status with `waitingReason` and `attentionRequired` so the UI does not mislead operators.
 
 ### 6.3 Feature flags
 
@@ -213,19 +222,21 @@ Canonical routes remain:
 
 ### 7.2 Temporal detail routing requirement
 
-The current dashboard route shell treats bare `/tasks/{taskId}` detail paths as UUID-shaped identifiers.
+The current dashboard route shell still assumes queue/orchestrator-era identifier patterns in a few places.
 
-That is a problem for Temporal-backed detail because documented Workflow IDs are not constrained to UUID format and may use `mm:`-style identifiers.
+That is a problem for Temporal-backed detail because canonical task handles for Temporal-backed work are `taskId == workflowId`, and Workflow IDs are opaque identifiers that may use `mm:`-style values.
 
 Required change:
 
-- widen the bare task-detail allowlist so Temporal-safe task identifiers are routable
-- or add a compatibility alias such as `/tasks/executions/:workflowId`
+- route `/tasks/:taskId` through canonical server-side source resolution metadata rather than ID-shape probing
+- accept safe Temporal-compatible task IDs in the route shell so canonical routes remain reachable
+- keep any source-specific alias route optional and clearly secondary
 
 Recommendation:
 
 - keep `/tasks/:taskId` as the canonical product route
-- widen the route allowlist to accept safe Temporal-compatible identifiers using the same safe-segment posture already used elsewhere in the dashboard shell
+- use a persisted source mapping / global task index to resolve `taskId` to `queue`, `orchestrator`, or `temporal`
+- widen the route allowlist to accept safe Temporal-compatible identifiers as an implementation detail, not as the compatibility contract
 - optionally add `/tasks/executions/:workflowId` as an internal/debug alias that redirects to `/tasks/:taskId?source=temporal`
 
 ### 7.3 Query parameters
@@ -237,9 +248,18 @@ Supported query parameters for Temporal integration:
 | `source=temporal` | Force Temporal source resolution for list/detail |
 | `workflowType=` | Filter Temporal list by workflow type when source is Temporal |
 | `state=` | Filter Temporal list by `mm_state` |
+| `entry=` | Filter Temporal list by `mm_entry` (`run`, `manifest`) |
+| `ownerType=` | Operator/admin-only owner class filter |
 | `ownerId=` | Admin-only filter passthrough when allowed by API policy |
 | `nextPageToken=` | Temporal-only pagination token |
-| `entry=` | Optional UI-level filter derived from `mm_entry` |
+| `repo=` | Optional repo-scoped filter when exposed by API policy |
+| `integration=` | Optional integration filter when exposed by API policy |
+
+Ownership rules:
+
+- standard user task pages should be implicitly scoped to the authenticated principal
+- the default end-user UI should not expose an arbitrary owner picker
+- `ownerType` / `ownerId` filters are operator/admin controls, not general-purpose user-facing filters
 
 ## 8. List Page Integration
 
@@ -267,7 +287,7 @@ When `source=temporal`, the dashboard should treat Temporal as the authoritative
 Behavior:
 
 - call `GET /api/executions`
-- pass `workflowType`, `state`, `ownerId`, `pageSize`, and `nextPageToken` where applicable
+- pass `workflowType`, `state`, `entry`, `ownerType`, `ownerId`, `pageSize`, and `nextPageToken` where applicable
 - use the returned `nextPageToken`, `count`, and `countMode` as-is
 - avoid pretending that queue/orchestrator records are part of the same exact paginated result set
 
@@ -284,17 +304,21 @@ Temporal rows normalized into the dashboard table should provide at least:
 | `summary` | `memo.summary` |
 | `workflowType` | `workflowType` |
 | `entry` | `searchAttributes.mm_entry` if present |
-| `status` | normalized from `state` |
-| `rawStatus` | `state` |
+| `status` | `dashboardStatus` |
+| `rawState` | exact `state` |
 | `temporalStatus` | `temporalStatus` |
+| `closeStatus` | `closeStatus` when present |
+| `ownerType` | `searchAttributes.mm_owner_type` |
 | `ownerId` | `searchAttributes.mm_owner_id` |
 | `repository` | `searchAttributes.mm_repo` when present |
 | `integration` | `searchAttributes.mm_integration` when present |
+| `waitingReason` | bounded wait reason when `rawState=awaiting_external` |
+| `attentionRequired` | whether current product surface expects operator/user action |
 | `startedAt` | `startedAt` |
 | `updatedAt` | `updatedAt` or `searchAttributes.mm_updated_at` |
 | `closedAt` | `closedAt` |
 | `workflowId` | `workflowId` |
-| `runId` | latest `runId` |
+| `temporalRunId` | latest Temporal run instance ID |
 
 ### 8.4 Sorting
 
@@ -302,6 +326,7 @@ For Temporal-backed rows:
 
 - primary sort should be `mm_updated_at` when available
 - fallback sort should be `updatedAt`
+- deterministic tie-breaker should be `workflowId DESC`
 - fallback of last resort is `startedAt`
 
 For mixed-source views:
@@ -318,20 +343,22 @@ Unified detail remains `/tasks/:taskId`.
 Resolution order:
 
 1. if `?source=temporal`, resolve against Temporal only
-2. otherwise use existing source-resolution rules until a broader compatibility model is implemented
-3. when a row originated from the Temporal list, all generated links should include `?source=temporal`
+2. otherwise resolve via canonical server-side source mapping for `taskId`
+3. keep source-probing heuristics, if any remain temporarily, as an implementation fallback rather than the documented contract
+4. when a row originated from the Temporal list, generated links may continue including `?source=temporal` until source mapping is fully in place
 
 ### 9.2 Temporal detail fetch sequence
 
 Minimum fetch sequence for Temporal-backed detail:
 
 1. `GET /api/executions/{workflowId}`
-2. `GET /api/executions/{namespace}/{workflowId}/{runId}/artifacts`
+2. `GET /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts`
 3. optional per-artifact metadata/download calls when the user expands or downloads an artifact
 
 Important rule:
 
-- artifact list fetch must use the **latest run ID from the execution detail response**, not a stale run ID cached from an earlier list row
+- artifact list fetch must use the **latest `temporalRunId` from the execution detail response**, not a stale run ID cached from an earlier list row
+- the detail route stays anchored to `taskId == workflowId` even when `temporalRunId` changes across rerun or Continue-As-New behavior
 
 ### 9.3 Detail header model
 
@@ -348,10 +375,13 @@ Temporal-backed detail should render:
 Advanced/debug fields may optionally show:
 
 - `workflowId`
-- latest `runId`
+- latest `temporalRunId`
 - `namespace`
 - raw `temporalStatus`
-- raw `mm_state`
+- raw `rawState`
+- raw `closeStatus`
+- `waitingReason`
+- `attentionRequired`
 
 ### 9.4 Timeline / event model
 
@@ -360,6 +390,7 @@ The current dashboard has queue event transport and orchestrator timelines. The 
 Therefore v1 detail behavior for Temporal-backed work should be:
 
 - show a summary/timeline panel synthesized from execution fields and known state transitions
+- surface `waitingReason` and `attentionRequired` when the execution is blocked externally
 - show artifacts as the main durable evidence surface
 - show update/signal/cancel actions when enabled
 - defer raw Temporal event history browsing until a dedicated backend contract exists
@@ -426,41 +457,27 @@ Phased order:
 When submit support is added:
 
 - do not add a visible “Temporal runtime” option to the standard runtime picker
-- keep submit flows organized around **task shape** (`Run`, `Manifest`) rather than internal orchestration engine
+- keep submit flows organized around current task product shapes rather than internal orchestration engine
 - let the backend decide whether the request starts a Temporal execution
 
-### 11.3 Initial Temporal submit shapes
+### 11.3 Backend mapping for initial Temporal-backed submit flows
 
-#### `MoonMind.Run`
+The dashboard should continue to submit task-shaped requests and artifact references. The backend compatibility layer may then map those requests onto Temporal workflow starts.
 
-Expected create payload fields:
+Initial expected mappings:
 
-- `workflowType="MoonMind.Run"`
-- optional `title`
-- optional `inputArtifactRef`
-- optional `planArtifactRef`
-- optional `failurePolicy`
-- optional `initialParameters`
-- optional `idempotencyKey`
-
-#### `MoonMind.ManifestIngest`
-
-Expected create payload fields:
-
-- `workflowType="MoonMind.ManifestIngest"`
-- required `manifestArtifactRef`
-- optional `title`
-- optional `failurePolicy`
-- optional `initialParameters`
-- optional `idempotencyKey`
+- run-shaped submit flows may start `MoonMind.Run`
+- manifest-oriented submit flows may start `MoonMind.ManifestIngest`
+- `workflowType`, `idempotencyKey`, `failurePolicy`, and `initialParameters` are backend/API contract details, not primary user-facing dashboard concepts
+- the dashboard should focus on reviewed task-safe fields and artifact references, not on exposing raw workflow-start payload structure
 
 ### 11.4 Redirect behavior after create
 
 After a successful Temporal-backed create:
 
 - redirect to `/tasks/{taskId}?source=temporal`
-- `taskId` should resolve to the Temporal-backed compatibility handle for the new execution
-- if both `taskId` and `workflowId` are available, internal state may retain both, but the route should remain task-oriented
+- for Temporal-backed records, `taskId` should equal `workflowId`
+- internal state may additionally retain `temporalRunId`, but the canonical route should remain task-oriented and stable across reruns
 
 ## 12. Artifact Integration
 
@@ -501,7 +518,7 @@ Execution-scoped artifact listing is currently keyed by:
 
 - `namespace`
 - `workflowId`
-- `runId`
+- `temporalRunId`
 
 That means Temporal detail should default to showing artifacts for the **latest run**. If prior-run artifact browsing is needed later, it should become an explicit detail feature rather than an implicit mixed-run view.
 
@@ -519,13 +536,15 @@ During migration, a Temporal-backed record may carry:
 
 - `taskId`
 - `workflowId`
-- latest `runId`
+- latest `temporalRunId`
 
 Rules:
 
+- for `source=temporal`, `taskId` should equal `workflowId`
 - `taskId` remains the main dashboard route handle during migration when compatibility requires it
 - `workflowId` is the durable Temporal identity
-- `runId` is detail/debug metadata, not the main user-facing identifier
+- `temporalRunId` is detail/debug metadata, not the main user-facing identifier
+- `runId` remains reserved for legacy orchestrator compatibility and should not be reused for Temporal-backed task payloads
 
 ### 13.3 Mixed-source list caveat
 
@@ -546,6 +565,7 @@ Rules:
 - add Temporal row normalization
 - add source-filtered Temporal list mode
 - add Temporal detail rendering
+- add canonical server-side source resolution for Temporal-backed `taskId`
 - widen task detail route handling for Temporal-safe identifiers
 
 ### Phase 2: Temporal action integration
@@ -558,8 +578,8 @@ Rules:
 ### Phase 3: Temporal artifact-first submit integration
 
 - add artifact upload helper flows in submit pages where required
-- enable `MoonMind.Run` create from `/tasks/new`
-- enable `MoonMind.ManifestIngest` create from `/tasks/manifests/new` or a unified replacement flow
+- enable backend-routed Temporal create for run-shaped submits from `/tasks/new`
+- enable backend-routed Temporal create for manifest-oriented submits from `/tasks/manifests/new` or a unified replacement flow
 
 ### Phase 4: Compatibility refinement
 
@@ -572,7 +592,7 @@ Rules:
 This document is ready to implement when all of the following are true:
 
 1. Runtime config additions for `temporal` are agreed.
-2. Route-shell handling for non-UUID Temporal task identifiers is agreed.
+2. Canonical source resolution and route-shell handling for non-UUID Temporal task identifiers are agreed.
 3. Temporal list row normalization fields are fixed.
 4. Temporal detail fetch sequence is fixed.
 5. Action-to-endpoint mapping is fixed.
@@ -587,6 +607,7 @@ This document is ready to implement when all of the following are true:
 - [ ] Add `sources.temporal` to `build_runtime_config()`
 - [ ] Add `statusMaps.temporal`
 - [ ] Add feature flags for Temporal list/detail/actions/submit
+- [ ] Add canonical source resolution metadata/path for `/tasks/:taskId`
 - [ ] Ensure dashboard shell route allowlist accepts Temporal-safe task identifiers
 
 ### List page
@@ -594,6 +615,7 @@ This document is ready to implement when all of the following are true:
 - [ ] Add Temporal fetch client for `GET /api/executions`
 - [ ] Add Temporal row normalization
 - [ ] Add `source=temporal` filter option
+- [ ] Add `entry` and operator-only ownership filters only where API policy allows
 - [ ] Add Temporal-only pagination token handling
 - [ ] Document mixed-source total limitations in UI copy if needed
 
@@ -601,7 +623,8 @@ This document is ready to implement when all of the following are true:
 
 - [ ] Add Temporal detail resolver
 - [ ] Add execution artifact list fetch
-- [ ] Add source-aware metadata rendering for workflow ID / run ID
+- [ ] Add source-aware metadata rendering for workflow ID / Temporal run ID
+- [ ] Add wait metadata rendering (`waitingReason`, `attentionRequired`)
 - [ ] Add Temporal artifact download flow
 - [ ] Add v1 synthesized timeline panel
 
@@ -616,14 +639,14 @@ This document is ready to implement when all of the following are true:
 
 - [ ] Keep Temporal out of the runtime picker
 - [ ] Add artifact-first submit helpers where needed
-- [ ] Add `MoonMind.Run` create flow
-- [ ] Add `MoonMind.ManifestIngest` create flow
+- [ ] Add backend-routed Temporal submit flow for run-shaped requests
+- [ ] Add backend-routed Temporal submit flow for manifest-oriented requests
 - [ ] Redirect new Temporal-backed executions to `/tasks/{taskId}?source=temporal`
 
 ## 17. Open Questions
 
 1. Should `/tasks/:taskId` remain the only canonical Temporal detail route, or should `/tasks/executions/:workflowId` exist as a first-class compatibility alias?
-2. Should approval-specific Temporal waits continue to normalize as `running`, or do we want a dedicated user-action status once the execution contract can distinguish approval waits from generic external waits?
+2. Is the current `awaiting_action` compatibility grouping sufficient once `waitingReason` and `attentionRequired` are exposed, or do we eventually want a sharper dashboard distinction for approval versus external wait states?
 3. Should direct Temporal-backed create be hidden entirely behind backend routing, or exposed as a feature-flagged advanced submit path during rollout?
 4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common?
 5. When a queue- or orchestrator-backed flow migrates to Temporal, should the dashboard preserve the previous source label for user continuity, or show `Temporal` directly?
