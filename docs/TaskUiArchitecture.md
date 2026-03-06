@@ -6,7 +6,7 @@ Last Updated: 2026-03-05
 
 ## 1. Purpose
 
-Define the concrete implementation architecture for the MoonMind Tasks Dashboard.
+Define the concrete implementation architecture for the MoonMind Mission Control.
 
 This document contains UI-specific behavior and contracts:
 

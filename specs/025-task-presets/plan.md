@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement a server-hosted Task Preset Catalog that stores curated step templates, exposes REST endpoints to browse/version/expand presets, tracks applied metadata on queued tasks, and empowers the Task Queue UI plus CLI/MCP clients with deterministic compile-time expansion. Work spans five surfaces: (1) DB schema + Alembic migrations to persist templates and their immutable versions, (2) FastAPI services/routers to list/fetch/expand/save templates with validation + audit, (3) seed + governance utilities so ops can ship global defaults, (4) Task Dashboard UI updates for browsing, previewing, applying, grouping, and diffing presets, and (5) secret-aware “save these steps as a template” writer that promotes existing drafts back into the catalog with RBAC + telemetry enforcement.
+Implement a server-hosted Task Preset Catalog that stores curated step templates, exposes REST endpoints to browse/version/expand presets, tracks applied metadata on queued tasks, and empowers the Task Queue UI plus CLI/MCP clients with deterministic compile-time expansion. Work spans five surfaces: (1) DB schema + Alembic migrations to persist templates and their immutable versions, (2) FastAPI services/routers to list/fetch/expand/save templates with validation + audit, (3) seed + governance utilities so ops can ship global defaults, (4) Mission Control UI updates for browsing, previewing, applying, grouping, and diffing presets, and (5) secret-aware “save these steps as a template” writer that promotes existing drafts back into the catalog with RBAC + telemetry enforcement.
 
 ## Technical Context
 

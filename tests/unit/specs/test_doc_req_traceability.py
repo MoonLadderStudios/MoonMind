@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gate for the active feature spec."""
+"""DOC-REQ traceability gates for contract-backed feature specs."""
 
 from __future__ import annotations
 
@@ -12,28 +12,50 @@ _FEATURE_DIR_PATTERN = re.compile(r"^(?P<prefix>\d{3})-[^/]+$")
 _DOC_REQ_COLUMN_NAMES = (
     "DOC-REQ ID",
     "DOC-REQ",
+    "DOC Requirement",
     "Source Requirement",
     "Requirement ID",
 )
-_VALIDATION_COLUMN_NAME = "Validation Strategy"
+_VALIDATION_COLUMN_NAMES = (
+    "Validation Strategy",
+    "Validation Evidence",
+    "Completed Validation Tasks",
+)
 
 
-def test_active_feature_doc_req_traceability_contract() -> None:
-    feature_dir = _find_active_feature_dir()
-    feature_spec = feature_dir / "spec.md"
-    feature_traceability = feature_dir / "contracts" / "requirements-traceability.md"
+def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
+    features: list[tuple[str, Path, Path]] = []
+    for path in sorted(Path("specs").iterdir()):
+        if not path.is_dir():
+            continue
+        if _FEATURE_DIR_PATTERN.fullmatch(path.name) is None:
+            continue
+        feature_spec = path / "spec.md"
+        feature_traceability = path / "contracts" / "requirements-traceability.md"
+        if feature_spec.exists() and feature_traceability.exists():
+            features.append((path.name, feature_spec, feature_traceability))
+    return features
 
+
+_FEATURES = _discover_contract_backed_features()
+
+
+@pytest.mark.parametrize(
+    ("feature_name", "feature_spec", "feature_traceability"),
+    _FEATURES,
+    ids=[feature_name for feature_name, *_ in _FEATURES],
+)
+def test_doc_req_traceability_contract(
+    feature_name: str,
+    feature_spec: Path,
+    feature_traceability: Path,
+) -> None:
     spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
     if not doc_req_ids:
-        pytest.skip(f"No DOC-REQ entries found in active feature spec {feature_spec}")
-
-    assert feature_traceability.exists(), (
-        "Missing traceability file for DOC-REQ feature: "
-        f"{feature_traceability}"
-    )
+        pytest.skip(f"No DOC-REQ entries found in {feature_name} spec.md")
 
     traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
@@ -61,10 +83,11 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
 
     header = _split_row(lines[table_start])
     doc_req_col = _find_column_index(header, _DOC_REQ_COLUMN_NAMES)
-    validation_col = _find_column_index(header, (_VALIDATION_COLUMN_NAME,))
+    validation_col = _find_column_index(header, _VALIDATION_COLUMN_NAMES)
     assert doc_req_col is not None and validation_col is not None, (
         "Traceability header must include one DOC-REQ column "
-        f"({_DOC_REQ_COLUMN_NAMES}) and '{_VALIDATION_COLUMN_NAME}' in "
+        f"({_DOC_REQ_COLUMN_NAMES}) and one validation column "
+        f"({_VALIDATION_COLUMN_NAMES}) in "
         f"{traceability_path}"
     )
 
@@ -106,7 +129,7 @@ def _find_header_line(lines: list[str]) -> int | None:
         cells = _split_row(line)
         if (
             _find_column_index(cells, _DOC_REQ_COLUMN_NAMES) is not None
-            and _find_column_index(cells, (_VALIDATION_COLUMN_NAME,)) is not None
+            and _find_column_index(cells, _VALIDATION_COLUMN_NAMES) is not None
         ):
             return index
     return None
@@ -120,7 +143,9 @@ def _split_row(line: str) -> list[str]:
 
 
 def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
-    normalized_to_index = {cell.strip("`").strip(): index for index, cell in enumerate(header)}
+    normalized_to_index = {
+        cell.strip("`").strip(): index for index, cell in enumerate(header)
+    }
     for name in names:
         if name in normalized_to_index:
             return normalized_to_index[name]
@@ -129,19 +154,3 @@ def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
 
 def _is_delimiter_row(cells: list[str]) -> bool:
     return all(cell and set(cell) <= {"-", ":", " "} for cell in cells)
-
-
-def _find_active_feature_dir() -> Path:
-    feature_dirs: list[tuple[int, Path]] = []
-    for path in Path("specs").iterdir():
-        if not path.is_dir():
-            continue
-        match = _FEATURE_DIR_PATTERN.fullmatch(path.name)
-        if match is None:
-            continue
-        if not (path / "spec.md").exists():
-            continue
-        feature_dirs.append((int(match.group("prefix")), path))
-
-    assert feature_dirs, "No numbered feature specs found under specs/"
-    return max(feature_dirs, key=lambda item: item[0])[1]

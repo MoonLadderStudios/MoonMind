@@ -1052,6 +1052,20 @@
     }
   }
 
+  function formatByteCount(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      return "-";
+    }
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   function sanitizeCssToken(value, fallback = "") {
     const token = String(value ?? "")
       .toLowerCase()
@@ -2896,6 +2910,9 @@
         parseQueuePaginationFromSearch,
         applyQueuePaginationToSearch,
         resetQueuePaginationState,
+      };
+      window.__temporalRunHistoryTest = {
+        resolveTemporalDetailContext,
       };
     }
 
@@ -8709,7 +8726,197 @@
     };
 
     await load();
-    startPolling(() => load(true), pollIntervals.detail);
+    startPolling(() => load(), pollIntervals.detail);
+  }
+
+  function renderTemporalArtifactsRows(artifacts) {
+    const normalizedArtifacts = Array.isArray(artifacts) ? artifacts : [];
+    return normalizedArtifacts
+      .map((artifact) => {
+        const artifactId = pick(artifact, "artifactId", "artifact_id") || "";
+        const contentType = pick(artifact, "contentType", "content_type") || "-";
+        const sizeBytes = pick(artifact, "sizeBytes", "size_bytes");
+        const linkItems = Array.isArray(pick(artifact, "links")) ? pick(artifact, "links") : [];
+        const firstLink = linkItems[0] || {};
+        const metadata = pick(artifact, "metadata") || {};
+        const label =
+          pick(firstLink, "label") ||
+          pick(metadata, "label") ||
+          artifactId ||
+          "-";
+        const linkType = pick(firstLink, "linkType", "link_type") || "-";
+        const downloadEndpointTemplate =
+          temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download";
+        const downloadHref = artifactId
+          ? endpoint(downloadEndpointTemplate, { artifactId })
+          : "";
+        const actionCell = downloadHref
+          ? `<a href="${escapeHtml(downloadHref)}" target="_blank" rel="noopener noreferrer">Download</a>`
+          : "-";
+        return `
+          <tr>
+            <td>${escapeHtml(String(label))}</td>
+            <td>${escapeHtml(formatByteCount(sizeBytes))}</td>
+            <td>${escapeHtml(String(contentType))}</td>
+            <td>${escapeHtml(String(linkType))}</td>
+            <td>${actionCell}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function resolveTemporalDetailContext(
+    execution,
+    workflowId,
+    sourceConfig = temporalSourceConfig,
+  ) {
+    const namespace = pick(execution, "namespace");
+    const taskId = pick(execution, "taskId") || workflowId;
+    const temporalRunId =
+      pick(execution, "temporalRunId") || pick(execution, "runId") || null;
+    const memo = pick(execution, "memo") || {};
+    const continueAsNewCause =
+      pick(execution, "continueAsNewCause")
+      || pick(memo, "continue_as_new_cause")
+      || "-";
+    const artifactsEndpointTemplate =
+      sourceConfig.artifacts
+      || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts";
+    const artifactsEndpoint =
+      namespace && temporalRunId
+        ? endpoint(artifactsEndpointTemplate, {
+            namespace,
+            workflowId,
+            temporalRunId,
+          })
+        : "";
+    return {
+      namespace,
+      taskId,
+      temporalRunId,
+      memo,
+      continueAsNewCause,
+      artifactsEndpoint,
+    };
+  }
+
+  async function renderTemporalDetailPage(workflowId) {
+    setView(
+      "Temporal Task Detail",
+      `Task ${workflowId}`,
+      "<p class='loading'>Loading Temporal execution...</p>",
+      { showAutoRefreshControls: true },
+    );
+
+    const load = async () => {
+      try {
+        const detailEndpointTemplate =
+          temporalSourceConfig.detail || "/api/executions/{workflowId}";
+        const execution = await fetchJson(
+          endpoint(detailEndpointTemplate, { workflowId }),
+        );
+
+        const detailContext = resolveTemporalDetailContext(execution, workflowId);
+        const {
+          namespace,
+          taskId,
+          temporalRunId: runId,
+          memo,
+          continueAsNewCause,
+          artifactsEndpoint,
+        } = detailContext;
+
+        let artifactsPayload = { artifacts: [] };
+        if (artifactsEndpoint) {
+          artifactsPayload = await fetchJson(artifactsEndpoint);
+        }
+
+        const artifactRefs = Array.isArray(pick(execution, "artifactRefs"))
+          ? pick(execution, "artifactRefs")
+          : [];
+        const summary = pick(memo, "summary") || "No summary available.";
+        const title =
+          pick(memo, "title")
+          || pick(execution, "title")
+          || `Temporal Execution ${workflowId}`;
+        const closeStatus = pick(execution, "closeStatus") || "-";
+        const rawState = pick(execution, "state") || "initializing";
+        const workflowType = pick(execution, "workflowType") || "-";
+        const temporalStatus = pick(execution, "temporalStatus") || "running";
+        const artifactsRows =
+          renderTemporalArtifactsRows(pick(artifactsPayload, "artifacts")) ||
+          "<tr><td colspan='5' class='small'>No artifacts.</td></tr>";
+        const artifactRefList = artifactRefs.length
+          ? `<ul>${artifactRefs
+              .map((ref) => `<li><code>${escapeHtml(String(ref))}</code></li>`)
+              .join("")}</ul>`
+          : "<p class='small'>No linked artifact refs recorded.</p>";
+        const searchAttributesJson = escapeHtml(
+          JSON.stringify(pick(execution, "searchAttributes") || {}, null, 2),
+        );
+        const memoJson = escapeHtml(JSON.stringify(memo, null, 2));
+
+        setView(
+          "Temporal Task Detail",
+          String(title),
+          `
+            <div class="grid-2">
+              <div class="card"><strong>Status:</strong> ${statusBadge("temporal", rawState)}</div>
+              <div class="card"><strong>Temporal Status:</strong> ${escapeHtml(String(temporalStatus))}</div>
+              <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(workflowType))}</div>
+              <div class="card"><strong>Started:</strong> ${formatTimestamp(pick(execution, "startedAt"))}</div>
+              <div class="card"><strong>Updated:</strong> ${formatTimestamp(pick(execution, "updatedAt"))}</div>
+              <div class="card"><strong>Closed:</strong> ${formatTimestamp(pick(execution, "closedAt"))}</div>
+            </div>
+            <div class="stack">
+              <section>
+                <h3>Summary</h3>
+                <p>${escapeHtml(String(summary))}</p>
+              </section>
+              <section>
+                <h3>Artifacts</h3>
+                <table>
+                  <thead><tr><th>Label</th><th>Size</th><th>Type</th><th>Link Type</th><th>Action</th></tr></thead>
+                  <tbody>${artifactsRows}</tbody>
+                </table>
+              </section>
+              <section>
+                <h3>Artifact References</h3>
+                ${artifactRefList}
+              </section>
+              <section>
+                <h3>Operator Metadata</h3>
+                <div class="grid-2">
+                  <div class="card"><strong>Task ID:</strong> <code>${escapeHtml(String(taskId))}</code></div>
+                  <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(String(workflowId))}</code></div>
+                  <div class="card"><strong>Temporal Run ID:</strong> <code>${escapeHtml(String(runId || "-"))}</code></div>
+                  <div class="card"><strong>Namespace:</strong> ${escapeHtml(String(namespace || "-"))}</div>
+                  <div class="card"><strong>Continue-As-New Cause:</strong> ${escapeHtml(String(continueAsNewCause))}</div>
+                  <div class="card"><strong>Close Status:</strong> ${escapeHtml(String(closeStatus))}</div>
+                </div>
+                <h4>Memo</h4>
+                <pre>${memoJson}</pre>
+                <h4>Search Attributes</h4>
+                <pre>${searchAttributesJson}</pre>
+              </section>
+            </div>
+          `,
+          { showAutoRefreshControls: true },
+        );
+      } catch (error) {
+        console.error("temporal detail load failed", error);
+        setView(
+          "Temporal Task Detail",
+          `Task ${workflowId}`,
+          "<div class='notice error'>Unable to load Temporal execution detail.</div>",
+          { showAutoRefreshControls: true },
+        );
+      }
+    };
+
+    await load();
+    startPolling(() => load(), pollIntervals.detail);
   }
 
   async function renderSystemSettingsPage() {
@@ -9147,6 +9354,18 @@
       const explicitSource = String(searchParams?.get("source") || "")
         .trim()
         .toLowerCase();
+      if (explicitSource === "queue") {
+        await renderQueueDetailPage(candidateTaskId);
+        return;
+      }
+      if (explicitSource === "orchestrator") {
+        await renderOrchestratorDetailPage(candidateTaskId);
+        return;
+      }
+      if (explicitSource === "temporal") {
+        await renderTemporalDetailPage(candidateTaskId);
+        return;
+      }
       try {
         const resolution = await resolveUnifiedTaskSource(candidateTaskId, explicitSource);
         const resolvedSource = String(pick(resolution, "source") || "")
@@ -9165,8 +9384,41 @@
           return;
         }
       } catch (_error) {
-        renderNotFound();
-        return;
+        // Fall back to direct runtime probes when the resolution endpoint is unavailable.
+      }
+      const detailProbes = [
+        {
+          config: queueSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/api/queue/jobs/{id}",
+          params: { id: candidateTaskId },
+          render: renderQueueDetailPage,
+        },
+        {
+          config: orchestratorSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/orchestrator/tasks/{id}",
+          params: { id: candidateTaskId },
+          render: renderOrchestratorDetailPage,
+        },
+        {
+          config: temporalSourceConfig,
+          endpointKey: "detail",
+          endpointDefault: "/api/executions/{workflowId}",
+          params: { workflowId: candidateTaskId },
+          render: renderTemporalDetailPage,
+        },
+      ];
+      for (const probe of detailProbes) {
+        try {
+          await fetchJson(
+            endpoint(probe.config[probe.endpointKey] || probe.endpointDefault, probe.params),
+          );
+          await probe.render(candidateTaskId);
+          return;
+        } catch (_error) {
+          // fall through and probe the next runtime source
+        }
       }
       renderNotFound();
       return;

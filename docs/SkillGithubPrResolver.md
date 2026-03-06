@@ -6,7 +6,7 @@ Last Updated: 2026-02-23
 
 ## 1. Purpose
 
-Add a **PR Resolver** skill that can be invoked from the Tasks Dashboard (or CLI) to:
+Add a **PR Resolver** skill that can be invoked from the Mission Control (or CLI) to:
 
 1. **Resolve target PR** (defaults to the PR associated with the current branch).
 2. **Fetch PR metadata + CI status + comments**.
@@ -146,7 +146,7 @@ Execution: `gh pr merge <pr> --<mergeMethod>`
 
 ---
 
-## 9. Tasks Dashboard Integration
+## 9. Mission Control Integration
 
 ### 9.1 Task Template
 

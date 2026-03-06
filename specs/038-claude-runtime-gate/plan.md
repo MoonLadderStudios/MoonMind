@@ -12,7 +12,7 @@ MoonMind currently exposes Claude runtime toggles even when no Anthropic API key
 **Language/Version**: Python 3.11 services + FastAPI API layer, Celery workers, pytest-based tests orchestrated via `./tools/test_unit.sh`.  
 **Primary Dependencies**: FastAPI for HTTP routing, Celery workers, Pydantic + pydantic-settings for config, Anthropic Claude CLI, GitHub CLI, Codex CLI, Gemini CLI; runtime gate helpers in `moonmind.claude.runtime`.  
 **Storage**: PostgreSQL (queue metadata + API persistence) and RabbitMQ (Celery broker); this feature only reads configuration, so no schema changes are required.  
-**Testing**: `./tools/test_unit.sh` (pytest wrapper) with existing suites under `tests/unit/**`; unit coverage must be expanded for preflight, queue router/service, task dashboard, and settings validation.  
+**Testing**: `./tools/test_unit.sh` (pytest wrapper) with existing suites under `tests/unit/**`; unit coverage must be expanded for preflight, queue router/service, Mission Control, and settings validation.  
 **Target Platform**: Dockerized Linux services (api, celery workers, dashboard) plus optional Claude worker container invoked via docker-compose profiles.  
 **Project Type**: Backend services and CLI workers inside a monorepo (`api_service`, `moonmind`, `tests`).  
 **Performance Goals**: Preflight failure should surface in <2s, queue validation remains O(1) string checks, dashboard config building stays synchronous (<20ms). No throughput regressions expected.  

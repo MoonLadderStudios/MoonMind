@@ -59,6 +59,17 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
     return "system" if owner_id == "system" or not owner_id else "user"
 
 
+def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
+    entry = str(search_attributes.get("mm_entry") or getattr(record, "entry", "")).strip()
+    if entry:
+        return entry.lower()
+
+    workflow_type = str(getattr(getattr(record, "workflow_type", None), "value", "")).lower()
+    if workflow_type.endswith("manifestingest"):
+        return "manifest"
+    return "run"
+
+
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalExecutionService:
@@ -77,6 +88,11 @@ async def _get_service(
 def _serialize_execution(record) -> ExecutionModel:
     temporal_status = "running"
     close_status = record.close_status.value if record.close_status else None
+    memo = dict(record.memo or {})
+    search_attributes = dict(record.search_attributes or {})
+    continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
+        "mm_continue_as_new_cause"
+    )
     if record.close_status is TemporalExecutionCloseStatus.COMPLETED:
         temporal_status = "completed"
     elif record.close_status is TemporalExecutionCloseStatus.CANCELED:
@@ -88,11 +104,9 @@ def _serialize_execution(record) -> ExecutionModel:
     }:
         temporal_status = "failed"
 
-    search_attributes = dict(record.search_attributes or {})
-    memo = dict(record.memo or {})
     owner_type = _normalize_owner_type(record, search_attributes)
     owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
-    entry = str(search_attributes.get("mm_entry") or record.entry or "").strip().lower()
+    entry = _resolve_execution_entry(record, search_attributes)
     title = str(memo.get("title") or "").strip() or record.workflow_type.value
     summary = str(memo.get("summary") or "").strip() or "Execution updated."
     waiting_reason = memo.get("waiting_reason")
@@ -104,6 +118,7 @@ def _serialize_execution(record) -> ExecutionModel:
         task_id=record.workflow_id,
         namespace=record.namespace,
         workflow_id=record.workflow_id,
+        run_id=record.run_id,
         temporal_run_id=record.run_id,
         workflow_type=record.workflow_type.value,
         entry=entry or record.entry,
@@ -124,6 +139,8 @@ def _serialize_execution(record) -> ExecutionModel:
         artifact_refs=list(record.artifact_refs or []),
         artifacts_count=len(record.artifact_refs or []),
         created_at=record.started_at,
+        latest_run_view=True,
+        continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,

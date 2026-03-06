@@ -65,6 +65,7 @@ class UpdateExecutionResponse(BaseModel):
         ..., alias="applied"
     )
     message: str = Field(..., alias="message")
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
 
 
 class SignalExecutionRequest(BaseModel):
@@ -97,6 +98,7 @@ class ExecutionModel(BaseModel):
     task_id: str = Field(..., alias="taskId")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
+    run_id: str = Field(..., alias="runId")
     temporal_run_id: str = Field(..., alias="temporalRunId")
     workflow_type: str = Field(..., alias="workflowType")
     entry: Literal["run", "manifest"] = Field(..., alias="entry")
@@ -135,6 +137,8 @@ class ExecutionModel(BaseModel):
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
     artifacts_count: int = Field(0, alias="artifactsCount")
     created_at: datetime = Field(..., alias="createdAt")
+    latest_run_view: bool = Field(True, alias="latestRunView")
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     started_at: datetime = Field(..., alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")

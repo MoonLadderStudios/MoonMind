@@ -80,7 +80,7 @@ To guarantee workers know that database retrieval is available and required:
 - **Job manifest flag**: queue API sets `job.capabilities.rag = "direct-qdrant"`. The CLI prints “RAG available: run `moonmind rag search` to pull context from the knowledge base.” during `job start`.
 - **Bootstrap prompt snippet**: the default Codex warm-up message includes a bullet: “Before coding, call `moonmind rag search` to load repo knowledge from Qdrant.”
 - **CLI self-check**: `moonmind worker doctor` fails hard (with clear instructions) if Qdrant credentials are missing, preventing workers from starting tasks without retrieval access.
-- **UI reminder**: the task dashboard shows a `RAG ready` badge plus the last retrieval timestamp so humans reviewing runs can confirm context was fetched.
+- **UI reminder**: the Mission Control shows a `RAG ready` badge plus the last retrieval timestamp so humans reviewing runs can confirm context was fetched.
 - **Run log breadcrumbs**: each successful context fetch logs `context_pack_id` and the sources, helping workers trust the mechanism and reviewers audit it.
 
 ## Guardrails (aligns with `docs/WorkerVectorEmbedding.md`)

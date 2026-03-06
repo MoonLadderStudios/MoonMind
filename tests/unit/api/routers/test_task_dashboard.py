@@ -80,7 +80,7 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 
     assert response.status_code == 200
     body = response.text
-    assert "Tasks Dashboard" in body
+    assert "Mission Control" in body
     assert "task-dashboard-config" in body
     assert "/static/task_dashboard/dashboard.js" in body
     assert "viewport-fit=cover" in body

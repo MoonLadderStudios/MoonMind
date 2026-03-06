@@ -106,7 +106,7 @@ def _is_safe_detail_segment(segment: str) -> bool:
 
 
 def _is_temporal_task_id(path: str) -> bool:
-    return ":" in path and _is_safe_detail_segment(path)
+    return path.startswith("mm:") and _is_safe_detail_segment(path)
 
 
 def _parse_task_uuid(task_id: str) -> UUID | None:

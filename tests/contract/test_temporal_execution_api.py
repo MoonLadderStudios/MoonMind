@@ -172,6 +172,79 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_contract_rerun.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "workflowType": "MoonMind.Run",
+                    "title": "Rerun contract",
+                    "planArtifactRef": "artifact://plan/123",
+                    "idempotencyKey": "rerun-create-1",
+                },
+            )
+            assert create_response.status_code == 201
+            created = create_response.json()
+
+            rerun_response = await client.post(
+                f"/api/executions/{created['workflowId']}/update",
+                json={
+                    "updateName": "RequestRerun",
+                    "idempotencyKey": "rerun-update-1",
+                },
+            )
+            assert rerun_response.status_code == 200
+            assert rerun_response.json() == {
+                "accepted": True,
+                "applied": "continue_as_new",
+                "message": "Rerun requested. Execution continued as new run.",
+                "continueAsNewCause": "manual_rerun",
+            }
+
+            describe_response = await client.get(
+                f"/api/executions/{created['workflowId']}"
+            )
+            assert describe_response.status_code == 200
+            described = describe_response.json()
+            assert described["workflowId"] == created["workflowId"]
+            assert described["taskId"] == created["workflowId"]
+            assert described["runId"] != created["runId"]
+            assert described["temporalRunId"] == described["runId"]
+            assert described["latestRunView"] is True
+            assert described["continueAsNewCause"] == "manual_rerun"
+            assert described["startedAt"] == created["startedAt"]
+            assert described["state"] == "executing"
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
+
+
+@pytest.mark.asyncio
 async def test_execution_list_pagination_and_state_filter(tmp_path):
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
@@ -233,6 +306,11 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             assert len(first_body["items"]) == 2
             assert first_body["count"] == 3
             assert first_body["nextPageToken"]
+            for item in first_body["items"]:
+                assert item["workflowId"]
+                assert item["taskId"] == item["workflowId"]
+                assert item["temporalRunId"] == item["runId"]
+                assert item["latestRunView"] is True
 
             second_page = await client.get(
                 "/api/executions",
@@ -245,6 +323,10 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             assert second_page.status_code == 200
             second_body = second_page.json()
             assert len(second_body["items"]) == 1
+            assert (
+                second_body["items"][0]["taskId"]
+                == second_body["items"][0]["workflowId"]
+            )
 
             canceled_only = await client.get(
                 "/api/executions",
@@ -254,6 +336,10 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             canceled_body = canceled_only.json()
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
+            assert (
+                canceled_body["items"][0]["taskId"]
+                == canceled_body["items"][0]["workflowId"]
+            )
 
             run_only = await client.get(
                 "/api/executions",

@@ -490,6 +490,13 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/new"), "/tasks/queue/new");
 })();
 
+(function testNormalizeDashboardDetailSegmentAcceptsTemporalWorkflowIds() {
+  assert.strictEqual(
+    helpers.normalizeDashboardDetailSegment("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB"),
+    "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
+  );
+})();
+
 (function testParseEditJobSearchParam() {
   assert.strictEqual(typeof helpers.parseEditJobSearchParam, "function");
   const params = new URLSearchParams("editJobId=123e4567-e89b-12d3-a456-426614174000");

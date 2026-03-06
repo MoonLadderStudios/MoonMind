@@ -5,7 +5,7 @@
 
 ## Summary
 
-Document `docs/ManifestTaskSystem.md` will codify how manifest-defined ingestion pipelines become Agent Queue jobs, how the dedicated manifest worker executes stage-by-stage pipelines against Qdrant + embeddings, how the Tasks Dashboard submits and visualizes runs, and how security/no-secrets rules apply. The doc references existing FastAPI queue services, MoonMind manifest foundations, and outlines Phase 1 deliverables (job type, payload schema, worker, UI category) with future phases for registry and expanded adapters.
+Document `docs/ManifestTaskSystem.md` will codify how manifest-defined ingestion pipelines become Agent Queue jobs, how the dedicated manifest worker executes stage-by-stage pipelines against Qdrant + embeddings, how the Mission Control submits and visualizes runs, and how security/no-secrets rules apply. The doc references existing FastAPI queue services, MoonMind manifest foundations, and outlines Phase 1 deliverables (job type, payload schema, worker, UI category) with future phases for registry and expanded adapters.
 
 ## Technical Context
 

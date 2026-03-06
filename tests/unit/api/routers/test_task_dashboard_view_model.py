@@ -22,6 +22,10 @@ def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
     assert normalize_status("orchestrator", "awaiting_approval") == "awaiting_action"
 
 
+def test_normalize_status_maps_temporal_executing_to_running() -> None:
+    assert normalize_status("temporal", "executing") == "running"
+
+
 def test_normalize_status_maps_temporal_planning_to_running() -> None:
     assert normalize_status("temporal", "planning") == "running"
 
@@ -136,6 +140,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifacts"]
         == "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts"
     )
+    assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")
