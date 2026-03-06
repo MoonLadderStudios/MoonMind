@@ -24,11 +24,11 @@ from api_service.api.schemas import (
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from moonmind.config.settings import settings
 from api_service.services.manifests_service import (
     ManifestRegistryNotFoundError,
     ManifestsService,
 )
+from moonmind.config.settings import settings
 from moonmind.workflows import get_agent_queue_service, get_temporal_artifact_service
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.service import AgentQueueValidationError

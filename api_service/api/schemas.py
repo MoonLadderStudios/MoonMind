@@ -103,8 +103,8 @@ class ManifestRunMetadataModel(BaseModel):
     workflow_id: Optional[str] = Field(None, alias="workflowId")
     temporal_run_id: Optional[str] = Field(None, alias="temporalRunId")
     workflow_type: Optional[str] = Field(None, alias="workflowType")
-    temporal_status: Optional[Literal["running", "completed", "failed", "canceled"]] = Field(
-        None, alias="temporalStatus"
+    temporal_status: Optional[Literal["running", "completed", "failed", "canceled"]] = (
+        Field(None, alias="temporalStatus")
     )
     manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
     link: Optional[str] = Field(None, alias="link")

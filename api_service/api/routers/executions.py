@@ -16,6 +16,10 @@ from api_service.db.models import (
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.schemas.manifest_ingest_models import (
+    ManifestNodePageModel,
+    ManifestStatusSnapshotModel,
+)
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -26,10 +30,6 @@ from moonmind.schemas.temporal_models import (
     SignalExecutionRequest,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
-)
-from moonmind.schemas.manifest_ingest_models import (
-    ManifestNodePageModel,
-    ManifestStatusSnapshotModel,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -171,11 +171,15 @@ def _serialize_execution(record) -> ExecutionModel:
         memo=memo,
         artifact_refs=list(record.artifact_refs or []),
         manifest_artifact_ref=_manifest_attr(
-            manifest_status, "manifest_artifact_ref", getattr(record, "manifest_ref", None)
+            manifest_status,
+            "manifest_artifact_ref",
+            getattr(record, "manifest_ref", None),
         ),
         plan_artifact_ref=_manifest_attr(manifest_status, "plan_artifact_ref"),
         summary_artifact_ref=_manifest_attr(manifest_status, "summary_artifact_ref"),
-        run_index_artifact_ref=_manifest_attr(manifest_status, "run_index_artifact_ref"),
+        run_index_artifact_ref=_manifest_attr(
+            manifest_status, "run_index_artifact_ref"
+        ),
         checkpoint_artifact_ref=_manifest_attr(
             manifest_status, "checkpoint_artifact_ref"
         ),

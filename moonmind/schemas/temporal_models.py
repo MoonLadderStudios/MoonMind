@@ -13,7 +13,6 @@ from moonmind.schemas.manifest_ingest_models import (
     RequestedByModel,
 )
 
-
 NormalizedIntegrationStatus = Literal[
     "queued",
     "running",
@@ -269,9 +268,7 @@ class ExecutionModel(BaseModel):
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     summary_artifact_ref: Optional[str] = Field(None, alias="summaryArtifactRef")
     run_index_artifact_ref: Optional[str] = Field(None, alias="runIndexArtifactRef")
-    checkpoint_artifact_ref: Optional[str] = Field(
-        None, alias="checkpointArtifactRef"
-    )
+    checkpoint_artifact_ref: Optional[str] = Field(None, alias="checkpointArtifactRef")
     requested_by: Optional[RequestedByModel] = Field(None, alias="requestedBy")
     execution_policy: Optional[ManifestExecutionPolicyModel] = Field(
         None,

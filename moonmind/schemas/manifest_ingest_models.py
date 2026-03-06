@@ -7,7 +7,6 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 ManifestFailurePolicy = Literal["fail_fast", "continue_and_report", "best_effort"]
 ManifestLifecycleState = Literal[
     "initializing",

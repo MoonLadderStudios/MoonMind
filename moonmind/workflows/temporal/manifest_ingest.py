@@ -15,11 +15,9 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from yaml import YAMLError, safe_load
+
 from api_service.db.models import MoonMindWorkflowState, TemporalExecutionRecord
-from moonmind.workflows.agent_queue.manifest_contract import (
-    ManifestContractError,
-    normalize_manifest_job_payload,
-)
 from moonmind.schemas.manifest_ingest_models import (
     CompiledManifestPlanModel,
     ManifestExecutionPolicyModel,
@@ -36,7 +34,10 @@ from moonmind.schemas.manifest_ingest_models import (
     RequestedByModel,
     manifest_node_counts_from_nodes,
 )
-from yaml import YAMLError, safe_load
+from moonmind.workflows.agent_queue.manifest_contract import (
+    ManifestContractError,
+    normalize_manifest_job_payload,
+)
 
 DEFAULT_MANIFEST_FAILURE_POLICY = "fail_fast"
 DEFAULT_MANIFEST_MAX_CONCURRENCY = 50
@@ -303,7 +304,9 @@ def apply_manifest_update(
             },
         }
 
-    raise ManifestIngestValidationError(f"Unsupported manifest update name: {update_name}")
+    raise ManifestIngestValidationError(
+        f"Unsupported manifest update name: {update_name}"
+    )
 
 
 def compile_manifest_plan(
@@ -332,7 +335,9 @@ def compile_manifest_plan(
     try:
         manifest_obj = safe_load(normalized_text)
     except YAMLError as exc:
-        raise ManifestIngestValidationError("Manifest artifact is not valid YAML") from exc
+        raise ManifestIngestValidationError(
+            "Manifest artifact is not valid YAML"
+        ) from exc
     if not isinstance(manifest_obj, Mapping):
         raise ManifestIngestValidationError("Manifest YAML must decode to an object")
 
@@ -402,16 +407,24 @@ def compile_manifest_plan(
 
 
 def plan_nodes_to_runtime_nodes(
-    plan: CompiledManifestPlanModel | Sequence[ManifestPlanNodeModel | Mapping[str, Any]],
+    plan: (
+        CompiledManifestPlanModel | Sequence[ManifestPlanNodeModel | Mapping[str, Any]]
+    ),
     *,
     requested_by: RequestedByModel | Mapping[str, Any],
 ) -> list[ManifestNodeModel]:
     """Materialize compiled plan nodes into bounded runtime node records."""
 
     requested_by_model = RequestedByModel.model_validate(requested_by)
-    raw_nodes = plan.nodes if isinstance(plan, CompiledManifestPlanModel) else list(plan)
+    raw_nodes = (
+        plan.nodes if isinstance(plan, CompiledManifestPlanModel) else list(plan)
+    )
     plan_nodes = [
-        node if isinstance(node, ManifestPlanNodeModel) else ManifestPlanNodeModel.model_validate(node)
+        (
+            node
+            if isinstance(node, ManifestPlanNodeModel)
+            else ManifestPlanNodeModel.model_validate(node)
+        )
         for node in raw_nodes
     ]
     return [
@@ -488,9 +501,9 @@ def _persist_node_items(
     parameters["manifestNodes"] = [
         item.model_dump(by_alias=True, mode="json") for item in nodes
     ]
-    memo["manifest_counts"] = manifest_node_counts_from_nodes(
-        list(nodes)
-    ).model_dump(by_alias=True)
+    memo["manifest_counts"] = manifest_node_counts_from_nodes(list(nodes)).model_dump(
+        by_alias=True
+    )
     if not record.paused:
         memo["manifest_phase"] = _default_phase(record)
     record.parameters = parameters
@@ -625,9 +638,7 @@ def _decode_cursor(cursor: str | None) -> int:
 
 def _encode_cursor(offset: int) -> str:
     payload = {"offset": offset}
-    return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode(
-        "ascii"
-    )
+    return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
 
 
 def _stable_node_id(payload: Mapping[str, Any]) -> str:
@@ -641,6 +652,10 @@ def _coerce_runtime_nodes(
     nodes: Sequence[ManifestNodeModel | Mapping[str, Any]],
 ) -> list[ManifestNodeModel]:
     return [
-        node if isinstance(node, ManifestNodeModel) else ManifestNodeModel.model_validate(node)
+        (
+            node
+            if isinstance(node, ManifestNodeModel)
+            else ManifestNodeModel.model_validate(node)
+        )
         for node in nodes
     ]

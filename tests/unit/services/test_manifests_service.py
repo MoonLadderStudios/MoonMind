@@ -183,7 +183,9 @@ async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
             assert submitted.temporal_status == "running"
             assert submitted.manifest_artifact_ref is not None
 
-            execution = await execution_service.describe_execution(submitted.workflow_id)
+            execution = await execution_service.describe_execution(
+                submitted.workflow_id
+            )
             assert execution.manifest_ref == submitted.manifest_artifact_ref
             assert execution.parameters["manifestName"] == "demo"
             assert execution.parameters["action"] == "run"
@@ -191,7 +193,9 @@ async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
             assert execution.parameters["manifestDigest"].startswith("sha256:")
             assert execution.parameters["manifestNodes"]
             assert execution.parameters["executionPolicy"]["maxConcurrency"] == 25
-            assert execution.parameters["executionPolicy"]["failurePolicy"] == "fail_fast"
+            assert (
+                execution.parameters["executionPolicy"]["failurePolicy"] == "fail_fast"
+            )
             assert execution.parameters["requestedBy"]["id"] == str(user_id)
             assert execution.search_attributes["mm_entry"] == "manifest"
             assert execution.search_attributes["mm_owner_type"] == "user"

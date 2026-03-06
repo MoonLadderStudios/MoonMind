@@ -302,11 +302,15 @@ def test_compile_manifest_plan_produces_stable_node_ids() -> None:
     )
 
     assert first.manifest_digest == second.manifest_digest
-    assert [node.node_id for node in first.nodes] == [node.node_id for node in second.nodes]
+    assert [node.node_id for node in first.nodes] == [
+        node.node_id for node in second.nodes
+    ]
 
 
 @pytest.mark.asyncio
-async def test_manifest_activities_compile_plan_and_write_summary(tmp_path: Path) -> None:
+async def test_manifest_activities_compile_plan_and_write_summary(
+    tmp_path: Path,
+) -> None:
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             artifact_service = TemporalArtifactService(
@@ -344,14 +348,16 @@ async def test_manifest_activities_compile_plan_and_write_summary(tmp_path: Path
                 compile_result.nodes,
                 requested_by={"type": "user", "id": "user-1"},
             )
-            summary_ref, run_index_ref = await manifest_activities.manifest_write_summary(
-                principal="user-1",
-                workflow_id="mm:manifest-1",
-                state="executing",
-                phase="executing",
-                manifest_ref=completed.artifact_id,
-                plan_ref=compile_result.plan_ref.artifact_id,
-                nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
+            summary_ref, run_index_ref = (
+                await manifest_activities.manifest_write_summary(
+                    principal="user-1",
+                    workflow_id="mm:manifest-1",
+                    state="executing",
+                    phase="executing",
+                    manifest_ref=completed.artifact_id,
+                    plan_ref=compile_result.plan_ref.artifact_id,
+                    nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
+                )
             )
 
             assert compile_result.plan_ref.artifact_id.startswith("art_")

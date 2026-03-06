@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel

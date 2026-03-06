@@ -20,16 +20,20 @@ from api_service.auth_providers import get_current_user
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 
 
-def _build_execution_record(*, workflow_type=TemporalWorkflowType.RUN) -> SimpleNamespace:
+def _build_execution_record(
+    *, workflow_type=TemporalWorkflowType.RUN
+) -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
         namespace="moonmind",
         workflow_id="mm:wf-1",
         run_id="run-2",
         workflow_type=workflow_type,
-        state=MoonMindWorkflowState.EXECUTING
-        if workflow_type is TemporalWorkflowType.RUN
-        else MoonMindWorkflowState.EXECUTING,
+        state=(
+            MoonMindWorkflowState.EXECUTING
+            if workflow_type is TemporalWorkflowType.RUN
+            else MoonMindWorkflowState.EXECUTING
+        ),
         close_status=None,
         search_attributes={
             "mm_state": "executing",
@@ -42,12 +46,16 @@ def _build_execution_record(*, workflow_type=TemporalWorkflowType.RUN) -> Simple
             "latest_temporal_run_id": "run-2",
         },
         artifact_refs=["artifact://output/1"],
-        manifest_ref="art_manifest_1"
-        if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
-        else None,
-        plan_ref="art_plan_1"
-        if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
-        else None,
+        manifest_ref=(
+            "art_manifest_1"
+            if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
+            else None
+        ),
+        plan_ref=(
+            "art_plan_1"
+            if workflow_type is TemporalWorkflowType.MANIFEST_INGEST
+            else None
+        ),
         parameters=(
             {
                 "requestedBy": {"type": "user", "id": "user-1"},
