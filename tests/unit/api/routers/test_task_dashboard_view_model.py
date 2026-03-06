@@ -22,6 +22,10 @@ def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
     assert normalize_status("orchestrator", "awaiting_approval") == "awaiting_action"
 
 
+def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
+    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+
+
 def test_normalize_status_maps_temporal_executing_to_running() -> None:
     assert normalize_status("temporal", "executing") == "running"
 
@@ -132,6 +136,24 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifacts"]
         == "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts"
     )
+    assert config["sources"]["temporal"]["artifactCreate"] == "/api/artifacts"
+    assert (
+        config["sources"]["temporal"]["artifactMetadata"]
+        == "/api/artifacts/{artifactId}"
+    )
+    assert (
+        config["sources"]["temporal"]["artifactPresignDownload"]
+        == "/api/artifacts/{artifactId}/presign-download"
+    )
+    assert (
+        config["sources"]["temporal"]["artifactDownload"]
+        == "/api/artifacts/{artifactId}/download"
+    )
+    assert config["features"]["temporalDashboard"]["enabled"] is True
+    assert config["features"]["temporalDashboard"]["detailEnabled"] is True
+    assert config["features"]["temporalDashboard"]["actionsEnabled"] is False
+    assert config["features"]["temporalDashboard"]["submitEnabled"] is False
+    assert config["features"]["temporalDashboard"]["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]

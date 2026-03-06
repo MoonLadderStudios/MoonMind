@@ -18,10 +18,12 @@ from api_service.db.models import (
 from moonmind.config.settings import settings
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
+    ConfigureIntegrationMonitoringRequest,
     CreateExecutionRequest,
     ExecutionListResponse,
     ExecutionModel,
     ExecutionRefreshEnvelope,
+    PollIntegrationRequest,
     SignalExecutionRequest,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
@@ -33,6 +35,12 @@ from moonmind.workflows.temporal import (
 )
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
+
+
+def _enum_value(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return getattr(value, "value", value)
 
 
 def _is_execution_admin(user: User | None) -> bool:
@@ -86,8 +94,17 @@ async def _get_service(
     return TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
+        integration_task_queue=settings.temporal.activity_integrations_task_queue,
+        integration_poll_initial_seconds=(
+            settings.temporal.integration_poll_initial_seconds
+        ),
+        integration_poll_max_seconds=settings.temporal.integration_poll_max_seconds,
+        integration_poll_jitter_ratio=settings.temporal.integration_poll_jitter_ratio,
         run_continue_as_new_step_threshold=(
             settings.temporal.run_continue_as_new_step_threshold
+        ),
+        run_continue_as_new_wait_cycle_threshold=(
+            settings.temporal.run_continue_as_new_wait_cycle_threshold
         ),
         manifest_continue_as_new_phase_threshold=(
             settings.temporal.manifest_continue_as_new_phase_threshold
@@ -99,9 +116,13 @@ def _serialize_execution(
     record, *, include_artifact_refs: bool = True
 ) -> ExecutionModel:
     temporal_status = "running"
-    close_status = record.close_status.value if record.close_status else None
+    close_status = _enum_value(record.close_status)
     memo = dict(record.memo or {})
     search_attributes = dict(record.search_attributes or {})
+    integration_state = getattr(record, "integration_state", None)
+    state_value = _enum_value(record.state) or ""
+    owner_type_value = _enum_value(record.owner_type) or "system"
+    workflow_type_value = _enum_value(record.workflow_type) or ""
     continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
         "mm_continue_as_new_cause"
     )
@@ -116,20 +137,16 @@ def _serialize_execution(
     }:
         temporal_status = "failed"
 
-    memo = dict(record.memo or {})
-    search_attributes = dict(record.search_attributes or {})
-    state_value = record.state.value
-
     return ExecutionModel(
         namespace=record.namespace,
         task_id=record.workflow_id,
         workflow_id=record.workflow_id,
         run_id=record.run_id,
         temporal_run_id=record.run_id,
-        workflow_type=record.workflow_type.value,
+        workflow_type=workflow_type_value,
         entry=record.entry,
-        owner_type=record.owner_type,
-        owner_id=record.owner_id,
+        owner_type=owner_type_value,
+        owner_id=record.owner_id or "system",
         state=state_value,
         temporal_status=temporal_status,
         close_status=close_status,
@@ -141,6 +158,9 @@ def _serialize_execution(
         search_attributes=search_attributes,
         memo=memo,
         artifact_refs=list(record.artifact_refs or []) if include_artifact_refs else [],
+        integration=(
+            dict(integration_state) if isinstance(integration_state, dict) else None
+        ),
         latest_run_view=True,
         continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,
@@ -172,7 +192,7 @@ async def _get_owned_execution(
     if _is_execution_admin(user):
         return record
 
-    if record.owner_type != "user" or record.owner_id != _owner_id(user):
+    if record.owner_type.value != "user" or record.owner_id != _owner_id(user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -278,10 +298,11 @@ async def list_executions(
         next_page_token=result.next_page_token,
         count=result.count,
         count_mode="exact",
-        ui_query_model="compatibility_adapter",
-        stale_state=False,
-        degraded_count=False,
-        refreshed_at=_utc_now(),
+        degraded_count=0,
+        refreshed_at=max(
+            (_compatibility_refreshed_at(item) for item in result.items),
+            default=None,
+        ),
     )
 
 
@@ -292,17 +313,18 @@ async def describe_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
-    canonical_workflow_id, _ = _canonicalize_execution_identifier(workflow_id)
-    _mark_execution_alias_usage(
-        response,
-        raw_identifier=workflow_id,
-        canonical_identifier=canonical_workflow_id,
-    )
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     record = await _get_owned_execution(
         service=service,
-        workflow_id=canonical_workflow_id,
+        workflow_id=workflow_id,
         user=user,
     )
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
     return _serialize_execution(record)
 
 
@@ -314,21 +336,15 @@ async def update_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> UpdateExecutionResponse:
-    canonical_workflow_id, _ = _canonicalize_execution_identifier(workflow_id)
-    _mark_execution_alias_usage(
-        response,
-        raw_identifier=workflow_id,
-        canonical_identifier=canonical_workflow_id,
-    )
-    await _get_owned_execution(
+    record = await _get_owned_execution(
         service=service,
-        workflow_id=canonical_workflow_id,
+        workflow_id=workflow_id,
         user=user,
     )
 
     try:
         update_result = await service.update_execution(
-            workflow_id=canonical_workflow_id,
+            workflow_id=workflow_id,
             update_name=payload.update_name,
             input_artifact_ref=payload.input_artifact_ref,
             plan_artifact_ref=payload.plan_artifact_ref,
@@ -345,19 +361,102 @@ async def update_execution(
             },
         ) from exc
 
-    record = await service.describe_execution(canonical_workflow_id)
-    accepted = bool(update_result.get("accepted", False))
+    refreshed_record = await service.describe_execution(record.workflow_id)
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+
     return UpdateExecutionResponse(
         **update_result,
-        execution=_serialize_execution(record),
+        execution=_serialize_execution(refreshed_record),
         refresh=ExecutionRefreshEnvelope(
-            ui_query_model="compatibility_adapter",
-            patched_execution=accepted,
-            list_stale=accepted,
-            refetch_suggested=accepted,
-            refreshed_at=_utc_now(),
+            patched_execution=True,
+            list_stale=True,
+            refetch_suggested=True,
+            refreshed_at=_compatibility_refreshed_at(refreshed_record),
         ),
     )
+
+
+@router.post(
+    "/{workflow_id}/integration",
+    response_model=ExecutionModel,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def configure_integration_monitoring(
+    workflow_id: str,
+    payload: ConfigureIntegrationMonitoringRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> ExecutionModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+
+    try:
+        record = await service.configure_integration_monitoring(
+            workflow_id=workflow_id,
+            integration_name=payload.integration_name,
+            correlation_id=payload.correlation_id,
+            external_operation_id=payload.external_operation_id,
+            normalized_status=payload.normalized_status,
+            provider_status=payload.provider_status,
+            callback_supported=payload.callback_supported,
+            callback_correlation_key=payload.callback_correlation_key,
+            recommended_poll_seconds=payload.recommended_poll_seconds,
+            external_url=payload.external_url,
+            provider_summary=payload.provider_summary,
+            result_refs=payload.result_refs,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_integration_monitoring_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return _serialize_execution(record)
+
+
+@router.post(
+    "/{workflow_id}/integration/poll",
+    response_model=ExecutionModel,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def record_integration_poll(
+    workflow_id: str,
+    payload: PollIntegrationRequest,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> ExecutionModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+
+    try:
+        record = await service.record_integration_poll(
+            workflow_id=workflow_id,
+            normalized_status=payload.normalized_status,
+            provider_status=payload.provider_status,
+            observed_at=payload.observed_at,
+            recommended_poll_seconds=payload.recommended_poll_seconds,
+            external_url=payload.external_url,
+            provider_summary=payload.provider_summary,
+            result_refs=payload.result_refs,
+            completed_wait_cycles=payload.completed_wait_cycles,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_integration_poll_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return _serialize_execution(record)
 
 
 @router.post(
@@ -372,21 +471,11 @@ async def signal_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
-    canonical_workflow_id, _ = _canonicalize_execution_identifier(workflow_id)
-    _mark_execution_alias_usage(
-        response,
-        raw_identifier=workflow_id,
-        canonical_identifier=canonical_workflow_id,
-    )
-    await _get_owned_execution(
-        service=service,
-        workflow_id=canonical_workflow_id,
-        user=user,
-    )
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     try:
         record = await service.signal_execution(
-            workflow_id=canonical_workflow_id,
+            workflow_id=workflow_id,
             signal_name=payload.signal_name,
             payload=payload.payload,
             payload_artifact_ref=payload.payload_artifact_ref,
@@ -400,6 +489,13 @@ async def signal_execution(
             },
         ) from exc
 
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
     return _serialize_execution(record)
 
 
@@ -415,29 +511,22 @@ async def cancel_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
-    canonical_workflow_id, _ = _canonicalize_execution_identifier(workflow_id)
-    _mark_execution_alias_usage(
-        response,
-        raw_identifier=workflow_id,
-        canonical_identifier=canonical_workflow_id,
-    )
-    await _get_owned_execution(
-        service=service,
-        workflow_id=canonical_workflow_id,
-        user=user,
-    )
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
     record = await service.cancel_execution(
-        workflow_id=canonical_workflow_id,
+        workflow_id=workflow_id,
         reason=request.reason,
         graceful=request.graceful,
     )
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
     return _serialize_execution(record)
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 __all__ = ["router"]
