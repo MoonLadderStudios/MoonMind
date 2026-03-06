@@ -42,6 +42,13 @@ _FEATURES = (
             "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
         ),
     ),
+    (
+        "048-source-truth-projection",
+        Path("specs/048-source-truth-projection/spec.md"),
+        Path(
+            "specs/048-source-truth-projection/contracts/requirements-traceability.md"
+        ),
+    ),
 )
 
 
@@ -65,7 +72,6 @@ def test_doc_req_traceability_contract(
         "Missing traceability file for DOC-REQ feature: "
         f"{feature_traceability} ({feature_name})"
     )
-
     traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 

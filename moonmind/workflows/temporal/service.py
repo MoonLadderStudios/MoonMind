@@ -20,7 +20,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
+    TemporalExecutionOwnerType,
+    TemporalExecutionProjectionSourceMode,
+    TemporalExecutionProjectionSyncState,
     TemporalExecutionRecord,
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
@@ -95,13 +99,13 @@ class TemporalExecutionValidationError(TemporalExecutionError):
 class TemporalExecutionListResult:
     """Paginated temporal execution list response payload."""
 
-    items: list[TemporalExecutionRecord]
+    items: list[TemporalExecutionRecord | TemporalExecutionCanonicalRecord]
     next_page_token: str | None
     count: int
 
 
 class TemporalExecutionService:
-    """State machine + visibility facade for Temporal workflow executions."""
+    """Canonical execution store with a projection mirror for compatibility reads."""
 
     def __init__(
         self,
@@ -144,6 +148,7 @@ class TemporalExecutionService:
         *,
         workflow_type: str,
         owner_id: UUID | str | None,
+        owner_type: str | None = None,
         title: str | None,
         input_artifact_ref: str | None,
         plan_artifact_ref: str | None,
@@ -153,7 +158,10 @@ class TemporalExecutionService:
         idempotency_key: str | None,
     ) -> TemporalExecutionRecord:
         workflow_type_enum = self._parse_workflow_type(workflow_type)
-        owner = str(owner_id) if owner_id is not None else None
+        owner_type_enum, owner = self._resolve_owner_metadata(
+            owner_id=owner_id,
+            owner_type=owner_type,
+        )
 
         if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
             if not manifest_artifact_ref:
@@ -165,10 +173,11 @@ class TemporalExecutionService:
             existing = await self._find_by_create_idempotency(
                 idempotency_key=idempotency_key,
                 owner_id=owner,
+                owner_type=owner_type_enum,
                 workflow_type=workflow_type_enum,
             )
             if existing is not None:
-                return existing
+                return await self._sync_projection_best_effort(existing)
 
         now = _utc_now()
         workflow_id = f"mm:{uuid4()}"
@@ -188,7 +197,8 @@ class TemporalExecutionService:
             memo["manifest_ref"] = manifest_artifact_ref
 
         search_attributes = {
-            "mm_owner_id": owner or "unknown",
+            "mm_owner_type": owner_type_enum.value,
+            "mm_owner_id": owner,
             "mm_state": MoonMindWorkflowState.INITIALIZING.value,
             "mm_updated_at": now.isoformat(),
             "mm_entry": WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
@@ -200,12 +210,13 @@ class TemporalExecutionService:
             if ref
         ]
 
-        record = TemporalExecutionRecord(
+        record = TemporalExecutionCanonicalRecord(
             workflow_id=workflow_id,
             run_id=run_id,
             namespace=self._namespace,
             workflow_type=workflow_type_enum,
             owner_id=owner,
+            owner_type=owner_type_enum,
             state=MoonMindWorkflowState.INITIALIZING,
             close_status=None,
             entry=WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
@@ -240,12 +251,14 @@ class TemporalExecutionService:
             existing = await self._find_by_create_idempotency(
                 idempotency_key=idempotency_key,
                 owner_id=owner,
+                owner_type=owner_type_enum,
                 workflow_type=workflow_type_enum,
             )
             if existing is None:
                 raise exc
-            return existing
-        return await self._refresh_and_detach_record(record)
+            return await self._sync_projection_best_effort(existing)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def list_executions(
         self,
@@ -264,28 +277,30 @@ class TemporalExecutionService:
         )
         state_enum = self._parse_state(state) if state else None
 
-        stmt = select(TemporalExecutionRecord)
+        stmt = select(TemporalExecutionCanonicalRecord)
         stmt = self._apply_filters(
             stmt,
+            model=TemporalExecutionCanonicalRecord,
             workflow_type=workflow_type_enum,
             state=state_enum,
             owner_id=owner,
         )
         stmt = stmt.order_by(
-            TemporalExecutionRecord.updated_at.desc(),
-            TemporalExecutionRecord.workflow_id.desc(),
+            TemporalExecutionCanonicalRecord.updated_at.desc(),
+            TemporalExecutionCanonicalRecord.workflow_id.desc(),
         )
         stmt = stmt.offset(offset).limit(page_size + 1)
 
         rows = list((await self._session.execute(stmt)).scalars().all())
         has_more = len(rows) > page_size
-        items = rows[:page_size]
+        items = await self._sync_projections_best_effort(rows[:page_size])
 
         next_token = self._encode_page_token(offset + page_size) if has_more else None
 
-        count_stmt = select(func.count()).select_from(TemporalExecutionRecord)
+        count_stmt = select(func.count()).select_from(TemporalExecutionCanonicalRecord)
         count_stmt = self._apply_filters(
             count_stmt,
+            model=TemporalExecutionCanonicalRecord,
             workflow_type=workflow_type_enum,
             state=state_enum,
             owner_id=owner,
@@ -298,13 +313,27 @@ class TemporalExecutionService:
             count=count,
         )
 
-    async def describe_execution(self, workflow_id: str) -> TemporalExecutionRecord:
-        record = await self._session.get(TemporalExecutionRecord, workflow_id)
+    async def describe_execution(
+        self,
+        workflow_id: str,
+        *,
+        include_orphaned: bool = False,
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._load_source_execution(
+            workflow_id,
+        )
         if record is None:
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {workflow_id} was not found"
             )
-        return record
+        if include_orphaned:
+            projection = await self._load_projection_execution(
+                workflow_id,
+                include_orphaned=True,
+            )
+            if projection is not None:
+                return projection
+        return await self._sync_projection_best_effort(record)
 
     async def update_execution(
         self,
@@ -321,7 +350,7 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Unsupported update name: {update_name}"
             )
-        record = await self.describe_execution(workflow_id)
+        record = await self._require_source_execution(workflow_id)
 
         if idempotency_key and idempotency_key == record.last_update_idempotency_key:
             cached = record.last_update_response
@@ -363,6 +392,7 @@ class TemporalExecutionService:
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
+        await self._sync_projection_best_effort(record)
         return response
 
     async def signal_execution(
@@ -372,12 +402,12 @@ class TemporalExecutionService:
         signal_name: str,
         payload: dict[str, Any] | None,
         payload_artifact_ref: str | None,
-    ) -> TemporalExecutionRecord:
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         if signal_name not in ALLOWED_SIGNAL_NAMES:
             raise TemporalExecutionValidationError(
                 f"Unsupported signal name: {signal_name}"
             )
-        record = await self.describe_execution(workflow_id)
+        record = await self._require_source_execution(workflow_id)
 
         if record.state in TERMINAL_STATES:
             raise TemporalExecutionValidationError(
@@ -438,7 +468,8 @@ class TemporalExecutionService:
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def configure_integration_monitoring(
         self,
@@ -455,8 +486,8 @@ class TemporalExecutionService:
         external_url: str | None,
         provider_summary: dict[str, Any] | None,
         result_refs: list[str] | None,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
 
         now = _utc_now()
@@ -525,7 +556,8 @@ class TemporalExecutionService:
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def record_integration_poll(
         self,
@@ -539,13 +571,13 @@ class TemporalExecutionService:
         provider_summary: dict[str, Any] | None,
         result_refs: list[str] | None,
         completed_wait_cycles: int,
-    ) -> TemporalExecutionRecord:
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         if completed_wait_cycles < 0:
             raise TemporalExecutionValidationError(
                 "completed_wait_cycles must be non-negative."
             )
 
-        record = await self.describe_execution(workflow_id)
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         state = self._require_integration_state(record)
 
@@ -564,7 +596,8 @@ class TemporalExecutionService:
             )
             await self._sync_integration_correlation_record(record)
             await self._session.commit()
-            return await self._refresh_and_detach_record(record)
+            await self._session.refresh(record)
+            return await self._sync_projection_best_effort(record)
 
         state["normalized_status"] = normalized
         state["provider_status"] = self._clean_text(provider_status)
@@ -624,7 +657,8 @@ class TemporalExecutionService:
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def ingest_integration_callback(
         self,
@@ -633,7 +667,7 @@ class TemporalExecutionService:
         callback_correlation_key: str,
         payload: dict[str, Any] | None,
         payload_artifact_ref: str | None,
-    ) -> TemporalExecutionRecord:
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         correlation, record = await self.resolve_integration_callback_target(
             integration_name=integration_name,
             callback_correlation_key=callback_correlation_key,
@@ -659,7 +693,10 @@ class TemporalExecutionService:
         *,
         integration_name: str,
         callback_correlation_key: str,
-    ) -> tuple[TemporalIntegrationCorrelationRecord, TemporalExecutionRecord]:
+    ) -> tuple[
+        TemporalIntegrationCorrelationRecord,
+        TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    ]:
         """Return the durable correlation row and current execution for one callback."""
 
         correlation = await self._find_integration_correlation(
@@ -679,11 +716,11 @@ class TemporalExecutionService:
         workflow_id: str,
         reason: str | None,
         graceful: bool,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
 
         if record.state in TERMINAL_STATES:
-            return record
+            return await self._sync_projection_best_effort(record)
 
         reason_text = (reason or "Canceled by user.").strip() or "Canceled by user."
         record.paused = False
@@ -705,15 +742,16 @@ class TemporalExecutionService:
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def mark_execution_succeeded(
         self,
         *,
         workflow_id: str,
         summary: str | None = None,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         self._set_state(record, MoonMindWorkflowState.FINALIZING)
         self._set_state(
@@ -725,45 +763,48 @@ class TemporalExecutionService:
             self._update_summary(record, summary)
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def mark_execution_planning(
         self,
         *,
         workflow_id: str,
         summary: str | None = None,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         self._set_state(record, MoonMindWorkflowState.PLANNING)
         if summary:
             self._update_summary(record, summary)
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def mark_execution_executing(
         self,
         *,
         workflow_id: str,
         summary: str | None = None,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         self._set_state(record, MoonMindWorkflowState.EXECUTING)
         if summary:
             self._update_summary(record, summary)
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def mark_execution_awaiting_external(
         self,
         *,
         workflow_id: str,
         summary: str | None = None,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         record.awaiting_external = True
         self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
@@ -771,22 +812,24 @@ class TemporalExecutionService:
             self._update_summary(record, summary)
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def mark_execution_finalizing(
         self,
         *,
         workflow_id: str,
         summary: str | None = None,
-    ) -> TemporalExecutionRecord:
-        record = await self.describe_execution(workflow_id)
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
         self._set_state(record, MoonMindWorkflowState.FINALIZING)
         if summary:
             self._update_summary(record, summary)
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def record_progress(
         self,
@@ -794,13 +837,13 @@ class TemporalExecutionService:
         workflow_id: str,
         completed_steps: int = 0,
         completed_wait_cycles: int = 0,
-    ) -> TemporalExecutionRecord:
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         if completed_steps < 0 or completed_wait_cycles < 0:
             raise TemporalExecutionValidationError(
                 "Progress increments must be non-negative."
             )
 
-        record = await self.describe_execution(workflow_id)
+        record = await self._require_source_execution(workflow_id)
         self._ensure_non_terminal(record)
 
         if completed_steps:
@@ -819,7 +862,8 @@ class TemporalExecutionService:
             )
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
 
     async def mark_execution_failed(
         self,
@@ -827,13 +871,13 @@ class TemporalExecutionService:
         workflow_id: str,
         error_category: str,
         message: str,
-    ) -> TemporalExecutionRecord:
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         if error_category not in ALLOWED_ERROR_CATEGORIES:
             supported = ", ".join(sorted(ALLOWED_ERROR_CATEGORIES))
             raise TemporalExecutionValidationError(
                 f"Unsupported error_category '{error_category}'. Supported values: {supported}"
             )
-        record = await self.describe_execution(workflow_id)
+        record = await self._require_source_execution(workflow_id)
         self._set_state(
             record,
             MoonMindWorkflowState.FAILED,
@@ -846,11 +890,60 @@ class TemporalExecutionService:
         )
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
-        return await self._refresh_and_detach_record(record)
+        await self._session.refresh(record)
+        return await self._sync_projection_best_effort(record)
+
+    async def mark_projection_stale(
+        self,
+        *,
+        workflow_id: str,
+        sync_error: str | None = None,
+    ) -> TemporalExecutionRecord:
+        record = await self._require_projection_execution(
+            workflow_id,
+            include_orphaned=True,
+        )
+        record.sync_state = TemporalExecutionProjectionSyncState.STALE
+        record.sync_error = (sync_error or "").strip() or None
+        await self._session.commit()
+        await self._session.refresh(record)
+        return record
+
+    async def mark_projection_repair_pending(
+        self,
+        *,
+        workflow_id: str,
+        sync_error: str | None = None,
+    ) -> TemporalExecutionRecord:
+        record = await self._require_projection_execution(
+            workflow_id,
+            include_orphaned=True,
+        )
+        record.sync_state = TemporalExecutionProjectionSyncState.REPAIR_PENDING
+        record.sync_error = (sync_error or "").strip() or None
+        await self._session.commit()
+        await self._session.refresh(record)
+        return record
+
+    async def mark_projection_orphaned(
+        self,
+        *,
+        workflow_id: str,
+        sync_error: str | None = None,
+    ) -> TemporalExecutionRecord:
+        record = await self._require_projection_execution(
+            workflow_id,
+            include_orphaned=True,
+        )
+        record.sync_state = TemporalExecutionProjectionSyncState.ORPHANED
+        record.sync_error = (sync_error or "").strip() or None
+        await self._session.commit()
+        await self._session.refresh(record)
+        return record
 
     def _apply_update_inputs(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord,
         *,
         input_artifact_ref: str | None,
         plan_artifact_ref: str | None,
@@ -927,7 +1020,7 @@ class TemporalExecutionService:
 
     def _apply_set_title(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord,
         title: str,
     ) -> dict[str, Any]:
         memo = dict(record.memo or {})
@@ -942,7 +1035,7 @@ class TemporalExecutionService:
 
     def _apply_request_rerun(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord,
         *,
         input_artifact_ref: str | None,
         plan_artifact_ref: str | None,
@@ -976,7 +1069,7 @@ class TemporalExecutionService:
 
     def _continue_as_new(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord,
         *,
         summary: str,
         cause: str,
@@ -1018,7 +1111,7 @@ class TemporalExecutionService:
 
     def _set_state(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord,
         state: MoonMindWorkflowState,
         *,
         close_status: TemporalExecutionCloseStatus | None = None,
@@ -1034,15 +1127,16 @@ class TemporalExecutionService:
         record.state = state
         self._touch(record)
 
-    def _touch(self, record: TemporalExecutionRecord) -> None:
+    def _touch(self, record: TemporalExecutionCanonicalRecord) -> None:
         now = _utc_now()
         record.updated_at = now
 
         attrs = dict(record.search_attributes or {})
+        attrs["mm_owner_type"] = record.owner_type.value
         attrs["mm_state"] = record.state.value
         attrs["mm_updated_at"] = now.isoformat()
-        attrs.setdefault("mm_entry", record.entry)
-        attrs.setdefault("mm_owner_id", record.owner_id or "unknown")
+        attrs["mm_entry"] = record.entry
+        attrs["mm_owner_id"] = self._default_owner_id(record)
         integration_state = self._integration_state(record)
         if integration_state is None:
             attrs.pop("mm_integration", None)
@@ -1054,7 +1148,7 @@ class TemporalExecutionService:
 
     def _update_summary(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord,
         summary: str,
         *,
         error_category: str | None = None,
@@ -1088,8 +1182,56 @@ class TemporalExecutionService:
             memo.pop("external_url", None)
         record.memo = memo
 
+    def _resolve_owner_metadata(
+        self,
+        *,
+        owner_id: UUID | str | None,
+        owner_type: str | None,
+    ) -> tuple[TemporalExecutionOwnerType, str]:
+        owner_value = str(owner_id).strip() if owner_id is not None else ""
+        if owner_type:
+            try:
+                owner_type_enum = TemporalExecutionOwnerType(owner_type)
+            except ValueError as exc:
+                supported = ", ".join(item.value for item in TemporalExecutionOwnerType)
+                raise TemporalExecutionValidationError(
+                    f"Unsupported owner type: {owner_type}. Supported values: {supported}"
+                ) from exc
+        elif owner_value:
+            owner_type_enum = TemporalExecutionOwnerType.USER
+        else:
+            owner_type_enum = TemporalExecutionOwnerType.SYSTEM
+
+        if owner_type_enum is TemporalExecutionOwnerType.USER:
+            if not owner_value:
+                raise TemporalExecutionValidationError(
+                    "owner_id is required when owner_type is user"
+                )
+            return owner_type_enum, owner_value
+
+        if owner_type_enum is TemporalExecutionOwnerType.SYSTEM:
+            return (
+                owner_type_enum,
+                owner_value or TemporalExecutionOwnerType.SYSTEM.value,
+            )
+
+        if not owner_value:
+            raise TemporalExecutionValidationError(
+                "owner_id is required when owner_type is service"
+            )
+        return owner_type_enum, owner_value
+
+    def _default_owner_id(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+    ) -> str:
+        if record.owner_type is TemporalExecutionOwnerType.SYSTEM:
+            return TemporalExecutionOwnerType.SYSTEM.value
+        return record.owner_id or TemporalExecutionOwnerType.SYSTEM.value
+
     def _integration_state(
-        self, record: TemporalExecutionRecord
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
     ) -> dict[str, Any] | None:
         raw = record.integration_state
         if not isinstance(raw, dict):
@@ -1097,7 +1239,8 @@ class TemporalExecutionService:
         return dict(raw)
 
     def _require_integration_state(
-        self, record: TemporalExecutionRecord
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
     ) -> dict[str, Any]:
         state = self._integration_state(record)
         if state is None:
@@ -1185,7 +1328,7 @@ class TemporalExecutionService:
 
     def _apply_external_event(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
         *,
         source: str,
         event_type: str,
@@ -1276,7 +1419,8 @@ class TemporalExecutionService:
         )
 
     async def _sync_integration_correlation_record(
-        self, record: TemporalExecutionRecord
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
     ) -> None:
         state = self._integration_state(record)
         if state is None:
@@ -1312,7 +1456,7 @@ class TemporalExecutionService:
 
     def _integration_lifecycle_status(
         self,
-        record: TemporalExecutionRecord,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
         state: dict[str, Any],
     ) -> str:
         if record.state is MoonMindWorkflowState.CANCELED:
@@ -1370,32 +1514,88 @@ class TemporalExecutionService:
         *,
         idempotency_key: str,
         owner_id: str | None,
+        owner_type: TemporalExecutionOwnerType,
         workflow_type: TemporalWorkflowType,
-    ) -> TemporalExecutionRecord | None:
-        stmt = select(TemporalExecutionRecord).where(
-            TemporalExecutionRecord.create_idempotency_key == idempotency_key,
-            TemporalExecutionRecord.workflow_type == workflow_type,
+    ) -> TemporalExecutionCanonicalRecord | None:
+        stmt = select(TemporalExecutionCanonicalRecord).where(
+            TemporalExecutionCanonicalRecord.create_idempotency_key == idempotency_key,
+            TemporalExecutionCanonicalRecord.owner_type == owner_type,
+            TemporalExecutionCanonicalRecord.workflow_type == workflow_type,
         )
         if owner_id is None:
-            stmt = stmt.where(TemporalExecutionRecord.owner_id.is_(None))
+            stmt = stmt.where(TemporalExecutionCanonicalRecord.owner_id.is_(None))
         else:
-            stmt = stmt.where(TemporalExecutionRecord.owner_id == owner_id)
+            stmt = stmt.where(TemporalExecutionCanonicalRecord.owner_id == owner_id)
         return (await self._session.execute(stmt.limit(1))).scalars().first()
+
+    async def _load_source_execution(
+        self,
+        workflow_id: str,
+    ) -> TemporalExecutionCanonicalRecord | None:
+        return await self._session.get(TemporalExecutionCanonicalRecord, workflow_id)
+
+    async def _require_source_execution(
+        self,
+        workflow_id: str,
+    ) -> TemporalExecutionCanonicalRecord:
+        record = await self._load_source_execution(workflow_id)
+        if record is None:
+            raise TemporalExecutionNotFoundError(
+                f"Workflow execution {workflow_id} was not found"
+            )
+        return record
+
+    async def _load_projection_execution(
+        self,
+        workflow_id: str,
+        *,
+        include_orphaned: bool,
+    ) -> TemporalExecutionRecord | None:
+        record = await self._session.get(TemporalExecutionRecord, workflow_id)
+        if (
+            record is not None
+            and not include_orphaned
+            and record.sync_state is TemporalExecutionProjectionSyncState.ORPHANED
+        ):
+            return None
+        return record
+
+    async def _require_projection_execution(
+        self,
+        workflow_id: str,
+        *,
+        include_orphaned: bool,
+    ) -> TemporalExecutionRecord:
+        record = await self._load_projection_execution(
+            workflow_id,
+            include_orphaned=include_orphaned,
+        )
+        if record is None:
+            raise TemporalExecutionNotFoundError(
+                f"Workflow execution {workflow_id} was not found"
+            )
+        return record
 
     def _apply_filters(
         self,
         stmt: Select[Any],
         *,
+        model: type[TemporalExecutionCanonicalRecord] | type[TemporalExecutionRecord],
         workflow_type: TemporalWorkflowType | None,
         state: MoonMindWorkflowState | None,
         owner_id: str | None,
     ) -> Select[Any]:
+        if model is TemporalExecutionRecord:
+            stmt = stmt.where(
+                TemporalExecutionRecord.sync_state
+                != TemporalExecutionProjectionSyncState.ORPHANED
+            )
         if workflow_type:
-            stmt = stmt.where(TemporalExecutionRecord.workflow_type == workflow_type)
+            stmt = stmt.where(model.workflow_type == workflow_type)
         if state:
-            stmt = stmt.where(TemporalExecutionRecord.state == state)
+            stmt = stmt.where(model.state == state)
         if owner_id:
-            stmt = stmt.where(TemporalExecutionRecord.owner_id == owner_id)
+            stmt = stmt.where(model.owner_id == owner_id)
         return stmt
 
     def _decode_page_token(self, token: str | None) -> int:
@@ -1417,13 +1617,13 @@ class TemporalExecutionService:
             "ascii"
         )
 
-    def _ensure_non_terminal(self, record: TemporalExecutionRecord) -> None:
+    def _ensure_non_terminal(self, record: TemporalExecutionCanonicalRecord) -> None:
         if record.state not in NON_TERMINAL_STATES:
             raise TemporalExecutionValidationError(
                 "Workflow is in a terminal state and cannot be progressed."
             )
 
-    def _should_continue_as_new(self, record: TemporalExecutionRecord) -> bool:
+    def _should_continue_as_new(self, record: TemporalExecutionCanonicalRecord) -> bool:
         if record.workflow_type is TemporalWorkflowType.RUN:
             return (
                 int(record.step_count or 0) >= self._run_continue_as_new_step_threshold
@@ -1437,12 +1637,187 @@ class TemporalExecutionService:
             )
         return False
 
-    async def _refresh_and_detach_record(
-        self, record: TemporalExecutionRecord
+    async def _sync_projection_best_effort(
+        self,
+        source: TemporalExecutionCanonicalRecord,
+    ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
+        snapshot = self._snapshot_source(source)
+        try:
+            projection = await self._upsert_projection_from_source(source)
+            await self._session.commit()
+            await self._session.refresh(projection)
+            return projection
+        except Exception as exc:
+            await self._session.rollback()
+            projection = await self._mark_projection_repair_pending_from_snapshot(
+                snapshot,
+                sync_error=str(exc),
+            )
+            if projection is not None:
+                return projection
+            return self._build_projection_fallback(
+                snapshot,
+                sync_error=str(exc),
+            )
+
+    async def _sync_projections_best_effort(
+        self,
+        sources: list[TemporalExecutionCanonicalRecord],
+    ) -> list[TemporalExecutionRecord | TemporalExecutionCanonicalRecord]:
+        if not sources:
+            return []
+
+        synced_at = _utc_now()
+        try:
+            projections = [
+                await self._upsert_projection_from_source(source, synced_at=synced_at)
+                for source in sources
+            ]
+            await self._session.commit()
+            for projection in projections:
+                await self._session.refresh(projection)
+            return projections
+        except Exception:
+            await self._session.rollback()
+            return [
+                await self._sync_projection_best_effort(source) for source in sources
+            ]
+
+    async def _mark_projection_repair_pending_from_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        sync_error: str,
+    ) -> TemporalExecutionRecord | None:
+        try:
+            projection = await self._load_projection_execution(
+                snapshot["workflow_id"],
+                include_orphaned=True,
+            )
+            if projection is None:
+                return None
+
+            projection.sync_state = TemporalExecutionProjectionSyncState.REPAIR_PENDING
+            projection.sync_error = sync_error[:1000] or "projection_sync_failed"
+            projection.source_mode = (
+                TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+            )
+            await self._session.commit()
+            await self._session.refresh(projection)
+            return projection
+        except Exception:
+            await self._session.rollback()
+            return None
+
+    async def _upsert_projection_from_source(
+        self,
+        source: TemporalExecutionCanonicalRecord,
+        *,
+        synced_at: datetime | None = None,
     ) -> TemporalExecutionRecord:
-        await self._session.refresh(record)
-        self._session.expunge(record)
-        return record
+        payload = self._projection_payload_from_source(source)
+        projection = await self._load_projection_execution(
+            source.workflow_id,
+            include_orphaned=True,
+        )
+        previous_version = int(projection.projection_version or 0) if projection else 0
+        if projection is None:
+            projection = TemporalExecutionRecord(
+                **payload,
+                projection_version=1,
+                last_synced_at=synced_at or _utc_now(),
+                sync_state=TemporalExecutionProjectionSyncState.FRESH,
+                sync_error=None,
+                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+            )
+            self._session.add(projection)
+
+        self._apply_projection_payload(projection, payload)
+        projection.projection_version = max(previous_version + 1, 1)
+        projection.last_synced_at = synced_at or _utc_now()
+        projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
+        projection.sync_error = None
+        projection.source_mode = (
+            TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+        return projection
+
+    def _build_projection_fallback(
+        self,
+        source: dict[str, Any],
+        *,
+        sync_error: str,
+    ) -> TemporalExecutionRecord:
+        return TemporalExecutionRecord(
+            **source,
+            projection_version=0,
+            last_synced_at=source["updated_at"],
+            sync_state=TemporalExecutionProjectionSyncState.REPAIR_PENDING,
+            sync_error=sync_error[:1000] or "projection_sync_failed",
+            source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+        )
+
+    def _snapshot_source(
+        self,
+        source: TemporalExecutionCanonicalRecord,
+    ) -> dict[str, Any]:
+        return self._projection_payload_from_source(source)
+
+    def _projection_payload_from_source(
+        self,
+        source: TemporalExecutionCanonicalRecord,
+    ) -> dict[str, Any]:
+        return {
+            "workflow_id": source.workflow_id,
+            "run_id": source.run_id,
+            "namespace": source.namespace,
+            "workflow_type": source.workflow_type,
+            "owner_id": source.owner_id,
+            "owner_type": source.owner_type,
+            "state": source.state,
+            "close_status": source.close_status,
+            "entry": source.entry,
+            "search_attributes": dict(source.search_attributes or {}),
+            "memo": dict(source.memo or {}),
+            "artifact_refs": list(source.artifact_refs or []),
+            "input_ref": source.input_ref,
+            "plan_ref": source.plan_ref,
+            "manifest_ref": source.manifest_ref,
+            "parameters": dict(source.parameters or {}),
+            "integration_state": (
+                dict(source.integration_state)
+                if isinstance(source.integration_state, dict)
+                else None
+            ),
+            "pending_parameters_patch": (
+                dict(source.pending_parameters_patch)
+                if isinstance(source.pending_parameters_patch, dict)
+                else None
+            ),
+            "paused": source.paused,
+            "awaiting_external": source.awaiting_external,
+            "step_count": source.step_count,
+            "wait_cycle_count": source.wait_cycle_count,
+            "rerun_count": source.rerun_count,
+            "create_idempotency_key": source.create_idempotency_key,
+            "last_update_idempotency_key": source.last_update_idempotency_key,
+            "last_update_response": (
+                dict(source.last_update_response)
+                if isinstance(source.last_update_response, dict)
+                else None
+            ),
+            "started_at": source.started_at,
+            "updated_at": source.updated_at,
+            "closed_at": source.closed_at,
+        }
+
+    def _apply_projection_payload(
+        self,
+        projection: TemporalExecutionRecord,
+        payload: dict[str, Any],
+    ) -> None:
+        for field, value in payload.items():
+            setattr(projection, field, value)
 
 
 def _utc_now() -> datetime:
