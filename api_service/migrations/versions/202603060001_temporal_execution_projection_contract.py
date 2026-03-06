@@ -61,16 +61,12 @@ def upgrade() -> None:
         else owner_type_enum
     )
     sync_state_column = (
-        postgresql.ENUM(
-            name="temporalexecutionprojectionsyncstate", create_type=False
-        )
+        postgresql.ENUM(name="temporalexecutionprojectionsyncstate", create_type=False)
         if is_postgres
         else sync_state_enum
     )
     source_mode_column = (
-        postgresql.ENUM(
-            name="temporalexecutionprojectionsourcemode", create_type=False
-        )
+        postgresql.ENUM(name="temporalexecutionprojectionsourcemode", create_type=False)
         if is_postgres
         else source_mode_enum
     )
@@ -88,13 +84,9 @@ def upgrade() -> None:
         batch_op.add_column(
             sa.Column("last_synced_at", sa.DateTime(timezone=True), nullable=True)
         )
-        batch_op.add_column(
-            sa.Column("sync_state", sync_state_column, nullable=True)
-        )
+        batch_op.add_column(sa.Column("sync_state", sync_state_column, nullable=True))
         batch_op.add_column(sa.Column("sync_error", sa.Text(), nullable=True))
-        batch_op.add_column(
-            sa.Column("source_mode", source_mode_column, nullable=True)
-        )
+        batch_op.add_column(sa.Column("source_mode", source_mode_column, nullable=True))
 
     temporal_executions = sa.table(
         "temporal_executions",

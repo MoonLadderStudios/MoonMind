@@ -14,7 +14,9 @@ _FEATURE_SPECS = (
 )
 
 
-@pytest.mark.parametrize("feature_spec", _FEATURE_SPECS, ids=lambda path: path.parent.name)
+@pytest.mark.parametrize(
+    "feature_spec", _FEATURE_SPECS, ids=lambda path: path.parent.name
+)
 def test_doc_req_traceability_contract(feature_spec: Path) -> None:
     spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
@@ -22,7 +24,9 @@ def test_doc_req_traceability_contract(feature_spec: Path) -> None:
     }
     assert doc_req_ids, f"Expected DOC-REQ entries in {feature_spec}"
 
-    feature_traceability = feature_spec.parent / "contracts" / "requirements-traceability.md"
+    feature_traceability = (
+        feature_spec.parent / "contracts" / "requirements-traceability.md"
+    )
 
     assert feature_traceability.exists(), (
         "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"

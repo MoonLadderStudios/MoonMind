@@ -12,8 +12,8 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
-    TemporalExecutionCloseStatus,
     TemporalExecutionCanonicalRecord,
+    TemporalExecutionCloseStatus,
     TemporalExecutionOwnerType,
     TemporalExecutionProjectionSourceMode,
     TemporalExecutionProjectionSyncState,
@@ -91,7 +91,9 @@ async def test_create_execution_returns_repair_pending_fallback_when_projection_
         async def fail_projection_sync(source):
             raise RuntimeError(f"projection write failed for {source.workflow_id}")
 
-        monkeypatch.setattr(service, "_upsert_projection_from_source", fail_projection_sync)
+        monkeypatch.setattr(
+            service, "_upsert_projection_from_source", fail_projection_sync
+        )
 
         record = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -573,7 +575,9 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
         async def fail_projection_sync(source):
             raise RuntimeError(f"projection write failed for {source.workflow_id}")
 
-        monkeypatch.setattr(service, "_upsert_projection_from_source", fail_projection_sync)
+        monkeypatch.setattr(
+            service, "_upsert_projection_from_source", fail_projection_sync
+        )
 
         response = await service.update_execution(
             workflow_id=created.workflow_id,
@@ -588,10 +592,14 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
         assert response["accepted"] is True
 
         projection = await session.get(TemporalExecutionRecord, created.workflow_id)
-        source = await session.get(TemporalExecutionCanonicalRecord, created.workflow_id)
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
         assert projection is not None
         assert source is not None
-        assert projection.sync_state is TemporalExecutionProjectionSyncState.REPAIR_PENDING
+        assert (
+            projection.sync_state is TemporalExecutionProjectionSyncState.REPAIR_PENDING
+        )
         assert (
             projection.source_mode
             is TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE

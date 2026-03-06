@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     MoonMindWorkflowState,
-    TemporalExecutionCloseStatus,
     TemporalExecutionCanonicalRecord,
+    TemporalExecutionCloseStatus,
     TemporalExecutionOwnerType,
     TemporalExecutionProjectionSourceMode,
     TemporalExecutionProjectionSyncState,
@@ -848,9 +848,7 @@ class TemporalExecutionService:
             try:
                 owner_type_enum = TemporalExecutionOwnerType(owner_type)
             except ValueError as exc:
-                supported = ", ".join(
-                    item.value for item in TemporalExecutionOwnerType
-                )
+                supported = ", ".join(item.value for item in TemporalExecutionOwnerType)
                 raise TemporalExecutionValidationError(
                     f"Unsupported owner type: {owner_type}. Supported values: {supported}"
                 ) from exc
@@ -867,7 +865,10 @@ class TemporalExecutionService:
             return owner_type_enum, owner_value
 
         if owner_type_enum is TemporalExecutionOwnerType.SYSTEM:
-            return owner_type_enum, owner_value or TemporalExecutionOwnerType.SYSTEM.value
+            return (
+                owner_type_enum,
+                owner_value or TemporalExecutionOwnerType.SYSTEM.value,
+            )
 
         if not owner_value:
             raise TemporalExecutionValidationError(
@@ -1014,9 +1015,7 @@ class TemporalExecutionService:
                 "Workflow is in a terminal state and cannot be progressed."
             )
 
-    def _should_continue_as_new(
-        self, record: TemporalExecutionCanonicalRecord
-    ) -> bool:
+    def _should_continue_as_new(self, record: TemporalExecutionCanonicalRecord) -> bool:
         if record.workflow_type is TemporalWorkflowType.RUN:
             return (
                 int(record.step_count or 0) >= self._run_continue_as_new_step_threshold
