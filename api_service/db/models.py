@@ -933,6 +933,7 @@ class TemporalExecutionCanonicalRecord(Base):
         UniqueConstraint(
             "create_idempotency_key",
             "owner_id",
+            "owner_type",
             "workflow_type",
             name="uq_temporal_execution_sources_create_idempotency_owner_type",
         ),
@@ -1060,6 +1061,7 @@ class TemporalExecutionRecord(Base):
         UniqueConstraint(
             "create_idempotency_key",
             "owner_id",
+            "owner_type",
             "workflow_type",
             name="uq_temporal_executions_create_idempotency_owner_type",
         ),

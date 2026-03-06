@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -11,8 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 revision: str = "202603060001"
 down_revision: str | None = "202603050002"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+__all__: Sequence[str] = ("revision", "down_revision")
 
 
 def _create_enum_if_postgres(enum_type: sa.Enum) -> None:
@@ -87,15 +86,30 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("sync_state", sync_state_column, nullable=True))
         batch_op.add_column(sa.Column("sync_error", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("source_mode", source_mode_column, nullable=True))
+        batch_op.drop_constraint(
+            "uq_temporal_executions_create_idempotency_owner_type",
+            type_="unique",
+        )
+        batch_op.create_unique_constraint(
+            "uq_temporal_executions_create_idempotency_owner_type",
+            [
+                "create_idempotency_key",
+                "owner_id",
+                "owner_type",
+                "workflow_type",
+            ],
+        )
 
     temporal_executions = sa.table(
         "temporal_executions",
         sa.column("workflow_id", sa.String(length=64)),
+        sa.column("workflow_type", sa.String(length=64)),
         sa.column("owner_id", sa.String(length=64)),
         sa.column("owner_type", sa.String(length=16)),
         sa.column("state", sa.String(length=64)),
         sa.column("entry", sa.String(length=16)),
         sa.column("search_attributes", sa.JSON()),
+        sa.column("create_idempotency_key", sa.String(length=128)),
         sa.column("projection_version", sa.Integer()),
         sa.column("last_synced_at", sa.DateTime(timezone=True)),
         sa.column("sync_state", sa.String(length=32)),
@@ -105,19 +119,26 @@ def upgrade() -> None:
         sa.column("updated_at", sa.DateTime(timezone=True)),
     )
 
-    rows = bind.execute(
+    owner_priority = sa.case(
+        (temporal_executions.c.owner_id == "system", 0),
+        else_=1,
+    )
+    rows = bind.execution_options(stream_results=True).execute(
         sa.select(
             temporal_executions.c.workflow_id,
+            temporal_executions.c.workflow_type,
             temporal_executions.c.owner_id,
             temporal_executions.c.state,
             temporal_executions.c.entry,
             temporal_executions.c.search_attributes,
+            temporal_executions.c.create_idempotency_key,
             temporal_executions.c.started_at,
             temporal_executions.c.updated_at,
-        )
+        ).order_by(owner_priority, temporal_executions.c.workflow_id)
     ).mappings()
 
     now = datetime.now(UTC)
+    seen_idempotency_scopes: set[tuple[str, str, str, str]] = set()
     for row in rows:
         raw_owner_id = str(row["owner_id"] or "").strip()
         if not raw_owner_id or raw_owner_id == "unknown":
@@ -129,6 +150,19 @@ def upgrade() -> None:
         else:
             owner_type = "user"
             owner_id = raw_owner_id
+
+        create_idempotency_key = row["create_idempotency_key"]
+        if create_idempotency_key:
+            scope = (
+                str(create_idempotency_key),
+                owner_id,
+                owner_type,
+                str(row["workflow_type"]),
+            )
+            if scope in seen_idempotency_scopes:
+                create_idempotency_key = None
+            else:
+                seen_idempotency_scopes.add(scope)
 
         synced_at = row["updated_at"] or row["started_at"] or now
         search_attributes = dict(row["search_attributes"] or {})
@@ -146,6 +180,7 @@ def upgrade() -> None:
                 temporal_executions.c.workflow_id == row["workflow_id"],
             )
             .values(
+                create_idempotency_key=create_idempotency_key,
                 owner_id=owner_id,
                 owner_type=owner_type,
                 search_attributes=search_attributes,
@@ -178,6 +213,18 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("temporal_executions") as batch_op:
+        batch_op.drop_constraint(
+            "uq_temporal_executions_create_idempotency_owner_type",
+            type_="unique",
+        )
+        batch_op.create_unique_constraint(
+            "uq_temporal_executions_create_idempotency_owner_type",
+            [
+                "create_idempotency_key",
+                "owner_id",
+                "workflow_type",
+            ],
+        )
         batch_op.drop_column("source_mode")
         batch_op.drop_column("sync_error")
         batch_op.drop_column("sync_state")

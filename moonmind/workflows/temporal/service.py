@@ -135,6 +135,7 @@ class TemporalExecutionService:
             existing = await self._find_by_create_idempotency(
                 idempotency_key=idempotency_key,
                 owner_id=owner,
+                owner_type=owner_type_enum,
                 workflow_type=workflow_type_enum,
             )
             if existing is not None:
@@ -211,6 +212,7 @@ class TemporalExecutionService:
             existing = await self._find_by_create_idempotency(
                 idempotency_key=idempotency_key,
                 owner_id=owner,
+                owner_type=owner_type_enum,
                 workflow_type=workflow_type_enum,
             )
             if existing is None:
@@ -252,9 +254,7 @@ class TemporalExecutionService:
 
         rows = list((await self._session.execute(stmt)).scalars().all())
         has_more = len(rows) > page_size
-        items = [
-            await self._sync_projection_best_effort(row) for row in rows[:page_size]
-        ]
+        items = await self._sync_projections_best_effort(rows[:page_size])
 
         next_token = self._encode_page_token(offset + page_size) if has_more else None
 
@@ -908,10 +908,12 @@ class TemporalExecutionService:
         *,
         idempotency_key: str,
         owner_id: str | None,
+        owner_type: TemporalExecutionOwnerType,
         workflow_type: TemporalWorkflowType,
     ) -> TemporalExecutionCanonicalRecord | None:
         stmt = select(TemporalExecutionCanonicalRecord).where(
             TemporalExecutionCanonicalRecord.create_idempotency_key == idempotency_key,
+            TemporalExecutionCanonicalRecord.owner_type == owner_type,
             TemporalExecutionCanonicalRecord.workflow_type == workflow_type,
         )
         if owner_id is None:
@@ -1050,6 +1052,29 @@ class TemporalExecutionService:
                 sync_error=str(exc),
             )
 
+    async def _sync_projections_best_effort(
+        self,
+        sources: list[TemporalExecutionCanonicalRecord],
+    ) -> list[TemporalExecutionRecord | TemporalExecutionCanonicalRecord]:
+        if not sources:
+            return []
+
+        synced_at = _utc_now()
+        try:
+            projections = [
+                await self._upsert_projection_from_source(source, synced_at=synced_at)
+                for source in sources
+            ]
+            await self._session.commit()
+            for projection in projections:
+                await self._session.refresh(projection)
+            return projections
+        except Exception:
+            await self._session.rollback()
+            return [
+                await self._sync_projection_best_effort(source) for source in sources
+            ]
+
     async def _mark_projection_repair_pending_from_snapshot(
         self,
         snapshot: dict[str, Any],
@@ -1079,7 +1104,10 @@ class TemporalExecutionService:
     async def _upsert_projection_from_source(
         self,
         source: TemporalExecutionCanonicalRecord,
+        *,
+        synced_at: datetime | None = None,
     ) -> TemporalExecutionRecord:
+        payload = self._projection_payload_from_source(source)
         projection = await self._load_projection_execution(
             source.workflow_id,
             include_orphaned=True,
@@ -1087,72 +1115,23 @@ class TemporalExecutionService:
         previous_version = int(projection.projection_version or 0) if projection else 0
         if projection is None:
             projection = TemporalExecutionRecord(
-                workflow_id=source.workflow_id,
-                run_id=source.run_id,
-                namespace=source.namespace,
-                workflow_type=source.workflow_type,
-                owner_id=source.owner_id,
-                owner_type=source.owner_type,
-                state=source.state,
-                close_status=source.close_status,
-                entry=source.entry,
-                search_attributes={},
-                memo={},
-                artifact_refs=[],
-                parameters={},
+                **payload,
                 projection_version=1,
-                last_synced_at=_utc_now(),
+                last_synced_at=synced_at or _utc_now(),
                 sync_state=TemporalExecutionProjectionSyncState.FRESH,
                 sync_error=None,
                 source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
-                started_at=source.started_at,
-                updated_at=source.updated_at,
-                closed_at=source.closed_at,
             )
             self._session.add(projection)
 
-        projection.run_id = source.run_id
-        projection.namespace = source.namespace
-        projection.workflow_type = source.workflow_type
-        projection.owner_id = source.owner_id
-        projection.owner_type = source.owner_type
-        projection.state = source.state
-        projection.close_status = source.close_status
-        projection.entry = source.entry
-        projection.search_attributes = dict(source.search_attributes or {})
-        projection.memo = dict(source.memo or {})
-        projection.artifact_refs = list(source.artifact_refs or [])
-        projection.input_ref = source.input_ref
-        projection.plan_ref = source.plan_ref
-        projection.manifest_ref = source.manifest_ref
-        projection.parameters = dict(source.parameters or {})
-        projection.pending_parameters_patch = (
-            dict(source.pending_parameters_patch)
-            if isinstance(source.pending_parameters_patch, dict)
-            else None
-        )
-        projection.paused = source.paused
-        projection.awaiting_external = source.awaiting_external
-        projection.step_count = source.step_count
-        projection.wait_cycle_count = source.wait_cycle_count
-        projection.rerun_count = source.rerun_count
-        projection.create_idempotency_key = source.create_idempotency_key
-        projection.last_update_idempotency_key = source.last_update_idempotency_key
-        projection.last_update_response = (
-            dict(source.last_update_response)
-            if isinstance(source.last_update_response, dict)
-            else None
-        )
+        self._apply_projection_payload(projection, payload)
         projection.projection_version = max(previous_version + 1, 1)
-        projection.last_synced_at = _utc_now()
+        projection.last_synced_at = synced_at or _utc_now()
         projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
         projection.sync_error = None
         projection.source_mode = (
             TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
         )
-        projection.started_at = source.started_at
-        projection.updated_at = source.updated_at
-        projection.closed_at = source.closed_at
         return projection
 
     def _build_projection_fallback(
@@ -1162,50 +1141,21 @@ class TemporalExecutionService:
         sync_error: str,
     ) -> TemporalExecutionRecord:
         return TemporalExecutionRecord(
-            workflow_id=source["workflow_id"],
-            run_id=source["run_id"],
-            namespace=source["namespace"],
-            workflow_type=source["workflow_type"],
-            owner_id=source["owner_id"],
-            owner_type=source["owner_type"],
-            state=source["state"],
-            close_status=source["close_status"],
-            entry=source["entry"],
-            search_attributes=dict(source["search_attributes"] or {}),
-            memo=dict(source["memo"] or {}),
-            artifact_refs=list(source["artifact_refs"] or []),
-            input_ref=source["input_ref"],
-            plan_ref=source["plan_ref"],
-            manifest_ref=source["manifest_ref"],
-            parameters=dict(source["parameters"] or {}),
-            pending_parameters_patch=(
-                dict(source["pending_parameters_patch"])
-                if isinstance(source["pending_parameters_patch"], dict)
-                else None
-            ),
-            paused=source["paused"],
-            awaiting_external=source["awaiting_external"],
-            step_count=source["step_count"],
-            wait_cycle_count=source["wait_cycle_count"],
-            rerun_count=source["rerun_count"],
-            create_idempotency_key=source["create_idempotency_key"],
-            last_update_idempotency_key=source["last_update_idempotency_key"],
-            last_update_response=(
-                dict(source["last_update_response"])
-                if isinstance(source["last_update_response"], dict)
-                else None
-            ),
+            **source,
             projection_version=0,
             last_synced_at=source["updated_at"],
             sync_state=TemporalExecutionProjectionSyncState.REPAIR_PENDING,
             sync_error=sync_error[:1000] or "projection_sync_failed",
             source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
-            started_at=source["started_at"],
-            updated_at=source["updated_at"],
-            closed_at=source["closed_at"],
         )
 
     def _snapshot_source(
+        self,
+        source: TemporalExecutionCanonicalRecord,
+    ) -> dict[str, Any]:
+        return self._projection_payload_from_source(source)
+
+    def _projection_payload_from_source(
         self,
         source: TemporalExecutionCanonicalRecord,
     ) -> dict[str, Any]:
@@ -1247,6 +1197,14 @@ class TemporalExecutionService:
             "updated_at": source.updated_at,
             "closed_at": source.closed_at,
         }
+
+    def _apply_projection_payload(
+        self,
+        projection: TemporalExecutionRecord,
+        payload: dict[str, Any],
+    ) -> None:
+        for field, value in payload.items():
+            setattr(projection, field, value)
 
 
 def _utc_now() -> datetime:

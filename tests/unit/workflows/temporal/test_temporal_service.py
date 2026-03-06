@@ -161,7 +161,13 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             owner_id = uuid4()
             key = "create-race"
 
-            async def race_precheck(*, idempotency_key, owner_id, workflow_type):
+            async def race_precheck(
+                *,
+                idempotency_key,
+                owner_id,
+                owner_type,
+                workflow_type,
+            ):
                 if idempotency_key == key:
                     await winner_service.create_execution(
                         workflow_type="MoonMind.Run",
@@ -214,6 +220,105 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             monkeypatch.setattr(loser_session, "commit", original_commit)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        user_record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id="shared-owner",
+            owner_type="user",
+            title="user owned",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="shared-idempotency-key",
+        )
+        service_record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id="shared-owner",
+            owner_type="service",
+            title="service owned",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="shared-idempotency-key",
+        )
+        service_retry = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id="shared-owner",
+            owner_type="service",
+            title="service retry",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="shared-idempotency-key",
+        )
+
+        assert user_record.workflow_id != service_record.workflow_id
+        assert service_retry.workflow_id == service_record.workflow_id
+        assert service_retry.memo["title"] == "service owned"
+
+
+@pytest.mark.asyncio
+async def test_list_executions_syncs_page_in_single_projection_commit(
+    tmp_path, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="first",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="second",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        original_commit = session.commit
+        commit_calls = 0
+
+        async def counting_commit():
+            nonlocal commit_calls
+            commit_calls += 1
+            await original_commit()
+
+        monkeypatch.setattr(session, "commit", counting_commit)
+
+        result = await service.list_executions(
+            workflow_type=None,
+            state=None,
+            owner_id=None,
+            page_size=2,
+            next_page_token=None,
+        )
+
+        assert len(result.items) == 2
+        assert commit_calls == 1
 
 
 @pytest.mark.asyncio

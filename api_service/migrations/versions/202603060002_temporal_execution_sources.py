@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import sqlalchemy as sa
 from alembic import op
@@ -10,8 +10,7 @@ from sqlalchemy.dialects import postgresql
 
 revision: str = "202603060002"
 down_revision: str | None = "202603060001"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+__all__: Sequence[str] = ("revision", "down_revision")
 
 
 def _json_variant() -> sa.JSON:
@@ -143,6 +142,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "create_idempotency_key",
             "owner_id",
+            "owner_type",
             "workflow_type",
             name="uq_temporal_execution_sources_create_idempotency_owner_type",
         ),
