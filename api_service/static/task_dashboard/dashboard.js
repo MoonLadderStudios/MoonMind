@@ -179,9 +179,6 @@
   const taskCompatibilityListEndpoint = String(
     systemConfig.taskCompatibilityList || "/api/tasks/list",
   );
-  const taskCompatibilityDetailEndpoint = String(
-    systemConfig.taskCompatibilityDetail || "/api/tasks/{taskId}",
-  );
   const taskResolutionEndpoint = String(
     systemConfig.taskResolution || "/api/tasks/{taskId}/resolution",
   );
