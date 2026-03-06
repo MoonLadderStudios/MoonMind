@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
@@ -80,6 +80,7 @@ _ALLOWED_MEMO_KEYS = {
 }
 _MAX_METADATA_VALUE_LENGTH = 512
 _MAX_PARAMETER_PREVIEW_ITEMS = 10
+_ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 
 
 @dataclass(slots=True)
@@ -125,7 +126,7 @@ class TaskCompatibilityService:
             owner_type=owner_type,
             owner_id=owner_id,
         )
-        rows = await self._load_rows(
+        rows, total_count = await self._load_rows(
             user=user,
             source=normalized_source,
             entry=entry,
@@ -133,8 +134,9 @@ class TaskCompatibilityService:
             status_filter=status_filter,
             owner_type=owner_type,
             owner_id=owner_id,
+            offset=normalized_cursor.offset,
+            page_size=page_size,
         )
-        total_count = len(rows)
         start = normalized_cursor.offset
         end = start + page_size
         page_items = rows[start:end]
@@ -202,39 +204,46 @@ class TaskCompatibilityService:
         status_filter: TaskStatusFilter,
         owner_type: Literal["user", "system", "service"] | None,
         owner_id: str | None,
-    ) -> list[TaskCompatibilityRow]:
+        offset: int,
+        page_size: int,
+    ) -> tuple[list[TaskCompatibilityRow], int]:
+        window_end = max(0, offset) + max(1, page_size)
         rows: list[TaskCompatibilityRow] = []
+        total_count = 0
         if source in {"all", "queue"}:
-            rows.extend(
-                await self._load_queue_rows(
-                    entry=entry,
-                    status_filter=status_filter,
-                    owner_id=owner_id,
-                )
+            queue_rows, queue_count = await self._load_queue_rows(
+                entry=entry,
+                status_filter=status_filter,
+                owner_id=owner_id,
+                limit=window_end,
             )
+            rows.extend(queue_rows)
+            total_count += queue_count
         if source in {"all", "orchestrator"}:
-            rows.extend(
-                await self._load_orchestrator_rows(
-                    entry=entry,
-                    status_filter=status_filter,
-                )
+            orchestrator_rows, orchestrator_count = await self._load_orchestrator_rows(
+                entry=entry,
+                status_filter=status_filter,
+                limit=window_end,
             )
+            rows.extend(orchestrator_rows)
+            total_count += orchestrator_count
         if source in {"all", "temporal"}:
-            rows.extend(
-                await self._load_temporal_rows(
-                    user=user,
-                    entry=entry,
-                    workflow_type=workflow_type,
-                    status_filter=status_filter,
-                    owner_type=owner_type,
-                    owner_id=owner_id,
-                )
+            temporal_rows, temporal_count = await self._load_temporal_rows(
+                user=user,
+                entry=entry,
+                workflow_type=workflow_type,
+                status_filter=status_filter,
+                owner_type=owner_type,
+                owner_id=owner_id,
+                limit=window_end,
             )
+            rows.extend(temporal_rows)
+            total_count += temporal_count
         rows.sort(
             key=lambda row: (row.updated_at, row.created_at, row.task_id),
             reverse=True,
         )
-        return rows
+        return rows[:window_end], total_count
 
     async def _load_queue_rows(
         self,
@@ -242,41 +251,71 @@ class TaskCompatibilityService:
         entry: Literal["run", "manifest"] | None,
         status_filter: TaskStatusFilter,
         owner_id: str | None,
-    ) -> list[TaskCompatibilityRow]:
+        limit: int,
+    ) -> tuple[list[TaskCompatibilityRow], int]:
         stmt = select(queue_models.AgentJob)
         if entry == "manifest":
             stmt = stmt.where(queue_models.AgentJob.type == MANIFEST_JOB_TYPE)
         elif entry == "run":
             stmt = stmt.where(queue_models.AgentJob.type != MANIFEST_JOB_TYPE)
+        queue_statuses = self._queue_statuses_for_filter(status_filter)
+        if queue_statuses == ():
+            return [], 0
+        if queue_statuses is not None:
+            stmt = stmt.where(queue_models.AgentJob.status.in_(queue_statuses))
+
+        normalized_owner_id = str(owner_id or "").strip()
+        if normalized_owner_id:
+            try:
+                owner_uuid = UUID(normalized_owner_id)
+            except ValueError:
+                return [], 0
+            stmt = stmt.where(self._queue_owner_id_expression() == owner_uuid)
+
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        stmt = stmt.order_by(
+            queue_models.AgentJob.updated_at.desc(),
+            queue_models.AgentJob.created_at.desc(),
+            queue_models.AgentJob.id.desc(),
+        ).limit(limit)
         jobs = list((await self._session.execute(stmt)).scalars().all())
+        total_count = int((await self._session.execute(count_stmt)).scalar_one())
         normalized: list[TaskCompatibilityRow] = []
         for job in jobs:
             row = self._build_queue_row(job)
-            if status_filter and row.status != status_filter:
-                continue
-            if owner_id and str(row.owner_id or "").strip() != str(owner_id).strip():
-                continue
             await self._source_mappings.upsert_queue_job(job)
             normalized.append(row)
-        return normalized
+        return normalized, total_count
 
     async def _load_orchestrator_rows(
         self,
         *,
         entry: Literal["run", "manifest"] | None,
         status_filter: TaskStatusFilter,
-    ) -> list[TaskCompatibilityRow]:
+        limit: int,
+    ) -> tuple[list[TaskCompatibilityRow], int]:
         if entry == "manifest":
-            return []
-        runs = list((await self._session.execute(select(db_models.OrchestratorRun))).scalars().all())
+            return [], 0
+        stmt = select(db_models.OrchestratorRun)
+        orchestrator_statuses = self._orchestrator_statuses_for_filter(status_filter)
+        if orchestrator_statuses == ():
+            return [], 0
+        if orchestrator_statuses is not None:
+            stmt = stmt.where(db_models.OrchestratorRun.status.in_(orchestrator_statuses))
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        stmt = stmt.order_by(
+            db_models.OrchestratorRun.updated_at.desc(),
+            db_models.OrchestratorRun.queued_at.desc(),
+            db_models.OrchestratorRun.id.desc(),
+        ).limit(limit)
+        runs = list((await self._session.execute(stmt)).scalars().all())
+        total_count = int((await self._session.execute(count_stmt)).scalar_one())
         normalized: list[TaskCompatibilityRow] = []
         for run in runs:
             row = self._build_orchestrator_row(run)
-            if status_filter and row.status != status_filter:
-                continue
             await self._source_mappings.upsert_orchestrator_run(run)
             normalized.append(row)
-        return normalized
+        return normalized, total_count
 
     async def _load_temporal_rows(
         self,
@@ -287,29 +326,39 @@ class TaskCompatibilityService:
         status_filter: TaskStatusFilter,
         owner_type: Literal["user", "system", "service"] | None,
         owner_id: str | None,
-    ) -> list[TaskCompatibilityRow]:
+        limit: int,
+    ) -> tuple[list[TaskCompatibilityRow], int]:
         stmt = select(db_models.TemporalExecutionRecord)
         if entry:
             stmt = stmt.where(db_models.TemporalExecutionRecord.entry == entry)
         if workflow_type:
             stmt = stmt.where(db_models.TemporalExecutionRecord.workflow_type == workflow_type)
+        temporal_states = self._temporal_states_for_filter(status_filter)
+        if temporal_states == ():
+            return [], 0
+        if temporal_states is not None:
+            stmt = stmt.where(db_models.TemporalExecutionRecord.state.in_(temporal_states))
         if not bool(getattr(user, "is_superuser", False)):
             stmt = stmt.where(db_models.TemporalExecutionRecord.owner_id == str(user.id))
-        elif owner_id:
-            stmt = stmt.where(db_models.TemporalExecutionRecord.owner_id == str(owner_id))
+        normalized_owner_id = str(owner_id or "").strip()
+        if owner_type:
+            stmt = stmt.where(self._temporal_owner_type_expression() == owner_type)
+        if normalized_owner_id:
+            stmt = stmt.where(self._temporal_owner_id_expression() == normalized_owner_id)
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        stmt = stmt.order_by(
+            db_models.TemporalExecutionRecord.updated_at.desc(),
+            db_models.TemporalExecutionRecord.started_at.desc(),
+            db_models.TemporalExecutionRecord.workflow_id.desc(),
+        ).limit(limit)
         records = list((await self._session.execute(stmt)).scalars().all())
+        total_count = int((await self._session.execute(count_stmt)).scalar_one())
         normalized: list[TaskCompatibilityRow] = []
         for record in records:
             row = self._build_temporal_row(record)
-            if status_filter and row.status != status_filter:
-                continue
-            if owner_type and row.owner_type != owner_type:
-                continue
-            if owner_id and str(row.owner_id or "").strip() != str(owner_id).strip():
-                continue
             await self._source_mappings.upsert_temporal_execution(record)
             normalized.append(row)
-        return normalized
+        return normalized, total_count
 
     def _build_queue_row(self, job: queue_models.AgentJob) -> TaskCompatibilityRow:
         payload = dict(job.payload or {})
@@ -657,9 +706,118 @@ class TaskCompatibilityService:
     def _default_owner_type(self, record: db_models.TemporalExecutionRecord) -> str:
         attrs = dict(record.search_attributes or {})
         owner_type = str(attrs.get("mm_owner_type") or "").strip().lower()
-        if owner_type in {"user", "system", "service"}:
+        if owner_type in _ALLOWED_OWNER_TYPES:
             return owner_type
         return "system" if not record.owner_id or record.owner_id == "system" else "user"
+
+    def _queue_statuses_for_filter(
+        self,
+        status_filter: TaskStatusFilter,
+    ) -> tuple[queue_models.AgentJobStatus, ...] | None:
+        if status_filter is None:
+            return None
+        mapping = {
+            "queued": (queue_models.AgentJobStatus.QUEUED,),
+            "running": (queue_models.AgentJobStatus.RUNNING,),
+            "awaiting_action": (),
+            "succeeded": (queue_models.AgentJobStatus.SUCCEEDED,),
+            "failed": (
+                queue_models.AgentJobStatus.FAILED,
+                queue_models.AgentJobStatus.DEAD_LETTER,
+            ),
+            "cancelled": (queue_models.AgentJobStatus.CANCELLED,),
+        }
+        return mapping[status_filter]
+
+    def _orchestrator_statuses_for_filter(
+        self,
+        status_filter: TaskStatusFilter,
+    ) -> tuple[db_models.OrchestratorRunStatus, ...] | None:
+        if status_filter is None:
+            return None
+        mapping = {
+            "queued": (db_models.OrchestratorRunStatus.PENDING,),
+            "running": (db_models.OrchestratorRunStatus.RUNNING,),
+            "awaiting_action": (db_models.OrchestratorRunStatus.AWAITING_APPROVAL,),
+            "succeeded": (
+                db_models.OrchestratorRunStatus.SUCCEEDED,
+                db_models.OrchestratorRunStatus.ROLLED_BACK,
+            ),
+            "failed": (db_models.OrchestratorRunStatus.FAILED,),
+            "cancelled": (),
+        }
+        return mapping[status_filter]
+
+    def _temporal_states_for_filter(
+        self,
+        status_filter: TaskStatusFilter,
+    ) -> tuple[db_models.MoonMindWorkflowState, ...] | None:
+        if status_filter is None:
+            return None
+        mapping = {
+            "queued": (db_models.MoonMindWorkflowState.INITIALIZING,),
+            "running": (
+                db_models.MoonMindWorkflowState.PLANNING,
+                db_models.MoonMindWorkflowState.EXECUTING,
+                db_models.MoonMindWorkflowState.FINALIZING,
+            ),
+            "awaiting_action": (db_models.MoonMindWorkflowState.AWAITING_EXTERNAL,),
+            "succeeded": (db_models.MoonMindWorkflowState.SUCCEEDED,),
+            "failed": (db_models.MoonMindWorkflowState.FAILED,),
+            "cancelled": (db_models.MoonMindWorkflowState.CANCELED,),
+        }
+        return mapping[status_filter]
+
+    def _queue_owner_id_expression(self):
+        return case(
+            (
+                queue_models.AgentJob.created_by_user_id.is_not(None),
+                queue_models.AgentJob.created_by_user_id,
+            ),
+            else_=queue_models.AgentJob.requested_by_user_id,
+        )
+
+    def _temporal_owner_id_expression(self):
+        search_owner_id = func.trim(
+            func.coalesce(
+                db_models.TemporalExecutionRecord.search_attributes[
+                    "mm_owner_id"
+                ].as_string(),
+                "",
+            )
+        )
+        record_owner_id = func.trim(
+            func.coalesce(db_models.TemporalExecutionRecord.owner_id, "")
+        )
+        return func.coalesce(
+            func.nullif(search_owner_id, ""),
+            func.nullif(record_owner_id, ""),
+        )
+
+    def _temporal_owner_type_expression(self):
+        search_owner_type = func.lower(
+            func.trim(
+                func.coalesce(
+                    db_models.TemporalExecutionRecord.search_attributes[
+                        "mm_owner_type"
+                    ].as_string(),
+                    "",
+                )
+            )
+        )
+        record_owner_id = func.lower(
+            func.trim(
+                func.coalesce(db_models.TemporalExecutionRecord.owner_id, "")
+            )
+        )
+        return case(
+            (search_owner_type.in_(tuple(sorted(_ALLOWED_OWNER_TYPES))), search_owner_type),
+            (
+                or_(record_owner_id == "", record_owner_id == "system"),
+                "system",
+            ),
+            else_="user",
+        )
 
     def _summarize_text(self, value: str, *, max_chars: int = 120) -> str:
         normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()

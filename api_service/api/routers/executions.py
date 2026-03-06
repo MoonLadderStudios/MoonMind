@@ -29,6 +29,7 @@ from moonmind.workflows.temporal import (
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
+_ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.INITIALIZING: "queued",
     MoonMindWorkflowState.PLANNING: "running",
@@ -48,6 +49,14 @@ def _is_execution_admin(user: User | None) -> bool:
 def _owner_id(user: User | None) -> str | None:
     value = getattr(user, "id", None)
     return str(value) if value is not None else None
+
+
+def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
+    owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
+    if owner_type in _ALLOWED_OWNER_TYPES:
+        return owner_type
+    owner_id = str(record.owner_id or "").strip().lower()
+    return "system" if owner_id == "system" or not owner_id else "user"
 
 
 async def _get_service(
@@ -81,9 +90,7 @@ def _serialize_execution(record) -> ExecutionModel:
 
     search_attributes = dict(record.search_attributes or {})
     memo = dict(record.memo or {})
-    owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
-    if owner_type not in {"user", "system", "service"}:
-        owner_type = "system" if not record.owner_id else "user"
+    owner_type = _normalize_owner_type(record, search_attributes)
     owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
     entry = str(search_attributes.get("mm_entry") or record.entry or "").strip().lower()
     title = str(memo.get("title") or "").strip() or record.workflow_type.value

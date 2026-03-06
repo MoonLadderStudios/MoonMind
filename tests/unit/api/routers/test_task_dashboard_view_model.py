@@ -26,6 +26,11 @@ def test_normalize_status_maps_temporal_planning_to_running() -> None:
     assert normalize_status("temporal", "planning") == "running"
 
 
+def test_normalize_status_maps_temporal_canceled_spellings_to_cancelled() -> None:
+    assert normalize_status("temporal", "canceled") == "cancelled"
+    assert normalize_status("temporal", "cancelled") == "cancelled"
+
+
 def test_normalize_status_fallback_for_unknown_source() -> None:
     assert normalize_status("unknown-source", "anything") == "queued"
 

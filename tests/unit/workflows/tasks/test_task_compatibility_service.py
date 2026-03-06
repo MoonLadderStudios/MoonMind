@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -155,3 +156,66 @@ def test_cursor_round_trip_rejects_filter_mismatch() -> None:
             owner_type="user",
             owner_id="owner-1",
         )
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_limits_source_fetches_to_cursor_window() -> None:
+    service = _service()
+    newer = service._build_temporal_row(_temporal_record(workflow_id="mm:newer"))
+    older = service._build_temporal_row(
+        _temporal_record(
+            workflow_id="mm:older",
+            updated_at=datetime(2026, 3, 5, 0, 0, 0, tzinfo=UTC),
+        )
+    )
+    service._load_queue_rows = AsyncMock(return_value=([older], 7))
+    service._load_orchestrator_rows = AsyncMock(return_value=([], 3))
+    service._load_temporal_rows = AsyncMock(return_value=([newer], 5))
+    cursor = service._encode_cursor(
+        _ListCursor(
+            offset=1,
+            page_size=1,
+            source="all",
+            entry=None,
+            workflow_type=None,
+            status_filter=None,
+            owner_type=None,
+            owner_id=None,
+        )
+    )
+
+    response = await service.list_tasks(
+        user=SimpleNamespace(id="owner-1", is_superuser=True),
+        source="all",
+        entry=None,
+        workflow_type=None,
+        status_filter=None,
+        owner_type=None,
+        owner_id=None,
+        page_size=1,
+        cursor=cursor,
+    )
+
+    assert [item.task_id for item in response.items] == ["mm:older"]
+    assert response.count == 15
+    assert response.next_cursor
+    service._load_queue_rows.assert_awaited_once_with(
+        entry=None,
+        status_filter=None,
+        owner_id=None,
+        limit=2,
+    )
+    service._load_orchestrator_rows.assert_awaited_once_with(
+        entry=None,
+        status_filter=None,
+        limit=2,
+    )
+    service._load_temporal_rows.assert_awaited_once_with(
+        user=SimpleNamespace(id="owner-1", is_superuser=True),
+        entry=None,
+        workflow_type=None,
+        status_filter=None,
+        owner_type=None,
+        owner_id=None,
+        limit=2,
+    )
