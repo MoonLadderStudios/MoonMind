@@ -381,8 +381,12 @@ __all__ = [
     "TemporalWorkflowType",
     "MoonMindWorkflowState",
     "TemporalExecutionCloseStatus",
+    "TemporalExecutionOwnerType",
+    "TemporalExecutionProjectionSyncState",
+    "TemporalExecutionProjectionSourceMode",
     "TemporalExecutionCanonicalRecord",
     "TemporalExecutionRecord",
+    "TemporalIntegrationCorrelationRecord",
     "SpecWorkflowRun",
     "SpecWorkflowRunStatus",
     "SpecWorkflowRunPhase",
@@ -1005,6 +1009,9 @@ class TemporalExecutionCanonicalRecord(Base):
     parameters: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
+    integration_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
     pending_parameters_patch: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
@@ -1132,6 +1139,9 @@ class TemporalExecutionRecord(Base):
     parameters: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
+    integration_state: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True
+    )
     pending_parameters_patch: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
@@ -1193,6 +1203,58 @@ class TemporalExecutionRecord(Base):
     )
     closed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class TemporalIntegrationCorrelationRecord(Base):
+    """Durable lookup record for resolving integration callbacks to workflows."""
+
+    __tablename__ = "temporal_integration_correlations"
+    __table_args__ = (
+        UniqueConstraint(
+            "integration_name",
+            "callback_correlation_key",
+            name="uq_temporal_integration_correlations_callback_key",
+        ),
+        UniqueConstraint(
+            "integration_name",
+            "external_operation_id",
+            name="uq_temporal_integration_correlations_operation_id",
+        ),
+        Index(
+            "ix_temporal_integration_correlations_workflow_status",
+            "workflow_id",
+            "lifecycle_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    integration_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    callback_correlation_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    external_operation_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("temporal_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    lifecycle_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 

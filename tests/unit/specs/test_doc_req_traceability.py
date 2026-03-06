@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gates for runtime-scoped feature specs."""
+"""DOC-REQ traceability gates for contract-backed feature specs."""
 
 from __future__ import annotations
 
@@ -8,30 +8,70 @@ from pathlib import Path
 import pytest
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPECS = (
-    Path("specs/047-activity-worker-topology/spec.md"),
-    Path("specs/048-source-truth-projection/spec.md"),
+_FEATURES = (
+    (
+        "046-workflow-type-lifecycle",
+        Path("specs/046-workflow-type-lifecycle/spec.md"),
+        Path(
+            "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-activity-worker-topology",
+        Path("specs/047-activity-worker-topology/spec.md"),
+        Path(
+            "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "047-integrations-monitoring",
+        Path("specs/047-integrations-monitoring/spec.md"),
+        Path(
+            "specs/047-integrations-monitoring/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "048-run-history-rerun",
+        Path("specs/048-run-history-rerun/spec.md"),
+        Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
+    ),
+    (
+        "047-temporal-artifact-presentation",
+        Path("specs/047-temporal-artifact-presentation/spec.md"),
+        Path(
+            "specs/047-temporal-artifact-presentation/contracts/requirements-traceability.md"
+        ),
+    ),
+    (
+        "048-source-truth-projection",
+        Path("specs/048-source-truth-projection/spec.md"),
+        Path(
+            "specs/048-source-truth-projection/contracts/requirements-traceability.md"
+        ),
+    ),
 )
 
 
 @pytest.mark.parametrize(
-    "feature_spec", _FEATURE_SPECS, ids=lambda path: path.parent.name
+    ("feature_name", "feature_spec", "feature_traceability"),
+    _FEATURES,
+    ids=[feature_name for feature_name, *_ in _FEATURES],
 )
-def test_doc_req_traceability_contract(feature_spec: Path) -> None:
+def test_doc_req_traceability_contract(
+    feature_name: str,
+    feature_spec: Path,
+    feature_traceability: Path,
+) -> None:
     spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_spec}"
-
-    feature_traceability = (
-        feature_spec.parent / "contracts" / "requirements-traceability.md"
-    )
+    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_name} spec.md"
 
     assert feature_traceability.exists(), (
-        "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"
+        "Missing traceability file for DOC-REQ feature: "
+        f"{feature_traceability} ({feature_name})"
     )
-
     traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 

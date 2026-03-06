@@ -1,0 +1,307 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Temporal Run History and Rerun Contract
+  version: 0.1.0
+  description: >
+    Focused latest-run contract for Temporal-backed execution detail, rerun, and
+    artifact resolution. The durable route key is workflowId; current run metadata
+    is exposed separately for diagnostics and artifact lookup.
+servers:
+  - url: /
+paths:
+  /api/executions:
+    get:
+      summary: List logical Temporal executions
+      operationId: listTemporalExecutions
+      parameters:
+        - in: query
+          name: workflowType
+          schema:
+            $ref: "#/components/schemas/WorkflowType"
+        - in: query
+          name: state
+          schema:
+            $ref: "#/components/schemas/MoonMindState"
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: nextPageToken
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Latest-run execution list keyed by logical workflow identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionListResponse"
+
+  /api/executions/{workflowId}:
+    get:
+      summary: Describe the latest/current run for one logical execution
+      operationId: describeTemporalExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+      responses:
+        "200":
+          description: Latest-run execution detail for the logical workflow
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "404":
+          description: Execution not found
+
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Apply `RequestRerun` or other lifecycle update to the logical execution
+      operationId: updateTemporalExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateExecutionRequest"
+      responses:
+        "200":
+          description: Update result against the logical execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateExecutionResponse"
+
+  /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts:
+    get:
+      summary: List artifacts for the current Temporal run resolved from detail
+      operationId: listExecutionArtifactsForCurrentRun
+      parameters:
+        - in: path
+          name: namespace
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+            pattern: "^mm:[A-Za-z0-9-]+$"
+        - in: path
+          name: temporalRunId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Artifact list for the latest/current Temporal run instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactListResponse"
+
+components:
+  schemas:
+    WorkflowType:
+      type: string
+      enum: [MoonMind.Run, MoonMind.ManifestIngest]
+
+    MoonMindState:
+      type: string
+      enum:
+        - initializing
+        - planning
+        - executing
+        - awaiting_external
+        - finalizing
+        - succeeded
+        - failed
+        - canceled
+
+    ContinueAsNewCause:
+      type: string
+      enum: [manual_rerun, lifecycle_threshold, major_reconfiguration]
+
+    UpdateName:
+      type: string
+      enum: [UpdateInputs, SetTitle, RequestRerun]
+
+    UpdateApplyMode:
+      type: string
+      enum: [immediate, next_safe_point, continue_as_new]
+
+    Execution:
+      type: object
+      required:
+        - namespace
+        - taskId
+        - workflowId
+        - runId
+        - temporalRunId
+        - workflowType
+        - state
+        - temporalStatus
+        - searchAttributes
+        - memo
+        - artifactRefs
+        - latestRunView
+        - startedAt
+        - updatedAt
+      properties:
+        namespace:
+          type: string
+        taskId:
+          type: string
+          description: For Temporal-backed payloads, taskId MUST equal workflowId.
+        workflowId:
+          type: string
+          description: Canonical durable route and bookmark identity.
+        runId:
+          type: string
+          description: Current Temporal run metadata; not the primary route key.
+        temporalRunId:
+          type: string
+          description: Explicit alias of the current runId for disambiguated payloads.
+        workflowType:
+          $ref: "#/components/schemas/WorkflowType"
+        state:
+          $ref: "#/components/schemas/MoonMindState"
+        temporalStatus:
+          type: string
+          enum: [running, completed, failed, canceled]
+        closeStatus:
+          type:
+            - string
+            - "null"
+        searchAttributes:
+          type: object
+          additionalProperties: true
+        memo:
+          type: object
+          additionalProperties: true
+        artifactRefs:
+          type: array
+          items:
+            type: string
+        latestRunView:
+          type: boolean
+          const: true
+        continueAsNewCause:
+          oneOf:
+            - $ref: "#/components/schemas/ContinueAsNewCause"
+            - type: "null"
+        startedAt:
+          type: string
+          format: date-time
+          description: Logical execution start time, not guaranteed current-run start.
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+
+    ExecutionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Execution"
+        nextPageToken:
+          type:
+            - string
+            - "null"
+        count:
+          type:
+            - integer
+            - "null"
+        countMode:
+          type: string
+          enum: [exact, estimated_or_unknown]
+
+    UpdateExecutionRequest:
+      type: object
+      properties:
+        updateName:
+          $ref: "#/components/schemas/UpdateName"
+        inputArtifactRef:
+          type:
+            - string
+            - "null"
+        planArtifactRef:
+          type:
+            - string
+            - "null"
+        parametersPatch:
+          type:
+            - object
+            - "null"
+          additionalProperties: true
+        title:
+          type:
+            - string
+            - "null"
+        idempotencyKey:
+          type:
+            - string
+            - "null"
+
+    UpdateExecutionResponse:
+      type: object
+      required: [accepted, applied, message]
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          $ref: "#/components/schemas/UpdateApplyMode"
+        message:
+          type: string
+        continueAsNewCause:
+          oneOf:
+            - $ref: "#/components/schemas/ContinueAsNewCause"
+            - type: "null"
+
+    ArtifactMetadata:
+      type: object
+      required: [artifactId, contentType, sizeBytes]
+      properties:
+        artifactId:
+          type: string
+        contentType:
+          type: string
+        sizeBytes:
+          type: integer
+        createdAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+
+    ArtifactListResponse:
+      type: object
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactMetadata"
