@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -11,8 +12,14 @@ import httpx
 from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
+    JulesIntegrationCancelResult,
+    JulesIntegrationFetchResult,
+    JulesIntegrationStartRequest,
+    JulesIntegrationStartResult,
+    JulesIntegrationStatusResult,
     JulesResolveTaskRequest,
     JulesTaskResponse,
+    normalize_jules_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,10 +39,12 @@ class JulesClientError(RuntimeError):
         *,
         status_code: int | None = None,
         request_path: str | None = None,
+        ambiguous: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.request_path = request_path
+        self.ambiguous = ambiguous
 
     def __str__(self) -> str:
         parts = ["Jules API request failed"]
@@ -43,6 +52,8 @@ class JulesClientError(RuntimeError):
             parts.append(f"path={self.request_path}")
         if self.status_code is not None:
             parts.append(f"status={self.status_code}")
+        if self.ambiguous:
+            parts.append("ambiguous")
         return ": ".join(parts)
 
 
@@ -95,6 +106,176 @@ class JulesClient:
     async def get_task(self, request: JulesGetTaskRequest) -> JulesTaskResponse:
         data = await self._get_json(f"/tasks/{request.task_id}")
         return JulesTaskResponse.model_validate(data)
+
+    async def start_integration(
+        self,
+        request: JulesIntegrationStartRequest,
+        *,
+        task_queue: str = "mm.activity.integrations",
+        recommended_poll_seconds: int | None = None,
+    ) -> JulesIntegrationStartResult:
+        """Start Jules work using the provider-neutral monitoring contract."""
+
+        metadata = dict(request.metadata)
+        metadata.setdefault("moonmind", {})
+        moonmind_meta = metadata["moonmind"]
+        if isinstance(moonmind_meta, dict):
+            moonmind_meta.setdefault("correlationId", request.correlation_id)
+            moonmind_meta.setdefault("idempotencyKey", request.idempotency_key)
+            if request.callback_correlation_key:
+                moonmind_meta.setdefault(
+                    "callbackCorrelationKey", request.callback_correlation_key
+                )
+            if request.callback_url:
+                moonmind_meta.setdefault("callbackUrl", request.callback_url)
+
+        description = request.description
+        if request.input_refs or request.parameters:
+            envelope = {
+                "description": request.description,
+                "inputRefs": request.input_refs,
+                "parameters": request.parameters,
+            }
+            description = json.dumps(envelope, sort_keys=True)
+
+        try:
+            created = await self.create_task(
+                JulesCreateTaskRequest(
+                    title=request.title,
+                    description=description,
+                    metadata=metadata,
+                )
+            )
+        except JulesClientError as exc:
+            if exc.request_path == "/tasks" and exc.status_code is None:
+                raise JulesClientError(
+                    "ambiguous Jules start result",
+                    request_path=exc.request_path,
+                    ambiguous=True,
+                ) from exc
+            raise
+
+        provider_status = str(created.status or "").strip() or "unknown"
+        return JulesIntegrationStartResult(
+            taskQueue=task_queue,
+            externalOperationId=str(created.task_id),
+            normalizedStatus=normalize_jules_status(provider_status),
+            providerStatus=provider_status,
+            callbackSupported=bool(request.callback_url),
+            callbackCorrelationKey=request.callback_correlation_key,
+            recommendedPollSeconds=recommended_poll_seconds,
+            externalUrl=str(created.url or "").strip() or None,
+            providerSummary={
+                "provider": "jules",
+                "idempotencyKey": request.idempotency_key,
+            },
+            idempotencyKey=request.idempotency_key,
+        )
+
+    async def get_integration_status(
+        self,
+        *,
+        external_operation_id: str,
+        task_queue: str = "mm.activity.integrations",
+        recommended_poll_seconds: int | None = None,
+    ) -> JulesIntegrationStatusResult:
+        """Return provider-neutral monitoring status for one Jules task."""
+
+        task = await self.get_task(JulesGetTaskRequest(task_id=external_operation_id))
+        provider_status = str(task.status or "").strip() or "unknown"
+        normalized = normalize_jules_status(provider_status)
+        return JulesIntegrationStatusResult(
+            taskQueue=task_queue,
+            externalOperationId=external_operation_id,
+            normalizedStatus=normalized,
+            providerStatus=provider_status,
+            terminal=normalized in {"succeeded", "failed", "canceled"},
+            recommendedPollSeconds=recommended_poll_seconds,
+            externalUrl=str(task.url or "").strip() or None,
+            providerSummary={"provider": "jules"},
+        )
+
+    async def fetch_integration_result(
+        self,
+        *,
+        external_operation_id: str,
+        result_refs: list[str] | None = None,
+        task_queue: str = "mm.activity.integrations",
+    ) -> JulesIntegrationFetchResult:
+        """Return a compact, idempotent Jules result envelope."""
+
+        task = await self.get_task(JulesGetTaskRequest(task_id=external_operation_id))
+        provider_status = str(task.status or "").strip() or "unknown"
+        normalized = normalize_jules_status(provider_status)
+        summary = (
+            f"Jules task {external_operation_id} completed with status "
+            f"'{provider_status}'."
+        )
+        return JulesIntegrationFetchResult(
+            taskQueue=task_queue,
+            externalOperationId=external_operation_id,
+            outputRefs=list(result_refs or []),
+            summary=summary,
+            diagnosticsRef=None,
+            providerStatus=provider_status,
+            normalizedStatus=normalized,
+        )
+
+    async def cancel_integration(
+        self,
+        *,
+        external_operation_id: str,
+        task_queue: str = "mm.activity.integrations",
+    ) -> JulesIntegrationCancelResult:
+        """Attempt best-effort cancellation for one Jules task."""
+
+        try:
+            task = await self.resolve_task(
+                JulesResolveTaskRequest(
+                    task_id=external_operation_id,
+                    resolution_notes="Canceled by MoonMind.",
+                    status="canceled",
+                )
+            )
+        except JulesClientError as exc:
+            if exc.status_code in {404, 405, 501}:
+                return JulesIntegrationCancelResult(
+                    taskQueue=task_queue,
+                    externalOperationId=external_operation_id,
+                    accepted=False,
+                    unsupported=True,
+                    finalProviderStatus=None,
+                    normalizedStatus="unknown",
+                    summary=(
+                        f"Jules cancellation is unsupported for task "
+                        f"{external_operation_id}."
+                    ),
+                )
+            if exc.status_code is None:
+                return JulesIntegrationCancelResult(
+                    taskQueue=task_queue,
+                    externalOperationId=external_operation_id,
+                    accepted=False,
+                    ambiguous=True,
+                    finalProviderStatus=None,
+                    normalizedStatus="unknown",
+                    summary=(
+                        f"Jules cancellation for task {external_operation_id} "
+                        "returned an ambiguous transport failure."
+                    ),
+                )
+            raise
+
+        provider_status = str(task.status or "").strip() or "canceled"
+        normalized = normalize_jules_status(provider_status)
+        return JulesIntegrationCancelResult(
+            taskQueue=task_queue,
+            externalOperationId=external_operation_id,
+            accepted=True,
+            finalProviderStatus=provider_status,
+            normalizedStatus=normalized,
+            summary=f"Jules task {external_operation_id} cancellation accepted.",
+        )
 
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         return await self._request_with_retry("POST", path, json=json)

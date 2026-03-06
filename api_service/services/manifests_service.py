@@ -299,6 +299,9 @@ class ManifestsService:
             initial_parameters=parameters,
             idempotency_key=idempotency_key,
         )
+        execution = await self._execution_service._require_source_execution(
+            execution.workflow_id
+        )
         if execution.manifest_ref and execution.manifest_ref != manifest_artifact_ref:
             await self._artifact_service.soft_delete(
                 artifact_id=artifact.artifact_id,

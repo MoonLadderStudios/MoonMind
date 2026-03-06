@@ -28,6 +28,9 @@ from api_service.api.routers.agent_queue import router as agent_queue_router
 from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
+from api_service.api.routers.execution_integrations import (
+    router as execution_integrations_router,
+)
 from api_service.api.routers.executions import router as executions_router
 from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
@@ -39,6 +42,9 @@ from api_service.api.routers.recurring_tasks import router as recurring_tasks_ro
 from api_service.api.routers.spec_automation import router as spec_automation_router
 from api_service.api.routers.system_worker_pause import (
     router as system_worker_pause_router,
+)
+from api_service.api.routers.task_compatibility import (
+    router as task_compatibility_router,
 )
 from api_service.api.routers.task_dashboard import router as task_dashboard_router
 from api_service.api.routers.task_proposals import router as task_proposals_router
@@ -291,6 +297,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(executions_router)
+app.include_router(execution_integrations_router)
 app.include_router(spec_automation_router)
 app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
@@ -299,6 +306,7 @@ app.include_router(task_runs_router)
 app.include_router(task_proposals_router)
 app.include_router(recurring_tasks_router)
 app.include_router(task_dashboard_router)
+app.include_router(task_compatibility_router)
 app.include_router(task_step_templates_router)
 app.include_router(temporal_artifacts_router)
 

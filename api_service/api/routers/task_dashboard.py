@@ -5,20 +5,29 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.agent_queue import _get_service, list_jobs
 from api_service.api.routers.task_dashboard_view_model import build_runtime_config
 from api_service.auth_providers import get_current_user
+from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.schemas.agent_queue_models import JobListResponse
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.orchestrator.skill_executor import list_runnable_skill_names
 from moonmind.workflows.skills.resolver import list_available_skill_names
+from moonmind.workflows.tasks.source_mapping import (
+    TaskResolutionAmbiguousError,
+    TaskResolutionNotFoundError,
+    TaskSourceMappingService,
+)
 
 router = APIRouter(prefix="", tags=["task-dashboard"])
 
@@ -28,6 +37,9 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_TASK_ID_SEGMENT = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT = re.compile(
+    r"^mm:[A-Za-z0-9][A-Za-z0-9._:-]{0,123}$"
 )
 
 _STATIC_PATHS = {
@@ -67,6 +79,15 @@ class DashboardSkillListResponse(BaseModel):
     )
 
 
+class TaskSourceResolutionResponse(BaseModel):
+    """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
+
+    task_id: str = Field(..., alias="taskId")
+    source: Literal["queue", "orchestrator", "temporal"] = Field(..., alias="source")
+    entry: str | None = Field(None, alias="entry")
+    workflow_id: str | None = Field(None, alias="workflowId")
+
+
 def _is_dynamic_detail(path: str, source: str) -> bool:
     parts = path.split("/")
     return (
@@ -86,12 +107,27 @@ def _is_safe_detail_segment(segment: str) -> bool:
     return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
 
 
+def _is_temporal_task_id(path: str) -> bool:
+    return path.startswith("mm:") and _is_safe_detail_segment(path)
+
+
+def _parse_task_uuid(task_id: str) -> UUID | None:
+    try:
+        return UUID(str(task_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_execution_admin(user: User | None) -> bool:
+    return bool(user and getattr(user, "is_superuser", False))
+
+
 def _is_allowed_path(path: str) -> bool:
     if not path:
         return False
     if _SAFE_TASK_ID_SEGMENT.fullmatch(path):
         return True
-    if path.startswith("mm:") and _is_safe_detail_segment(path):
+    if _is_temporal_task_id(path):
         return True
     if path in _STATIC_PATHS:
         return True
@@ -201,6 +237,54 @@ async def list_dashboard_skills(
 
 
 @router.get(
+    "/api/tasks/{task_id}/resolution",
+    response_model=TaskSourceResolutionResponse,
+)
+async def resolve_dashboard_task_source(
+    task_id: str,
+    *,
+    source_hint: Literal["queue", "orchestrator", "temporal"] | None = Query(
+        None, alias="source"
+    ),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+) -> TaskSourceResolutionResponse:
+    """Resolve a unified task handle to its canonical execution source."""
+
+    service = TaskSourceMappingService(session)
+    try:
+        resolved = await service.resolve_task(
+            task_id=task_id,
+            source_hint=source_hint,
+            user=user,
+        )
+    except TaskResolutionNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "task_not_found",
+                "message": str(exc),
+            },
+        ) from exc
+    except TaskResolutionAmbiguousError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ambiguous_task_source",
+                "message": str(exc),
+                "sources": sorted(exc.sources),
+            },
+        ) from exc
+
+    return TaskSourceResolutionResponse(
+        taskId=task_id,
+        source=resolved.source,
+        entry=resolved.entry,
+        workflowId=resolved.workflow_id,
+    )
+
+
+@router.get(
     "/api/tasks",
     response_model=JobListResponse,
     response_model_exclude={"items": {"__all__": {"finish_summary"}}},
@@ -230,4 +314,8 @@ async def list_dashboard_tasks(
     )
 
 
-__all__ = ["router", "_is_allowed_path", "_resolve_user_dependency_overrides"]
+__all__ = [
+    "router",
+    "_is_allowed_path",
+    "_resolve_user_dependency_overrides",
+]

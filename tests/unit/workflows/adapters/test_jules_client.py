@@ -10,7 +10,9 @@ import pytest
 from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
+    JulesIntegrationStartRequest,
     JulesResolveTaskRequest,
+    normalize_jules_status,
 )
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
@@ -91,6 +93,121 @@ async def test_get_task_success():
     client = _make_client(handler)
     result = await client.get_task(JulesGetTaskRequest(task_id="task-001"))
     assert result.task_id == "task-001"
+
+
+@pytest.mark.asyncio
+async def test_normalize_jules_status_maps_terminal_and_running_states():
+    assert normalize_jules_status("pending") == "queued"
+    assert normalize_jules_status("in_progress") == "running"
+    assert normalize_jules_status("completed") == "succeeded"
+    assert normalize_jules_status("canceled") == "canceled"
+    assert normalize_jules_status("mystery") == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_start_integration_builds_provider_neutral_result():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["metadata"]["moonmind"]["correlationId"] == "corr-1"
+        assert body["metadata"]["moonmind"]["idempotencyKey"] == "idem-1"
+        return httpx.Response(
+            200,
+            json={
+                "taskId": "task-123",
+                "status": "pending",
+                "url": "https://jules.example.com/tasks/task-123",
+            },
+        )
+
+    client = _make_client(handler)
+    result = await client.start_integration(
+        JulesIntegrationStartRequest(
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            title="MoonMind run",
+            description="Monitor this task",
+            inputRefs=["art_1"],
+            parameters={"prompt": "hello"},
+            callbackUrl="https://moonmind.example.test/callback",
+            callbackCorrelationKey="cb-1",
+        ),
+        recommended_poll_seconds=15,
+    )
+
+    assert result.external_operation_id == "task-123"
+    assert result.normalized_status == "queued"
+    assert result.callback_supported is True
+    assert result.recommended_poll_seconds == 15
+    assert result.idempotency_key == "idem-1"
+
+
+@pytest.mark.asyncio
+async def test_start_integration_marks_transport_timeout_as_ambiguous():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    client = _make_client(handler, retry_attempts=1, retry_delay_seconds=0.0)
+
+    with pytest.raises(JulesClientError) as exc_info:
+        await client.start_integration(
+            JulesIntegrationStartRequest(
+                correlationId="corr-timeout",
+                idempotencyKey="idem-timeout",
+                title="MoonMind run",
+                description="Monitor this task",
+            )
+        )
+
+    assert exc_info.value.ambiguous is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_cancel_integration_return_normalized_results():
+    step = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        step["count"] += 1
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "taskId": "task-123",
+                    "status": "completed",
+                    "url": "https://jules.example.com/tasks/task-123",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "taskId": "task-123",
+                "status": "canceled",
+                "url": "https://jules.example.com/tasks/task-123",
+            },
+        )
+
+    client = _make_client(handler)
+    fetched = await client.fetch_integration_result(
+        external_operation_id="task-123",
+        result_refs=["art_result"],
+    )
+    canceled = await client.cancel_integration(external_operation_id="task-123")
+
+    assert fetched.normalized_status == "succeeded"
+    assert fetched.output_refs == ["art_result"]
+    assert canceled.accepted is True
+    assert canceled.normalized_status == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_integration_reports_unsupported_response():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(405, text="Method not allowed")
+
+    client = _make_client(handler, retry_attempts=1, retry_delay_seconds=0.0)
+    result = await client.cancel_integration(external_operation_id="task-404")
+
+    assert result.accepted is False
+    assert result.unsupported is True
 
 
 # --- retry tests ---
