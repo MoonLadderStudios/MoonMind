@@ -892,7 +892,6 @@ class TemporalExecutionService:
         await self._session.commit()
         await self._session.refresh(record)
         return await self._sync_projection_best_effort(record)
-        return await self._sync_projection_best_effort(record)
 
     async def mark_projection_stale(
         self,
