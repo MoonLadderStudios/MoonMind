@@ -31,7 +31,11 @@ async def _db(tmp_path: Path):
         yield maker
     finally:
         await engine.dispose()
-async def test_callback_first_completion_uses_single_terminal_path(tmp_path: Path) -> None:
+
+
+async def test_callback_first_completion_uses_single_terminal_path(
+    tmp_path: Path,
+) -> None:
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -154,7 +158,9 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
             assert "art_result" in finished.artifact_refs
 
 
-async def test_duplicate_reordered_and_invalid_callbacks_are_safe(tmp_path: Path) -> None:
+async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
+    tmp_path: Path,
+) -> None:
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)

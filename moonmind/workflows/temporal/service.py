@@ -501,7 +501,9 @@ class TemporalExecutionService:
         )
 
         record.integration_state = state
-        record.artifact_refs = self._merge_refs(record.artifact_refs or [], state["result_refs"])
+        record.artifact_refs = self._merge_refs(
+            record.artifact_refs or [], state["result_refs"]
+        )
 
         if normalized in TERMINAL_INTEGRATION_STATUSES:
             record.awaiting_external = False
@@ -583,7 +585,9 @@ class TemporalExecutionService:
             status_changed=status_changed,
         )
         record.integration_state = state
-        record.artifact_refs = self._merge_refs(record.artifact_refs or [], state["result_refs"])
+        record.artifact_refs = self._merge_refs(
+            record.artifact_refs or [], state["result_refs"]
+        )
 
         if completed_wait_cycles:
             record.wait_cycle_count = (
@@ -1283,7 +1287,8 @@ class TemporalExecutionService:
             select(TemporalIntegrationCorrelationRecord)
             .where(
                 TemporalIntegrationCorrelationRecord.workflow_id == record.workflow_id,
-                TemporalIntegrationCorrelationRecord.integration_name == integration_name,
+                TemporalIntegrationCorrelationRecord.integration_name
+                == integration_name,
             )
             .limit(1)
         )

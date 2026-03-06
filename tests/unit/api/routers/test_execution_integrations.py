@@ -8,8 +8,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from api_service.api.routers import (
+    execution_integrations as execution_integrations_router,
+)
 from api_service.auth_providers import get_current_user
-from api_service.api.routers import execution_integrations as execution_integrations_router
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
@@ -267,7 +269,9 @@ async def test_callback_rate_limit_applies_across_callback_keys(tmp_path, monkey
     original_engine = db_base.engine
     original_session_maker = db_base.async_session_maker
 
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_shared_rate_limit.db"
+    db_url = (
+        f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_shared_rate_limit.db"
+    )
     db_base.DATABASE_URL = db_url
     db_base.engine = create_async_engine(db_url, future=True)
     db_base.async_session_maker = sessionmaker(
@@ -387,7 +391,8 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
 
         assert response.status_code == 202
         assert any(
-            str(ref).startswith("art_") for ref in response.json().get("artifactRefs", [])
+            str(ref).startswith("art_")
+            for ref in response.json().get("artifactRefs", [])
         )
     finally:
         db_base.DATABASE_URL = original_db_url

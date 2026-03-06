@@ -13,10 +13,7 @@ from api_service.api.routers.executions import _serialize_execution
 from api_service.db.base import get_async_session
 from api_service.db.models import TemporalArtifactRedactionLevel
 from moonmind.config.settings import settings
-from moonmind.schemas.temporal_models import (
-    ExecutionModel,
-    IntegrationCallbackRequest,
-)
+from moonmind.schemas.temporal_models import ExecutionModel, IntegrationCallbackRequest
 from moonmind.workflows.temporal import (
     ExecutionRef,
     TemporalArtifactRepository,
@@ -108,11 +105,15 @@ def _callback_profile(integration_name: str) -> _CallbackProfile:
             normalized_name=normalized,
             expected_token=token,
             max_payload_bytes=int(settings.jules.jules_callback_max_payload_bytes),
-            rate_limit_per_window=int(settings.jules.jules_callback_rate_limit_per_window),
+            rate_limit_per_window=int(
+                settings.jules.jules_callback_rate_limit_per_window
+            ),
             rate_limit_window_seconds=int(
                 settings.jules.jules_callback_rate_limit_window_seconds
             ),
-            capture_artifacts=bool(settings.jules.jules_callback_artifact_capture_enabled),
+            capture_artifacts=bool(
+                settings.jules.jules_callback_artifact_capture_enabled
+            ),
         )
     return _CallbackProfile(
         normalized_name=normalized,
@@ -235,7 +236,9 @@ async def ingest_integration_callback(
             payload_artifact_ref is None
             and _callback_profile(integration_name).capture_artifacts
         ):
-            artifact_service = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(session)
+            )
             event_type = str(payload.event_type).strip()
             artifact_ref = await artifact_service.write_integration_event_artifact(
                 principal="service:integration-callback",
@@ -247,9 +250,9 @@ async def ingest_integration_callback(
                     label=f"{integration_name}:{event_type}",
                 ),
                 integration_name=str(integration_name).strip().lower(),
-                correlation_id=(
-                    target_record.integration_state or {}
-                ).get("correlation_id", callback_correlation_key),
+                correlation_id=(target_record.integration_state or {}).get(
+                    "correlation_id", callback_correlation_key
+                ),
                 payload=payload_bytes,
                 content_type="application/json",
                 event_type=event_type,

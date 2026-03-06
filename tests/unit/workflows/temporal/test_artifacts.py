@@ -442,15 +442,18 @@ async def test_write_integration_result_and_failure_artifacts_assign_link_retent
                 diagnostics={"httpStatus": 500},
             )
 
-            result_artifact = await service._repository.get_artifact(result_ref.artifact_id)
+            result_artifact = await service._repository.get_artifact(
+                result_ref.artifact_id
+            )
             failure_artifact = await service._repository.get_artifact(
                 failure_ref.artifact_id
             )
 
             assert result_artifact.retention_class.value == "standard"
-            assert result_artifact.metadata_json["artifact_kind"] == "integration_result"
             assert (
-                failure_artifact.metadata_json["artifact_kind"]
-                == "integration_failure"
+                result_artifact.metadata_json["artifact_kind"] == "integration_result"
+            )
+            assert (
+                failure_artifact.metadata_json["artifact_kind"] == "integration_failure"
             )
             assert failure_artifact.retention_class.value == "standard"

@@ -541,7 +541,10 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
         assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
         assert configured.awaiting_external is True
         assert configured.search_attributes["mm_integration"] == "jules"
-        assert configured.memo["external_url"] == "https://jules.example.test/tasks/task-123"
+        assert (
+            configured.memo["external_url"]
+            == "https://jules.example.test/tasks/task-123"
+        )
         assert configured.integration_state is not None
         assert configured.integration_state["callback_correlation_key"]
         assert configured.integration_state["external_operation_id"] == "task-123"
@@ -814,7 +817,9 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_polling_backoff_resets_after_status_change_and_updates_visibility(tmp_path):
+async def test_polling_backoff_resets_after_status_change_and_updates_visibility(
+    tmp_path,
+):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(
             session,
@@ -880,7 +885,9 @@ async def test_polling_backoff_resets_after_status_change_and_updates_visibility
 
 
 @pytest.mark.asyncio
-async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(tmp_path):
+async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
+    tmp_path,
+):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 

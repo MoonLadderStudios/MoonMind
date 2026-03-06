@@ -96,9 +96,7 @@ class ConfigureIntegrationMonitoringRequest(BaseModel):
 
     integration_name: str = Field(..., alias="integrationName", min_length=1)
     correlation_id: Optional[str] = Field(None, alias="correlationId")
-    external_operation_id: str = Field(
-        ..., alias="externalOperationId", min_length=1
-    )
+    external_operation_id: str = Field(..., alias="externalOperationId", min_length=1)
     normalized_status: NormalizedIntegrationStatus = Field(
         ..., alias="normalizedStatus"
     )

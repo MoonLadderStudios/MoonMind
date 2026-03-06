@@ -98,7 +98,9 @@ def _serialize_execution(record) -> ExecutionModel:
         search_attributes=search_attributes,
         memo=memo,
         artifact_refs=list(record.artifact_refs or []),
-        integration=dict(integration_state) if isinstance(integration_state, dict) else None,
+        integration=(
+            dict(integration_state) if isinstance(integration_state, dict) else None
+        ),
         latest_run_view=True,
         continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,

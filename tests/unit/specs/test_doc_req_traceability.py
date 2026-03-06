@@ -12,17 +12,23 @@ _FEATURES = (
     (
         "046-workflow-type-lifecycle",
         Path("specs/046-workflow-type-lifecycle/spec.md"),
-        Path("specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"),
+        Path(
+            "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+        ),
     ),
     (
         "047-activity-worker-topology",
         Path("specs/047-activity-worker-topology/spec.md"),
-        Path("specs/047-activity-worker-topology/contracts/requirements-traceability.md"),
+        Path(
+            "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+        ),
     ),
     (
         "047-integrations-monitoring",
         Path("specs/047-integrations-monitoring/spec.md"),
-        Path("specs/047-integrations-monitoring/contracts/requirements-traceability.md"),
+        Path(
+            "specs/047-integrations-monitoring/contracts/requirements-traceability.md"
+        ),
     ),
     (
         "048-run-history-rerun",
