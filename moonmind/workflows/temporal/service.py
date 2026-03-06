@@ -29,10 +29,22 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
 )
+from moonmind.schemas.manifest_ingest_models import (
+    ManifestNodePageModel,
+    ManifestStatusSnapshotModel,
+)
 from moonmind.schemas.temporal_models import (
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
+)
+from moonmind.workflows.temporal.manifest_ingest import (
+    MANIFEST_UPDATE_NAMES,
+    ManifestIngestValidationError,
+    apply_manifest_update,
+    build_manifest_status_snapshot,
+    initialize_manifest_projection,
+    list_manifest_nodes,
 )
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
@@ -277,6 +289,8 @@ class TemporalExecutionService:
             closed_at=None,
         )
         self._session.add(record)
+        if workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
+            initialize_manifest_projection(record)
         try:
             await self._session.commit()
         except IntegrityError as exc:
@@ -409,17 +423,30 @@ class TemporalExecutionService:
         *,
         workflow_id: str,
         update_name: str,
-        input_artifact_ref: str | None,
-        plan_artifact_ref: str | None,
-        parameters_patch: dict[str, Any] | None,
-        title: str | None,
-        idempotency_key: str | None,
+        input_artifact_ref: str | None = None,
+        plan_artifact_ref: str | None = None,
+        parameters_patch: dict[str, Any] | None = None,
+        title: str | None = None,
+        new_manifest_artifact_ref: str | None = None,
+        mode: str | None = None,
+        max_concurrency: int | None = None,
+        node_ids: list[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         if update_name not in ALLOWED_UPDATE_NAMES:
             raise TemporalExecutionValidationError(
                 f"Unsupported update name: {update_name}"
             )
+
         record = await self._require_source_execution(workflow_id)
+        if (
+            update_name in MANIFEST_UPDATE_NAMES
+            and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
+        ):
+            raise TemporalExecutionValidationError(
+                f"Update {update_name} is only supported for "
+                "MoonMind.ManifestIngest workflows"
+            )
 
         if idempotency_key and idempotency_key == record.last_update_idempotency_key:
             cached = record.last_update_response
@@ -433,7 +460,24 @@ class TemporalExecutionService:
                 "message": "Workflow is in a terminal state and no longer accepts updates.",
             }
 
-        if update_name == "UpdateInputs":
+        if record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST and (
+            update_name in MANIFEST_UPDATE_NAMES
+        ):
+            try:
+                response = apply_manifest_update(
+                    record,
+                    update_name=update_name,
+                    new_manifest_artifact_ref=new_manifest_artifact_ref,
+                    mode=mode,
+                    max_concurrency=max_concurrency,
+                    node_ids=node_ids,
+                )
+            except ManifestIngestValidationError as exc:
+                raise TemporalExecutionValidationError(str(exc)) from exc
+            self._touch(record)
+            if response.get("message"):
+                self._update_summary(record, str(response["message"]))
+        elif update_name == "UpdateInputs":
             response = self._apply_update_inputs(
                 record,
                 input_artifact_ref=input_artifact_ref,
@@ -453,6 +497,10 @@ class TemporalExecutionService:
                 plan_artifact_ref=plan_artifact_ref,
                 parameters_patch=parameters_patch,
             )
+        else:
+            raise TemporalExecutionValidationError(
+                f"Unsupported update name: {update_name}"
+            )
 
         if idempotency_key:
             record.last_update_idempotency_key = idempotency_key
@@ -463,6 +511,35 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         await self._sync_projection_best_effort(record)
         return response
+
+    async def describe_manifest_status(
+        self,
+        workflow_id: str,
+    ) -> ManifestStatusSnapshotModel:
+        record = await self.describe_execution(workflow_id)
+        try:
+            return build_manifest_status_snapshot(record)
+        except ManifestIngestValidationError as exc:
+            raise TemporalExecutionValidationError(str(exc)) from exc
+
+    async def list_manifest_nodes(
+        self,
+        workflow_id: str,
+        *,
+        state: str | None,
+        cursor: str | None,
+        limit: int,
+    ) -> ManifestNodePageModel:
+        record = await self.describe_execution(workflow_id)
+        try:
+            return list_manifest_nodes(
+                record,
+                state=state,
+                cursor=cursor,
+                limit=limit,
+            )
+        except ManifestIngestValidationError as exc:
+            raise TemporalExecutionValidationError(str(exc)) from exc
 
     async def signal_execution(
         self,

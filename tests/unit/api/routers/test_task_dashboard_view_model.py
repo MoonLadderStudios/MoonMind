@@ -141,6 +141,14 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["update"] == "/api/executions/{workflowId}/update"
     )
     assert (
+        config["sources"]["temporal"]["manifestStatus"]
+        == "/api/executions/{workflowId}/manifest-status"
+    )
+    assert (
+        config["sources"]["temporal"]["manifestNodes"]
+        == "/api/executions/{workflowId}/manifest-nodes"
+    )
+    assert (
         config["sources"]["temporal"]["signal"] == "/api/executions/{workflowId}/signal"
     )
     assert (

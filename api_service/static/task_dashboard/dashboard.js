@@ -3093,10 +3093,7 @@
       toTemporalRows,
       uploadTemporalArtifactContent,
     };
-    window.__temporalRunHistoryTest = {
-      resolveTemporalDetailContext,
-    };
-      window.__queueLayoutTest = {
+    window.__queueLayoutTest = {
         queueFieldDefinitions,
         renderQueueFieldValue,
         renderQueueTable,
@@ -3115,6 +3112,10 @@
         applyQueuePaginationToSearch,
         resetQueuePaginationState,
       };
+    window.__temporalRunHistoryTest = {
+      resolveTemporalDetailContext,
+      resolveManifestIngestContext,
+    };
     }
 
   async function apiPromoteProposal(proposalId, overrides = {}) {
@@ -9995,6 +9996,31 @@
     startPolling(() => load(true), pollIntervals.detail);
   }
 
+  function resolveManifestIngestContext(
+    execution,
+    workflowId,
+    sourceConfig = temporalSourceConfig,
+  ) {
+    const detailContext = resolveTemporalDetailContext(execution, workflowId, sourceConfig);
+    const resolvedWorkflowId = detailContext.taskId || workflowId;
+    const statusEndpointTemplate =
+      sourceConfig.manifestStatus || "/api/executions/{workflowId}/manifest-status";
+    const nodesEndpointTemplate =
+      sourceConfig.manifestNodes || "/api/executions/{workflowId}/manifest-nodes";
+    return {
+      ...detailContext,
+      manifestStatusEndpoint: endpoint(statusEndpointTemplate, {
+        workflowId: resolvedWorkflowId,
+      }),
+      manifestNodesEndpoint: endpoint(nodesEndpointTemplate, {
+        workflowId: resolvedWorkflowId,
+      }),
+      runIndexArtifactRef:
+        pick(execution, "runIndexArtifactRef")
+        || pick(execution, "run_index_artifact_ref")
+        || null,
+    };
+  }
   async function renderSystemSettingsPage() {
     if (!workerPauseTransport) {
       setView(

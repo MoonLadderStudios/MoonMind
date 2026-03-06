@@ -22,6 +22,8 @@ function createVmContext() {
       sources: {
         temporal: {
           detail: "/api/executions/{workflowId}",
+          manifestStatus: "/api/executions/{workflowId}/manifest-status",
+          manifestNodes: "/api/executions/{workflowId}/manifest-nodes",
           artifacts: "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
         },
       },
@@ -162,4 +164,27 @@ const helpers = loadTemporalHelpers();
   assert.strictEqual(context.taskId, "mm:wf-3");
   assert.strictEqual(context.temporalRunId, null);
   assert.strictEqual(context.artifactsEndpoint, "");
+})();
+
+(function testResolveManifestIngestContextBuildsStatusAndNodesEndpoints() {
+  const context = helpers.resolveManifestIngestContext(
+    {
+      namespace: "moonmind",
+      workflowId: "mm:manifest-1",
+      taskId: "mm:manifest-1",
+      temporalRunId: "run-1",
+      runIndexArtifactRef: "art_index_1",
+    },
+    "mm:manifest-1",
+  );
+
+  assert.strictEqual(
+    context.manifestStatusEndpoint,
+    "/api/executions/mm%3Amanifest-1/manifest-status",
+  );
+  assert.strictEqual(
+    context.manifestNodesEndpoint,
+    "/api/executions/mm%3Amanifest-1/manifest-nodes",
+  );
+  assert.strictEqual(context.runIndexArtifactRef, "art_index_1");
 })();

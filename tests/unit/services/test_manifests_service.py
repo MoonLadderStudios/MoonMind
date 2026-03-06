@@ -21,6 +21,12 @@ from api_service.services.manifests_service import (
 )
 from moonmind.workflows.agent_queue import models as queue_models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
+from moonmind.workflows.temporal import (
+    LocalTemporalArtifactStore,
+    TemporalArtifactRepository,
+    TemporalArtifactService,
+    TemporalExecutionService,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
 
@@ -120,18 +126,169 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
             service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
 
             await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
-            job = await service.submit_manifest_run(
+            submission = await service.submit_manifest_run(
                 name="demo",
                 action="run",
                 options={"dryRun": True},
                 user_id=uuid4(),
             )
 
-            assert job.id == job_id
+            assert submission.source == "queue"
+            assert submission.job is not None
+            assert submission.job.id == job_id
             record = await service.get_manifest("demo")
             assert record is not None
             assert record.last_run_job_id == job_id
+            assert record.last_run_source == "queue"
             assert record.last_run_status == queue_models.AgentJobStatus.QUEUED.value
+
+
+async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
+    tmp_path: Path,
+) -> None:
+    """submit_manifest_run should stage registry YAML as an artifact and create a Temporal ingest execution."""
+
+    async with manifest_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "temporal-artifacts"),
+            )
+            execution_service = TemporalExecutionService(session)
+            service = ManifestsService(
+                session,
+                None,
+                execution_service=execution_service,
+                artifact_service=artifact_service,
+            )
+
+            user_id = uuid4()
+            await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
+            submitted = await service.submit_manifest_run(
+                name="demo",
+                action="run",
+                options={"dryRun": True},
+                user_id=user_id,
+                title="Registry ingest",
+                failure_policy="fail_fast",
+                max_concurrency=25,
+                tags={"env": "test"},
+                idempotency_key="manifest-demo-1",
+            )
+
+            assert submitted.source == "temporal"
+            assert submitted.workflow_id is not None
+            assert submitted.run_id is not None
+            assert submitted.workflow_type == "MoonMind.ManifestIngest"
+            assert submitted.temporal_status == "running"
+            assert submitted.manifest_artifact_ref is not None
+
+            execution = await execution_service.describe_execution(
+                submitted.workflow_id
+            )
+            assert execution.manifest_ref == submitted.manifest_artifact_ref
+            assert execution.parameters["manifestName"] == "demo"
+            assert execution.parameters["action"] == "run"
+            assert execution.parameters["options"] == {"dryRun": True}
+            assert execution.parameters["manifestDigest"].startswith("sha256:")
+            assert execution.parameters["manifestNodes"]
+            assert execution.parameters["executionPolicy"]["maxConcurrency"] == 25
+            assert (
+                execution.parameters["executionPolicy"]["failurePolicy"] == "fail_fast"
+            )
+            assert execution.parameters["requestedBy"]["id"] == str(user_id)
+            assert execution.search_attributes["mm_entry"] == "manifest"
+            assert execution.search_attributes["mm_owner_type"] == "user"
+            assert execution.search_attributes["mm_state"] == "executing"
+            assert execution.plan_ref is not None
+            assert execution.memo["summary_artifact_ref"].startswith("art_")
+            assert execution.memo["run_index_artifact_ref"].startswith("art_")
+            assert "manifest:" not in str(execution.memo).lower()
+            assert REGISTRY_MANIFEST not in str(execution.memo)
+
+            first_node = execution.parameters["manifestNodes"][0]
+            assert first_node["childWorkflowId"].startswith("mm:")
+            child_execution = await execution_service.describe_execution(
+                first_node["childWorkflowId"]
+            )
+            assert (
+                child_execution.parameters["manifestIngestWorkflowId"]
+                == execution.workflow_id
+            )
+            assert child_execution.parameters["parentClosePolicy"] == "REQUEST_CANCEL"
+
+            record = await service.get_manifest("demo")
+            assert record is not None
+            assert record.last_run_job_id is None
+            assert record.last_run_source == "temporal"
+            assert record.last_run_workflow_id == submitted.workflow_id
+            assert record.last_run_temporal_run_id == submitted.run_id
+            assert record.last_run_manifest_ref == submitted.manifest_artifact_ref
+            assert record.last_run_status == "executing"
+
+
+async def test_submit_manifest_run_reuses_idempotent_execution_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    """submit_manifest_run should return the original Temporal submission for idempotent retries."""
+
+    async with manifest_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            artifact_service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "temporal-artifacts"),
+            )
+            execution_service = TemporalExecutionService(session)
+            service = ManifestsService(
+                session,
+                None,
+                execution_service=execution_service,
+                artifact_service=artifact_service,
+            )
+
+            user_id = uuid4()
+            await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
+            first = await service.submit_manifest_run(
+                name="demo",
+                action="run",
+                options={"dryRun": True},
+                user_id=user_id,
+                idempotency_key="manifest-demo-repeat",
+            )
+            first_execution_count = (
+                await execution_service.list_executions(
+                    workflow_type=None,
+                    state=None,
+                    owner_id=None,
+                    page_size=200,
+                    next_page_token=None,
+                )
+            ).count
+
+            second = await service.submit_manifest_run(
+                name="demo",
+                action="run",
+                options={"dryRun": True},
+                user_id=user_id,
+                idempotency_key="manifest-demo-repeat",
+            )
+            second_execution_count = (
+                await execution_service.list_executions(
+                    workflow_type=None,
+                    state=None,
+                    owner_id=None,
+                    page_size=200,
+                    next_page_token=None,
+                )
+            ).count
+
+            assert second.workflow_id == first.workflow_id
+            assert second.run_id == first.run_id
+            assert second.manifest_artifact_ref == first.manifest_artifact_ref
+            assert second_execution_count == first_execution_count
+
+            execution = await execution_service.describe_execution(first.workflow_id)
+            assert execution.manifest_ref == first.manifest_artifact_ref
 
 
 async def test_update_manifest_state_persists_checkpoint_and_run_metadata(

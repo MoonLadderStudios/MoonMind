@@ -19,6 +19,10 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_queue_models import CreateJobRequest
+from moonmind.schemas.manifest_ingest_models import (
+    ManifestNodePageModel,
+    ManifestStatusSnapshotModel,
+)
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
@@ -37,6 +41,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
+    build_manifest_status_snapshot,
 )
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
@@ -95,6 +100,10 @@ def _compatibility_refreshed_at(record) -> datetime:
     if updated_at.tzinfo is not None:
         return updated_at
     return updated_at.replace(tzinfo=UTC)
+
+
+def _manifest_attr(manifest_status, field: str, default=None):
+    return getattr(manifest_status, field, default) if manifest_status else default
 
 
 def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
@@ -169,6 +178,9 @@ def _serialize_execution(
         temporal_status = "failed"
 
     raw_state = state_value
+    manifest_status = None
+    if workflow_type_value == "MoonMind.ManifestIngest":
+        manifest_status = build_manifest_status_snapshot(record)
     owner_type = _normalize_owner_type(record, search_attributes)
     owner_id = str(search_attributes.get("mm_owner_id") or record.owner_id or "system")
     entry = _resolve_execution_entry(record, search_attributes)
@@ -227,6 +239,24 @@ def _serialize_execution(
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),
+        manifest_artifact_ref=_manifest_attr(
+            manifest_status,
+            "manifest_artifact_ref",
+            getattr(record, "manifest_ref", None),
+        ),
+        plan_artifact_ref=_manifest_attr(manifest_status, "plan_artifact_ref"),
+        summary_artifact_ref=_manifest_attr(manifest_status, "summary_artifact_ref"),
+        run_index_artifact_ref=_manifest_attr(
+            manifest_status, "run_index_artifact_ref"
+        ),
+        checkpoint_artifact_ref=_manifest_attr(
+            manifest_status, "checkpoint_artifact_ref"
+        ),
+        requested_by=_manifest_attr(manifest_status, "requested_by"),
+        execution_policy=_manifest_attr(manifest_status, "execution_policy"),
+        phase=_manifest_attr(manifest_status, "phase"),
+        paused=_manifest_attr(manifest_status, "paused"),
+        counts=_manifest_attr(manifest_status, "counts"),
         artifacts_count=len(record.artifact_refs or []),
         created_at=record.started_at,
         actions=actions,
@@ -680,7 +710,11 @@ async def describe_execution(
     return _serialize_execution(record)
 
 
-@router.post("/{workflow_id}/update", response_model=UpdateExecutionResponse)
+@router.post(
+    "/{workflow_id}/update",
+    response_model=UpdateExecutionResponse,
+    response_model_exclude_none=True,
+)
 async def update_execution(
     workflow_id: str,
     payload: UpdateExecutionRequest,
@@ -702,6 +736,10 @@ async def update_execution(
             plan_artifact_ref=payload.plan_artifact_ref,
             parameters_patch=payload.parameters_patch,
             title=payload.title,
+            new_manifest_artifact_ref=payload.new_manifest_artifact_ref,
+            mode=payload.mode,
+            max_concurrency=payload.max_concurrency,
+            node_ids=payload.node_ids,
             idempotency_key=payload.idempotency_key,
         )
     except TemporalExecutionValidationError as exc:
@@ -732,6 +770,58 @@ async def update_execution(
             refreshed_at=_compatibility_refreshed_at(refreshed_record),
         ),
     )
+
+
+@router.get(
+    "/{workflow_id}/manifest-status",
+    response_model=ManifestStatusSnapshotModel,
+)
+async def describe_manifest_status(
+    workflow_id: str,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> ManifestStatusSnapshotModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    try:
+        return await service.describe_manifest_status(workflow_id)
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_manifest_status_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+
+@router.get(
+    "/{workflow_id}/manifest-nodes",
+    response_model=ManifestNodePageModel,
+)
+async def list_manifest_node_page(
+    workflow_id: str,
+    state: Optional[str] = Query(None, alias="state"),
+    cursor: Optional[str] = Query(None, alias="cursor"),
+    limit: int = Query(50, alias="limit", ge=1, le=200),
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> ManifestNodePageModel:
+    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+    try:
+        return await service.list_manifest_nodes(
+            workflow_id,
+            state=state,
+            cursor=cursor,
+            limit=limit,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_manifest_nodes_request",
+                "message": str(exc),
+            },
+        ) from exc
 
 
 @router.post(

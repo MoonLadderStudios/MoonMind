@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SUPPORTED_WORKFLOW_TYPES = ("MoonMind.Run", "MoonMind.ManifestIngest")
 SUPPORTED_FAILURE_POLICIES = (
@@ -13,8 +13,24 @@ SUPPORTED_FAILURE_POLICIES = (
     "continue_and_report",
     "best_effort",
 )
-SUPPORTED_UPDATE_NAMES = ("UpdateInputs", "SetTitle", "RequestRerun")
+SUPPORTED_UPDATE_NAMES = (
+    "UpdateInputs",
+    "SetTitle",
+    "RequestRerun",
+    "UpdateManifest",
+    "SetConcurrency",
+    "Pause",
+    "Resume",
+    "CancelNodes",
+    "RetryNodes",
+)
 SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Approve", "Pause", "Resume")
+
+from moonmind.schemas.manifest_ingest_models import (
+    ManifestExecutionPolicyModel,
+    ManifestNodeCountsModel,
+    RequestedByModel,
+)
 
 NormalizedIntegrationStatus = Literal[
     "queued",
@@ -50,6 +66,18 @@ class CreateExecutionRequest(BaseModel):
     )
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
+    @model_validator(mode="after")
+    def _validate_required_fields(self) -> "CreateExecutionRequest":
+        if (
+            self.workflow_type == "MoonMind.ManifestIngest"
+            and not self.manifest_artifact_ref
+        ):
+            raise ValueError(
+                "manifestArtifactRef is required when workflowType is "
+                "MoonMind.ManifestIngest"
+            )
+        return self
+
 
 class UpdateExecutionRequest(BaseModel):
     """Request payload for workflow updates."""
@@ -65,6 +93,12 @@ class UpdateExecutionRequest(BaseModel):
     plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
     parameters_patch: Optional[dict[str, Any]] = Field(None, alias="parametersPatch")
     title: Optional[str] = Field(None, alias="title")
+    new_manifest_artifact_ref: Optional[str] = Field(
+        None, alias="newManifestArtifactRef"
+    )
+    mode: Optional[Literal["REPLACE_FUTURE", "APPEND"]] = Field(None, alias="mode")
+    max_concurrency: Optional[int] = Field(None, alias="maxConcurrency")
+    node_ids: list[str] = Field(default_factory=list, alias="nodeIds")
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
 
 
@@ -275,6 +309,19 @@ class ExecutionModel(BaseModel):
     )
     debug_fields: Optional[ExecutionDebugFieldsModel] = Field(None, alias="debugFields")
     redirect_path: Optional[str] = Field(None, alias="redirectPath")
+    manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
+    plan_artifact_ref: Optional[str] = Field(None, alias="planArtifactRef")
+    summary_artifact_ref: Optional[str] = Field(None, alias="summaryArtifactRef")
+    run_index_artifact_ref: Optional[str] = Field(None, alias="runIndexArtifactRef")
+    checkpoint_artifact_ref: Optional[str] = Field(None, alias="checkpointArtifactRef")
+    requested_by: Optional[RequestedByModel] = Field(None, alias="requestedBy")
+    execution_policy: Optional[ManifestExecutionPolicyModel] = Field(
+        None,
+        alias="executionPolicy",
+    )
+    phase: Optional[str] = Field(None, alias="phase")
+    paused: Optional[bool] = Field(None, alias="paused")
+    counts: Optional[ManifestNodeCountsModel] = Field(None, alias="counts")
     artifacts_count: int = Field(0, alias="artifactsCount")
     created_at: datetime = Field(..., alias="createdAt")
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")

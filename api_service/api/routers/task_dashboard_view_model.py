@@ -15,7 +15,6 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "jules", "universal")
-_DEFAULT_TASK_RUNTIME = "codex"
 _DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
 _DEFAULT_CODEX_EFFORT = "high"
 _DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
@@ -238,6 +237,8 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "create": temporal_dashboard.create_endpoint,
                 "detail": temporal_dashboard.detail_endpoint,
                 "update": temporal_dashboard.update_endpoint,
+                "manifestStatus": "/api/executions/{workflowId}/manifest-status",
+                "manifestNodes": "/api/executions/{workflowId}/manifest-nodes",
                 "signal": temporal_dashboard.signal_endpoint,
                 "cancel": temporal_dashboard.cancel_endpoint,
                 "artifacts": temporal_dashboard.artifacts_endpoint,

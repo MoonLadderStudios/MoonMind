@@ -69,6 +69,8 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             assert execution["entry"] == "run"
             assert execution["status"] == "queued"
             assert execution["rawState"] == "initializing"
+            assert execution["runId"]
+            assert execution["temporalRunId"] == execution["runId"]
             assert execution["createdAt"] == execution["startedAt"]
             assert execution["detailHref"] == f"/tasks/{workflow_id}"
 
@@ -631,6 +633,97 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(tmp_pat
                 body["memo"]["summary"]
                 == "Implement Temporal submit redirect coverage."
             )
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
+
+
+@pytest.mark.asyncio
+async def test_manifest_execution_status_and_node_page_contract(tmp_path):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_manifest_contract.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "workflowType": "MoonMind.ManifestIngest",
+                    "manifestArtifactRef": "art_manifest_123",
+                    "failurePolicy": "best_effort",
+                    "initialParameters": {
+                        "requestedBy": {"type": "user", "id": str(shared_user_id)},
+                        "executionPolicy": {"maxConcurrency": 6},
+                        "manifestNodes": [
+                            {"nodeId": "node-a", "state": "ready"},
+                            {"nodeId": "node-b", "state": "running"},
+                            {"nodeId": "node-c", "state": "failed"},
+                        ],
+                    },
+                    "idempotencyKey": "manifest-contract-create-1",
+                },
+            )
+            assert create_response.status_code == 201
+            created = create_response.json()
+            workflow_id = created["workflowId"]
+            assert created["workflowType"] == "MoonMind.ManifestIngest"
+            assert created["manifestArtifactRef"] == "art_manifest_123"
+            assert created["executionPolicy"]["maxConcurrency"] == 6
+            assert created["counts"]["ready"] == 1
+            assert created["counts"]["running"] == 1
+            assert created["counts"]["failed"] == 1
+
+            update_response = await client.post(
+                f"/api/executions/{workflow_id}/update",
+                json={
+                    "updateName": "SetConcurrency",
+                    "maxConcurrency": 4,
+                    "idempotencyKey": "manifest-set-concurrency-1",
+                },
+            )
+            assert update_response.status_code == 200
+            assert update_response.json()["accepted"] is True
+
+            status_response = await client.get(
+                f"/api/executions/{workflow_id}/manifest-status"
+            )
+            assert status_response.status_code == 200
+            status_payload = status_response.json()
+            assert status_payload["workflowId"] == workflow_id
+            assert status_payload["maxConcurrency"] == 4
+            assert status_payload["failurePolicy"] == "best_effort"
+            assert status_payload["counts"]["running"] == 1
+
+            nodes_response = await client.get(
+                f"/api/executions/{workflow_id}/manifest-nodes",
+                params={"state": "running", "limit": 10},
+            )
+            assert nodes_response.status_code == 200
+            nodes_payload = nodes_response.json()
+            assert nodes_payload["count"] == 1
+            assert nodes_payload["items"][0]["nodeId"] == "node-b"
+            assert nodes_payload["items"][0]["workflowType"] == "MoonMind.Run"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

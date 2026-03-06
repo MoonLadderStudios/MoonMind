@@ -413,7 +413,7 @@ async def list_dashboard_tasks(
     "/api/tasks/{task_id}/source",
     response_model=DashboardTaskSourceResponse,
 )
-async def resolve_dashboard_task_source(
+async def get_dashboard_task_source(
     task_id: str,
     queue_service: AgentQueueService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),

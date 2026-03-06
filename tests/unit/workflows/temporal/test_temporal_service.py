@@ -62,6 +62,7 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
         )
 
         assert record.workflow_id.startswith("mm:")
+        assert record.search_attributes["mm_owner_type"] == "user"
         assert record.state is MoonMindWorkflowState.INITIALIZING
         assert record.owner_type is TemporalExecutionOwnerType.USER
         assert record.search_attributes["mm_owner_id"] == str(owner_id)
@@ -437,6 +438,10 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-1",
         )
 
@@ -483,6 +488,10 @@ async def test_request_rerun_rejected_for_terminal_execution(tmp_path):
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-terminal",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -493,6 +502,41 @@ async def test_request_rerun_rejected_for_terminal_execution(tmp_path):
             "message": "Workflow is in a terminal state and no longer accepts updates.",
         }
         assert refreshed.state is MoonMindWorkflowState.CANCELED
+
+
+@pytest.mark.asyncio
+async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(TemporalExecutionValidationError) as exc_info:
+            await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="Pause",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                new_manifest_artifact_ref=None,
+                mode=None,
+                max_concurrency=None,
+                node_ids=None,
+                idempotency_key=None,
+            )
+
+        assert "only supported for MoonMind.ManifestIngest" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -526,6 +570,10 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path)
             plan_artifact_ref=None,
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-clears-pause",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -727,6 +775,10 @@ async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
             plan_artifact_ref="artifact://plan/new",
             parameters_patch={"force": "yes"},
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="rerun-with-overrides",
         )
         refreshed = await service.describe_execution(created.workflow_id)
@@ -764,6 +816,10 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
             plan_artifact_ref="artifact://plan/replacement",
             parameters_patch=None,
             title=None,
+            new_manifest_artifact_ref=None,
+            mode=None,
+            max_concurrency=None,
+            node_ids=None,
             idempotency_key="update-major-reconfig",
         )
         refreshed = await service.describe_execution(created.workflow_id)

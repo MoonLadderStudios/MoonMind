@@ -35,6 +35,7 @@ from moonmind.workflows.temporal.workers import (
     build_all_worker_topologies,
     build_worker_activity_bindings,
     describe_configured_worker,
+    list_registered_workflow_types,
 )
 
 
@@ -82,6 +83,13 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
     assert "mm.skill.execute" in topologies[ARTIFACTS_FLEET].activity_types
     assert "mm.skill.execute" in topologies[SANDBOX_FLEET].activity_types
     assert "mm.skill.execute" in topologies[INTEGRATIONS_FLEET].activity_types
+
+
+def test_registered_workflow_types_include_manifest_ingest():
+    assert list_registered_workflow_types() == (
+        "MoonMind.Run",
+        "MoonMind.ManifestIngest",
+    )
 
 
 def test_describe_configured_worker_uses_temporal_worker_fleet_override():

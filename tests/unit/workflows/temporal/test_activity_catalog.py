@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     SANDBOX_TASK_QUEUE,
     TemporalActivityCatalogError,
     build_default_activity_catalog,
+    manifest_ingest_activity_routes,
 )
 
 
@@ -154,3 +155,18 @@ def test_resolve_explicit_activity_requires_binding_reason():
                 capabilities=["integration:jules"],
             )
         )
+
+
+def test_manifest_ingest_activity_routes_stay_at_activity_queue_boundaries():
+    routes = manifest_ingest_activity_routes(build_default_activity_catalog())
+
+    assert [route.activity_type for route in routes] == [
+        "artifact.read",
+        "plan.generate",
+        "artifact.write_complete",
+    ]
+    assert [route.task_queue for route in routes] == [
+        ARTIFACTS_TASK_QUEUE,
+        LLM_TASK_QUEUE,
+        ARTIFACTS_TASK_QUEUE,
+    ]

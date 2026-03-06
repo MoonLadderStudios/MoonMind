@@ -60,10 +60,20 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     SANDBOX_FLEET: ("llm", "integration:jules"),
     INTEGRATIONS_FLEET: ("sandbox",),
 }
+REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
+    "MoonMind.Run",
+    "MoonMind.ManifestIngest",
+)
 
 
 class TemporalWorkerBootstrapError(ValueError):
     """Raised when the worker topology cannot be resolved safely."""
+
+
+def list_registered_workflow_types() -> tuple[str, ...]:
+    """Return the workflow types owned by the workflow fleet."""
+
+    return REGISTERED_TEMPORAL_WORKFLOW_TYPES
 
 
 @dataclass(frozen=True, slots=True)
