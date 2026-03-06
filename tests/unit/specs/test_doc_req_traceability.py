@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gate for the active workflow-type-lifecycle feature."""
+"""DOC-REQ traceability gate for the active activity-worker-topology feature."""
 
 from __future__ import annotations
 
@@ -6,18 +6,18 @@ import re
 from pathlib import Path
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPEC = Path("specs/046-workflow-type-lifecycle/spec.md")
+_FEATURE_SPEC = Path("specs/047-activity-worker-topology/spec.md")
 _FEATURE_TRACEABILITY = Path(
-    "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+    "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
 )
 
 
-def test_workflow_type_lifecycle_doc_req_traceability_contract() -> None:
+def test_activity_worker_topology_doc_req_traceability_contract() -> None:
     spec_text = _FEATURE_SPEC.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, "Expected DOC-REQ entries in 046 spec.md"
+    assert doc_req_ids, "Expected DOC-REQ entries in 047 spec.md"
 
     assert _FEATURE_TRACEABILITY.exists(), (
         "Missing traceability file for DOC-REQ feature: " f"{_FEATURE_TRACEABILITY}"

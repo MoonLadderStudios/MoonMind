@@ -98,8 +98,9 @@ def _registry_payload() -> dict:
                     }
                 },
                 "executor": {
-                    "activity_type": "sandbox.exec",
+                    "activity_type": "sandbox.run_command",
                     "selector": {"mode": "by_capability"},
+                    "binding_reason": "stronger_isolation",
                 },
                 "requirements": {"capabilities": ["sandbox"]},
                 "policies": {
@@ -287,7 +288,9 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     dispatcher.register_skill(
         skill_name="repo.run_tests", version="1.0.0", handler=mm_handler
     )
-    dispatcher.register_activity(activity_type="sandbox.exec", handler=sandbox_handler)
+    dispatcher.register_activity(
+        activity_type="sandbox.run_command", handler=sandbox_handler
+    )
 
     result_a = asyncio.run(
         execute_skill_activity(
