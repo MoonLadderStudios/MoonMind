@@ -335,7 +335,7 @@ async def list_dashboard_skills(
     "/api/tasks/{task_id}/resolution",
     response_model=TaskSourceResolutionResponse,
 )
-async def resolve_dashboard_task_source(
+async def resolve_dashboard_task_resolution(
     task_id: str,
     *,
     source_hint: Literal["queue", "orchestrator", "temporal"] | None = Query(
