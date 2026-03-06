@@ -615,6 +615,7 @@ class TemporalExecutionService:
             self._continue_as_new(
                 record,
                 summary="Execution continued as new during integration monitoring.",
+                cause="lifecycle_threshold",
             )
 
         await self._sync_integration_correlation_record(record)

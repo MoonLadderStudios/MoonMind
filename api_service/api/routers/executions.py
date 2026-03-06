@@ -70,6 +70,7 @@ def _serialize_execution(record) -> ExecutionModel:
     close_status = record.close_status.value if record.close_status else None
     memo = dict(record.memo or {})
     search_attributes = dict(record.search_attributes or {})
+    integration_state = getattr(record, "integration_state", None)
     continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
         "mm_continue_as_new_cause"
     )
@@ -97,11 +98,7 @@ def _serialize_execution(record) -> ExecutionModel:
         search_attributes=search_attributes,
         memo=memo,
         artifact_refs=list(record.artifact_refs or []),
-        integration=(
-            dict(record.integration_state)
-            if isinstance(record.integration_state, dict)
-            else None
-        ),
+        integration=dict(integration_state) if isinstance(integration_state, dict) else None,
         latest_run_view=True,
         continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,
