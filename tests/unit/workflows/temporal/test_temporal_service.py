@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -11,9 +12,16 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
+    TemporalExecutionOwnerType,
+    TemporalExecutionProjectionSourceMode,
+    TemporalExecutionProjectionSyncState,
+    TemporalExecutionRecord,
+    TemporalWorkflowType,
 )
 from moonmind.workflows.temporal.service import (
+    TemporalExecutionNotFoundError,
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
@@ -55,12 +63,84 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
 
         assert record.workflow_id.startswith("mm:")
         assert record.state is MoonMindWorkflowState.INITIALIZING
-        assert record.search_attributes["mm_owner_type"] == "user"
+        assert record.owner_type is TemporalExecutionOwnerType.USER
         assert record.search_attributes["mm_owner_id"] == str(owner_id)
+        assert record.search_attributes["mm_owner_type"] == "user"
         assert record.search_attributes["mm_state"] == "initializing"
         assert record.search_attributes["mm_entry"] == "run"
         assert record.memo["title"] == "My run"
         assert record.memo["input_ref"] == "artifact://input/1"
+        assert record.sync_state is TemporalExecutionProjectionSyncState.FRESH
+        assert (
+            record.source_mode
+            is TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+
+        source = await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
+        assert source is not None
+        assert source.run_id == record.run_id
+
+
+@pytest.mark.asyncio
+async def test_create_execution_returns_repair_pending_fallback_when_projection_sync_fails(
+    tmp_path, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        async def fail_projection_sync(source):
+            raise RuntimeError(f"projection write failed for {source.workflow_id}")
+
+        monkeypatch.setattr(
+            service, "_upsert_projection_from_source", fail_projection_sync
+        )
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="repair pending",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="repair-pending-create",
+        )
+
+        assert record.sync_state is TemporalExecutionProjectionSyncState.REPAIR_PENDING
+        assert (
+            record.source_mode
+            is TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+        assert "projection write failed" in (record.sync_error or "")
+
+        source = await session.get(TemporalExecutionCanonicalRecord, record.workflow_id)
+        projection = await session.get(TemporalExecutionRecord, record.workflow_id)
+        assert source is not None
+        assert projection is None
+
+
+@pytest.mark.asyncio
+async def test_create_execution_defaults_missing_owner_to_system(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=None,
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        assert record.owner_type is TemporalExecutionOwnerType.SYSTEM
+        assert record.owner_id == "system"
+        assert record.search_attributes["mm_owner_type"] == "system"
+        assert record.search_attributes["mm_owner_id"] == "system"
 
 
 @pytest.mark.asyncio
@@ -81,7 +161,13 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             owner_id = uuid4()
             key = "create-race"
 
-            async def race_precheck(*, idempotency_key, owner_id, workflow_type):
+            async def race_precheck(
+                *,
+                idempotency_key,
+                owner_id,
+                owner_type,
+                workflow_type,
+            ):
                 if idempotency_key == key:
                     await winner_service.create_execution(
                         workflow_type="MoonMind.Run",
@@ -134,6 +220,105 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
             monkeypatch.setattr(loser_session, "commit", original_commit)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        user_record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id="shared-owner",
+            owner_type="user",
+            title="user owned",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="shared-idempotency-key",
+        )
+        service_record = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id="shared-owner",
+            owner_type="service",
+            title="service owned",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="shared-idempotency-key",
+        )
+        service_retry = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id="shared-owner",
+            owner_type="service",
+            title="service retry",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="shared-idempotency-key",
+        )
+
+        assert user_record.workflow_id != service_record.workflow_id
+        assert service_retry.workflow_id == service_record.workflow_id
+        assert service_retry.memo["title"] == "service owned"
+
+
+@pytest.mark.asyncio
+async def test_list_executions_syncs_page_in_single_projection_commit(
+    tmp_path, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="first",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="second",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        original_commit = session.commit
+        commit_calls = 0
+
+        async def counting_commit():
+            nonlocal commit_calls
+            commit_calls += 1
+            await original_commit()
+
+        monkeypatch.setattr(session, "commit", counting_commit)
+
+        result = await service.list_executions(
+            workflow_type=None,
+            state=None,
+            owner_id=None,
+            page_size=2,
+            next_page_token=None,
+        )
+
+        assert len(result.items) == 2
+        assert commit_calls == 1
 
 
 @pytest.mark.asyncio
@@ -509,6 +694,209 @@ async def test_signal_external_event_requires_source_and_event_type(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_configure_integration_monitoring_persists_visibility_and_callback_key(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Run with integration",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        configured = await service.configure_integration_monitoring(
+            workflow_id=created.workflow_id,
+            integration_name="Jules",
+            correlation_id=None,
+            external_operation_id="task-123",
+            normalized_status="running",
+            provider_status="in_progress",
+            callback_supported=True,
+            callback_correlation_key=None,
+            recommended_poll_seconds=30,
+            external_url="https://jules.example.test/tasks/task-123",
+            provider_summary={"queue": "primary"},
+            result_refs=["artifact://events/start"],
+        )
+
+        assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
+        assert configured.awaiting_external is True
+        assert configured.search_attributes["mm_integration"] == "jules"
+        assert (
+            configured.memo["external_url"]
+            == "https://jules.example.test/tasks/task-123"
+        )
+        assert configured.integration_state is not None
+        assert configured.integration_state["callback_correlation_key"]
+        assert configured.integration_state["external_operation_id"] == "task-123"
+        assert "artifact://events/start" in configured.artifact_refs
+
+
+@pytest.mark.asyncio
+async def test_configure_integration_monitoring_rejects_blank_external_operation_id(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Run with invalid integration id",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="external_operation_id is required",
+        ):
+            await service.configure_integration_monitoring(
+                workflow_id=created.workflow_id,
+                integration_name="jules",
+                correlation_id=None,
+                external_operation_id="   ",
+                normalized_status="running",
+                provider_status="running",
+                callback_supported=True,
+                callback_correlation_key=None,
+                recommended_poll_seconds=30,
+                external_url=None,
+                provider_summary={},
+                result_refs=[],
+            )
+
+
+@pytest.mark.asyncio
+async def test_ingest_integration_callback_deduplicates_provider_event_ids(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        configured = await service.configure_integration_monitoring(
+            workflow_id=created.workflow_id,
+            integration_name="jules",
+            correlation_id="corr-1",
+            external_operation_id="task-123",
+            normalized_status="running",
+            provider_status="running",
+            callback_supported=True,
+            callback_correlation_key="cb-123",
+            recommended_poll_seconds=15,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+        )
+
+        first = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-123",
+            payload={
+                "event_type": "status_changed",
+                "provider_event_id": "evt-1",
+                "normalized_status": "running",
+                "provider_status": "running",
+            },
+            payload_artifact_ref=None,
+        )
+        second = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-123",
+            payload={
+                "event_type": "status_changed",
+                "provider_event_id": "evt-1",
+                "normalized_status": "running",
+                "provider_status": "running",
+            },
+            payload_artifact_ref=None,
+        )
+
+        assert first.workflow_id == configured.workflow_id
+        assert second.integration_state["provider_event_ids_seen"] == ["evt-1"]
+        assert "Ignored duplicate external event" in second.memo["summary"]
+
+
+@pytest.mark.asyncio
+async def test_wait_cycle_continue_as_new_preserves_active_integration_monitoring(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            run_continue_as_new_step_threshold=100,
+            run_continue_as_new_wait_cycle_threshold=2,
+        )
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        configured = await service.configure_integration_monitoring(
+            workflow_id=created.workflow_id,
+            integration_name="jules",
+            correlation_id="corr-continue",
+            external_operation_id="task-continue",
+            normalized_status="running",
+            provider_status="running",
+            callback_supported=True,
+            callback_correlation_key="cb-continue",
+            recommended_poll_seconds=5,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+        )
+        original_run_id = configured.run_id
+
+        updated = await service.record_integration_poll(
+            workflow_id=created.workflow_id,
+            normalized_status="running",
+            provider_status="running",
+            observed_at=None,
+            recommended_poll_seconds=5,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+            completed_wait_cycles=2,
+        )
+
+        assert updated.run_id != original_run_id
+        assert updated.state is MoonMindWorkflowState.AWAITING_EXTERNAL
+        assert updated.awaiting_external is True
+        assert updated.wait_cycle_count == 0
+        assert updated.integration_state["external_operation_id"] == "task-continue"
+        assert updated.integration_state["callback_correlation_key"] == "cb-continue"
+
+
+@pytest.mark.asyncio
 async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
@@ -531,6 +919,249 @@ async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
                 error_category="unknown",
                 message="boom",
             )
+
+
+@pytest.mark.asyncio
+async def test_projection_sync_markers_round_trip_between_stale_and_fresh(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        stale = await service.mark_projection_stale(
+            workflow_id=created.workflow_id,
+            sync_error="visibility lag",
+        )
+        assert stale.sync_state is TemporalExecutionProjectionSyncState.STALE
+        assert stale.sync_error == "visibility lag"
+
+        refreshed = await service.mark_execution_executing(
+            workflow_id=created.workflow_id,
+            summary="back in sync",
+        )
+        assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+        assert refreshed.sync_error is None
+        assert refreshed.search_attributes["mm_owner_type"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_update_execution_persists_repair_pending_when_projection_refresh_fails(
+    tmp_path, monkeypatch
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Before failure",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        previous_sync_at = created.last_synced_at
+
+        async def fail_projection_sync(source):
+            raise RuntimeError(f"projection write failed for {source.workflow_id}")
+
+        monkeypatch.setattr(
+            service, "_upsert_projection_from_source", fail_projection_sync
+        )
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="SetTitle",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title="After failure",
+            idempotency_key="repair-pending-update",
+        )
+
+        assert response["accepted"] is True
+
+        projection = await session.get(TemporalExecutionRecord, created.workflow_id)
+        source = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert projection is not None
+        assert source is not None
+        assert (
+            projection.sync_state is TemporalExecutionProjectionSyncState.REPAIR_PENDING
+        )
+        assert (
+            projection.source_mode
+            is TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+        assert "projection write failed" in (projection.sync_error or "")
+        assert projection.last_synced_at == previous_sync_at
+        assert projection.memo["title"] == "Before failure"
+        assert source.memo["title"] == "After failure"
+
+
+@pytest.mark.asyncio
+async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+
+        visible = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="visible",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="visible-row",
+        )
+        hidden = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="hidden",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="hidden-row",
+        )
+
+        orphaned = await service.mark_projection_orphaned(
+            workflow_id=hidden.workflow_id,
+            sync_error="temporal execution missing",
+        )
+        assert orphaned.sync_state is TemporalExecutionProjectionSyncState.ORPHANED
+
+        listed = await service.list_executions(
+            workflow_type="MoonMind.Run",
+            state=None,
+            owner_id=owner_id,
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert [item.workflow_id for item in listed.items] == [
+            hidden.workflow_id,
+            visible.workflow_id,
+        ]
+        assert listed.count == 2
+
+        repaired = await service.describe_execution(hidden.workflow_id)
+        assert repaired.sync_state is TemporalExecutionProjectionSyncState.FRESH
+        assert repaired.source_mode is (
+            TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+
+
+@pytest.mark.asyncio
+async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and_update(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="hidden",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="hidden-describe-row",
+        )
+
+        await service.mark_projection_orphaned(
+            workflow_id=created.workflow_id,
+            sync_error="temporal execution missing",
+        )
+
+        repaired = await service.describe_execution(created.workflow_id)
+        assert repaired.sync_state is TemporalExecutionProjectionSyncState.FRESH
+        assert repaired.state is MoonMindWorkflowState.INITIALIZING
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="SetTitle",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title="Should apply",
+            idempotency_key="orphaned-update",
+        )
+        assert response["accepted"] is True
+
+        updated = await service.describe_execution(created.workflow_id)
+        assert updated.memo["title"] == "Should apply"
+
+
+@pytest.mark.asyncio
+async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = str(uuid4())
+        created_at = datetime.now(UTC)
+        ghost = TemporalExecutionRecord(
+            workflow_id="mm:ghost-row",
+            run_id=str(uuid4()),
+            namespace="moonmind",
+            workflow_type=TemporalWorkflowType.RUN,
+            owner_id=owner_id,
+            owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.EXECUTING,
+            close_status=None,
+            entry="run",
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": owner_id,
+                "mm_state": "executing",
+                "mm_updated_at": "2026-03-06T00:00:00+00:00",
+                "mm_entry": "run",
+            },
+            memo={"title": "ghost", "summary": "Ghost row"},
+            artifact_refs=[],
+            parameters={},
+            projection_version=1,
+            last_synced_at=created_at,
+            sync_state=TemporalExecutionProjectionSyncState.FRESH,
+            sync_error=None,
+            source_mode=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY,
+            started_at=created_at,
+            updated_at=created_at,
+            closed_at=None,
+        )
+        session.add(ghost)
+        await session.commit()
+
+        listed = await service.list_executions(
+            workflow_type="MoonMind.Run",
+            state=None,
+            owner_id=owner_id,
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert listed.count == 0
+        assert listed.items == []
+
+        with pytest.raises(TemporalExecutionNotFoundError):
+            await service.describe_execution(ghost.workflow_id)
 
 
 @pytest.mark.asyncio
@@ -642,3 +1273,175 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         )
         assert len(manifest_page.items) == 1
         assert manifest_page.items[0].entry == "manifest"
+
+@pytest.mark.asyncio
+async def test_polling_backoff_resets_after_status_change_and_updates_visibility(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            integration_poll_initial_seconds=5,
+            integration_poll_max_seconds=30,
+            integration_poll_jitter_ratio=0.0,
+        )
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title="Backoff test",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        configured = await service.configure_integration_monitoring(
+            workflow_id=created.workflow_id,
+            integration_name="jules",
+            correlation_id="corr-backoff",
+            external_operation_id="task-backoff",
+            normalized_status="queued",
+            provider_status="pending",
+            callback_supported=True,
+            callback_correlation_key="cb-backoff",
+            recommended_poll_seconds=None,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+        )
+        assert configured.integration_state["poll_interval_seconds"] == 5
+        assert configured.search_attributes["mm_stage"] == "queued"
+
+        first_poll = await service.record_integration_poll(
+            workflow_id=created.workflow_id,
+            normalized_status="queued",
+            provider_status="pending",
+            observed_at=None,
+            recommended_poll_seconds=None,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+            completed_wait_cycles=0,
+        )
+        assert first_poll.integration_state["poll_interval_seconds"] == 10
+
+        second_poll = await service.record_integration_poll(
+            workflow_id=created.workflow_id,
+            normalized_status="running",
+            provider_status="in_progress",
+            observed_at=None,
+            recommended_poll_seconds=None,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+            completed_wait_cycles=0,
+        )
+        assert second_poll.integration_state["poll_interval_seconds"] == 5
+        assert second_poll.search_attributes["mm_stage"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        await service.configure_integration_monitoring(
+            workflow_id=created.workflow_id,
+            integration_name="jules",
+            correlation_id="corr-late",
+            external_operation_id="task-late",
+            normalized_status="running",
+            provider_status="running",
+            callback_supported=True,
+            callback_correlation_key="cb-late",
+            recommended_poll_seconds=5,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+        )
+        await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-late",
+            payload={
+                "event_type": "completed",
+                "provider_event_id": "evt-complete",
+                "normalized_status": "succeeded",
+                "provider_status": "completed",
+            },
+            payload_artifact_ref=None,
+        )
+        late = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-late",
+            payload={
+                "event_type": "progress",
+                "provider_event_id": "evt-progress",
+                "normalized_status": "running",
+                "provider_status": "running",
+            },
+            payload_artifact_ref=None,
+        )
+
+        assert late.integration_state["normalized_status"] == "succeeded"
+        assert "Ignored late non-terminal external event" in late.memo["summary"]
+
+
+@pytest.mark.asyncio
+async def test_failed_poll_marks_integration_error_summary(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        await service.configure_integration_monitoring(
+            workflow_id=created.workflow_id,
+            integration_name="jules",
+            correlation_id="corr-fail",
+            external_operation_id="task-fail",
+            normalized_status="running",
+            provider_status="running",
+            callback_supported=False,
+            callback_correlation_key=None,
+            recommended_poll_seconds=5,
+            external_url=None,
+            provider_summary={},
+            result_refs=[],
+        )
+        failed = await service.record_integration_poll(
+            workflow_id=created.workflow_id,
+            normalized_status="failed",
+            provider_status="errored",
+            observed_at=None,
+            recommended_poll_seconds=None,
+            external_url=None,
+            provider_summary={"message": "boom"},
+            result_refs=[],
+            completed_wait_cycles=0,
+        )
+
+        assert failed.memo["error_category"] == "integration_error"
+        assert failed.awaiting_external is False

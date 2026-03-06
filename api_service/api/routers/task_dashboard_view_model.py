@@ -47,7 +47,9 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "executing": "running",
         "awaiting_external": "awaiting_action",
         "finalizing": "running",
+        "running": "running",
         "succeeded": "succeeded",
+        "completed": "succeeded",
         "failed": "failed",
         # Accept both Temporal's raw status spelling and the normalized dashboard value.
         "canceled": "cancelled",
@@ -243,6 +245,16 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "update": "/api/recurring-tasks/{id}",
                 "runNow": "/api/recurring-tasks/{id}/run",
                 "runs": "/api/recurring-tasks/{id}/runs?limit=200",
+            },
+        },
+        "features": {
+            "temporalDashboard": {
+                "enabled": True,
+                "listEnabled": True,
+                "detailEnabled": True,
+                "actionsEnabled": False,
+                "submitEnabled": False,
+                "debugFieldsEnabled": False,
             },
         },
         "system": {

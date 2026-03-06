@@ -56,7 +56,6 @@ def test_doc_req_traceability_contract(
     }
     if not doc_req_ids:
         pytest.skip(f"No DOC-REQ entries found in {feature_name} spec.md")
-
     traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 
