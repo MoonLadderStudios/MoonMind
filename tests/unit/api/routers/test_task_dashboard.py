@@ -18,6 +18,7 @@ from api_service.api.routers.task_dashboard import (
     _resolve_user_dependency_overrides,
     router,
 )
+from api_service.db.base import get_async_session
 from moonmind.workflows.agent_queue.service import QueueJobPage
 
 
@@ -56,6 +57,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue/123")
     assert _is_allowed_path("orchestrator/run-1")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
+    assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB")
     assert _is_allowed_path("new")
     assert _is_allowed_path("manifests")
     assert _is_allowed_path("manifests/new")
@@ -108,6 +110,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         f"/tasks/{uuid4()}",
+        "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
         f"/tasks/queue/{uuid4()}",
         f"/tasks/orchestrator/{uuid4()}",
         f"/tasks/manifests/{uuid4()}",
@@ -210,3 +213,70 @@ def test_tasks_api_alias_rejects_cursor_with_zero_offset() -> None:
     assert response.status_code == 422
     service.list_jobs.assert_not_awaited()
     service.list_jobs_page.assert_not_awaited()
+
+
+def test_task_resolution_returns_temporal_source_for_workflow_id() -> None:
+    class FakeSession:
+        async def get(self, model, key):
+            if model.__name__ == "TemporalExecutionRecord":
+                return SimpleNamespace(
+                    workflow_id=str(key),
+                    owner_id="owner-1",
+                    entry="run",
+                )
+            return None
+
+    app = FastAPI()
+    app.include_router(router)
+    for dependency in _resolve_user_dependency_overrides():
+        app.dependency_overrides[dependency] = lambda: SimpleNamespace(
+            id="owner-1",
+            email="dashboard@example.com",
+            is_superuser=False,
+        )
+    app.dependency_overrides[get_async_session] = lambda: FakeSession()
+
+    with TestClient(app) as client:
+        response = client.get("/api/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/resolution")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "taskId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
+        "source": "temporal",
+        "entry": "run",
+        "workflowId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
+    }
+
+
+def test_task_resolution_uses_source_hint_to_disambiguate_legacy_uuid() -> None:
+    task_id = str(uuid4())
+
+    class FakeSession:
+        async def get(self, model, key):
+            if model.__name__ in {"AgentJob", "OrchestratorRun"}:
+                return SimpleNamespace(id=key)
+            return None
+
+    app = FastAPI()
+    app.include_router(router)
+    for dependency in _resolve_user_dependency_overrides():
+        app.dependency_overrides[dependency] = lambda: SimpleNamespace(
+            id=uuid4(),
+            email="dashboard@example.com",
+            is_superuser=False,
+        )
+    app.dependency_overrides[get_async_session] = lambda: FakeSession()
+
+    with TestClient(app) as client:
+        ambiguous = client.get(f"/api/tasks/{task_id}/resolution")
+        hinted = client.get(f"/api/tasks/{task_id}/resolution?source=orchestrator")
+
+    assert ambiguous.status_code == 409
+    assert ambiguous.json()["detail"]["code"] == "ambiguous_task_source"
+    assert hinted.status_code == 200
+    assert hinted.json() == {
+        "taskId": task_id,
+        "source": "orchestrator",
+        "entry": None,
+        "workflowId": None,
+    }

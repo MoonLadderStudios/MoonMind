@@ -26,6 +26,13 @@ from .manifest_models import (
     Spec,
     export_schema,
 )
+from .task_compatibility_models import (
+    TaskActionAvailability,
+    TaskCompatibilityDetail,
+    TaskCompatibilityListResponse,
+    TaskCompatibilityRow,
+    TaskDebugContext,
+)
 from .temporal_models import (
     CancelExecutionRequest,
     CreateExecutionRequest,
@@ -52,6 +59,11 @@ __all__ = [
     "Spec",
     "Manifest",
     "export_schema",
+    "TaskActionAvailability",
+    "TaskDebugContext",
+    "TaskCompatibilityRow",
+    "TaskCompatibilityDetail",
+    "TaskCompatibilityListResponse",
     "CreateExecutionRequest",
     "UpdateExecutionRequest",
     "UpdateExecutionResponse",

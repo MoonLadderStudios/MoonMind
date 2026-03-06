@@ -22,6 +22,10 @@ def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
     assert normalize_status("orchestrator", "awaiting_approval") == "awaiting_action"
 
 
+def test_normalize_status_maps_temporal_planning_to_running() -> None:
+    assert normalize_status("temporal", "planning") == "running"
+
+
 def test_normalize_status_fallback_for_unknown_source() -> None:
     assert normalize_status("unknown-source", "anything") == "queued"
 
@@ -121,6 +125,12 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
+    assert config["sources"]["temporal"]["list"] == "/api/executions"
+    assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
+    assert (
+        config["sources"]["temporal"]["artifacts"]
+        == "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts"
+    )
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")
@@ -139,6 +149,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert worker_pause["get"] == "/api/system/worker-pause"
     assert worker_pause["post"] == "/api/system/worker-pause"
     assert worker_pause["pollIntervalMs"] == 5000
+    assert config["system"]["taskResolution"] == "/api/tasks/{taskId}/resolution"
     attachment_policy = config["system"]["attachmentPolicy"]
     assert attachment_policy["enabled"] is True
     assert attachment_policy["maxCount"] >= 1

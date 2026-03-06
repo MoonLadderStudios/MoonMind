@@ -1,0 +1,529 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Task Execution Compatibility API
+  version: 0.1.0
+  description: |
+    Task-facing compatibility contract for unified `/tasks/*` list/detail behavior
+    while Temporal-backed executions are introduced during migration.
+servers:
+  - url: https://api.moonmind.local
+paths:
+  /api/tasks/list:
+    get:
+      summary: List task-compatible rows across one or more execution sources.
+      operationId: listCompatibilityTasks
+      parameters:
+        - $ref: '#/components/parameters/Source'
+        - $ref: '#/components/parameters/Entry'
+        - $ref: '#/components/parameters/WorkflowType'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/OwnerType'
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Compatibility list response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCompatibilityListResponse'
+        '422':
+          description: Invalid filter or cursor input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/tasks/{taskId}:
+    get:
+      summary: Resolve and return one canonical task detail payload.
+      operationId: getCompatibilityTaskDetail
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/SourceHint'
+      responses:
+        '200':
+          description: Task detail payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCompatibilityDetail'
+        '404':
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Task source is ambiguous and requires an explicit source hint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/tasks/{taskId}/resolution:
+    get:
+      summary: Resolve a task handle to its canonical execution source.
+      operationId: resolveCompatibilityTaskSource
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/SourceHint'
+      responses:
+        '200':
+          description: Task source resolution payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskSourceResolutionResponse'
+        '404':
+          description: Task or source hint not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/executions:
+    post:
+      summary: Create a Temporal-backed task/workflow execution.
+      operationId: createExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExecutionRequest'
+      responses:
+        '201':
+          description: Temporal-backed task-compatible execution row.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCompatibilityDetail'
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Apply a task-facing edit, rename, or rerun update to a Temporal execution.
+      operationId: updateExecution
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateExecutionRequest'
+      responses:
+        '200':
+          description: Update acceptance/apply-mode response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateExecutionResponse'
+  /api/executions/{workflowId}/signal:
+    post:
+      summary: Deliver a task-facing approval, pause/resume, or callback signal.
+      operationId: signalExecution
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalExecutionRequest'
+      responses:
+        '202':
+          description: Updated execution detail after accepted signal handling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCompatibilityDetail'
+  /api/executions/{workflowId}/cancel:
+    post:
+      summary: Cancel a Temporal-backed task using graceful semantics by default.
+      operationId: cancelExecution
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelExecutionRequest'
+      responses:
+        '202':
+          description: Updated execution detail after cancel or termination handling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCompatibilityDetail'
+components:
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Canonical task handle. For Temporal-backed work this equals `workflowId`.
+    WorkflowId:
+      name: workflowId
+      in: path
+      required: true
+      schema:
+        type: string
+    Source:
+      name: source
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [queue, orchestrator, temporal, all]
+      description: Optional source filter. Omit or use `all` for mixed-source compatibility views.
+    SourceHint:
+      name: source
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [queue, orchestrator, temporal]
+      description: Optional explicit source hint for detail resolution.
+    Entry:
+      name: entry
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [run, manifest]
+    WorkflowType:
+      name: workflowType
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [MoonMind.Run, MoonMind.ManifestIngest]
+    Status:
+      name: status
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [queued, running, awaiting_action, succeeded, failed, cancelled]
+    OwnerType:
+      name: ownerType
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [user, system, service]
+    OwnerId:
+      name: ownerId
+      in: query
+      required: false
+      schema:
+        type: string
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Opaque compatibility-owned cursor token.
+  schemas:
+    TaskCompatibilityListResponse:
+      type: object
+      required:
+        - items
+        - nextCursor
+        - countMode
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskCompatibilityRow'
+        nextCursor:
+          type: string
+          nullable: true
+        count:
+          type: integer
+          nullable: true
+        countMode:
+          type: string
+          enum: [exact, estimated_or_unknown]
+    TaskCompatibilityRow:
+      type: object
+      required:
+        - taskId
+        - source
+        - title
+        - status
+        - createdAt
+        - updatedAt
+        - detailHref
+      properties:
+        taskId:
+          type: string
+        source:
+          type: string
+          enum: [queue, orchestrator, temporal]
+        entry:
+          type: string
+          nullable: true
+        title:
+          type: string
+        summary:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [queued, running, awaiting_action, succeeded, failed, cancelled]
+        rawState:
+          type: string
+          nullable: true
+        temporalStatus:
+          type: string
+          nullable: true
+        closeStatus:
+          type: string
+          nullable: true
+        workflowId:
+          type: string
+          nullable: true
+        workflowType:
+          type: string
+          nullable: true
+        ownerType:
+          type: string
+          nullable: true
+        ownerId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+        artifactsCount:
+          type: integer
+          minimum: 0
+        detailHref:
+          type: string
+    TaskCompatibilityDetail:
+      allOf:
+        - $ref: '#/components/schemas/TaskCompatibilityRow'
+        - type: object
+          required:
+            - artifactRefs
+            - searchAttributes
+            - memo
+          properties:
+            temporalRunId:
+              type: string
+              nullable: true
+            namespace:
+              type: string
+              nullable: true
+            artifactRefs:
+              type: array
+              items:
+                type: string
+            searchAttributes:
+              type: object
+              additionalProperties: true
+            memo:
+              type: object
+              additionalProperties: true
+            inputArtifactRef:
+              type: string
+              nullable: true
+            planArtifactRef:
+              type: string
+              nullable: true
+            manifestArtifactRef:
+              type: string
+              nullable: true
+            actions:
+              $ref: '#/components/schemas/TaskActions'
+            debug:
+              $ref: '#/components/schemas/TaskDebug'
+    TaskActions:
+      type: object
+      additionalProperties: false
+      properties:
+        rename:
+          type: boolean
+        editInputs:
+          type: boolean
+        rerun:
+          type: boolean
+        approve:
+          type: boolean
+        pause:
+          type: boolean
+        resume:
+          type: boolean
+        deliverCallback:
+          type: boolean
+        cancel:
+          type: boolean
+        forceTerminate:
+          type: boolean
+    TaskDebug:
+      type: object
+      additionalProperties: false
+      properties:
+        namespace:
+          type: string
+          nullable: true
+        workflowType:
+          type: string
+          nullable: true
+        workflowId:
+          type: string
+          nullable: true
+        temporalRunId:
+          type: string
+          nullable: true
+        temporalStatus:
+          type: string
+          nullable: true
+        closeStatus:
+          type: string
+          nullable: true
+        waitingReason:
+          type: string
+          nullable: true
+        attentionRequired:
+          type: boolean
+    TaskSourceResolutionResponse:
+      type: object
+      required:
+        - taskId
+        - source
+      properties:
+        taskId:
+          type: string
+        source:
+          type: string
+          enum: [queue, orchestrator, temporal]
+        entry:
+          type: string
+          nullable: true
+        workflowId:
+          type: string
+          nullable: true
+    CreateExecutionRequest:
+      type: object
+      required:
+        - workflowType
+      properties:
+        workflowType:
+          type: string
+          enum: [MoonMind.Run, MoonMind.ManifestIngest]
+        title:
+          type: string
+          nullable: true
+        inputArtifactRef:
+          type: string
+          nullable: true
+        planArtifactRef:
+          type: string
+          nullable: true
+        manifestArtifactRef:
+          type: string
+          nullable: true
+        failurePolicy:
+          type: string
+          enum: [fail_fast, continue_and_report, best_effort]
+          nullable: true
+        initialParameters:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+          nullable: true
+    UpdateExecutionRequest:
+      type: object
+      properties:
+        updateName:
+          type: string
+          enum: [UpdateInputs, SetTitle, RequestRerun]
+        inputArtifactRef:
+          type: string
+          nullable: true
+        planArtifactRef:
+          type: string
+          nullable: true
+        parametersPatch:
+          type: object
+          additionalProperties: true
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        idempotencyKey:
+          type: string
+          nullable: true
+    UpdateExecutionResponse:
+      type: object
+      required:
+        - accepted
+        - applied
+        - message
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum: [immediate, next_safe_point, continue_as_new]
+        message:
+          type: string
+    SignalExecutionRequest:
+      type: object
+      required:
+        - signalName
+      properties:
+        signalName:
+          type: string
+          enum: [ExternalEvent, Approve, Pause, Resume]
+        payload:
+          type: object
+          additionalProperties: true
+        payloadArtifactRef:
+          type: string
+          nullable: true
+    CancelExecutionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          nullable: true
+        graceful:
+          type: boolean
+          default: true
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string

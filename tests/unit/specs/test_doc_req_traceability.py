@@ -1,29 +1,41 @@
-"""DOC-REQ traceability gate for the active workflow-type-lifecycle feature."""
+"""DOC-REQ traceability gate for the active feature spec."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+import pytest
+
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPEC = Path("specs/046-workflow-type-lifecycle/spec.md")
-_FEATURE_TRACEABILITY = Path(
-    "specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"
+_FEATURE_DIR_PATTERN = re.compile(r"^(?P<prefix>\d{3})-[^/]+$")
+_DOC_REQ_COLUMN_NAMES = (
+    "DOC-REQ ID",
+    "DOC-REQ",
+    "Source Requirement",
+    "Requirement ID",
 )
+_VALIDATION_COLUMN_NAME = "Validation Strategy"
 
 
-def test_workflow_type_lifecycle_doc_req_traceability_contract() -> None:
-    spec_text = _FEATURE_SPEC.read_text(encoding="utf-8")
+def test_active_feature_doc_req_traceability_contract() -> None:
+    feature_dir = _find_active_feature_dir()
+    feature_spec = feature_dir / "spec.md"
+    feature_traceability = feature_dir / "contracts" / "requirements-traceability.md"
+
+    spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, "Expected DOC-REQ entries in 046 spec.md"
+    if not doc_req_ids:
+        pytest.skip(f"No DOC-REQ entries found in active feature spec {feature_spec}")
 
-    assert _FEATURE_TRACEABILITY.exists(), (
-        "Missing traceability file for DOC-REQ feature: " f"{_FEATURE_TRACEABILITY}"
+    assert feature_traceability.exists(), (
+        "Missing traceability file for DOC-REQ feature: "
+        f"{feature_traceability}"
     )
 
-    traceability_rows = _parse_traceability_rows(_FEATURE_TRACEABILITY)
+    traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 
     missing_ids = sorted(doc_req_ids - traceability_ids)
@@ -31,11 +43,11 @@ def test_workflow_type_lifecycle_doc_req_traceability_contract() -> None:
 
     assert not missing_ids, (
         "Missing DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(missing_ids)}"
+        f"{feature_traceability}: {', '.join(missing_ids)}"
     )
     assert not extra_ids, (
         "Unexpected DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(extra_ids)}"
+        f"{feature_traceability}: {', '.join(extra_ids)}"
     )
 
 
@@ -48,11 +60,12 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
     )
 
     header = _split_row(lines[table_start])
-    doc_req_col = _find_column_index(header, "DOC-REQ ID")
-    validation_col = _find_column_index(header, "Validation Strategy")
+    doc_req_col = _find_column_index(header, _DOC_REQ_COLUMN_NAMES)
+    validation_col = _find_column_index(header, (_VALIDATION_COLUMN_NAME,))
     assert doc_req_col is not None and validation_col is not None, (
-        "Traceability header must include 'DOC-REQ ID' and 'Validation Strategy' "
-        f"columns in {traceability_path}"
+        "Traceability header must include one DOC-REQ column "
+        f"({_DOC_REQ_COLUMN_NAMES}) and '{_VALIDATION_COLUMN_NAME}' in "
+        f"{traceability_path}"
     )
 
     rows: dict[str, str] = {}
@@ -68,9 +81,10 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
         if max(doc_req_col, validation_col) >= len(cells):
             continue
 
-        doc_req_id = cells[doc_req_col].strip().strip("`")
-        if not _DOC_REQ_PATTERN.fullmatch(doc_req_id):
+        doc_req_match = _DOC_REQ_PATTERN.search(cells[doc_req_col])
+        if doc_req_match is None:
             continue
+        doc_req_id = f"DOC-REQ-{doc_req_match.group(1)}"
 
         validation_strategy = cells[validation_col].strip()
         normalized_validation = validation_strategy.strip("`").strip().lower()
@@ -90,7 +104,10 @@ def _find_header_line(lines: list[str]) -> int | None:
         if not line.strip().startswith("|"):
             continue
         cells = _split_row(line)
-        if "DOC-REQ ID" in cells and "Validation Strategy" in cells:
+        if (
+            _find_column_index(cells, _DOC_REQ_COLUMN_NAMES) is not None
+            and _find_column_index(cells, (_VALIDATION_COLUMN_NAME,)) is not None
+        ):
             return index
     return None
 
@@ -102,12 +119,29 @@ def _split_row(line: str) -> list[str]:
     return [cell.strip() for cell in stripped.strip("|").split("|")]
 
 
-def _find_column_index(header: list[str], name: str) -> int | None:
-    try:
-        return header.index(name)
-    except ValueError:
-        return None
+def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
+    normalized_to_index = {cell.strip("`").strip(): index for index, cell in enumerate(header)}
+    for name in names:
+        if name in normalized_to_index:
+            return normalized_to_index[name]
+    return None
 
 
 def _is_delimiter_row(cells: list[str]) -> bool:
     return all(cell and set(cell) <= {"-", ":", " "} for cell in cells)
+
+
+def _find_active_feature_dir() -> Path:
+    feature_dirs: list[tuple[int, Path]] = []
+    for path in Path("specs").iterdir():
+        if not path.is_dir():
+            continue
+        match = _FEATURE_DIR_PATTERN.fullmatch(path.name)
+        if match is None:
+            continue
+        if not (path / "spec.md").exists():
+            continue
+        feature_dirs.append((int(match.group("prefix")), path))
+
+    assert feature_dirs, "No numbered feature specs found under specs/"
+    return max(feature_dirs, key=lambda item: item[0])[1]

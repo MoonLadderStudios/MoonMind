@@ -62,11 +62,21 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             assert create_response.status_code == 201
             execution = create_response.json()
             workflow_id = execution["workflowId"]
+            assert execution["taskId"] == workflow_id
+            assert execution["source"] == "temporal"
+            assert execution["ownerType"] == "user"
+            assert execution["entry"] == "run"
+            assert execution["status"] == "queued"
+            assert execution["rawState"] == "initializing"
+            assert "runId" not in execution
+            assert execution["createdAt"] == execution["startedAt"]
+            assert execution["detailHref"] == f"/tasks/{workflow_id}"
 
             describe_response = await client.get(f"/api/executions/{workflow_id}")
             assert describe_response.status_code == 200
             assert describe_response.json()["state"] == "initializing"
             assert describe_response.json()["temporalStatus"] == "running"
+            original_temporal_run_id = describe_response.json()["temporalRunId"]
 
             update_response = await client.post(
                 f"/api/executions/{workflow_id}/update",
@@ -79,12 +89,34 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             assert update_response.status_code == 200
             assert update_response.json()["accepted"] is True
 
+            rerun_response = await client.post(
+                f"/api/executions/{workflow_id}/update",
+                json={
+                    "updateName": "RequestRerun",
+                    "idempotencyKey": "rerun-1",
+                },
+            )
+            assert rerun_response.status_code == 200
+            assert rerun_response.json()["accepted"] is True
+            assert rerun_response.json()["applied"] == "continue_as_new"
+
+            rerun_detail = await client.get(f"/api/executions/{workflow_id}")
+            assert rerun_detail.status_code == 200
+            rerun_execution = rerun_detail.json()
+            assert rerun_execution["taskId"] == workflow_id
+            assert rerun_execution["workflowId"] == workflow_id
+            assert rerun_execution["detailHref"] == f"/tasks/{workflow_id}"
+            assert rerun_execution["temporalRunId"] != original_temporal_run_id
+
             pause_response = await client.post(
                 f"/api/executions/{workflow_id}/signal",
                 json={"signalName": "Pause"},
             )
             assert pause_response.status_code == 202
             assert pause_response.json()["state"] == "awaiting_external"
+            assert pause_response.json()["waitingReason"] == "operator_paused"
+            assert pause_response.json()["attentionRequired"] is True
+            assert pause_response.json()["status"] == "awaiting_action"
 
             resume_response = await client.post(
                 f"/api/executions/{workflow_id}/signal",
@@ -92,6 +124,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             )
             assert resume_response.status_code == 202
             assert resume_response.json()["state"] == "executing"
+            assert resume_response.json()["waitingReason"] is None
 
             cancel_response = await client.post(
                 f"/api/executions/{workflow_id}/cancel",
@@ -101,6 +134,7 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             assert cancel_response.json()["state"] == "canceled"
             assert cancel_response.json()["temporalStatus"] == "canceled"
             assert cancel_response.json()["closeStatus"] == "canceled"
+            assert cancel_response.json()["status"] == "cancelled"
 
             post_cancel_update = await client.post(
                 f"/api/executions/{workflow_id}/update",
@@ -177,6 +211,17 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
                 assert response.status_code == 201
                 created_ids.append(response.json()["workflowId"])
 
+            manifest_response = await client.post(
+                "/api/executions",
+                json={
+                    "workflowType": "MoonMind.ManifestIngest",
+                    "title": "Manifest-0",
+                    "manifestArtifactRef": "artifact://manifest/0",
+                    "idempotencyKey": "manifest-0",
+                },
+            )
+            assert manifest_response.status_code == 201
+
             await client.post(f"/api/executions/{created_ids[0]}/cancel", json={})
 
             first_page = await client.get(
@@ -209,6 +254,24 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             canceled_body = canceled_only.json()
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
+
+            run_only = await client.get(
+                "/api/executions",
+                params={"entry": "run", "ownerType": "user"},
+            )
+            assert run_only.status_code == 200
+            run_only_body = run_only.json()
+            assert run_only_body["count"] == 3
+            assert all(item["entry"] == "run" for item in run_only_body["items"])
+
+            manifest_only = await client.get(
+                "/api/executions",
+                params={"entry": "manifest", "ownerType": "user"},
+            )
+            assert manifest_only.status_code == 200
+            manifest_body = manifest_only.json()
+            assert manifest_body["count"] == 1
+            assert manifest_body["items"][0]["entry"] == "manifest"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

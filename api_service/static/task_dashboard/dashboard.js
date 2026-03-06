@@ -140,6 +140,10 @@
     sourceConfig.orchestrator && typeof sourceConfig.orchestrator === "object"
       ? sourceConfig.orchestrator
       : {};
+  const temporalSourceConfig =
+    sourceConfig.temporal && typeof sourceConfig.temporal === "object"
+      ? sourceConfig.temporal
+      : {};
   const proposalsSourceConfig =
     sourceConfig.proposals && typeof sourceConfig.proposals === "object"
       ? sourceConfig.proposals
@@ -166,6 +170,15 @@
       : {};
   const systemConfig = config.system || {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
+  const taskCompatibilityListEndpoint = String(
+    systemConfig.taskCompatibilityList || "/api/tasks/list",
+  );
+  const taskCompatibilityDetailEndpoint = String(
+    systemConfig.taskCompatibilityDetail || "/api/tasks/{taskId}",
+  );
+  const taskResolutionEndpoint = String(
+    systemConfig.taskResolution || "/api/tasks/{taskId}/resolution",
+  );
   const supportedWorkerRuntimes =
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
     systemConfig.supportedWorkerRuntimes.length > 0
@@ -1001,11 +1014,30 @@
   function buildUnifiedTaskDetailRoute(rawId, source) {
     const safeId = normalizeDashboardDetailSegment(rawId);
     const normalizedSource = String(source || "").trim().toLowerCase();
-    const sourceParam = normalizedSource ? `?source=${encodeURIComponent(normalizedSource)}` : "";
+    const sourceParam =
+      normalizedSource && normalizedSource !== "temporal"
+        ? `?source=${encodeURIComponent(normalizedSource)}`
+        : "";
     if (!safeId) {
       return "/tasks/list";
     }
     return `/tasks/${safeId}${sourceParam}`;
+  }
+
+  async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
+    const normalizedTaskId = normalizeDashboardDetailSegment(taskId);
+    if (!normalizedTaskId) {
+      throw new Error("Task id is required for source resolution.");
+    }
+    const normalizedSourceHint = String(sourceHint || "").trim().toLowerCase();
+    const resolutionUrl = new URL(
+      endpoint(taskResolutionEndpoint, { taskId: normalizedTaskId }),
+      window.location.origin,
+    );
+    if (normalizedSourceHint) {
+      resolutionUrl.searchParams.set("source", normalizedSourceHint);
+    }
+    return fetchJson(`${resolutionUrl.pathname}${resolutionUrl.search}`);
   }
 
   function formatTimestamp(value) {
@@ -3005,6 +3037,79 @@
     }));
   }
 
+  function toTemporalRows(items) {
+    return items.map((item) => {
+      const workflowId = pick(item, "taskId") || pick(item, "workflowId") || "";
+      const rawState = pick(item, "rawState") || pick(item, "state") || "initializing";
+      return {
+        source: "temporal",
+        sourceLabel: "Temporal",
+        id: workflowId,
+        queueName: "-",
+        runtimeMode: null,
+        skillId: null,
+        rawStatus: rawState,
+        title:
+          pick(item, "title") ||
+          pick(item, "summary") ||
+          pick(item, "workflowType") ||
+          "Temporal Execution",
+        summary: pick(item, "summary") || "",
+        entry: pick(item, "entry") || "",
+        workflowType: pick(item, "workflowType") || "",
+        temporalStatus: pick(item, "temporalStatus") || "",
+        closeStatus: pick(item, "closeStatus") || "",
+        ownerType: pick(item, "ownerType") || "",
+        ownerId: pick(item, "ownerId") || "",
+        waitingReason: pick(item, "waitingReason") || "",
+        attentionRequired: Boolean(pick(item, "attentionRequired")),
+        createdAt: pick(item, "createdAt") || pick(item, "startedAt"),
+        startedAt: pick(item, "startedAt"),
+        finishedAt: pick(item, "closedAt"),
+        updatedAt: pick(item, "updatedAt"),
+        link: buildUnifiedTaskDetailRoute(workflowId, "temporal"),
+      };
+    });
+  }
+
+  function toCompatibilityRows(items) {
+    return items.map((item) => {
+      const source = String(pick(item, "source") || "queue").trim().toLowerCase();
+      const taskId = pick(item, "taskId") || "";
+      const rawStatus =
+        pick(item, "rawState") || pick(item, "status") || "queued";
+      const detailHref = pick(item, "detailHref") || buildUnifiedTaskDetailRoute(taskId, source);
+      return {
+        source,
+        sourceLabel:
+          source === "orchestrator"
+            ? "Orchestrator"
+            : source === "temporal"
+              ? "Temporal"
+              : "Task",
+        id: taskId,
+        queueName: pick(item, "queueName") || (source === "queue" ? defaultQueueName : "-"),
+        runtimeMode: pick(item, "runtimeMode") || null,
+        skillId: pick(item, "skillId") || null,
+        publishMode: pick(item, "publishMode") || null,
+        rawStatus,
+        title: pick(item, "title") || "Task",
+        summary: pick(item, "summary") || "",
+        entry: pick(item, "entry") || "",
+        workflowType: pick(item, "workflowType") || "",
+        temporalStatus: pick(item, "temporalStatus") || "",
+        closeStatus: pick(item, "closeStatus") || "",
+        ownerType: pick(item, "ownerType") || "",
+        ownerId: pick(item, "ownerId") || "",
+        createdAt: pick(item, "createdAt"),
+        startedAt: pick(item, "startedAt") || pick(item, "createdAt"),
+        finishedAt: pick(item, "closedAt"),
+        updatedAt: pick(item, "updatedAt"),
+        link: detailHref,
+      };
+    });
+  }
+
   function sortRows(rows) {
     return rows.sort((left, right) => {
       const leftTime = Date.parse(left.startedAt || left.createdAt || 0) || 0;
@@ -3016,7 +3121,7 @@
   async function renderActivePage() {
     setView(
       "Active Tasks",
-      `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+      `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading active runs...</p>",
       { showAutoRefreshControls: true },
     );
@@ -3075,6 +3180,18 @@
             ),
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
+        {
+          source: "temporal-active",
+          call: () =>
+            fetchJson(
+              `${temporalSourceConfig.list || "/api/executions"}?pageSize=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
+            ),
+          transform: (payload) =>
+            toTemporalRows(payload?.items || []).filter((row) => {
+              const normalized = normalizeStatus("temporal", row.rawStatus);
+              return normalized === "queued" || normalized === "running" || normalized === "awaiting_action";
+            }),
+        },
       ];
 
       const settled = await Promise.allSettled(requests.map((req) => req.call()));
@@ -3093,7 +3210,7 @@
       }
       setView(
         "Active Tasks",
-        `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+        `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`,
         renderActivePageContent(rows, errors),
         { showAutoRefreshControls: true },
       );
@@ -3113,7 +3230,7 @@
     );
     setView(
       "Tasks List",
-      `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
+      `Unified queue, orchestrator, and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`,
       "<p class='loading'>Loading tasks...</p>",
       { showAutoRefreshControls: true },
     );
@@ -3126,7 +3243,7 @@
       source:
         initialFilterRuntime === ORCHESTRATOR_RUNTIME
           ? "orchestrator"
-          : ["queue", "orchestrator"].includes(initialSource)
+          : ["queue", "orchestrator", "temporal"].includes(initialSource)
             ? initialSource
             : "",
     };
@@ -3206,7 +3323,7 @@
             return false;
           }
           const publishMode =
-            extractPublishModeFromPayload(row.payload || {}) || defaultPublishMode;
+            String(row.publishMode || "").trim().toLowerCase() || defaultPublishMode;
           if (publishMode !== filterState.publishMode) {
             return false;
           }
@@ -3227,6 +3344,19 @@
             paginationState.limit === value ? "selected" : ""
           }>${escapeHtml(value)}</option>`,
       ).join("");
+      const sourceOptions = [
+        ["", "(all)"],
+        ["queue", "queue"],
+        ["orchestrator", "orchestrator"],
+        ["temporal", "temporal"],
+      ]
+        .map(
+          ([value, label]) =>
+            `<option value="${escapeHtml(value)}" ${
+              filterState.source === value ? "selected" : ""
+            }>${escapeHtml(label)}</option>`,
+        )
+        .join("");
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -3253,19 +3383,24 @@
       return `
         <form id="queue-filter-form">
           <div class="grid-2">
+            <label>Source
+              <select name="source">
+                ${sourceOptions}
+              </select>
+            </label>
             <label>Runtime
               <select name="runtime">
                 <option value="">(all)</option>
                 ${runtimeOptions}
               </select>
             </label>
+          </div>
+          <div class="grid-2">
             <label>Skill
               <input name="skill" placeholder="auto, speckit-orchestrate, ..." value="${escapeHtml(
                 filterState.skill,
               )}" />
             </label>
-          </div>
-          <div class="grid-2">
             <label>Stage Status
               <select name="stageStatus">
                 <option value="">(all)</option>
@@ -3345,7 +3480,7 @@
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
       setView(
         "Tasks List",
-        `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
+        `Unified queue, orchestrator, and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`,
         `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
           filteredRows,
         )}`,
@@ -3360,6 +3495,7 @@
         return;
       }
       const runtimeField = filterForm.elements.namedItem("runtime");
+      const sourceField = filterForm.elements.namedItem("source");
       const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
@@ -3367,6 +3503,15 @@
       const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
       const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
+      if (sourceField) {
+        sourceField.addEventListener("change", () => {
+          filterState.source = String(sourceField.value || "").trim().toLowerCase();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue source filter update failed", error);
+          });
+        });
+      }
       if (runtimeField) {
         runtimeField.addEventListener("change", () => {
           filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
@@ -3478,30 +3623,27 @@
 
     const load = async () => {
       const params = new URLSearchParams();
-      params.set("limit", String(paginationState.limit));
+      params.set("pageSize", String(paginationState.limit));
       if (paginationState.cursor) {
         params.set("cursor", paginationState.cursor);
       }
+      if (filterState.source) {
+        params.set("source", filterState.source);
+      }
+      if (filterState.stageStatus) {
+        params.set("status", filterState.stageStatus);
+      }
       syncPaginationQueryParams();
-      const queueListEndpoint = queueSourceConfig.list || "/api/tasks";
-      const [payload, orchestratorPayload] = await Promise.all([
-        fetchJson(withQueueSummaryFlag(`${queueListEndpoint}?${params.toString()}`)),
-        fetchJson(
-          `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=${paginationState.limit}`,
-        ).catch(() => ({ runs: [], tasks: [] })),
-      ]);
+      const payload = await fetchJson(
+        `${taskCompatibilityListEndpoint}?${params.toString()}`,
+      );
       if (!pageActive) {
         return;
       }
       const items = Array.isArray(payload?.items) ? payload.items : [];
       const payloadNextCursor = payload && typeof payload === "object"
-        ? String(payload.next_cursor || payload.nextCursor || "").trim() || null
+        ? String(payload.nextCursor || payload.next_cursor || "").trim() || null
         : null;
-      const orchestratorItems = Array.isArray(orchestratorPayload?.tasks)
-        ? orchestratorPayload.tasks
-        : Array.isArray(orchestratorPayload?.runs)
-          ? orchestratorPayload.runs
-          : [];
       paginationState.nextCursor = payloadNextCursor;
       paginationState.hasMore = Boolean(payloadNextCursor);
       if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
@@ -3514,10 +3656,7 @@
       const pageIndex = paginationState.cursorStack.length;
       paginationState.pageStart = items.length > 0 ? pageIndex * paginationState.limit + 1 : 0;
       paginationState.pageEnd = pageIndex * paginationState.limit + items.length;
-      currentRows = sortRows([
-        ...toQueueRows(items),
-        ...toOrchestratorRows(orchestratorItems),
-      ]);
+      currentRows = sortRows(toCompatibilityRows(items));
       renderQueueList(currentRows);
       refreshTelemetryIfStale().catch(() => {
         console.warn("queue telemetry refresh failed");
@@ -7745,6 +7884,311 @@
     startPolling(load, pollIntervals.detail);
   }
 
+  function renderTemporalArtifactsRows(artifacts) {
+    return (artifacts || [])
+      .map((artifact) => {
+        const artifactId = pick(artifact, "artifact_id", "artifactId");
+        const downloadUrl = artifactId
+          ? endpoint(
+            temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download",
+            { artifactId },
+          )
+          : "";
+        return `
+          <tr>
+            <td>${escapeHtml(
+              pick(artifact, "label") ||
+              pick(artifact, "artifact_id", "artifactId") ||
+              "artifact",
+            )}</td>
+            <td>${escapeHtml(String(pick(artifact, "size_bytes", "sizeBytes") || "-"))}</td>
+            <td>${escapeHtml(
+              pick(artifact, "content_type", "contentType") || "-",
+            )}</td>
+            <td>${
+              downloadUrl
+                ? `<a href="${escapeHtml(downloadUrl)}">Download</a>`
+                : "-"
+            }</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  async function renderTemporalDetailPage(workflowId) {
+    setView(
+      "Temporal Task Detail",
+      `Task ${workflowId}`,
+      "<p class='loading'>Loading Temporal execution...</p>",
+      { showAutoRefreshControls: true },
+    );
+
+    const state = {
+      execution: null,
+      artifacts: [],
+      notice: "",
+      noticeIsError: false,
+    };
+
+    const renderExecution = () => {
+      const execution = state.execution;
+      if (!execution) {
+        setView(
+          "Temporal Task Detail",
+          `Task ${workflowId}`,
+          "<div class='notice error'>Failed to load Temporal task detail.</div>",
+          { showAutoRefreshControls: true },
+        );
+        return;
+      }
+
+      const rawState = pick(execution, "rawState") || pick(execution, "state") || "initializing";
+      const temporalRunId = pick(execution, "temporalRunId") || "-";
+      const waitingReason = pick(execution, "waitingReason") || "-";
+      const attentionRequired = pick(execution, "attentionRequired") ? "yes" : "no";
+      const terminalStatuses = new Set(["succeeded", "failed", "cancelled"]);
+      const normalizedStatus = String(
+        pick(execution, "status") || normalizeStatus("temporal", rawState),
+      );
+      const isTerminal = terminalStatuses.has(normalizedStatus);
+      const canPause = !isTerminal && rawState !== "awaiting_external";
+      const canResume = !isTerminal && rawState === "awaiting_external";
+
+      setView(
+        "Temporal Task Detail",
+        `${escapeHtml(pick(execution, "title") || workflowId)}`,
+        `
+          ${
+            state.notice
+              ? `<div class="notice ${state.noticeIsError ? "error" : ""}">${escapeHtml(
+                state.notice,
+              )}</div>`
+              : ""
+          }
+          <div class="actions">
+            <button type="button" data-temporal-action="rename" ${isTerminal ? "disabled" : ""}>Rename</button>
+            <button type="button" data-temporal-action="edit-inputs" ${isTerminal ? "disabled" : ""}>Edit Inputs</button>
+            <button type="button" data-temporal-action="rerun" ${isTerminal ? "disabled" : ""}>Rerun</button>
+            <button type="button" data-temporal-action="pause" ${canPause ? "" : "disabled"}>Pause</button>
+            <button type="button" data-temporal-action="resume" ${canResume ? "" : "disabled"}>Resume</button>
+            <button type="button" data-temporal-action="cancel" ${isTerminal ? "disabled" : ""}>Cancel</button>
+          </div>
+          <div class="grid-2">
+            <div class="card"><strong>Status:</strong> ${statusBadge("temporal", rawState)}</div>
+            <div class="card"><strong>Summary:</strong> ${escapeHtml(pick(execution, "summary") || "-")}</div>
+            <div class="card"><strong>Task ID:</strong> <span class="inline-code">${escapeHtml(
+              pick(execution, "taskId") || workflowId,
+            )}</span></div>
+            <div class="card"><strong>Workflow ID:</strong> <span class="inline-code">${escapeHtml(
+              pick(execution, "workflowId") || workflowId,
+            )}</span></div>
+            <div class="card"><strong>Temporal Run ID:</strong> <span class="inline-code">${escapeHtml(
+              temporalRunId,
+            )}</span></div>
+            <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(
+              pick(execution, "workflowType") || "-",
+            )}</div>
+            <div class="card"><strong>Entry:</strong> ${escapeHtml(
+              pick(execution, "entry") || "-",
+            )}</div>
+            <div class="card"><strong>Owner:</strong> ${escapeHtml(
+              `${pick(execution, "ownerType") || "-"} / ${pick(execution, "ownerId") || "-"}`,
+            )}</div>
+            <div class="card"><strong>Raw State:</strong> ${escapeHtml(rawState)}</div>
+            <div class="card"><strong>Temporal Status:</strong> ${escapeHtml(
+              pick(execution, "temporalStatus") || "-",
+            )}</div>
+            <div class="card"><strong>Close Status:</strong> ${escapeHtml(
+              pick(execution, "closeStatus") || "-",
+            )}</div>
+            <div class="card"><strong>Waiting Reason:</strong> ${escapeHtml(waitingReason)}</div>
+            <div class="card"><strong>Attention Required:</strong> ${escapeHtml(
+              attentionRequired,
+            )}</div>
+            <div class="card"><strong>Created:</strong> ${formatTimestamp(
+              pick(execution, "createdAt") || pick(execution, "startedAt"),
+            )}</div>
+            <div class="card"><strong>Updated:</strong> ${formatTimestamp(
+              pick(execution, "updatedAt"),
+            )}</div>
+            <div class="card"><strong>Closed:</strong> ${formatTimestamp(
+              pick(execution, "closedAt"),
+            )}</div>
+          </div>
+          <div class="stack">
+            <section>
+              <h3>Artifacts</h3>
+              <table>
+                <thead><tr><th>Name</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
+                <tbody>${
+                  renderTemporalArtifactsRows(state.artifacts) ||
+                  "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
+                }</tbody>
+              </table>
+            </section>
+            <section>
+              <h3>Search Attributes</h3>
+              <pre>${escapeHtml(JSON.stringify(pick(execution, "searchAttributes") || {}, null, 2))}</pre>
+            </section>
+            <section>
+              <h3>Memo</h3>
+              <pre>${escapeHtml(JSON.stringify(pick(execution, "memo") || {}, null, 2))}</pre>
+            </section>
+          </div>
+        `,
+        { showAutoRefreshControls: true },
+      );
+    };
+
+    const load = async () => {
+      try {
+        const detail = await fetchJson(
+          endpoint(taskCompatibilityDetailEndpoint, {
+            taskId: workflowId,
+          }),
+        );
+        state.execution = detail;
+        state.artifacts = Array.isArray(pick(detail, "artifactRefs"))
+          ? pick(detail, "artifactRefs")
+          : [];
+        renderExecution();
+      } catch (error) {
+        console.error("temporal detail load failed", error);
+        state.execution = null;
+        state.artifacts = [];
+        renderExecution();
+      }
+    };
+
+    const detailClickHandler = async (event) => {
+      const button = event.target instanceof HTMLElement
+        ? event.target.closest("button[data-temporal-action]")
+        : null;
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+      const action = String(button.dataset.temporalAction || "");
+      if (!action) {
+        return;
+      }
+
+      try {
+        if (action === "rename") {
+          const nextTitle = window.prompt(
+            "Task title",
+            String(pick(state.execution, "title") || ""),
+          );
+          if (nextTitle === null || !String(nextTitle).trim()) {
+            return;
+          }
+          const response = await fetchJson(
+            endpoint(temporalSourceConfig.update || "/api/executions/{workflowId}/update", {
+              workflowId,
+            }),
+            {
+              method: "POST",
+              body: JSON.stringify({
+                updateName: "SetTitle",
+                title: String(nextTitle).trim(),
+                idempotencyKey: `dashboard-rename-${Date.now()}`,
+              }),
+            },
+          );
+          state.notice = `${pick(response, "message") || "Title updated."} (${pick(
+            response,
+            "applied",
+          ) || "immediate"})`;
+        } else if (action === "edit-inputs") {
+          const patchText = window.prompt(
+            "JSON parameters patch",
+            "{}",
+          );
+          if (patchText === null) {
+            return;
+          }
+          const parametersPatch = JSON.parse(String(patchText || "{}"));
+          const response = await fetchJson(
+            endpoint(temporalSourceConfig.update || "/api/executions/{workflowId}/update", {
+              workflowId,
+            }),
+            {
+              method: "POST",
+              body: JSON.stringify({
+                updateName: "UpdateInputs",
+                parametersPatch,
+                idempotencyKey: `dashboard-update-inputs-${Date.now()}`,
+              }),
+            },
+          );
+          state.notice = `${pick(response, "message") || "Update submitted."} (${pick(
+            response,
+            "applied",
+          ) || "immediate"})`;
+        } else if (action === "rerun") {
+          const response = await fetchJson(
+            endpoint(temporalSourceConfig.update || "/api/executions/{workflowId}/update", {
+              workflowId,
+            }),
+            {
+              method: "POST",
+              body: JSON.stringify({
+                updateName: "RequestRerun",
+                idempotencyKey: `dashboard-rerun-${Date.now()}`,
+              }),
+            },
+          );
+          state.notice = `${pick(response, "message") || "Rerun requested."} (${pick(
+            response,
+            "applied",
+          ) || "continue_as_new"})`;
+        } else if (action === "pause" || action === "resume") {
+          await fetchJson(
+            endpoint(temporalSourceConfig.signal || "/api/executions/{workflowId}/signal", {
+              workflowId,
+            }),
+            {
+              method: "POST",
+              body: JSON.stringify({
+                signalName: action === "pause" ? "Pause" : "Resume",
+                payload: {},
+              }),
+            },
+          );
+          state.notice = action === "pause" ? "Execution paused." : "Execution resumed.";
+        } else if (action === "cancel") {
+          const reason = window.prompt("Cancellation reason", "Canceled from dashboard");
+          if (reason === null) {
+            return;
+          }
+          await fetchJson(
+            endpoint(temporalSourceConfig.cancel || "/api/executions/{workflowId}/cancel", {
+              workflowId,
+            }),
+            {
+              method: "POST",
+              body: JSON.stringify({ reason: String(reason || "").trim() || null }),
+            },
+          );
+          state.notice = "Cancellation requested.";
+        }
+        state.noticeIsError = false;
+        await load();
+      } catch (error) {
+        console.error("temporal detail action failed", error);
+        state.notice = "Temporal action failed.";
+        state.noticeIsError = true;
+        renderExecution();
+      }
+    };
+
+    root.addEventListener("click", detailClickHandler);
+    registerDisposer(() => root.removeEventListener("click", detailClickHandler));
+
+    await load();
+    startPolling(load, pollIntervals.detail);
+  }
+
   async function renderProposalsListPage() {
     const repoStorageKey = "task-dashboard-proposals-repo";
     const initialQuery = new URLSearchParams(window.location.search || "");
@@ -8703,37 +9147,29 @@
       const explicitSource = String(searchParams?.get("source") || "")
         .trim()
         .toLowerCase();
-      if (explicitSource === "queue") {
-        await renderQueueDetailPage(candidateTaskId);
-        return;
-      }
-      if (explicitSource === "orchestrator") {
-        await renderOrchestratorDetailPage(candidateTaskId);
-        return;
-      }
       try {
-        await fetchJson(
-          endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
-            id: candidateTaskId,
-          }),
-        );
-        await renderQueueDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        // fall through and probe orchestrator
-      }
-      try {
-        await fetchJson(
-          endpoint(orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}", {
-            id: candidateTaskId,
-          }),
-        );
-        await renderOrchestratorDetailPage(candidateTaskId);
-        return;
+        const resolution = await resolveUnifiedTaskSource(candidateTaskId, explicitSource);
+        const resolvedSource = String(pick(resolution, "source") || "")
+          .trim()
+          .toLowerCase();
+        if (resolvedSource === "queue") {
+          await renderQueueDetailPage(candidateTaskId);
+          return;
+        }
+        if (resolvedSource === "orchestrator") {
+          await renderOrchestratorDetailPage(candidateTaskId);
+          return;
+        }
+        if (resolvedSource === "temporal") {
+          await renderTemporalDetailPage(candidateTaskId);
+          return;
+        }
       } catch (_error) {
         renderNotFound();
         return;
       }
+      renderNotFound();
+      return;
     }
     if (proposalDetailMatch) {
       await renderProposalDetailPage(proposalDetailMatch[1]);
