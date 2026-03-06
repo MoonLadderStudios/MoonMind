@@ -51,7 +51,9 @@ def _build_execution_record(
     owner_id: str = "user-123",
 ) -> SimpleNamespace:
     now = datetime.now(UTC)
-    entry = "manifest" if workflow_type is TemporalWorkflowType.MANIFEST_INGEST else "run"
+    entry = (
+        "manifest" if workflow_type is TemporalWorkflowType.MANIFEST_INGEST else "run"
+    )
     return SimpleNamespace(
         namespace="moonmind",
         workflow_id="mm:wf-1",
