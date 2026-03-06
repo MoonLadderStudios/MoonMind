@@ -153,6 +153,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         )
 
         original_run_id = created.run_id
+        original_started_at = created.started_at
         workflow_id = created.workflow_id
         response = await service.update_execution(
             workflow_id=workflow_id,
@@ -167,9 +168,56 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         refreshed = await service.describe_execution(workflow_id)
         assert response["accepted"] is True
         assert response["applied"] == "continue_as_new"
+        assert response["continue_as_new_cause"] == "manual_rerun"
         assert refreshed.workflow_id == workflow_id
         assert refreshed.run_id != original_run_id
+        assert refreshed.started_at == original_started_at
         assert refreshed.rerun_count == 1
+        assert refreshed.memo["continue_as_new_cause"] == "manual_rerun"
+        assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
+        assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
+
+
+@pytest.mark.asyncio
+async def test_request_rerun_rejected_for_terminal_execution(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="done",
+            graceful=True,
+        )
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="RequestRerun",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            parameters_patch=None,
+            title=None,
+            idempotency_key="rerun-terminal",
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+
+        assert response == {
+            "accepted": False,
+            "applied": "immediate",
+            "message": "Workflow is in a terminal state and no longer accepts updates.",
+        }
+        assert refreshed.state is MoonMindWorkflowState.CANCELED
 
 
 @pytest.mark.asyncio
@@ -352,6 +400,45 @@ async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_new_cause(
+    tmp_path,
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/original",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        response = await service.update_execution(
+            workflow_id=created.workflow_id,
+            update_name="UpdateInputs",
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/replacement",
+            parameters_patch=None,
+            title=None,
+            idempotency_key="update-major-reconfig",
+        )
+        refreshed = await service.describe_execution(created.workflow_id)
+
+        assert response["accepted"] is True
+        assert response["applied"] == "continue_as_new"
+        assert response["continue_as_new_cause"] == "major_reconfiguration"
+        assert refreshed.memo["continue_as_new_cause"] == "major_reconfiguration"
+        assert refreshed.search_attributes["mm_continue_as_new_cause"] == (
+            "major_reconfiguration"
+        )
+
+
+@pytest.mark.asyncio
 async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(
@@ -385,6 +472,10 @@ async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_pa
         assert second.run_id != original_run_id
         assert second.rerun_count == 1
         assert second.step_count == 0
+        assert second.memo["continue_as_new_cause"] == "lifecycle_threshold"
+        assert second.search_attributes["mm_continue_as_new_cause"] == (
+            "lifecycle_threshold"
+        )
 
 
 @pytest.mark.asyncio
