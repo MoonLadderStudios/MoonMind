@@ -12,10 +12,10 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
-from uuid import uuid4
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
+from uuid import uuid4
 
 from moonmind.config.settings import settings
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
@@ -531,7 +531,9 @@ class TemporalSandboxActivities:
             workspace_root or settings.spec_workflow.workspace_root
         ).resolve()
 
-    def _resolve_workspace(self, workspace_ref: str | Path, *, must_exist: bool) -> Path:
+    def _resolve_workspace(
+        self, workspace_ref: str | Path, *, must_exist: bool
+    ) -> Path:
         workspace = Path(workspace_ref).expanduser().resolve()
         sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
         if not workspace.is_relative_to(sandbox_root):
@@ -545,7 +547,9 @@ class TemporalSandboxActivities:
     def _resolve_checkout_source(self, repo_ref: str | Path) -> Path:
         source = Path(str(repo_ref).removeprefix("file://")).expanduser().resolve()
         if not source.exists() or not source.is_dir():
-            raise TemporalActivityRuntimeError(f"unsupported sandbox repo_ref '{repo_ref}'")
+            raise TemporalActivityRuntimeError(
+                f"unsupported sandbox repo_ref '{repo_ref}'"
+            )
         if not source.is_relative_to(self._workspace_root):
             raise TemporalActivityRuntimeError(
                 "sandbox.checkout_repo local sources must be under workspace_root"

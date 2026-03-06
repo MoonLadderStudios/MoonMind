@@ -318,7 +318,9 @@ async def test_sandbox_rejects_workspace_outside_sandbox_root(tmp_path: Path):
         )
 
 
-async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(tmp_path: Path):
+async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(
+    tmp_path: Path,
+):
     activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
     source = tmp_path / "repo"
     source.mkdir()
