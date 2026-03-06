@@ -123,19 +123,23 @@ def upgrade() -> None:
         (temporal_executions.c.owner_id == "system", 0),
         else_=1,
     )
-    rows = bind.execution_options(stream_results=True).execute(
-        sa.select(
-            temporal_executions.c.workflow_id,
-            temporal_executions.c.workflow_type,
-            temporal_executions.c.owner_id,
-            temporal_executions.c.state,
-            temporal_executions.c.entry,
-            temporal_executions.c.search_attributes,
-            temporal_executions.c.create_idempotency_key,
-            temporal_executions.c.started_at,
-            temporal_executions.c.updated_at,
-        ).order_by(owner_priority, temporal_executions.c.workflow_id)
-    ).mappings()
+    rows = (
+        bind.execution_options(stream_results=True)
+        .execute(
+            sa.select(
+                temporal_executions.c.workflow_id,
+                temporal_executions.c.workflow_type,
+                temporal_executions.c.owner_id,
+                temporal_executions.c.state,
+                temporal_executions.c.entry,
+                temporal_executions.c.search_attributes,
+                temporal_executions.c.create_idempotency_key,
+                temporal_executions.c.started_at,
+                temporal_executions.c.updated_at,
+            ).order_by(owner_priority, temporal_executions.c.workflow_id)
+        )
+        .mappings()
+    )
 
     now = datetime.now(UTC)
     seen_idempotency_scopes: set[tuple[str, str, str, str]] = set()
