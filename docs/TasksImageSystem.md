@@ -1,10 +1,10 @@
-# Task Image Attachments (Tasks Dashboard → Agent Queue → Workers)
+# Task Image Attachments (Mission Control → Agent Queue → Workers)
 
 ## Summary
 
 This design adds **image attachments** to MoonMind tasks so that:
 
-1. A user can **upload one or more images** from the Tasks Dashboard UI when creating a task.
+1. A user can **upload one or more images** from the Mission Control UI when creating a task.
 2. The API stores those images as **job-scoped input attachments**.
 3. A worker (Codex/Gemini/Claude runtimes) **downloads the images into the job workspace** and can “see” them during processing by generating **text image context** (captions / optional OCR) and **injecting that context into the prompt**.
 
@@ -303,7 +303,7 @@ This makes it work for:
 
 ---
 
-## Tasks Dashboard UI Changes
+## Mission Control UI Changes
 
 ### Task creation form
 

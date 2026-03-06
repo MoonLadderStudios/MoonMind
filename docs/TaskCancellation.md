@@ -12,7 +12,7 @@ Add **Task Cancellation** to MoonMind so that:
 * Tasks can be cancelled while **running on a worker** (best-effort, cooperative).
 * Cancellation is exposed through:
 
-  * **Task Dashboard UI** (thin dashboard over REST)
+  * **Mission Control UI** (thin dashboard over REST)
   * **REST API endpoint(s)** (under `/api/queue`)
   * **MCP tool call** (under `/mcp/tools/call`) alongside existing queue tools
 
@@ -164,7 +164,7 @@ No new MCP router needed; it’s just a registry/tool expansion.
 
 ---
 
-### 4.5 Task Dashboard UI Changes (Thin Dashboard)
+### 4.5 Mission Control UI Changes (Thin Dashboard)
 
 The dashboard is a thin client over REST endpoints  and already knows queue vs orchestrator endpoints via the injected runtime config .
 
@@ -282,7 +282,7 @@ This makes “cancel while running” real for `codex`, `gemini`, and `claude` s
 
 ```mermaid
 sequenceDiagram
-  participant UI as Task Dashboard
+  participant UI as Mission Control
   participant API as MoonMind API (/api/queue)
   participant DB as Postgres (agent_jobs)
 
@@ -296,7 +296,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  participant UI as Task Dashboard
+  participant UI as Mission Control
   participant API as MoonMind API
   participant W as Worker
   participant DB as Postgres

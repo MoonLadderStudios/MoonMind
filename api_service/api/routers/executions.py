@@ -47,7 +47,7 @@ async def _get_service(
     return TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
-        integration_task_queue=settings.temporal.integration_task_queue,
+        integration_task_queue=settings.temporal.activity_integrations_task_queue,
         integration_poll_initial_seconds=(
             settings.temporal.integration_poll_initial_seconds
         ),
@@ -68,6 +68,11 @@ async def _get_service(
 def _serialize_execution(record) -> ExecutionModel:
     temporal_status = "running"
     close_status = record.close_status.value if record.close_status else None
+    memo = dict(record.memo or {})
+    search_attributes = dict(record.search_attributes or {})
+    continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
+        "mm_continue_as_new_cause"
+    )
     if record.close_status is TemporalExecutionCloseStatus.COMPLETED:
         temporal_status = "completed"
     elif record.close_status is TemporalExecutionCloseStatus.CANCELED:
@@ -81,20 +86,24 @@ def _serialize_execution(record) -> ExecutionModel:
 
     return ExecutionModel(
         namespace=record.namespace,
+        task_id=record.workflow_id,
         workflow_id=record.workflow_id,
         run_id=record.run_id,
+        temporal_run_id=record.run_id,
         workflow_type=record.workflow_type.value,
         state=record.state.value,
         temporal_status=temporal_status,
         close_status=close_status,
-        search_attributes=dict(record.search_attributes or {}),
-        memo=dict(record.memo or {}),
+        search_attributes=search_attributes,
+        memo=memo,
         artifact_refs=list(record.artifact_refs or []),
         integration=(
             dict(record.integration_state)
             if isinstance(record.integration_state, dict)
             else None
         ),
+        latest_run_view=True,
+        continue_as_new_cause=continue_as_new_cause,
         started_at=record.started_at,
         updated_at=record.updated_at,
         closed_at=record.closed_at,

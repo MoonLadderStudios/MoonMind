@@ -128,10 +128,48 @@ class TemporalSettings(BaseSettings):
 
     address: str = Field("temporal:7233", env="TEMPORAL_ADDRESS")
     namespace: str = Field("moonmind", env="TEMPORAL_NAMESPACE")
+    worker_fleet: str = Field("workflow", env="TEMPORAL_WORKER_FLEET")
     workflow_task_queue: str = Field("mm.workflow", env="TEMPORAL_WORKFLOW_TASK_QUEUE")
-    integration_task_queue: str = Field(
+    activity_artifacts_task_queue: str = Field(
+        "mm.activity.artifacts",
+        env="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
+    )
+    activity_llm_task_queue: str = Field(
+        "mm.activity.llm",
+        env="TEMPORAL_ACTIVITY_LLM_TASK_QUEUE",
+    )
+    activity_sandbox_task_queue: str = Field(
+        "mm.activity.sandbox",
+        env="TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE",
+    )
+    activity_integrations_task_queue: str = Field(
         "mm.activity.integrations",
-        env="TEMPORAL_INTEGRATION_TASK_QUEUE",
+        env="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
+    )
+    workflow_worker_concurrency: int | None = Field(
+        8,
+        env="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
+        ge=1,
+    )
+    artifacts_worker_concurrency: int | None = Field(
+        8,
+        env="TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY",
+        ge=1,
+    )
+    llm_worker_concurrency: int | None = Field(
+        4,
+        env="TEMPORAL_LLM_WORKER_CONCURRENCY",
+        ge=1,
+    )
+    sandbox_worker_concurrency: int | None = Field(
+        2,
+        env="TEMPORAL_SANDBOX_WORKER_CONCURRENCY",
+        ge=1,
+    )
+    integrations_worker_concurrency: int | None = Field(
+        4,
+        env="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
+        ge=1,
     )
     integration_poll_initial_seconds: int = Field(
         5,
@@ -171,6 +209,18 @@ class TemporalSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("worker_fleet", mode="before")
+    @classmethod
+    def _normalize_worker_fleet(cls, value: Any) -> str:
+        normalized = str(value or "workflow").strip().lower()
+        allowed = {"workflow", "artifacts", "llm", "sandbox", "integrations"}
+        if normalized not in allowed:
+            raise ValueError(
+                "TEMPORAL_WORKER_FLEET must be one of "
+                "workflow, artifacts, llm, sandbox, integrations"
+            )
+        return normalized
 
 
 class SpecWorkflowSettings(BaseSettings):

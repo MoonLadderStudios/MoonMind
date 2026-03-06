@@ -17,7 +17,7 @@
 | DOC-REQ-006 | `docs/TaskCancellation.md` "Repository/service changes" | Retry/requeue paths (manual failure retries and lease-expiry requeue) must not resurrect cancellation-requested jobs. |
 | DOC-REQ-007 | `docs/TaskCancellation.md` "Auditability" | Cancellation request and cancellation completion must be visible in queue job events. |
 | DOC-REQ-008 | `docs/TaskCancellation.md` "MCP tooling" | MCP registry must expose `queue.cancel` and dispatch to queue cancellation service. |
-| DOC-REQ-009 | `docs/TaskCancellation.md` "Task Dashboard Integration" | Dashboard configuration and queue detail UX must expose cancel action and cancellation-requested state. |
+| DOC-REQ-009 | `docs/TaskCancellation.md` "Mission Control Integration" | Dashboard configuration and queue detail UX must expose cancel action and cancellation-requested state. |
 | DOC-REQ-010 | `docs/TaskCancellation.md` "Worker behavior" heartbeat section | Worker heartbeat loop must detect cancel-request metadata from API responses and react quickly (capped heartbeat interval). |
 | DOC-REQ-011 | `docs/TaskCancellation.md` "Worker behavior" stage boundaries | Worker must stop execution cooperatively when cancellation is requested and acknowledge cancellation instead of completing successfully. |
 | DOC-REQ-012 | `docs/TaskCancellation.md` "Subprocess interruption" | Command execution utilities must support cooperative cancellation with best-effort process termination. |

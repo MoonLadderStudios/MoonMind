@@ -9,7 +9,7 @@ Last Updated: 2026-02-18
 Define how MoonMind ingests **manifest-defined data pipelines** using the existing **Agent Queue** (`/api/queue`) so that:
 
 - Manifest ingestion runs are submitted, monitored, cancelled, and audited like other queue jobs.
-- The Tasks Dashboard UI can show manifest runs as a first-class **category** (separate from codex/gemini/claude).
+- The Mission Control UI can show manifest runs as a first-class **category** (separate from codex/gemini/claude).
 - Ingestion is deterministic and declarative: **validate → fetch → transform → embed → upsert (+ delete)**.
 - Ingestion is observable (events + artifacts) and safe (no raw secrets in payloads/logs).
 
@@ -45,7 +45,7 @@ This design intentionally reuses:
    - supports cancellation
 3. Support **v0 manifests** as defined in `docs/LlamaIndexManifestSystem.md` and `examples/readers-*.yaml`.
 4. Keep queue payloads **token-free**: only allow env references, profile references, and/or secret references (Vault) — never raw API keys.
-5. Make manifest runs visible in the Tasks Dashboard UI as a **separate category** from codex/gemini/claude.
+5. Make manifest runs visible in the Mission Control UI as a **separate category** from codex/gemini/claude.
 6. Make runs **idempotent**:
    - stable point IDs
    - incremental updates
@@ -85,7 +85,7 @@ Per-(manifest,dataSource) state capturing what was last indexed so subsequent ru
 
 ```mermaid
 flowchart LR
-  UI[Tasks Dashboard UI] --> API[FastAPI /api/queue + /api/manifests]
+  UI[Mission Control UI] --> API[FastAPI /api/queue + /api/manifests]
   API --> Q[(Postgres: agent_queue tables + manifest registry)]
   API -->|Create job type=manifest| Q
   W[moonmind-manifest-worker] -->|claim/heartbeat/events/artifacts| API
@@ -637,7 +637,7 @@ Cancellation policy:
 * If cancellation occurs mid-upsert batch, the worker SHOULD finish the current Qdrant request and then stop.
 * If partial results were written, the run_summary must reflect partial counts.
 
-## 10. Tasks Dashboard UI Integration
+## 10. Mission Control UI Integration
 
 ### 10.1 New category
 
@@ -759,7 +759,7 @@ Additionally:
 
 ### Phase 2: UI + operational hardening
 
-1. Add Tasks Dashboard category + submit form for manifests.
+1. Add Mission Control category + submit form for manifests.
 2. Add “profile mode” secret resolution for registry-based runs (token-free queue payload).
 3. Add Vault support for hardened deployments.
 

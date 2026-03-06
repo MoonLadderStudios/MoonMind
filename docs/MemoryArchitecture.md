@@ -2,7 +2,7 @@
 
 Status: Proposed
 Last Updated: 2026-02-16
-Scope: Chat, RAG, Task Dashboard (agent queue), Spec workflow, orchestrator
+Scope: Chat, RAG, Mission Control (agent queue), Spec workflow, orchestrator
 
 ## 1) Goals
 

@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gates for active spec features."""
+"""DOC-REQ traceability gates for contract-backed feature specs."""
 
 from __future__ import annotations
 
@@ -8,24 +8,34 @@ from pathlib import Path
 import pytest
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_CASES = (
+_FEATURES = (
     (
         "046-workflow-type-lifecycle",
         Path("specs/046-workflow-type-lifecycle/spec.md"),
         Path("specs/046-workflow-type-lifecycle/contracts/requirements-traceability.md"),
     ),
     (
+        "047-activity-worker-topology",
+        Path("specs/047-activity-worker-topology/spec.md"),
+        Path("specs/047-activity-worker-topology/contracts/requirements-traceability.md"),
+    ),
+    (
         "047-integrations-monitoring",
         Path("specs/047-integrations-monitoring/spec.md"),
         Path("specs/047-integrations-monitoring/contracts/requirements-traceability.md"),
+    ),
+    (
+        "048-run-history-rerun",
+        Path("specs/048-run-history-rerun/spec.md"),
+        Path("specs/048-run-history-rerun/contracts/requirements-traceability.md"),
     ),
 )
 
 
 @pytest.mark.parametrize(
     ("feature_name", "feature_spec", "feature_traceability"),
-    _FEATURE_CASES,
-    ids=[case[0] for case in _FEATURE_CASES],
+    _FEATURES,
+    ids=[feature_name for feature_name, *_ in _FEATURES],
 )
 def test_doc_req_traceability_contract(
     feature_name: str,
@@ -36,7 +46,7 @@ def test_doc_req_traceability_contract(
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_spec}"
+    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_name} spec.md"
 
     assert feature_traceability.exists(), (
         "Missing traceability file for DOC-REQ feature: "

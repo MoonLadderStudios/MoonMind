@@ -31,7 +31,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/TaskArchitecture.md`
 - `docs/TaskUiArchitecture.md`
-- `docs/Temporal/Visibility/VisibilityAndUiQueryModel.md` *(expected companion doc)*
+- `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 ---
 
@@ -80,7 +80,7 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
    Temporal implementation docs, worker code, and execution APIs should use Temporal language precisely.
 
 3. **A Temporal-backed task is not a fake queue item.**  
-   It may render in the task dashboard, but it must not inherit queue-order semantics or leasing semantics.
+   It may render in the Mission Control, but it must not inherit queue-order semantics or leasing semantics.
 
 4. **Identifiers are opaque.**  
    Clients must not parse source, entry type, or lifecycle meaning from the textual shape of an ID.
@@ -98,7 +98,7 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 
 ## 6. Source model
 
-### 6.1 Execution sources for the task dashboard
+### 6.1 Execution sources for the Mission Control
 
 For task list/detail purposes, the execution sources are:
 
@@ -125,6 +125,14 @@ Rules:
 - do **not** create a separate dashboard execution source called `manifest` for Temporal-backed work
 - manifest pages may later become filtered task views over `source=temporal` + `entry=manifest`
 - source answers **where the execution lives**; entry answers **what kind of product flow it represents**
+
+### 6.4 Current manifest migration rule
+
+Manifest flows remain source-specific during migration:
+
+- queue-backed manifest jobs continue to render as `source=queue`
+- only Temporal-managed manifest executions use `source=temporal` + `entry=manifest`
+- compatibility layers must not relabel queue-backed manifest work as Temporal-backed before the execution substrate has actually moved
 
 ---
 
@@ -156,7 +164,18 @@ Rules:
 - Clients must treat all IDs as opaque strings.
 - Path routing may use explicit `source` or a persisted source mapping; ID shape may be used as an optimization, but not as the compatibility contract.
 
-### 7.4 Rerun identity rule
+### 7.4 Route resolution rule for `/tasks/{taskId}`
+
+For unified task detail routing, MoonMind should use a **persisted source mapping / global task index** keyed by task handle.
+
+Rules:
+
+- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing queue, orchestrator, and Temporal backends heuristically
+- Temporal-backed rows must resolve through the durable `workflowId` because `taskId == workflowId`
+- legacy source-specific routes may redirect into `/tasks/{taskId}`, but the server must preserve canonical source resolution metadata
+- ID text shape must not be the contract for backend selection
+
+### 7.5 Rerun identity rule
 
 For Temporal-backed work:
 
@@ -186,7 +205,8 @@ This section defines the **task-compatible shape** that adapters should material
 | `temporalStatus` | string | Raw Temporal close/runtime status | execution `temporalStatus` |
 | `workflowId` | string | Durable Temporal identity | execution `workflowId` |
 | `workflowType` | string | Root workflow type | execution `workflowType` |
-| `ownerId` | string \| null | Owning user | `searchAttributes.mm_owner_id` or projection owner |
+| `ownerType` | string | Owner class for auth and filtering | `searchAttributes.mm_owner_type` |
+| `ownerId` | string \| null | Owning principal identifier | `searchAttributes.mm_owner_id` or projection owner |
 | `createdAt` | datetime | Start time for task row sorting/display | execution `startedAt` |
 | `updatedAt` | datetime | Most recent meaningful change | execution `updatedAt` |
 | `closedAt` | datetime \| null | Terminal close time | execution `closedAt` |
@@ -199,6 +219,8 @@ Rules:
 - `summary` is allowed to be short and operational rather than user-marketing copy.
 - `status` is the **dashboard display/filter status**. It does not replace `rawState` or `temporalStatus`.
 - `createdAt` uses `startedAt` for Temporal-backed compatibility rows.
+- `ownerType` and `ownerId` should be populated together from canonical execution metadata.
+- compatibility payloads must keep Search Attributes and Memo bounded and secret-safe; do not surface raw secrets, large prompts, or unreviewed free-text blobs.
 
 ### 8.2 Task detail payload (normalized)
 
@@ -220,7 +242,8 @@ Recommended required fields:
 | `rawState` | MoonMind execution state |
 | `temporalStatus` | Temporal runtime/close view |
 | `closeStatus` | Raw Temporal close status when present |
-| `ownerId` | Owning user |
+| `ownerType` | Owning principal class (`user`, `system`, or `service`) |
+| `ownerId` | Owning principal identifier |
 | `createdAt` | Start time |
 | `updatedAt` | Last meaningful update |
 | `closedAt` | Close time when terminal |
@@ -241,6 +264,7 @@ Rules:
 - detail pages may show `temporalRunId`, but must still anchor the route to `taskId == workflowId`
 - `searchAttributes` and `memo` should be available to operators even if the default UI renders only selected fields
 - execution `parameters` should not be blindly surfaced; adapters should expose only reviewed, task-safe fields
+- Search Attributes and Memo must remain bounded and secret-safe in compatibility payloads
 
 ### 8.3 Example normalized Temporal-backed row
 
@@ -256,6 +280,7 @@ Rules:
   "temporalStatus": "running",
   "workflowId": "mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
   "workflowType": "MoonMind.Run",
+  "ownerType": "user",
   "ownerId": "0f2d5802-0bd2-4d31-a618-6f7d3b0f09da",
   "createdAt": "2026-03-06T08:15:21Z",
   "updatedAt": "2026-03-06T08:18:04Z",
@@ -280,9 +305,9 @@ The current dashboard status family remains:
 - `failed`
 - `cancelled`
 
-### 9.2 Temporal state to dashboard status mapping
+### 9.2 MoonMind domain state to dashboard status mapping
 
-| Temporal-side value | Normalized task status | Notes |
+| `mm_state` value | Normalized task status | Notes |
 | --- | --- | --- |
 | `initializing` | `queued` | Workflow exists but has not reached meaningful work yet |
 | `planning` | `running` | Active execution work, not queue wait |
@@ -293,7 +318,22 @@ The current dashboard status family remains:
 | `failed` | `failed` | Terminal failure |
 | `canceled` | `cancelled` | UI spelling remains `cancelled` |
 
-### 9.3 Raw values that must remain available
+### 9.3 Temporal runtime and close status semantics
+
+For Temporal-backed rows, adapters must preserve raw Temporal lifecycle information separately from `mm_state`.
+
+| Temporal field | Example values | Compatibility use |
+| --- | --- | --- |
+| `temporalStatus` | `running`, `completed`, `failed`, `canceled` | Raw runtime/close view shown in detail/debug UI |
+| `closeStatus` | `Completed`, `Failed`, `Canceled`, `Terminated`, `TimedOut`, `ContinuedAsNew` | Exact terminal/debug semantics when present |
+
+Rules:
+
+- `temporalStatus` and `closeStatus` must not be collapsed into `status` and discarded
+- `TimedOut` and `Terminated` close outcomes normalize to dashboard `failed`
+- `ContinuedAsNew` is not a user-facing terminal success/failure state; it should be treated as run-history/debug information while the stable task remains active on the same `workflowId`
+
+### 9.4 Raw values that must remain available
 
 The adapter must preserve:
 
@@ -301,7 +341,7 @@ The adapter must preserve:
 - `temporalStatus` = `running`, `completed`, `failed`, or `canceled`
 - `closeStatus` when present
 
-### 9.4 Important compatibility note
+### 9.5 Important compatibility note
 
 `awaiting_external` is broader than human approval.
 
@@ -425,6 +465,7 @@ Adapters should treat these fields as canonical for Temporal-backed rows:
 
 #### Search Attributes
 
+- `mm_owner_type`
 - `mm_owner_id`
 - `mm_state`
 - `mm_updated_at`
@@ -441,6 +482,7 @@ Rules:
 
 - compatibility adapters should prefer canonical execution metadata over inventing source-specific shadow fields
 - projection tables must not drift from the documented execution lifecycle contract
+- Search Attributes and Memo must remain bounded and secret-safe; they are not a dump target for raw prompts, credentials, or large unreviewed payloads
 
 ---
 
@@ -464,6 +506,7 @@ Rules:
 - Temporal-backed task details should render inside the same unified task shell used for other task sources
 - the canonical task detail handle for Temporal-backed work is `taskId == workflowId`
 - introducing `/tasks/temporal/{workflowId}` is optional compatibility sugar, not a requirement
+- bare `/tasks/{taskId}` resolution should use the canonical server-side source mapping defined in Section 7.4
 
 ### 13.3 Manifest pages
 
@@ -563,7 +606,7 @@ This document is considered successfully implemented for a Temporal-backed flow 
 
 ## 17. Open decisions to lock next
 
-1. Whether the task dashboard should eventually expose run history for a single `workflowId` or only the latest run by default
+1. Whether the Mission Control should eventually expose run history for a single `workflowId` or only the latest run by default
 2. Whether `awaiting_external` needs a first-class `waitKind` field sooner rather than later
 3. Whether Temporal-backed manifest views become simple task filters or keep a distinct route shell longer
 4. When `/api/executions` should graduate from adapter-first surface to a more openly documented public API

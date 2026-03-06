@@ -183,7 +183,7 @@ async def _get_service(
     return TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
-        integration_task_queue=settings.temporal.integration_task_queue,
+        integration_task_queue=settings.temporal.activity_integrations_task_queue,
         integration_poll_initial_seconds=(
             settings.temporal.integration_poll_initial_seconds
         ),

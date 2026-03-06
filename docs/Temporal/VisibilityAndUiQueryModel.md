@@ -46,7 +46,7 @@ This document narrows several open items from the lifecycle doc so frontend and 
 - Memo registry for list/detail presentation.
 - Canonical list/detail field model for Temporal-backed rows.
 - Allowed filters, sort order, recency rules, pagination, and counts.
-- Compatibility mapping into current task dashboard status/grouping semantics.
+- Compatibility mapping into current Mission Control status/grouping semantics.
 - Migration rules for adapter APIs and unified task surfaces.
 
 ### 3.2 Out of scope
@@ -403,7 +403,7 @@ Implementation guidance:
 
 ---
 
-## 10. Compatibility status mapping for the current task dashboard
+## 10. Compatibility status mapping for the current Mission Control
 
 The current dashboard uses broad normalized task statuses such as:
 
@@ -426,7 +426,7 @@ Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provi
 | Exact Temporal-backed state | Compatibility dashboard status | Notes |
 | --- | --- | --- |
 | `initializing` | `queued` | Not yet materially executing user work. |
-| `planning` | `queued` | Still pre-execution from a task dashboard perspective. |
+| `planning` | `queued` | Still pre-execution from a Mission Control perspective. |
 | `executing` | `running` | Active execution. |
 | `awaiting_external` | `awaiting_action` | Compatibility grouping only; detail must still show exact `awaiting_external`. |
 | `finalizing` | `running` | Still in-flight, not terminal. |
@@ -438,7 +438,7 @@ Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provi
 
 `awaiting_external` does **not** always mean the current user must take action.
 
-For current task dashboard compatibility surfaces, it maps to `awaiting_action` because that is the nearest existing grouped status. Exact detail views must still show `awaiting_external` so the product can later distinguish:
+For current Mission Control compatibility surfaces, it maps to `awaiting_action` because that is the nearest existing grouped status. Exact detail views must still show `awaiting_external` so the product can later distinguish:
 
 - approval required,
 - webhook wait,

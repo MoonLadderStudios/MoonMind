@@ -72,6 +72,11 @@ ALLOWED_INTEGRATION_STATUSES: set[str] = {
 TERMINAL_INTEGRATION_STATUSES: set[str] = {"succeeded", "failed", "canceled"}
 _SEEN_PROVIDER_EVENT_LIMIT = 50
 _CORRELATION_EXPIRY_DAYS = 30
+CONTINUE_AS_NEW_CAUSES: set[str] = {
+    "manual_rerun",
+    "lifecycle_threshold",
+    "major_reconfiguration",
+}
 
 
 class TemporalExecutionError(RuntimeError):
@@ -805,6 +810,7 @@ class TemporalExecutionService:
             self._continue_as_new(
                 record,
                 summary="Execution continued as new after lifecycle threshold.",
+                cause="lifecycle_threshold",
             )
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
@@ -877,11 +883,13 @@ class TemporalExecutionService:
             self._continue_as_new(
                 record,
                 summary="Applied input update via Continue-As-New.",
+                cause="major_reconfiguration",
             )
             return {
                 "accepted": True,
                 "applied": "continue_as_new",
                 "message": "Update applied via Continue-As-New.",
+                "continue_as_new_cause": "major_reconfiguration",
             }
 
         if not updated:
@@ -952,16 +960,26 @@ class TemporalExecutionService:
         self._continue_as_new(
             record,
             summary="Rerun requested via Continue-As-New.",
+            cause="manual_rerun",
         )
         return {
             "accepted": True,
             "applied": "continue_as_new",
             "message": "Rerun requested. Execution continued as new run.",
+            "continue_as_new_cause": "manual_rerun",
         }
 
     def _continue_as_new(
-        self, record: TemporalExecutionRecord, *, summary: str
+        self,
+        record: TemporalExecutionRecord,
+        *,
+        summary: str,
+        cause: str,
     ) -> None:
+        if cause not in CONTINUE_AS_NEW_CAUSES:
+            raise TemporalExecutionValidationError(
+                f"Unsupported Continue-As-New cause: {cause}"
+            )
         integration_state = self._integration_state(record)
         integration_wait_active = False
         if integration_state is not None:
@@ -991,7 +1009,7 @@ class TemporalExecutionService:
             next_state = MoonMindWorkflowState.EXECUTING
 
         self._set_state(record, next_state)
-        self._update_summary(record, summary)
+        self._update_summary(record, summary, continue_as_new_cause=cause)
 
     def _set_state(
         self,
@@ -1036,6 +1054,7 @@ class TemporalExecutionService:
         *,
         error_category: str | None = None,
         external_url: str | None = None,
+        continue_as_new_cause: str | None = None,
     ) -> None:
         memo = dict(record.memo or {})
         memo["summary"] = summary
@@ -1043,6 +1062,12 @@ class TemporalExecutionService:
             memo["error_category"] = error_category
         elif "error_category" in memo and "integration_error:" not in summary:
             memo.pop("error_category", None)
+        if continue_as_new_cause:
+            memo["continue_as_new_cause"] = continue_as_new_cause
+            memo["latest_temporal_run_id"] = record.run_id
+            attrs = dict(record.search_attributes or {})
+            attrs["mm_continue_as_new_cause"] = continue_as_new_cause
+            record.search_attributes = attrs
         if record.input_ref:
             memo["input_ref"] = record.input_ref
         if record.manifest_ref:

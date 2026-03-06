@@ -101,7 +101,7 @@
 - [X] T024 [US3] Implement dashboard pagination URL state (`limit`, optional `cursor`) and initial hydration in `api_service/static/task_dashboard/dashboard.js` (DOC-REQ-009)
 - [X] T025 [US3] Implement page-size selector (`25/50/100`) and next-button gating by `next_cursor` in `api_service/static/task_dashboard/dashboard.js` (DOC-REQ-009)
 - [X] T026 [US3] Implement filter-change pagination reset behavior (clear cursor and cursor stack) in `api_service/static/task_dashboard/dashboard.js` (DOC-REQ-010)
-- [X] T027 [US3] Update task dashboard view model pagination payload/state mapping in `api_service/api/routers/task_dashboard_view_model.py` and `api_service/api/routers/task_dashboard.py` (DOC-REQ-004, DOC-REQ-009)
+- [X] T027 [US3] Update Mission Control view model pagination payload/state mapping in `api_service/api/routers/task_dashboard_view_model.py` and `api_service/api/routers/task_dashboard.py` (DOC-REQ-004, DOC-REQ-009)
 
 **Checkpoint**: User Story 3 independently validates filter-aware URL-persisted pagination UX.
 
