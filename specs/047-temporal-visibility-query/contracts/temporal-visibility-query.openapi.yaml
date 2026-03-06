@@ -1,0 +1,368 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Temporal Visibility Query Contract
+  version: 0.1.0
+  description: >
+    Canonical adapter contract for Temporal-backed list, detail, and control surfaces
+    described by docs/Temporal/VisibilityAndUiQueryModel.md.
+servers:
+  - url: http://localhost
+paths:
+  /api/executions:
+    get:
+      summary: List Temporal-backed executions using canonical Visibility semantics
+      parameters:
+        - in: query
+          name: workflowType
+          schema:
+            type: string
+          description: Exact workflow type filter.
+        - in: query
+          name: ownerType
+          schema:
+            $ref: '#/components/schemas/OwnerType'
+          description: Admin/operator filter. End-user surfaces are implicitly scoped.
+        - in: query
+          name: ownerId
+          schema:
+            type: string
+          description: Admin/operator owner filter or self-scope for end-user flows.
+        - in: query
+          name: state
+          schema:
+            $ref: '#/components/schemas/MoonMindState'
+          description: Exact `mm_state` filter.
+        - in: query
+          name: entry
+          schema:
+            $ref: '#/components/schemas/EntryType'
+          description: Exact `mm_entry` filter.
+        - in: query
+          name: repo
+          schema:
+            type: string
+          description: Optional bounded repo filter when exposed by runtime policy.
+        - in: query
+          name: integration
+          schema:
+            type: string
+          description: Optional bounded integration filter when exposed by runtime policy.
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: nextPageToken
+          schema:
+            type: string
+          description: Opaque token bound to the current filter and sort scope.
+      responses:
+        '200':
+          description: Canonical Temporal-backed list response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionListResponse'
+        '403':
+          description: Caller is not allowed to query the requested owner scope
+        '422':
+          description: Invalid filter combination or stale page token scope
+  /api/executions/{workflowId}:
+    get:
+      summary: Describe one Temporal-backed execution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Canonical execution detail payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '404':
+          description: Workflow execution not found in the caller's visible scope
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Apply a workflow update while preserving canonical identity and recency semantics
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateExecutionRequest'
+      responses:
+        '200':
+          description: Update accepted or rejected with deterministic outcome fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateExecutionResponse'
+        '404':
+          description: Workflow execution not found in the caller's visible scope
+        '422':
+          description: Invalid update request
+  /api/executions/{workflowId}/signal:
+    post:
+      summary: Deliver an asynchronous signal to a Temporal-backed execution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignalExecutionRequest'
+      responses:
+        '202':
+          description: Signal accepted and the updated canonical row is returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '404':
+          description: Workflow execution not found in the caller's visible scope
+        '422':
+          description: Invalid signal request
+  /api/executions/{workflowId}/cancel:
+    post:
+      summary: Cancel or terminate a Temporal-backed execution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelExecutionRequest'
+      responses:
+        '202':
+          description: Cancellation accepted and the updated canonical row is returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionModel'
+        '404':
+          description: Workflow execution not found in the caller's visible scope
+components:
+  schemas:
+    OwnerType:
+      type: string
+      enum: [user, system, service]
+    EntryType:
+      type: string
+      enum: [run, manifest]
+    MoonMindState:
+      type: string
+      enum:
+        - initializing
+        - planning
+        - executing
+        - awaiting_external
+        - finalizing
+        - succeeded
+        - failed
+        - canceled
+    TemporalStatus:
+      type: string
+      enum: [running, completed, failed, canceled]
+    DashboardStatus:
+      type: string
+      enum: [queued, running, awaiting_action, succeeded, failed, cancelled]
+    WaitingReason:
+      type: string
+      enum:
+        - approval_required
+        - external_callback
+        - external_completion
+        - operator_paused
+        - retry_backoff
+        - unknown_external
+    CountMode:
+      type: string
+      enum: [exact, estimated_or_unknown]
+    CreateExecutionRequest:
+      type: object
+      required: [workflowType]
+      properties:
+        workflowType:
+          type: string
+        title:
+          type: string
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        manifestArtifactRef:
+          type: string
+        failurePolicy:
+          type: string
+        initialParameters:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+    UpdateExecutionRequest:
+      type: object
+      properties:
+        updateName:
+          type: string
+          enum: [UpdateInputs, SetTitle, RequestRerun]
+        inputArtifactRef:
+          type: string
+        planArtifactRef:
+          type: string
+        parametersPatch:
+          type: object
+          additionalProperties: true
+        title:
+          type: string
+        idempotencyKey:
+          type: string
+    UpdateExecutionResponse:
+      type: object
+      required: [accepted, applied, message]
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum: [immediate, next_safe_point, continue_as_new]
+        message:
+          type: string
+    SignalExecutionRequest:
+      type: object
+      required: [signalName]
+      properties:
+        signalName:
+          type: string
+          enum: [ExternalEvent, Approve, Pause, Resume]
+        payload:
+          type: object
+          additionalProperties: true
+        payloadArtifactRef:
+          type: string
+    CancelExecutionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+        graceful:
+          type: boolean
+          default: true
+    ExecutionModel:
+      type: object
+      required:
+        - namespace
+        - taskId
+        - workflowId
+        - runId
+        - workflowType
+        - entry
+        - ownerType
+        - ownerId
+        - state
+        - temporalStatus
+        - title
+        - summary
+        - attentionRequired
+        - dashboardStatus
+        - searchAttributes
+        - memo
+        - artifactRefs
+        - startedAt
+        - updatedAt
+      properties:
+        namespace:
+          type: string
+        taskId:
+          type: string
+          description: Compatibility alias that must equal workflowId for Temporal-backed rows.
+        workflowId:
+          type: string
+        runId:
+          type: string
+          description: Current/latest Temporal run identifier for detail/debug use.
+        workflowType:
+          type: string
+        entry:
+          $ref: '#/components/schemas/EntryType'
+        ownerType:
+          $ref: '#/components/schemas/OwnerType'
+        ownerId:
+          type: string
+        state:
+          $ref: '#/components/schemas/MoonMindState'
+        temporalStatus:
+          $ref: '#/components/schemas/TemporalStatus'
+        closeStatus:
+          type: string
+          nullable: true
+        title:
+          type: string
+        summary:
+          type: string
+        waitingReason:
+          allOf:
+            - $ref: '#/components/schemas/WaitingReason'
+          nullable: true
+        attentionRequired:
+          type: boolean
+        dashboardStatus:
+          $ref: '#/components/schemas/DashboardStatus'
+        searchAttributes:
+          type: object
+          additionalProperties: true
+        memo:
+          type: object
+          additionalProperties: true
+        artifactRefs:
+          type: array
+          items:
+            type: string
+        startedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+    ExecutionListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutionModel'
+        nextPageToken:
+          type: string
+          nullable: true
+        count:
+          type: integer
+          nullable: true
+        countMode:
+          $ref: '#/components/schemas/CountMode'

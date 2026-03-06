@@ -1,4 +1,4 @@
-"""DOC-REQ traceability gates for contract-backed feature specs."""
+"""DOC-REQ traceability gates for feature specs that declare document requirements."""
 
 from __future__ import annotations
 
@@ -20,7 +20,10 @@ _VALIDATION_COLUMN_NAMES = (
     "Validation Strategy",
     "Validation Evidence",
     "Completed Validation Tasks",
+    "Planned Validation",
+    "Evidence Artifacts",
 )
+_EMPTY_VALIDATION_VALUES = {"", "-", "tbd", "todo", "n/a", "na", "none"}
 
 
 def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
@@ -50,10 +53,7 @@ def test_doc_req_traceability_contract(
     feature_spec: Path,
     feature_traceability: Path,
 ) -> None:
-    spec_text = feature_spec.read_text(encoding="utf-8")
-    doc_req_ids = {
-        f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
-    }
+    doc_req_ids = _doc_req_ids_from_text(feature_spec)
     if not doc_req_ids:
         pytest.skip(f"No DOC-REQ entries found in {feature_name} spec.md")
     traceability_rows = _parse_traceability_rows(feature_traceability)
@@ -72,12 +72,20 @@ def test_doc_req_traceability_contract(
     )
 
 
+def _doc_req_ids_from_text(spec_path: Path) -> set[str]:
+    spec_text = spec_path.read_text(encoding="utf-8")
+    return {
+        f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
+    }
+
+
 def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
     lines = traceability_path.read_text(encoding="utf-8").splitlines()
 
     table_start = _find_header_line(lines)
     assert table_start is not None, (
-        "Traceability table header missing required columns " f"in {traceability_path}"
+        "Traceability table header missing DOC-REQ and validation columns "
+        f"in {traceability_path}"
     )
 
     header = _split_row(lines[table_start])
@@ -108,14 +116,19 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
             continue
         doc_req_id = f"DOC-REQ-{doc_req_match.group(1)}"
 
-        validation_strategy = cells[validation_col].strip()
-        normalized_validation = validation_strategy.strip("`").strip().lower()
-        assert normalized_validation not in {"", "-", "tbd", "todo", "n/a", "na"}, (
+        assert doc_req_id not in rows, (
+            "Duplicate DOC-REQ traceability row in "
+            f"{traceability_path}: {doc_req_id}"
+        )
+
+        validation_value = cells[validation_col].strip()
+        normalized_validation = _normalize_validation_value(validation_value)
+        assert normalized_validation not in _EMPTY_VALIDATION_VALUES, (
             "Validation strategy must be non-empty for "
             f"{doc_req_id} in {traceability_path}"
         )
 
-        rows[doc_req_id] = validation_strategy
+        rows[doc_req_id] = validation_value
 
     assert rows, f"No DOC-REQ rows found in {traceability_path}"
     return rows
@@ -149,6 +162,10 @@ def _find_column_index(header: list[str], names: tuple[str, ...]) -> int | None:
         if name in normalized_to_index:
             return normalized_to_index[name]
     return None
+
+
+def _normalize_validation_value(value: str) -> str:
+    return value.replace("`", "").strip().lower()
 
 
 def _is_delimiter_row(cells: list[str]) -> bool:

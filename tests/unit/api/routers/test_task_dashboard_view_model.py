@@ -202,6 +202,18 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert worker_pause["get"] == "/api/system/worker-pause"
     assert worker_pause["post"] == "/api/system/worker-pause"
     assert worker_pause["pollIntervalMs"] == 5000
+    temporal_compat = config["system"]["temporalCompatibility"]
+    assert temporal_compat["enabled"] is True
+    assert temporal_compat["uiQueryModel"] == "compatibility_adapter"
+    assert temporal_compat["list"] == "/api/executions"
+    assert temporal_compat["detail"] == "/api/executions/{workflowId}"
+    assert temporal_compat["actionExecutionField"] == "execution"
+    assert temporal_compat["actionRefreshField"] == "refresh"
+    assert temporal_compat["staleStateField"] == "staleState"
+    assert temporal_compat["refreshedAtField"] == "refreshedAt"
+    assert temporal_compat["countModeField"] == "countMode"
+    assert temporal_compat["degradedCountField"] == "degradedCount"
+    assert temporal_compat["backgroundRefetchMs"] == config["pollIntervalsMs"]["list"]
     assert config["system"]["taskResolution"] == "/api/tasks/{taskId}/resolution"
     attachment_policy = config["system"]["attachmentPolicy"]
     assert attachment_policy["enabled"] is True

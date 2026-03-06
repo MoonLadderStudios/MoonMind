@@ -101,10 +101,13 @@ def _build_execution_record(
             else {}
         ),
         paused=False,
+        waiting_reason=None,
+        attention_required=False,
         started_at=now,
         updated_at=now,
         closed_at=None,
         owner_id=owner_id,
+        owner_type="user" if owner_id != "system" else "system",
         entry=entry,
         integration_state=None,
     )

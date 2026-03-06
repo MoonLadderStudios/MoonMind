@@ -191,6 +191,11 @@
     temporalDashboardEnabled && Boolean(temporalDashboardFeature.debugFieldsEnabled);
   const TEMPORAL_INLINE_INPUT_MAX_CHARS = 4000;
   const systemConfig = config.system || {};
+  const temporalCompatibilityConfig =
+    systemConfig.temporalCompatibility &&
+    typeof systemConfig.temporalCompatibility === "object"
+      ? systemConfig.temporalCompatibility
+      : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
@@ -320,6 +325,60 @@
   };
 
   const submitRuntimeOptions = buildSubmitRuntimeOptions(supportedTaskRuntimes);
+
+  function extractTemporalActionExecution(payload) {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const executionField = String(
+      temporalCompatibilityConfig.actionExecutionField || "execution",
+    );
+    const candidate = payload[executionField];
+    return candidate && typeof candidate === "object" ? candidate : null;
+  }
+
+  function describeTemporalCompatibilityFreshness(payload) {
+    const refreshField = String(
+      temporalCompatibilityConfig.actionRefreshField || "refresh",
+    );
+    const staleField = String(
+      temporalCompatibilityConfig.staleStateField || "staleState",
+    );
+    const refreshedAtField = String(
+      temporalCompatibilityConfig.refreshedAtField || "refreshedAt",
+    );
+    const degradedCountField = String(
+      temporalCompatibilityConfig.degradedCountField || "degradedCount",
+    );
+    const refresh =
+      payload &&
+      typeof payload === "object" &&
+      payload[refreshField] &&
+      typeof payload[refreshField] === "object"
+        ? payload[refreshField]
+        : null;
+    return {
+      stale: Boolean(
+        (payload && typeof payload === "object" && payload[staleField]) ||
+          (refresh && refresh.listStale),
+      ),
+      refetchSuggested: Boolean(refresh && refresh.refetchSuggested),
+      refreshedAt:
+        (payload && typeof payload === "object" && payload[refreshedAtField]) ||
+        (refresh && refresh.refreshedAt) ||
+        null,
+      degradedCount: Boolean(
+        payload && typeof payload === "object" && payload[degradedCountField],
+      ),
+    };
+  }
+
+  if (typeof window !== "undefined") {
+    window.__taskDashboardTemporalCompatibilityTest = {
+      describeTemporalCompatibilityFreshness,
+      extractTemporalActionExecution,
+    };
+  }
 
   const formatRuntimeLabel = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();

@@ -1023,6 +1023,10 @@ class TemporalExecutionCanonicalRecord(Base):
     awaiting_external: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    waiting_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    attention_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     wait_cycle_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rerun_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -1104,6 +1108,7 @@ class TemporalExecutionRecord(Base):
         ),
         nullable=False,
         default=TemporalExecutionOwnerType.USER,
+        server_default=TemporalExecutionOwnerType.USER.value,
     )
     state: Mapped[MoonMindWorkflowState] = mapped_column(
         Enum(
@@ -1151,6 +1156,10 @@ class TemporalExecutionRecord(Base):
     )
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     awaiting_external: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    waiting_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    attention_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
     step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -1208,6 +1217,19 @@ class TemporalExecutionRecord(Base):
     closed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    _IDENTIFIER_ALIASES = ("task:", "workflow:", "execution:")
+
+    @classmethod
+    def canonicalize_identifier(cls, raw_identifier: str) -> str:
+        """Normalize temporary compatibility aliases back to workflowId."""
+
+        candidate = str(raw_identifier or "").strip()
+        for prefix in cls._IDENTIFIER_ALIASES:
+            if candidate.startswith(prefix):
+                candidate = candidate[len(prefix) :].strip()
+                break
+        return candidate
 
 
 class TemporalIntegrationCorrelationRecord(Base):

@@ -399,8 +399,10 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
 
         result = await service.list_executions(
             workflow_type=None,
+            owner_type=None,
             state=None,
             owner_id=None,
+            entry=None,
             page_size=2,
             next_page_token=None,
         )
@@ -1253,8 +1255,10 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
 
         listed = await service.list_executions(
             workflow_type="MoonMind.Run",
+            owner_type="user",
             state=None,
             owner_id=owner_id,
+            entry="run",
             page_size=10,
             next_page_token=None,
         )
@@ -1355,8 +1359,10 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
 
         listed = await service.list_executions(
             workflow_type="MoonMind.Run",
+            owner_type="user",
             state=None,
             owner_id=owner_id,
+            entry="run",
             page_size=10,
             next_page_token=None,
         )
@@ -1444,8 +1450,8 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         first_page = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
-            entry=None,
-            owner_type=None,
+            entry="run",
+            owner_type="user",
             owner_id=owner_a,
             repo=None,
             integration=None,
@@ -1459,8 +1465,8 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         second_page = await service.list_executions(
             workflow_type="MoonMind.Run",
             state=None,
-            entry=None,
-            owner_type=None,
+            entry="run",
+            owner_type="user",
             owner_id=owner_a,
             repo=None,
             integration=None,
