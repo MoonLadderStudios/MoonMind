@@ -16,6 +16,7 @@ from api_service.db.models import (
     TemporalArtifactStorageBackend,
 )
 from moonmind.workflows.temporal.artifacts import (
+    ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
     TemporalArtifactService,
@@ -365,3 +366,91 @@ async def test_complete_multipart_upload_sets_integrity_metadata(
 
             assert completed.size_bytes == 8
             assert completed.sha256 is not None
+
+
+async def test_write_integration_event_artifact_creates_restricted_preview(
+    tmp_path: Path,
+) -> None:
+    """Integration callback helper should persist restricted trace artifacts."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            artifact_ref = await service.write_integration_event_artifact(
+                principal="service:integration-callback",
+                execution=ExecutionRef(
+                    namespace="moonmind",
+                    workflow_id="wf-1",
+                    run_id="run-1",
+                    link_type="debug.trace",
+                ),
+                integration_name="jules",
+                correlation_id="corr-1",
+                payload=b'{"token":"secret"}',
+                event_type="completed",
+            )
+
+            artifact, _links, _pinned, policy = await service.get_metadata(
+                artifact_id=artifact_ref.artifact_id,
+                principal="service:integration-callback",
+            )
+            assert artifact.metadata_json["artifact_kind"] == "integration_event"
+            assert artifact.retention_class.value == "ephemeral"
+            assert policy.preview_artifact_ref is not None
+
+
+async def test_write_integration_result_and_failure_artifacts_assign_link_retention(
+    tmp_path: Path,
+) -> None:
+    """Result/failure helpers should keep payloads compact and link-type scoped."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(
+                repo,
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            execution = ExecutionRef(
+                namespace="moonmind",
+                workflow_id="wf-2",
+                run_id="run-2",
+                link_type="output.primary",
+            )
+
+            result_ref = await service.write_integration_result_artifact(
+                principal="service:integration-result",
+                execution=execution,
+                integration_name="jules",
+                correlation_id="corr-2",
+                payload={"status": "completed", "url": "https://example.test/task/2"},
+            )
+            failure_ref = await service.write_integration_failure_artifact(
+                principal="service:integration-result",
+                execution=execution,
+                integration_name="jules",
+                correlation_id="corr-2",
+                external_operation_id="task-2",
+                normalized_status="failed",
+                provider_status="errored",
+                summary="Provider returned 500.",
+                diagnostics={"httpStatus": 500},
+            )
+
+            result_artifact = await service._repository.get_artifact(result_ref.artifact_id)
+            failure_artifact = await service._repository.get_artifact(
+                failure_ref.artifact_id
+            )
+
+            assert result_artifact.retention_class.value == "standard"
+            assert result_artifact.metadata_json["artifact_kind"] == "integration_result"
+            assert (
+                failure_artifact.metadata_json["artifact_kind"]
+                == "integration_failure"
+            )
+            assert failure_artifact.retention_class.value == "standard"

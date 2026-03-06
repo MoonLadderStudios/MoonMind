@@ -129,9 +129,34 @@ class TemporalSettings(BaseSettings):
     address: str = Field("temporal:7233", env="TEMPORAL_ADDRESS")
     namespace: str = Field("moonmind", env="TEMPORAL_NAMESPACE")
     workflow_task_queue: str = Field("mm.workflow", env="TEMPORAL_WORKFLOW_TASK_QUEUE")
+    integration_task_queue: str = Field(
+        "mm.activity.integrations",
+        env="TEMPORAL_INTEGRATION_TASK_QUEUE",
+    )
+    integration_poll_initial_seconds: int = Field(
+        5,
+        env="TEMPORAL_INTEGRATION_POLL_INITIAL_SECONDS",
+        ge=1,
+    )
+    integration_poll_max_seconds: int = Field(
+        300,
+        env="TEMPORAL_INTEGRATION_POLL_MAX_SECONDS",
+        ge=1,
+    )
+    integration_poll_jitter_ratio: float = Field(
+        0.2,
+        env="TEMPORAL_INTEGRATION_POLL_JITTER_RATIO",
+        ge=0.0,
+        le=1.0,
+    )
     run_continue_as_new_step_threshold: int = Field(
         500,
         env="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
+        ge=1,
+    )
+    run_continue_as_new_wait_cycle_threshold: int = Field(
+        200,
+        env="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
         ge=1,
     )
     manifest_continue_as_new_phase_threshold: int = Field(

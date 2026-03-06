@@ -29,6 +29,9 @@ from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
 from api_service.api.routers.documents import router as documents_router
 from api_service.api.routers.executions import router as executions_router
+from api_service.api.routers.execution_integrations import (
+    router as execution_integrations_router,
+)
 from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.models import router as models_router
@@ -291,6 +294,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(executions_router)
+app.include_router(execution_integrations_router)
 app.include_router(spec_automation_router)
 app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
