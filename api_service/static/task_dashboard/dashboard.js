@@ -7901,7 +7901,7 @@
     startPolling(load, pollIntervals.detail);
   }
 
-  function renderTemporalArtifactsRows(artifacts) {
+  function renderLegacyTemporalArtifactsRows(artifacts) {
     return (artifacts || [])
       .map((artifact) => {
         const artifactId = pick(artifact, "artifact_id", "artifactId");
@@ -7933,7 +7933,7 @@
       .join("");
   }
 
-  async function renderTemporalDetailPage(workflowId) {
+  async function renderLegacyTemporalDetailPage(workflowId) {
     setView(
       "Temporal Task Detail",
       `Task ${workflowId}`,
@@ -8039,7 +8039,7 @@
               <table>
                 <thead><tr><th>Name</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
                 <tbody>${
-                  renderTemporalArtifactsRows(state.artifacts) ||
+                  renderLegacyTemporalArtifactsRows(state.artifacts) ||
                   "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
                 }</tbody>
               </table>
