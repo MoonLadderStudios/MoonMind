@@ -57,12 +57,9 @@ from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
+from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.schemas.jules_models import (
-    JulesCreateTaskRequest,
-    JulesGetTaskRequest,
-    JulesResolveTaskRequest,
-)
+from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 from moonmind.workflows.agent_queue.task_contract import (
     CANONICAL_TASK_JOB_TYPE,
@@ -264,19 +261,10 @@ _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
 )
 _CONFLICTING_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
 _CONFLICTING_MERGEABLE_VALUES = frozenset({"CONFLICTING", "DIRTY", "FALSE"})
-_JULES_TERMINAL_SUCCESS_STATUSES = frozenset(
-    {"completed", "succeeded", "success", "done", "resolved", "finished"}
-)
-_JULES_TERMINAL_FAILURE_STATUSES = frozenset(
-    {
-        "cancelled",
-        "canceled",
-        "error",
-        "failed",
-        "rejected",
-        "timed_out",
-        "timeout",
-    }
+_JULES_TERMINAL_SUCCESS_STATUSES = frozenset({"succeeded"})
+_JULES_TERMINAL_FAILURE_STATUSES = frozenset({"failed", "canceled"})
+_JULES_PROVIDER_CANCEL_UNSUPPORTED_MESSAGE = (
+    "provider-side cancellation unsupported; MoonMind canceled without remote cancel"
 )
 
 
@@ -1197,6 +1185,7 @@ class JulesRuntimeTaskRecord:
     total_steps: int | None
     task_id: str
     status: str
+    provider_status: str
     url: str | None
     submitted_at: str
     last_polled_at: str
@@ -1204,6 +1193,7 @@ class JulesRuntimeTaskRecord:
     failed: bool
     error: str | None
     status_history: tuple[str, ...]
+    provider_status_history: tuple[str, ...]
 
 
 @dataclass(slots=True)
@@ -1227,7 +1217,9 @@ class JulesSoftwareRunState:
     jules_task_id: str
     jules_task_url: str | None
     jules_status: str
+    jules_provider_status: str
     jules_status_history: list[str]
+    jules_provider_status_history: list[str]
     jules_submitted_at: str
     jules_last_polled_at: str
     jules_completed_at: str | None
@@ -2775,12 +2767,14 @@ class CodexWorker:
             "runtime": "jules",
             "externalTaskId": state.jules_task_id,
             "status": state.jules_status,
+            "providerStatus": state.jules_provider_status,
             "url": state.jules_task_url,
             "submittedAt": state.jules_submitted_at,
             "lastPolledAt": state.jules_last_polled_at,
             "completedAt": state.jules_completed_at,
             "error": state.jules_error,
             "statusHistory": list(state.jules_status_history),
+            "providerStatusHistory": list(state.jules_provider_status_history),
         }
 
     async def _persist_jules_runtime_checkpoint(
@@ -2814,6 +2808,7 @@ class CodexWorker:
             total_steps=None,
             task_id=state.jules_task_id,
             status=state.jules_status,
+            provider_status=state.jules_provider_status,
             url=state.jules_task_url,
             submitted_at=state.jules_submitted_at,
             last_polled_at=state.jules_last_polled_at,
@@ -2824,34 +2819,8 @@ class CodexWorker:
             ),
             error=state.jules_error,
             status_history=tuple(state.jules_status_history),
+            provider_status_history=tuple(state.jules_provider_status_history),
         )
-
-    async def _try_cancel_jules_task(self, *, task_id: str) -> None:
-        """Best-effort remote cancellation for a delegated Jules task."""
-
-        client = JulesClient(
-            base_url=str(self._config.jules_api_url),
-            api_key=str(self._config.jules_api_key),
-            timeout=self._config.jules_timeout_seconds,
-            retry_attempts=self._config.jules_retry_attempts,
-            retry_delay_seconds=self._config.jules_retry_delay_seconds,
-        )
-        try:
-            await client.resolve_task(
-                JulesResolveTaskRequest(
-                    task_id=task_id,
-                    resolution_notes="Cancelled by MoonMind worker",
-                    status="cancelled",
-                )
-            )
-        except JulesClientError:
-            logger.warning(
-                "Best-effort Jules cancellation failed for task %s",
-                task_id,
-                exc_info=True,
-            )
-        finally:
-            await client.aclose()
 
     async def _finalize_jules_software_run(
         self,
@@ -3094,7 +3063,18 @@ class CodexWorker:
         checkpoint_now = datetime.now(UTC).isoformat()
         if checkpoint is not None:
             jules_task_id = str(checkpoint.get("externalTaskId") or "").strip()
-            jules_status = self._normalize_jules_status(checkpoint.get("status"))
+            status_snapshot = self._normalize_jules_status(checkpoint.get("status"))
+            provider_status = str(checkpoint.get("providerStatus") or "").strip()
+            if provider_status:
+                provider_snapshot = self._normalize_jules_status(provider_status)
+                provider_status = provider_snapshot.provider_status
+                # Preserve locally-recorded terminal states such as unsupported
+                # cancellation over stale provider status snapshots on resume.
+                if not status_snapshot.terminal:
+                    status_snapshot = provider_snapshot
+            else:
+                provider_status = status_snapshot.provider_status
+            jules_status = status_snapshot.normalized_status
             jules_task_url = str(checkpoint.get("url") or "").strip() or None
             submitted_at = (
                 str(checkpoint.get("submittedAt") or "").strip() or checkpoint_now
@@ -3107,7 +3087,7 @@ class CodexWorker:
             history_raw = checkpoint.get("statusHistory")
             history = (
                 [
-                    self._normalize_jules_status(value)
+                    self._normalize_jules_status(value).normalized_status
                     for value in history_raw
                     if str(value or "").strip()
                 ]
@@ -3116,6 +3096,18 @@ class CodexWorker:
             )
             if not history:
                 history = [jules_status]
+            provider_history_raw = checkpoint.get("providerStatusHistory")
+            provider_history = (
+                [
+                    self._normalize_jules_status(value).provider_status
+                    for value in provider_history_raw
+                    if str(value or "").strip()
+                ]
+                if isinstance(provider_history_raw, list)
+                else []
+            )
+            if not provider_history:
+                provider_history = [provider_status]
             await self._emit_jules_runtime_event(
                 job_id=job.id,
                 level="info",
@@ -3124,6 +3116,7 @@ class CodexWorker:
                     "stage": "moonmind.task.execute",
                     "taskId": jules_task_id,
                     "status": jules_status,
+                    "providerStatus": provider_status,
                     "url": jules_task_url,
                 },
             )
@@ -3183,13 +3176,16 @@ class CodexWorker:
                     await client.aclose()
 
             submitted_at = checkpoint_now
-            jules_status = self._normalize_jules_status(created.status)
+            status_snapshot = self._normalize_jules_status(created.status)
+            jules_status = status_snapshot.normalized_status
+            provider_status = status_snapshot.provider_status
             jules_task_id = str(created.task_id)
             jules_task_url = str(created.url or "").strip() or None
             last_polled_at = submitted_at
             completed_at = None
             jules_error = None
             history = [jules_status]
+            provider_history = [provider_status]
             await self._emit_jules_runtime_event(
                 job_id=job.id,
                 level="info",
@@ -3199,6 +3195,7 @@ class CodexWorker:
                     "stage": "moonmind.task.execute",
                     "taskId": jules_task_id,
                     "status": jules_status,
+                    "providerStatus": provider_status,
                     "url": jules_task_url,
                 },
             )
@@ -3234,7 +3231,9 @@ class CodexWorker:
             jules_task_id=jules_task_id,
             jules_task_url=jules_task_url,
             jules_status=jules_status,
+            jules_provider_status=provider_status,
             jules_status_history=history,
+            jules_provider_status_history=provider_history,
             jules_submitted_at=submitted_at,
             jules_last_polled_at=last_polled_at,
             jules_completed_at=completed_at,
@@ -3282,9 +3281,25 @@ class CodexWorker:
                         message="task.control.cancel.requested",
                         payload={"status": "cancel_requested"},
                     )
-                    await self._try_cancel_jules_task(task_id=state.jules_task_id)
-                    state.jules_error = "cancellation requested"
+                    state.jules_status = "canceled"
+                    state.jules_status_history.append(state.jules_status)
+                    state.jules_provider_status_history.append(
+                        state.jules_provider_status
+                    )
+                    state.jules_error = _JULES_PROVIDER_CANCEL_UNSUPPORTED_MESSAGE
                     state.jules_completed_at = datetime.now(UTC).isoformat()
+                    await self._emit_jules_runtime_event(
+                        job_id=job_id,
+                        level="warn",
+                        canonical_message="runtime.jules.cancel.unsupported",
+                        payload={
+                            "stage": "moonmind.task.execute",
+                            "taskId": state.jules_task_id,
+                            "status": state.jules_status,
+                            "providerStatus": state.jules_provider_status,
+                            "url": state.jules_task_url,
+                        },
+                    )
                     await self._finalize_jules_software_run(
                         state=state,
                         cancelled=True,
@@ -3336,10 +3351,17 @@ class CodexWorker:
                 )
                 if polled_url is not None:
                     state.jules_task_url = polled_url
-                current_status = self._normalize_jules_status(polled.status)
-                if current_status != state.jules_status:
+                status_snapshot = self._normalize_jules_status(polled.status)
+                current_status = status_snapshot.normalized_status
+                current_provider_status = status_snapshot.provider_status
+                if (
+                    current_status != state.jules_status
+                    or current_provider_status != state.jules_provider_status
+                ):
                     state.jules_status = current_status
+                    state.jules_provider_status = current_provider_status
                     state.jules_status_history.append(current_status)
+                    state.jules_provider_status_history.append(current_provider_status)
                     status_changed = True
                     await self._emit_jules_runtime_event(
                         job_id=job_id,
@@ -3350,6 +3372,7 @@ class CodexWorker:
                             "stage": "moonmind.task.execute",
                             "taskId": state.jules_task_id,
                             "status": current_status,
+                            "providerStatus": current_provider_status,
                             "url": state.jules_task_url,
                         },
                     )
@@ -3378,6 +3401,7 @@ class CodexWorker:
                             "stage": "moonmind.task.execute",
                             "taskId": state.jules_task_id,
                             "status": current_status,
+                            "providerStatus": current_provider_status,
                             "url": state.jules_task_url,
                         },
                     )
@@ -10120,11 +10144,10 @@ class CodexWorker:
         raise RuntimeError(JULES_RUNTIME_DISABLED_MESSAGE)
 
     @staticmethod
-    def _normalize_jules_status(raw_status: str | None) -> str:
-        """Return normalized lowercase Jules status token."""
+    def _normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
+        """Return the shared Jules status snapshot used across worker paths."""
 
-        normalized = str(raw_status or "").strip().lower()
-        return normalized or "pending"
+        return normalize_jules_status(raw_status)
 
     @staticmethod
     def _is_probable_pr_url(value: str | None) -> bool:
@@ -10143,6 +10166,7 @@ class CodexWorker:
             "stage": record.stage,
             "taskId": record.task_id,
             "status": record.status,
+            "providerStatus": record.provider_status,
             "url": record.url,
             "submittedAt": record.submitted_at,
             "lastPolledAt": record.last_polled_at,
@@ -10150,6 +10174,7 @@ class CodexWorker:
             "failed": record.failed,
             "error": record.error,
             "statusHistory": list(record.status_history),
+            "providerStatusHistory": list(record.provider_status_history),
         }
         if record.step_id is not None:
             payload["stepId"] = record.step_id
@@ -10167,11 +10192,14 @@ class CodexWorker:
             self._serialize_jules_runtime_task_record(record) for record in records
         ]
         latest_status = tasks[-1]["status"] if tasks else None
+        latest_provider_status = tasks[-1]["providerStatus"] if tasks else None
         return {
             "schemaVersion": "v1",
             "provider": "jules",
+            "providerCancelSupported": False,
             "taskCount": len(tasks),
             "latestStatus": latest_status,
+            "latestProviderStatus": latest_provider_status,
             "tasks": tasks,
         }
 
@@ -10247,8 +10275,10 @@ class CodexWorker:
         completed_at: str | None = None
         task_id: str | None = None
         task_url: str | None = None
-        current_status = "pending"
+        current_status = "queued"
+        current_provider_status = "pending"
         status_history: list[str] = []
+        provider_status_history: list[str] = []
         failure_message: str | None = None
         event_context: dict[str, Any] = {"stage": stage}
         if step_id is not None:
@@ -10275,11 +10305,16 @@ class CodexWorker:
             )
             task_id = str(created.task_id)
             task_url = str(created.url or "").strip() or None
-            current_status = self._normalize_jules_status(created.status)
+            status_snapshot = self._normalize_jules_status(created.status)
+            current_status = status_snapshot.normalized_status
+            current_provider_status = status_snapshot.provider_status
             status_history.append(current_status)
+            provider_status_history.append(current_provider_status)
             self._append_stage_log(
                 log_path,
-                f"jules task submitted: task_id={task_id} status={current_status}",
+                "jules task submitted: "
+                f"task_id={task_id} status={current_status} "
+                f"provider_status={current_provider_status}",
             )
             await self._emit_jules_runtime_event(
                 job_id=job_id,
@@ -10290,6 +10325,7 @@ class CodexWorker:
                     **event_context,
                     "taskId": task_id,
                     "status": current_status,
+                    "providerStatus": current_provider_status,
                     "url": task_url,
                 },
             )
@@ -10311,12 +10347,19 @@ class CodexWorker:
                 polled_url = str(polled.url or "").strip() or None
                 if polled_url is not None:
                     task_url = polled_url
-                current_status = self._normalize_jules_status(polled.status)
-                if current_status != last_status:
+                status_snapshot = self._normalize_jules_status(polled.status)
+                current_status = status_snapshot.normalized_status
+                current_provider_status = status_snapshot.provider_status
+                if current_status != last_status or current_provider_status != (
+                    provider_status_history[-1] if provider_status_history else None
+                ):
                     status_history.append(current_status)
+                    provider_status_history.append(current_provider_status)
                     self._append_stage_log(
                         log_path,
-                        f"jules task status changed: task_id={task_id} status={current_status}",
+                        "jules task status changed: "
+                        f"task_id={task_id} status={current_status} "
+                        f"provider_status={current_provider_status}",
                     )
                     await self._emit_jules_runtime_event(
                         job_id=job_id,
@@ -10327,6 +10370,7 @@ class CodexWorker:
                             **event_context,
                             "taskId": task_id,
                             "status": current_status,
+                            "providerStatus": current_provider_status,
                             "url": task_url,
                         },
                     )
@@ -10334,7 +10378,8 @@ class CodexWorker:
 
             if current_status in _JULES_TERMINAL_FAILURE_STATUSES:
                 failure_message = (
-                    f"Jules task '{task_id}' failed with status '{current_status}'"
+                    f"Jules task '{task_id}' failed with status "
+                    f"'{current_provider_status}' ({current_status})"
                 )
                 raise RuntimeError(failure_message)
 
@@ -10352,6 +10397,7 @@ class CodexWorker:
                     **event_context,
                     "taskId": task_id,
                     "status": current_status,
+                    "providerStatus": current_provider_status,
                     "url": task_url,
                 },
             )
@@ -10383,6 +10429,7 @@ class CodexWorker:
                         total_steps=total_steps,
                         task_id=task_id,
                         status=current_status,
+                        provider_status=current_provider_status,
                         url=task_url,
                         submitted_at=submitted_at,
                         last_polled_at=last_polled_at,
@@ -10393,6 +10440,7 @@ class CodexWorker:
                         ),
                         error=failure_message,
                         status_history=tuple(status_history),
+                        provider_status_history=tuple(provider_status_history),
                     )
                 )
             await client.aclose()
