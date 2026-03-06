@@ -1,29 +1,34 @@
-"""DOC-REQ traceability gate for the active activity-worker-topology feature."""
+"""DOC-REQ traceability gates for runtime-scoped feature specs."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+import pytest
+
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPEC = Path("specs/047-activity-worker-topology/spec.md")
-_FEATURE_TRACEABILITY = Path(
-    "specs/047-activity-worker-topology/contracts/requirements-traceability.md"
+_FEATURE_SPECS = (
+    Path("specs/047-activity-worker-topology/spec.md"),
+    Path("specs/048-source-truth-projection/spec.md"),
 )
 
 
-def test_activity_worker_topology_doc_req_traceability_contract() -> None:
-    spec_text = _FEATURE_SPEC.read_text(encoding="utf-8")
+@pytest.mark.parametrize("feature_spec", _FEATURE_SPECS, ids=lambda path: path.parent.name)
+def test_doc_req_traceability_contract(feature_spec: Path) -> None:
+    spec_text = feature_spec.read_text(encoding="utf-8")
     doc_req_ids = {
         f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
     }
-    assert doc_req_ids, "Expected DOC-REQ entries in 047 spec.md"
+    assert doc_req_ids, f"Expected DOC-REQ entries in {feature_spec}"
 
-    assert _FEATURE_TRACEABILITY.exists(), (
-        "Missing traceability file for DOC-REQ feature: " f"{_FEATURE_TRACEABILITY}"
+    feature_traceability = feature_spec.parent / "contracts" / "requirements-traceability.md"
+
+    assert feature_traceability.exists(), (
+        "Missing traceability file for DOC-REQ feature: " f"{feature_traceability}"
     )
 
-    traceability_rows = _parse_traceability_rows(_FEATURE_TRACEABILITY)
+    traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 
     missing_ids = sorted(doc_req_ids - traceability_ids)
@@ -31,11 +36,11 @@ def test_activity_worker_topology_doc_req_traceability_contract() -> None:
 
     assert not missing_ids, (
         "Missing DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(missing_ids)}"
+        f"{feature_traceability}: {', '.join(missing_ids)}"
     )
     assert not extra_ids, (
         "Unexpected DOC-REQ traceability rows in "
-        f"{_FEATURE_TRACEABILITY}: {', '.join(extra_ids)}"
+        f"{feature_traceability}: {', '.join(extra_ids)}"
     )
 
 

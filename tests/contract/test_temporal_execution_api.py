@@ -12,6 +12,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
+from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
 
@@ -209,6 +210,76 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             canceled_body = canceled_only.json()
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
+
+
+@pytest.mark.asyncio
+async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_path):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_contract_orphaned.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "workflowType": "MoonMind.Run",
+                    "title": "Ghost row candidate",
+                    "idempotencyKey": "orphaned-create-1",
+                },
+            )
+            assert create_response.status_code == 201
+            workflow_id = create_response.json()["workflowId"]
+
+            async with db_base.async_session_maker() as session:
+                service = TemporalExecutionService(session)
+                await service.mark_projection_orphaned(
+                    workflow_id=workflow_id,
+                    sync_error="temporal execution missing",
+                )
+
+            describe_response = await client.get(f"/api/executions/{workflow_id}")
+            assert describe_response.status_code == 200
+            assert describe_response.json()["workflowId"] == workflow_id
+
+            update_response = await client.post(
+                f"/api/executions/{workflow_id}/update",
+                json={
+                    "updateName": "SetTitle",
+                    "title": "Should repair",
+                    "idempotencyKey": "orphaned-update-1",
+                },
+            )
+            assert update_response.status_code == 200
+            assert update_response.json()["accepted"] is True
+
+            list_response = await client.get("/api/executions")
+            assert list_response.status_code == 200
+            assert list_response.json()["count"] == 1
+            assert list_response.json()["items"][0]["workflowId"] == workflow_id
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

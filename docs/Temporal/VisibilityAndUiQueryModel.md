@@ -688,7 +688,6 @@ If the projection and Temporal-backed canonical execution metadata drift, the sy
 
 ### 15.3 Transitional gaps to retire
 
-- use of `"unknown"` as a non-user owner placeholder in the current adapter/projection layer
 - compatibility dashboards that collapse all waiting states into a generic action-required label
 - any task-oriented payload that hides `workflowId` in raw/debug-only metadata
 
@@ -713,8 +712,7 @@ This document is operationally done when:
 
 ## 17. Open follow-ups
 
-1. Implement `mm_owner_type` and remove `"unknown"` from the adapter/projection layer.
-2. Add `entry` and `ownerType` filters to the public adapter API.
-3. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields to adapter payloads.
-4. Decide when `mm_repo` and `mm_integration` become required for specific workflow families.
-5. Decide whether `/api/executions` remains an adapter surface or evolves into a stable public product API after task compatibility layers retire.
+1. Add `entry` and `ownerType` filters to the public adapter API.
+2. Add top-level `taskId`, `ownerType`, `waitingReason`, and `attentionRequired` fields to adapter payloads.
+3. Decide when `mm_repo` and `mm_integration` become required for specific workflow families.
+4. Decide whether `/api/executions` remains an adapter surface or evolves into a stable public product API after task compatibility layers retire.
