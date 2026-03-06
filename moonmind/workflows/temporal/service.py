@@ -33,6 +33,11 @@ from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
 )
+from moonmind.schemas.temporal_models import (
+    SUPPORTED_FAILURE_POLICIES,
+    SUPPORTED_SIGNAL_NAMES,
+    SUPPORTED_UPDATE_NAMES,
+)
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -69,16 +74,9 @@ WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
 }
 
-BASE_UPDATE_NAMES: set[str] = {
-    "UpdateInputs",
-    "SetTitle",
-    "RequestRerun",
-}
-ALLOWED_UPDATE_NAMES: set[str] = {
-    *BASE_UPDATE_NAMES,
-    *MANIFEST_UPDATE_NAMES,
-}
-ALLOWED_SIGNAL_NAMES: set[str] = {"ExternalEvent", "Approve", "Pause", "Resume"}
+ALLOWED_UPDATE_NAMES: frozenset[str] = frozenset(SUPPORTED_UPDATE_NAMES)
+ALLOWED_SIGNAL_NAMES: frozenset[str] = frozenset(SUPPORTED_SIGNAL_NAMES)
+ALLOWED_FAILURE_POLICIES: frozenset[str] = frozenset(SUPPORTED_FAILURE_POLICIES)
 ALLOWED_ERROR_CATEGORIES: set[str] = {
     "user_error",
     "integration_error",
@@ -185,6 +183,9 @@ class TemporalExecutionService:
         failure_policy: str | None,
         initial_parameters: dict[str, Any] | None,
         idempotency_key: str | None,
+        repository: str | None = None,
+        integration: str | None = None,
+        summary: str | None = None,
     ) -> TemporalExecutionRecord:
         workflow_type_enum = self._parse_workflow_type(workflow_type)
         owner_type_enum, owner = self._resolve_owner_metadata(
@@ -197,6 +198,15 @@ class TemporalExecutionService:
                 raise TemporalExecutionValidationError(
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
+
+        if (
+            failure_policy is not None
+            and failure_policy not in ALLOWED_FAILURE_POLICIES
+        ):
+            supported = ", ".join(sorted(ALLOWED_FAILURE_POLICIES))
+            raise TemporalExecutionValidationError(
+                f"Unsupported failurePolicy '{failure_policy}'. Supported values: {supported}"
+            )
 
         if idempotency_key:
             existing = await self._find_by_create_idempotency(
@@ -212,13 +222,13 @@ class TemporalExecutionService:
         workflow_id = f"mm:{uuid4()}"
         run_id = str(uuid4())
         params = dict(initial_parameters or {})
-        if failure_policy:
+        if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
             "title": resolved_title,
-            "summary": "Execution initialized.",
+            "summary": summary or "Execution initialized.",
         }
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
@@ -232,6 +242,10 @@ class TemporalExecutionService:
             "mm_updated_at": now.isoformat(),
             "mm_entry": WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
         }
+        if repository:
+            search_attributes["mm_repo"] = repository
+        if integration:
+            search_attributes["mm_integration"] = integration
 
         artifact_refs = [
             ref
@@ -294,13 +308,15 @@ class TemporalExecutionService:
     async def list_executions(
         self,
         *,
-        workflow_type: str | None,
-        state: str | None,
+        workflow_type: str | None = None,
+        state: str | None = None,
         entry: str | None = None,
         owner_type: str | None = None,
-        owner_id: UUID | str | None,
+        owner_id: UUID | str | None = None,
+        repo: str | None = None,
+        integration: str | None = None,
         page_size: int,
-        next_page_token: str | None,
+        next_page_token: str | None = None,
     ) -> TemporalExecutionListResult:
         offset = self._decode_page_token(next_page_token)
         owner = str(owner_id) if owner_id is not None else None
@@ -321,6 +337,8 @@ class TemporalExecutionService:
             entry=entry_value,
             owner_type=owner_type_value,
             owner_id=owner,
+            repo=repo,
+            integration=integration,
         )
         stmt = stmt.order_by(
             TemporalExecutionCanonicalRecord.updated_at.desc(),
@@ -343,6 +361,8 @@ class TemporalExecutionService:
             entry=entry_value,
             owner_type=owner_type_value,
             owner_id=owner,
+            repo=repo,
+            integration=integration,
         )
         count = int((await self._session.execute(count_stmt)).scalar_one())
 
@@ -1782,6 +1802,8 @@ class TemporalExecutionService:
         entry: str | None,
         owner_type: str | None,
         owner_id: str | None,
+        repo: str | None,
+        integration: str | None,
     ) -> Select[Any]:
         if model is TemporalExecutionRecord:
             stmt = stmt.where(
@@ -1800,6 +1822,12 @@ class TemporalExecutionService:
             )
         if owner_id:
             stmt = stmt.where(model.owner_id == owner_id)
+        if repo:
+            stmt = stmt.where(model.search_attributes["mm_repo"].as_string() == repo)
+        if integration:
+            stmt = stmt.where(
+                model.search_attributes["mm_integration"].as_string() == integration
+            )
         return stmt
 
     def _decode_page_token(self, token: str | None) -> int:

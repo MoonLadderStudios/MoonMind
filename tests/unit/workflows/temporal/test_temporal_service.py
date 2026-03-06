@@ -145,6 +145,93 @@ async def test_create_execution_defaults_missing_owner_to_system(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_unsupported_workflow_type(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError, match="Unsupported workflow type"
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Unknown",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_missing_manifest_artifact_ref(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="manifestArtifactRef is required",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.ManifestIngest",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_unsupported_failure_policy(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported failurePolicy",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy="explode_loudly",
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_empty_failure_policy(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported failurePolicy",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy="",
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_returns_existing_record_after_idempotency_race(
     tmp_path, monkeypatch
 ):
@@ -496,6 +583,38 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_update_execution_rejects_unknown_update_name(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported update name",
+        ):
+            await service.update_execution(
+                workflow_id=created.workflow_id,
+                update_name="UnknownUpdate",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                parameters_patch=None,
+                title=None,
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
 async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
@@ -542,6 +661,35 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
         signaled = await service.describe_execution(created.workflow_id)
         assert "artifact://events/1" in (signaled.artifact_refs or [])
         assert signaled.state is MoonMindWorkflowState.EXECUTING
+
+
+@pytest.mark.asyncio
+async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Unsupported signal name",
+        ):
+            await service.signal_execution(
+                workflow_id=created.workflow_id,
+                signal_name="UnknownSignal",
+                payload=None,
+                payload_artifact_ref=None,
+            )
 
 
 @pytest.mark.asyncio
@@ -1297,8 +1445,10 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             workflow_type="MoonMind.Run",
             state=None,
             entry=None,
-            owner_type="user",
+            owner_type=None,
             owner_id=owner_a,
+            repo=None,
+            integration=None,
             page_size=2,
             next_page_token=None,
         )
@@ -1310,8 +1460,10 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             workflow_type="MoonMind.Run",
             state=None,
             entry=None,
-            owner_type="user",
+            owner_type=None,
             owner_id=owner_a,
+            repo=None,
+            integration=None,
             page_size=2,
             next_page_token=first_page.next_page_token,
         )
@@ -1329,6 +1481,66 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
         )
         assert len(manifest_page.items) == 1
         assert manifest_page.items[0].entry == "manifest"
+
+
+@pytest.mark.asyncio
+async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+
+        matching = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Matching run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="matching-run",
+            repository="Moon/Mind",
+            integration="github",
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=owner_id,
+            title="Other repo",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="other-repo",
+            repository="Other/Repo",
+            integration="github",
+        )
+        await service.create_execution(
+            workflow_type="MoonMind.ManifestIngest",
+            owner_id=owner_id,
+            title="Manifest",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref="artifact://manifest/1",
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key="manifest-run",
+        )
+        result = await service.list_executions(
+            workflow_type=None,
+            state=None,
+            entry="run",
+            owner_type="user",
+            owner_id=owner_id,
+            repo="Moon/Mind",
+            integration="github",
+            page_size=10,
+            next_page_token=None,
+        )
+
+        assert result.count == 1
+        assert len(result.items) == 1
+        assert result.items[0].workflow_id == matching.workflow_id
 
 
 @pytest.mark.asyncio
