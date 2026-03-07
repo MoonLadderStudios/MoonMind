@@ -1372,12 +1372,8 @@ class AppSpecWorkflowSettings(SpecWorkflowSettings):
 class SecuritySettings(BaseSettings):
     """Security settings"""
 
-    JWT_SECRET_KEY: Optional[str] = Field(
-        None, env="JWT_SECRET_KEY"
-    )
-    ENCRYPTION_MASTER_KEY: Optional[str] = Field(
-        None, env="ENCRYPTION_MASTER_KEY"
-    )
+    JWT_SECRET_KEY: Optional[str] = Field(None, env="JWT_SECRET_KEY")
+    ENCRYPTION_MASTER_KEY: Optional[str] = Field(None, env="ENCRYPTION_MASTER_KEY")
 
     model_config = SettingsConfigDict(env_prefix="")
 
