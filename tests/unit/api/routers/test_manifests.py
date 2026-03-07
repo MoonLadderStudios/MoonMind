@@ -27,7 +27,11 @@ def _record(**overrides):
         "content_hash": "sha256:abc",
         "updated_at": now,
         "last_run_job_id": uuid4(),
+        "last_run_source": "queue",
         "last_run_status": "queued",
+        "last_run_workflow_id": None,
+        "last_run_temporal_run_id": None,
+        "last_run_manifest_ref": None,
         "last_run_started_at": now,
         "last_run_finished_at": None,
         "state_json": {"foo": "bar"},
@@ -77,6 +81,7 @@ async def test_list_manifests_serializes_records() -> None:
 
     assert response.items[0].name == "demo"
     assert response.items[0].content_hash == "sha256:abc"
+    assert response.items[0].last_run_source == "queue"
     assert response.items[0].last_run_status == "queued"
     service.list_manifests.assert_awaited_once_with(limit=10, search=None)
 
@@ -116,6 +121,7 @@ async def test_get_manifest_returns_detail() -> None:
     assert response.name == "demo"
     assert response.content_hash == "sha256:abc"
     assert response.last_run is not None
+    assert response.last_run.source == "queue"
     assert response.last_run.status == "queued"
     assert response.state.state_json == {"foo": "bar"}
     service.get_manifest.assert_awaited_once_with("demo")
@@ -162,16 +168,20 @@ async def test_upsert_manifest_validation_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_manifest_run_returns_queue_metadata() -> None:
-    """create_manifest_run should include job id and queue metadata."""
+async def test_create_manifest_run_returns_temporal_execution_metadata() -> None:
+    """create_manifest_run should return Temporal identity when runtime submit succeeds."""
 
-    job = SimpleNamespace(
-        id=uuid4(),
-        type="manifest",
-        payload={"requiredCapabilities": ["manifest"], "manifestHash": "sha256:def"},
+    submission = SimpleNamespace(
+        source="temporal",
+        status="initializing",
+        workflow_id="mm:manifest-1",
+        run_id="run-1",
+        workflow_type="MoonMind.ManifestIngest",
+        temporal_status="running",
+        manifest_artifact_ref="art_123",
     )
     service = AsyncMock()
-    service.submit_manifest_run.return_value = job
+    service.submit_manifest_run.return_value = submission
     user = SimpleNamespace(id=uuid4())
 
     response = await manifests_router.create_manifest_run(
@@ -181,10 +191,15 @@ async def test_create_manifest_run_returns_queue_metadata() -> None:
         user=user,
     )
 
-    assert response.job_id == job.id
-    assert response.queue.type == "manifest"
-    assert response.queue.required_capabilities == ["manifest"]
-    assert response.queue.manifest_hash == "sha256:def"
+    assert response.source == "temporal"
+    assert response.job_id is None
+    assert response.queue is None
+    assert response.execution is not None
+    assert response.execution.workflow_id == "mm:manifest-1"
+    assert response.execution.task_id == "mm:manifest-1"
+    assert response.execution.temporal_run_id == "run-1"
+    assert response.execution.temporal_status == "running"
+    assert response.execution.manifest_artifact_ref == "art_123"
     service.submit_manifest_run.assert_awaited_once()
     assert service.submit_manifest_run.await_args.kwargs["name"] == "demo"
     assert service.submit_manifest_run.await_args.kwargs["action"] == "run"
@@ -311,7 +326,7 @@ def test_create_manifest_run_http_response_preserves_queue_metadata(
     """HTTP run submissions should return queue metadata fields without transforms."""
 
     test_client, service = client
-    job = SimpleNamespace(
+    queue_job = SimpleNamespace(
         id=uuid4(),
         type="manifest",
         payload={
@@ -319,7 +334,11 @@ def test_create_manifest_run_http_response_preserves_queue_metadata(
             "manifestHash": "sha256:abc123",
         },
     )
-    service.submit_manifest_run.return_value = job
+    service.submit_manifest_run.return_value = SimpleNamespace(
+        source="queue",
+        status="queued",
+        job=queue_job,
+    )
 
     response = test_client.post(
         "/api/manifests/demo/runs",
@@ -328,7 +347,54 @@ def test_create_manifest_run_http_response_preserves_queue_metadata(
 
     assert response.status_code == status.HTTP_201_CREATED
     body = response.json()
+    assert body["source"] == "queue"
+    assert body["jobId"] == str(queue_job.id)
     assert body["queue"]["requiredCapabilities"] == ["manifest", "qdrant"]
     assert body["queue"]["manifestHash"] == "sha256:abc123"
     called = service.submit_manifest_run.await_args.kwargs
     assert called["action"] == "plan"
+
+
+def test_create_manifest_run_http_response_includes_temporal_execution_fields(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """HTTP run submissions should surface Temporal task identity for manifest ingests."""
+
+    test_client, service = client
+    service.submit_manifest_run.return_value = SimpleNamespace(
+        source="temporal",
+        status="initializing",
+        workflow_id="mm:manifest-123",
+        run_id="run-123",
+        workflow_type="MoonMind.ManifestIngest",
+        temporal_status="running",
+        manifest_artifact_ref="art_123",
+    )
+
+    response = test_client.post(
+        "/api/manifests/demo/runs",
+        json={
+            "action": "run",
+            "title": "Manifest ingest",
+            "failurePolicy": "fail_fast",
+            "maxConcurrency": 20,
+            "tags": {"env": "test"},
+            "idempotencyKey": "manifest-run-1",
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    body = response.json()
+    assert body["source"] == "temporal"
+    assert body["jobId"] is None
+    assert body["queue"] is None
+    assert body["execution"]["workflowId"] == "mm:manifest-123"
+    assert body["execution"]["taskId"] == "mm:manifest-123"
+    assert body["execution"]["temporalRunId"] == "run-123"
+    assert body["execution"]["manifestArtifactRef"] == "art_123"
+    called = service.submit_manifest_run.await_args.kwargs
+    assert called["title"] == "Manifest ingest"
+    assert called["failure_policy"] == "fail_fast"
+    assert called["max_concurrency"] == 20
+    assert called["tags"] == {"env": "test"}
+    assert called["idempotency_key"] == "manifest-run-1"

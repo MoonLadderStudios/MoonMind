@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
-from uuid import uuid4
 
 from moonmind.config.settings import settings
+from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_client import JulesClient
@@ -45,6 +45,11 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactService,
     build_artifact_ref,
+)
+from moonmind.workflows.temporal.manifest_ingest import (
+    build_manifest_run_index,
+    build_manifest_summary,
+    compile_manifest_plan,
 )
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
@@ -75,6 +80,15 @@ class PlanGenerateActivityResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ManifestCompileActivityResult:
+    """Result from manifest compile activity helpers."""
+
+    plan_ref: ArtifactRef
+    manifest_digest: str
+    nodes: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SandboxCommandResult:
     """Structured result from ``sandbox.run_command``."""
 
@@ -94,6 +108,13 @@ class IntegrationStartResult:
     status: str
     tracking_ref: ArtifactRef | None
     url: str | None = None
+    normalized_status: str = "unknown"
+    provider_status: str = "unknown"
+    callback_supported: bool = False
+
+    @property
+    def external_url(self) -> str | None:
+        return self.url
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +125,13 @@ class IntegrationStatusResult:
     status: str
     tracking_ref: ArtifactRef | None
     url: str | None = None
+    normalized_status: str = "unknown"
+    provider_status: str = "unknown"
+    terminal: bool = False
+
+    @property
+    def external_url(self) -> str | None:
+        return self.url
 
 
 @dataclass(frozen=True, slots=True)
@@ -515,6 +543,112 @@ class TemporalSkillActivities:
         )
 
 
+class TemporalManifestActivities:
+    """Implementation helpers for manifest-ingest activity steps."""
+
+    def __init__(self, *, artifact_service: TemporalArtifactService) -> None:
+        self._artifact_service = artifact_service
+
+    async def manifest_read(
+        self,
+        *,
+        principal: str,
+        manifest_ref: ArtifactRef | str,
+    ) -> str:
+        _artifact, payload = await self._artifact_service.read(
+            artifact_id=_artifact_id_from_ref(manifest_ref),
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        return payload.decode("utf-8")
+
+    async def manifest_compile(
+        self,
+        *,
+        principal: str,
+        manifest_ref: ArtifactRef | str,
+        manifest_payload: bytes | str,
+        action: str,
+        options: Mapping[str, Any] | None,
+        requested_by: Mapping[str, Any],
+        execution_policy: Mapping[str, Any],
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> ManifestCompileActivityResult:
+        plan = compile_manifest_plan(
+            manifest_ref=_artifact_id_from_ref(manifest_ref),
+            manifest_payload=manifest_payload,
+            action=action,
+            options=options,
+            requested_by=requested_by,
+            execution_policy=execution_policy,
+        )
+        plan_ref = await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload=plan.model_dump(by_alias=True),
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "manifest_plan.json",
+                "producer": "activity:manifest.compile",
+                "labels": ["manifest", "plan"],
+            },
+        )
+        return ManifestCompileActivityResult(
+            plan_ref=plan_ref,
+            manifest_digest=plan.manifest_digest,
+            nodes=tuple(node.model_dump(by_alias=True) for node in plan.nodes),
+        )
+
+    async def manifest_write_summary(
+        self,
+        *,
+        principal: str,
+        workflow_id: str,
+        state: str,
+        phase: str,
+        manifest_ref: str,
+        plan_ref: str | None,
+        nodes: Sequence[Mapping[str, Any]],
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> tuple[ArtifactRef, ArtifactRef]:
+        summary = build_manifest_summary(
+            workflow_id=workflow_id,
+            state=state,
+            phase=phase,
+            manifest_ref=manifest_ref,
+            plan_ref=plan_ref,
+            nodes=list(nodes),
+        )
+        run_index = build_manifest_run_index(
+            workflow_id=workflow_id,
+            manifest_ref=manifest_ref,
+            nodes=list(nodes),
+        )
+        summary_ref = await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload=summary.model_dump(by_alias=True),
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "manifest_summary.json",
+                "producer": "activity:manifest.summary",
+                "labels": ["manifest", "summary"],
+            },
+        )
+        run_index_ref = await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload=run_index.model_dump(by_alias=True),
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "manifest_run_index.json",
+                "producer": "activity:manifest.run_index",
+                "labels": ["manifest", "run-index"],
+            },
+        )
+        return summary_ref, run_index_ref
+
+
 class TemporalSandboxActivities:
     """Implementation helper for ``sandbox.run_command``."""
 
@@ -813,12 +947,9 @@ class TemporalJulesActivities:
 
     @staticmethod
     def _build_default_client() -> JulesClient:
-        if not settings.jules.jules_enabled:
-            raise TemporalActivityRuntimeError("Jules integration is not enabled")
-        if not settings.jules.jules_api_url or not settings.jules.jules_api_key:
-            raise TemporalActivityRuntimeError(
-                "Jules integration requires JULES_API_URL and JULES_API_KEY"
-            )
+        gate = settings.jules_runtime_gate
+        if not gate.enabled:
+            raise TemporalActivityRuntimeError(gate.error_message)
         return JulesClient(
             base_url=settings.jules.jules_api_url,
             api_key=settings.jules.jules_api_key,
@@ -827,11 +958,48 @@ class TemporalJulesActivities:
             retry_delay_seconds=settings.jules.jules_retry_delay_seconds,
         )
 
+    @staticmethod
+    def _status_snapshot(raw_status: str | None) -> JulesStatusSnapshot:
+        return normalize_jules_status(raw_status)
+
+    async def _write_failure_summary_artifact(
+        self,
+        *,
+        principal: str,
+        execution_ref: ExecutionRef | dict[str, Any] | None,
+        external_id: str,
+        status: IntegrationStatusResult,
+    ) -> ArtifactRef:
+        summary_message = (
+            f"Jules task '{external_id}' reached terminal status "
+            f"'{status.provider_status}' ({status.normalized_status})."
+        )
+        return await _write_json_artifact(
+            self._artifact_service,
+            principal=principal,
+            payload={
+                "externalId": external_id,
+                "providerStatus": status.provider_status,
+                "normalizedStatus": status.normalized_status,
+                "terminal": status.terminal,
+                "externalUrl": status.external_url,
+                "trackingRef": _artifact_locator(status.tracking_ref),
+                "summary": summary_message,
+            },
+            execution_ref=execution_ref,
+            metadata_json={
+                "name": "jules_failure_summary.json",
+                "producer": "activity:integration.jules.fetch_result",
+                "labels": ["integration", "jules", "failure", "summary"],
+            },
+        )
+
     async def integration_jules_start(
         self,
         *,
         principal: str | None,
         parameters: Mapping[str, Any] | None = None,
+        correlation_id: str | None = None,
         inputs_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
         idempotency_key: str | None = None,
@@ -856,16 +1024,26 @@ class TemporalJulesActivities:
                 allow_restricted_raw=True,
             )
             description = payload.decode("utf-8", errors="replace")
+        if not description:
+            raise TemporalActivityRuntimeError(
+                "integration.jules.start requires parameters.description or inputs_ref"
+            )
 
         metadata = parameters.get("metadata")
         if metadata is not None and not isinstance(metadata, Mapping):
             raise TemporalActivityRuntimeError("integration metadata must be an object")
 
         metadata_payload = dict(metadata or {})
+        if correlation_id is not None:
+            normalized_correlation_id = str(correlation_id).strip()
+            if not normalized_correlation_id:
+                raise TemporalActivityRuntimeError(
+                    "integration.jules.start correlation_id must not be blank"
+                )
+            metadata_payload.setdefault("correlationId", normalized_correlation_id)
         if idempotency_key is not None:
             metadata_payload.setdefault("idempotencyKey", idempotency_key)
             metadata_payload.setdefault("requestId", idempotency_key)
-        metadata_payload.setdefault("moonmindStartRequestId", str(uuid4()))
 
         client = self._client_factory()
         try:
@@ -878,6 +1056,8 @@ class TemporalJulesActivities:
             )
         finally:
             await client.aclose()
+
+        status_snapshot = self._status_snapshot(response.status)
 
         tracking_ref = None
         if self._artifact_service is not None and principal is not None:
@@ -895,9 +1075,12 @@ class TemporalJulesActivities:
 
         result = IntegrationStartResult(
             external_id=response.task_id,
-            status=response.status,
+            status=status_snapshot.provider_status,
             tracking_ref=tracking_ref,
             url=response.url,
+            normalized_status=status_snapshot.normalized_status,
+            provider_status=status_snapshot.provider_status,
+            callback_supported=False,
         )
         if idempotency_key is not None:
             self._starts_by_idempotency[idempotency_key] = result
@@ -916,6 +1099,8 @@ class TemporalJulesActivities:
         finally:
             await client.aclose()
 
+        status_snapshot = self._status_snapshot(response.status)
+
         tracking_ref = None
         if self._artifact_service is not None and principal is not None:
             tracking_ref = await _write_json_artifact(
@@ -932,9 +1117,12 @@ class TemporalJulesActivities:
 
         return IntegrationStatusResult(
             external_id=response.task_id,
-            status=response.status,
+            status=status_snapshot.provider_status,
             tracking_ref=tracking_ref,
             url=response.url,
+            normalized_status=status_snapshot.normalized_status,
+            provider_status=status_snapshot.provider_status,
+            terminal=status_snapshot.terminal,
         )
 
     async def integration_jules_fetch_result(
@@ -954,9 +1142,19 @@ class TemporalJulesActivities:
             principal=principal,
             execution_ref=execution_ref,
         )
-        if status.tracking_ref is None:
-            return ()
-        return (status.tracking_ref,)
+        output_refs: list[ArtifactRef] = []
+        if status.tracking_ref is not None:
+            output_refs.append(status.tracking_ref)
+        if status.normalized_status in {"failed", "canceled"}:
+            output_refs.append(
+                await self._write_failure_summary_artifact(
+                    principal=principal,
+                    execution_ref=execution_ref,
+                    external_id=external_id,
+                    status=status,
+                )
+            )
+        return tuple(output_refs)
 
 
 def build_activity_bindings(

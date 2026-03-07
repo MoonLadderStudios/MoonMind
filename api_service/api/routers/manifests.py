@@ -28,9 +28,17 @@ from api_service.services.manifests_service import (
     ManifestRegistryNotFoundError,
     ManifestsService,
 )
-from moonmind.workflows import get_agent_queue_service
+from moonmind.config.settings import settings
+from moonmind.workflows import get_agent_queue_service, get_temporal_artifact_service
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.service import AgentQueueValidationError
+from moonmind.workflows.temporal import (
+    TemporalArtifactAuthorizationError,
+    TemporalArtifactStateError,
+    TemporalArtifactValidationError,
+    TemporalExecutionService,
+    TemporalExecutionValidationError,
+)
 
 router = APIRouter(prefix="/api/manifests", tags=["manifests"])
 logger = logging.getLogger(__name__)
@@ -40,7 +48,23 @@ async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> ManifestsService:
     queue_service = get_agent_queue_service(session)
-    return ManifestsService(session, queue_service)
+    execution_service = TemporalExecutionService(
+        session,
+        namespace=settings.temporal.namespace,
+        run_continue_as_new_step_threshold=(
+            settings.temporal.run_continue_as_new_step_threshold
+        ),
+        manifest_continue_as_new_phase_threshold=(
+            settings.temporal.manifest_continue_as_new_phase_threshold
+        ),
+    )
+    artifact_service = get_temporal_artifact_service(session)
+    return ManifestsService(
+        session,
+        queue_service,
+        execution_service=execution_service,
+        artifact_service=artifact_service,
+    )
 
 
 def _serialize_summary(record) -> ManifestSummaryModel:
@@ -49,9 +73,10 @@ def _serialize_summary(record) -> ManifestSummaryModel:
         version=record.version,
         content_hash=record.content_hash,
         updated_at=record.updated_at,
-        last_run_job_id=record.last_run_job_id,
-        last_run_status=record.last_run_status,
-        state_updated_at=record.state_updated_at,
+        last_run_job_id=getattr(record, "last_run_job_id", None),
+        last_run_source=getattr(record, "last_run_source", None),
+        last_run_status=getattr(record, "last_run_status", None),
+        state_updated_at=getattr(record, "state_updated_at", None),
     )
 
 
@@ -61,12 +86,33 @@ def _serialize_detail(record) -> ManifestDetailModel:
         state_updated_at=record.state_updated_at,
     )
     last_run: Optional[ManifestRunMetadataModel] = None
-    if record.last_run_job_id or record.last_run_status:
+    last_run_source = getattr(record, "last_run_source", None)
+    last_run_workflow_id = getattr(record, "last_run_workflow_id", None)
+    if record.last_run_job_id or record.last_run_status or last_run_workflow_id:
+        task_id = last_run_workflow_id if last_run_source == "temporal" else None
+        link = f"/tasks/{task_id}?source=temporal" if task_id else None
         last_run = ManifestRunMetadataModel(
-            job_id=record.last_run_job_id,
-            status=record.last_run_status,
-            started_at=record.last_run_started_at,
-            finished_at=record.last_run_finished_at,
+            source=last_run_source,
+            job_id=getattr(record, "last_run_job_id", None),
+            status=getattr(record, "last_run_status", None),
+            task_id=task_id,
+            workflow_id=last_run_workflow_id,
+            temporal_run_id=getattr(record, "last_run_temporal_run_id", None),
+            workflow_type=(
+                "MoonMind.ManifestIngest" if last_run_source == "temporal" else None
+            ),
+            temporal_status=(
+                _temporal_status_for_manifest_status(
+                    getattr(record, "last_run_status", None),
+                    finished_at=getattr(record, "last_run_finished_at", None),
+                )
+                if last_run_source == "temporal"
+                else None
+            ),
+            manifest_artifact_ref=getattr(record, "last_run_manifest_ref", None),
+            link=link,
+            started_at=getattr(record, "last_run_started_at", None),
+            finished_at=getattr(record, "last_run_finished_at", None),
         )
     return ManifestDetailModel(
         name=record.name,
@@ -151,6 +197,11 @@ async def create_manifest_run(
             action=action,
             options=options_payload,
             user_id=getattr(user, "id", None),
+            title=payload.title,
+            failure_policy=payload.failure_policy,
+            max_concurrency=payload.max_concurrency,
+            tags=payload.tags,
+            idempotency_key=payload.idempotency_key,
         )
     except ManifestRegistryNotFoundError as exc:
         raise HTTPException(
@@ -160,19 +211,73 @@ async def create_manifest_run(
                 "message": f"Manifest '{name}' not found",
             },
         ) from exc
+    except TemporalArtifactAuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "manifest_forbidden", "message": str(exc)},
+        ) from exc
     except AgentQueueValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_manifest_job", "message": str(exc)},
         ) from exc
+    except (
+        TemporalArtifactStateError,
+        TemporalArtifactValidationError,
+        TemporalExecutionValidationError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "invalid_manifest_job", "message": str(exc)},
+        ) from exc
 
-    queue_payload = job.payload or {}
-    queue_metadata = ManifestRunQueueMetadata(
-        type=job.type,
-        required_capabilities=list(queue_payload.get("requiredCapabilities", [])),
-        manifest_hash=queue_payload.get("manifestHash"),
+    if job.source == "queue":
+        queue_job = job.job
+        assert queue_job is not None
+        queue_payload = queue_job.payload or {}
+        queue_metadata = ManifestRunQueueMetadata(
+            type=queue_job.type,
+            required_capabilities=list(queue_payload.get("requiredCapabilities", [])),
+            manifest_hash=queue_payload.get("manifestHash"),
+        )
+        return ManifestRunResponse(
+            source="queue",
+            job_id=queue_job.id,
+            queue=queue_metadata,
+        )
+
+    execution = ManifestRunMetadataModel(
+        source="temporal",
+        status=job.status,
+        task_id=job.workflow_id,
+        workflow_id=job.workflow_id,
+        temporal_run_id=job.run_id,
+        workflow_type=job.workflow_type,
+        temporal_status=job.temporal_status,
+        manifest_artifact_ref=job.manifest_artifact_ref,
+        link=f"/tasks/{job.workflow_id}?source=temporal" if job.workflow_id else None,
     )
-    return ManifestRunResponse(job_id=job.id, queue=queue_metadata)
+    return ManifestRunResponse(
+        source="temporal",
+        execution=execution,
+    )
+
+
+def _temporal_status_for_manifest_status(
+    status_value: str | None,
+    *,
+    finished_at,
+) -> str:
+    normalized = (status_value or "").strip().lower()
+    if normalized == "succeeded":
+        return "completed"
+    if normalized == "canceled":
+        return "canceled"
+    if normalized == "failed":
+        return "failed"
+    if finished_at is not None:
+        return "failed"
+    return "running"
 
 
 @router.post("/{name}/state", response_model=ManifestDetailModel)

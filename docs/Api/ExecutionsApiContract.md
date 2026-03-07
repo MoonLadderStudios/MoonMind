@@ -231,16 +231,14 @@ Current execution responses are expected to carry the following baseline metadat
 
 Required baseline keys:
 
+- `mm_owner_type`
 - `mm_owner_id`
 - `mm_state`
 - `mm_updated_at`
 - `mm_entry`
 
-Target companion docs for Visibility and compatibility also expect `mm_owner_type`, but that field is not yet guaranteed by the current adapter implementation.
-
 Optional bounded keys may include values such as:
 
-- `mm_owner_type`
 - `mm_repo`
 - `mm_integration`
 
@@ -261,7 +259,7 @@ This API returns these fields as opaque JSON objects. Clients may read documente
 
 Current staging note:
 
-- the current projection-backed implementation may still surface `"unknown"` as a placeholder `mm_owner_id` in some paths; that is a migration-stage behavior, not the desired target-state contract
+- the current projection-backed implementation still returns projection-authored lifecycle state, but owner metadata now uses explicit `mm_owner_type` + `mm_owner_id` values instead of `"unknown"` placeholders
 
 ### 8.3 `ExecutionListResponse`
 

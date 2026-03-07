@@ -1109,7 +1109,7 @@ class RecurringTasksService:
             dict(options_payload) if isinstance(options_payload, Mapping) else None
         )
 
-        return await self._manifests_service.submit_manifest_run(
+        submission = await self._manifests_service.submit_manifest_run(
             name=name,
             action=action,
             options=options,
@@ -1118,6 +1118,11 @@ class RecurringTasksService:
                 "recurrence": self._recurrence_payload(definition=definition, run=run)
             },
         )
+        if submission.job is None:
+            raise RecurringTaskValidationError(
+                "Recurring manifest_run targets require queue-backed manifest submission."
+            )
+        return submission.job
 
     async def _dispatch_run(
         self,

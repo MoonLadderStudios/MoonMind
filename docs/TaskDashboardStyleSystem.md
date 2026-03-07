@@ -1,4 +1,4 @@
-# Task Dashboard Style System
+# Mission Control Style System
 
 Status: Active guidance (Phases 1-3 shipped, Phase 4+ planned)  
 Owners: MoonMind Engineering  
@@ -6,7 +6,7 @@ Last Updated: 2026-02-25
 
 ## 1. Purpose
 
-Introduce Tailwind CSS for the MoonMind Tasks Dashboard without changing the dashboard architecture (FastAPI HTML shell + vanilla JS renderer + static CSS).
+Introduce Tailwind CSS for the MoonMind Mission Control without changing the dashboard architecture (FastAPI HTML shell + vanilla JS renderer + static CSS).
 
 This document is both:
 

@@ -115,6 +115,7 @@ const {
   renderProposalLayouts,
   renderProposalActionFeedback,
   filterProposalsByTag,
+  toTemporalRows,
   parseQueuePaginationFromSearch,
   applyQueuePaginationToSearch,
   resetQueuePaginationState,
@@ -197,6 +198,44 @@ function createProposalRow(overrides = {}) {
 (function testRenderRowsTableDelegatesToQueueTable() {
   const html = renderRowsTable([createQueueRow()]);
   assert(html.includes("<th>Type</th>"));
+})();
+
+(function testToTemporalRowsNormalizesExecutionPayload() {
+  const rows = toTemporalRows([
+    {
+      workflowId: "mm:workflow-123",
+      runId: "run-456",
+      namespace: "moonmind",
+      workflowType: "MoonMind.Run",
+      state: "awaiting_external",
+      temporalStatus: "running",
+      closeStatus: null,
+      searchAttributes: {
+        mm_entry: "run",
+        mm_owner_id: "user-123",
+        mm_updated_at: "2026-03-06T11:00:00Z",
+      },
+      memo: {
+        title: "Temporal task",
+        summary: "Execution paused.",
+      },
+      startedAt: "2026-03-06T10:00:00Z",
+      updatedAt: "2026-03-06T11:00:00Z",
+      closedAt: null,
+    },
+  ]);
+
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].source, "temporal");
+  assert.strictEqual(rows[0].sourceLabel, "Temporal");
+  assert.strictEqual(rows[0].id, "mm:workflow-123");
+  assert.strictEqual(rows[0].taskId, "mm:workflow-123");
+  assert.strictEqual(rows[0].temporalRunId, "run-456");
+  assert.strictEqual(rows[0].entry, "run");
+  assert.strictEqual(rows[0].ownerId, "user-123");
+  assert.strictEqual(rows[0].waitingReason, "Execution paused.");
+  assert.strictEqual(rows[0].attentionRequired, true);
+  assert.strictEqual(rows[0].link, "/tasks/mm:workflow-123?source=temporal");
 })();
 
 (function testQueuePaginationParsesLimitAndCursorFromUrlQuery() {

@@ -13,6 +13,7 @@ from api_service.api.routers.task_dashboard import _resolve_user_dependency_over
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.main import app as main_app
+from moonmind.config.settings import settings
 
 if not os.getenv("RUN_E2E_TESTS"):
     pytest.skip("E2E tests disabled", allow_module_level=True)
@@ -241,3 +242,244 @@ def test_submit_error_restores_label(server):
         assert page.url.endswith("/tasks/create")
         assert calls["create"] == 1
         browser.close()
+
+
+def test_temporal_detail_resolves_source_and_fetches_latest_run_artifacts(server):
+    base_url = server
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        _route_handlers(
+            page,
+            base_url=base_url,
+            create_status=201,
+            create_body=json.dumps({"id": "unused"}),
+        )
+        ordered_calls = []
+
+        page.route(
+            f"{base_url}/api/tasks/mm:workflow-123/source",
+            lambda route: (
+                ordered_calls.append("source"),
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "taskId": "mm:workflow-123",
+                            "source": "temporal",
+                            "sourceLabel": "Temporal",
+                            "detailPath": "/tasks/mm:workflow-123?source=temporal",
+                        }
+                    ),
+                ),
+            )[1],
+        )
+        page.route(
+            f"{base_url}/api/executions/mm:workflow-123",
+            lambda route: (
+                ordered_calls.append("detail"),
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "taskId": "mm:workflow-123",
+                            "workflowId": "mm:workflow-123",
+                            "runId": "run-123",
+                            "temporalRunId": "run-123",
+                            "namespace": "moonmind",
+                            "workflowType": "MoonMind.Run",
+                            "state": "awaiting_external",
+                            "dashboardStatus": "awaiting_action",
+                            "temporalStatus": "running",
+                            "waitingReason": "Waiting on approval.",
+                            "attentionRequired": True,
+                            "memo": {
+                                "title": "Temporal task",
+                                "summary": "Waiting on approval.",
+                            },
+                            "startedAt": "2026-03-06T10:00:00Z",
+                            "updatedAt": "2026-03-06T11:00:00Z",
+                            "actions": {
+                                "canApprove": True,
+                                "canPause": True,
+                                "canResume": True,
+                                "canCancel": True,
+                            },
+                        }
+                    ),
+                ),
+            )[1],
+        )
+        page.route(
+            f"{base_url}/api/executions/moonmind/mm:workflow-123/run-123/artifacts",
+            lambda route: (
+                ordered_calls.append("artifacts"),
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"artifacts": []}),
+                ),
+            )[1],
+        )
+
+        page.goto(f"{base_url}/tasks/mm:workflow-123")
+        page.wait_for_selector("text=Temporal Task Detail")
+        assert page.url.endswith("/tasks/mm:workflow-123")
+        assert ordered_calls[:3] == ["source", "detail", "artifacts"]
+        browser.close()
+
+
+def test_temporal_submit_redirects_without_exposing_runtime_picker(server):
+    base_url = server
+    original_submit_enabled = settings.temporal_dashboard.submit_enabled
+    settings.temporal_dashboard.submit_enabled = True
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            _route_handlers(
+                page,
+                base_url=base_url,
+                create_status=201,
+                create_body=json.dumps({"id": "unused"}),
+            )
+            artifact_calls = {"create": 0, "upload": 0, "link": 0, "execution": 0}
+
+            page.route(
+                f"{base_url}/api/artifacts",
+                lambda route: (
+                    artifact_calls.__setitem__("create", artifact_calls["create"] + 1),
+                    route.fulfill(
+                        status=201,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "artifact_ref": {
+                                    "artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+                                },
+                                "upload": {
+                                    "mode": "single",
+                                    "upload_url": f"{base_url}/api/artifacts/art_01ARZ3NDEKTSV4RRFFQ69G5FAV/content",
+                                    "expires_at": "2026-03-06T12:00:00Z",
+                                    "max_size_bytes": 100000,
+                                    "required_headers": {},
+                                },
+                            }
+                        ),
+                    ),
+                )[1],
+            )
+            page.route(
+                f"{base_url}/api/artifacts/art_01ARZ3NDEKTSV4RRFFQ69G5FAV/content",
+                lambda route: (
+                    artifact_calls.__setitem__("upload", artifact_calls["upload"] + 1),
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+                        ),
+                    ),
+                )[1],
+            )
+            page.route(
+                f"{base_url}/api/executions",
+                lambda route: (
+                    artifact_calls.__setitem__(
+                        "execution", artifact_calls["execution"] + 1
+                    ),
+                    route.fulfill(
+                        status=201,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {
+                                "taskId": "mm:workflow-123",
+                                "workflowId": "mm:workflow-123",
+                                "runId": "run-123",
+                                "temporalRunId": "run-123",
+                                "namespace": "moonmind",
+                                "workflowType": "MoonMind.Run",
+                                "state": "initializing",
+                                "dashboardStatus": "queued",
+                                "temporalStatus": "running",
+                                "memo": {
+                                    "title": "Temporal task",
+                                    "summary": "Execution initialized.",
+                                },
+                                "redirectPath": "/tasks/mm:workflow-123?source=temporal",
+                            }
+                        ),
+                    ),
+                )[1],
+            )
+            page.route(
+                f"{base_url}/api/artifacts/art_01ARZ3NDEKTSV4RRFFQ69G5FAV/links",
+                lambda route: (
+                    artifact_calls.__setitem__("link", artifact_calls["link"] + 1),
+                    route.fulfill(
+                        status=200,
+                        content_type="application/json",
+                        body=json.dumps(
+                            {"artifact_id": "art_01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+                        ),
+                    ),
+                )[1],
+            )
+            page.route(
+                f"{base_url}/api/executions/mm:workflow-123",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(
+                        {
+                            "taskId": "mm:workflow-123",
+                            "workflowId": "mm:workflow-123",
+                            "runId": "run-123",
+                            "temporalRunId": "run-123",
+                            "namespace": "moonmind",
+                            "workflowType": "MoonMind.Run",
+                            "state": "initializing",
+                            "dashboardStatus": "queued",
+                            "temporalStatus": "running",
+                            "memo": {
+                                "title": "Temporal task",
+                                "summary": "Execution initialized.",
+                            },
+                        }
+                    ),
+                ),
+            )
+            page.route(
+                f"{base_url}/api/executions/moonmind/mm:workflow-123/run-123/artifacts",
+                lambda route: route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"artifacts": []}),
+                ),
+            )
+
+            page.goto(f"{base_url}/tasks/create")
+            page.wait_for_selector("#queue-submit-form")
+            runtime_options = page.locator('select[name="runtime"] option')
+            assert "temporal" not in [
+                runtime_options.nth(i).get_attribute("value")
+                for i in range(runtime_options.count())
+            ]
+            page.fill(
+                'textarea[data-step-field="instructions"][data-step-index="0"]',
+                "Implement Temporal submit redirect coverage. " * 200,
+            )
+            page.fill('input[name="repository"]', "MoonLadderStudios/MoonMind")
+            page.locator("#queue-submit-form button[type='submit']").click()
+            page.wait_for_url("**/tasks/mm:workflow-123?source=temporal")
+            assert artifact_calls == {
+                "create": 1,
+                "upload": 1,
+                "link": 1,
+                "execution": 1,
+            }
+            browser.close()
+    finally:
+        settings.temporal_dashboard.submit_enabled = original_submit_enabled

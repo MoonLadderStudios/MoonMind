@@ -22,6 +22,20 @@ class RuntimeGateState:
     error_message: str
 
 
+@dataclass(frozen=True, slots=True)
+class JulesProviderProfile:
+    """Resolved runtime profile used by provider-neutral integrations monitoring."""
+
+    integration_name: str
+    activity_queue: str
+    callback_mode: str
+    supports_cancel: bool
+    initial_poll_seconds: int
+    max_poll_seconds: int
+    callback_rate_limit_per_window: int
+    callback_rate_limit_window_seconds: int
+
+
 def _clean_value(value: object | None) -> str:
     return str(value or "").strip()
 
@@ -94,9 +108,37 @@ def is_jules_runtime_enabled(
     ).enabled
 
 
+def build_jules_provider_profile(
+    *,
+    activity_queue: str = "mm.activity.integrations",
+    callback_mode: str = "preferred",
+    supports_cancel: bool = True,
+    initial_poll_seconds: int = 5,
+    max_poll_seconds: int = 300,
+    callback_rate_limit_per_window: int = 30,
+    callback_rate_limit_window_seconds: int = 60,
+) -> JulesProviderProfile:
+    """Return the default Jules monitoring profile without altering runtime semantics."""
+
+    return JulesProviderProfile(
+        integration_name="jules",
+        activity_queue=activity_queue,
+        callback_mode=callback_mode,
+        supports_cancel=supports_cancel,
+        initial_poll_seconds=max(1, int(initial_poll_seconds)),
+        max_poll_seconds=max(1, int(max_poll_seconds)),
+        callback_rate_limit_per_window=max(1, int(callback_rate_limit_per_window)),
+        callback_rate_limit_window_seconds=max(
+            1, int(callback_rate_limit_window_seconds)
+        ),
+    )
+
+
 __all__ = [
     "JULES_RUNTIME_DISABLED_MESSAGE",
+    "JulesProviderProfile",
     "RuntimeGateState",
+    "build_jules_provider_profile",
     "build_runtime_gate_state",
     "is_jules_runtime_enabled",
 ]

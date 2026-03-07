@@ -43,6 +43,20 @@ else
     exit 127
 fi
 
+REQUIRED_MODULES=(pytest temporalio)
+MISSING_MODULES=()
+for module_name in "${REQUIRED_MODULES[@]}"; do
+    if ! "$PYTHON_BIN" -c "import ${module_name}" >/dev/null 2>&1; then
+        MISSING_MODULES+=("${module_name}")
+    fi
+done
+
+if [[ "${#MISSING_MODULES[@]}" -gt 0 ]]; then
+    echo "Error: test environment for '$PYTHON_BIN' is missing required modules: ${MISSING_MODULES[*]}." >&2
+    echo "Run ./tools/setup_test_env.sh to create or refresh the local test environment." >&2
+    exit 1
+fi
+
 PYTEST_PARALLEL_ARGS=()
 if "$PYTHON_BIN" -c "import xdist" >/dev/null 2>&1; then
     PYTEST_PARALLEL_ARGS=(-n auto --dist loadscope)
@@ -55,7 +69,10 @@ fi
 if command -v node >/dev/null 2>&1; then
     for test_file in \
         tests/task_dashboard/test_queue_layouts.js \
-        tests/task_dashboard/test_submit_runtime.js
+        tests/task_dashboard/test_temporal_dashboard.js \
+        tests/task_dashboard/test_submit_runtime.js \
+        tests/task_dashboard/test_temporal_detail_runtime.js \
+        tests/task_dashboard/test_temporal_run_history.js
     do
         node "$test_file"
     done

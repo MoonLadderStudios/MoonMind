@@ -164,8 +164,45 @@
     sourceConfig.schedules && typeof sourceConfig.schedules === "object"
       ? sourceConfig.schedules
       : {};
+  const temporalSourceConfig =
+    sourceConfig.temporal && typeof sourceConfig.temporal === "object"
+      ? sourceConfig.temporal
+      : {};
+  const featuresConfig =
+    config.features && typeof config.features === "object" && !Array.isArray(config.features)
+      ? config.features
+      : {};
+  const temporalDashboardFeature =
+    featuresConfig.temporalDashboard &&
+    typeof featuresConfig.temporalDashboard === "object" &&
+    !Array.isArray(featuresConfig.temporalDashboard)
+      ? featuresConfig.temporalDashboard
+      : {};
+  const temporalDashboardEnabled = Boolean(temporalDashboardFeature.enabled);
+  const temporalListEnabled =
+    temporalDashboardEnabled && Boolean(temporalDashboardFeature.listEnabled);
+  const temporalDetailEnabled =
+    temporalDashboardEnabled && Boolean(temporalDashboardFeature.detailEnabled);
+  const temporalActionsEnabled =
+    temporalDashboardEnabled && Boolean(temporalDashboardFeature.actionsEnabled);
+  const temporalSubmitEnabled =
+    temporalDashboardEnabled && Boolean(temporalDashboardFeature.submitEnabled);
+  const temporalDebugFieldsEnabled =
+    temporalDashboardEnabled && Boolean(temporalDashboardFeature.debugFieldsEnabled);
+  const TEMPORAL_INLINE_INPUT_MAX_CHARS = 4000;
   const systemConfig = config.system || {};
+  const temporalCompatibilityConfig =
+    systemConfig.temporalCompatibility &&
+    typeof systemConfig.temporalCompatibility === "object"
+      ? systemConfig.temporalCompatibility
+      : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
+  const taskSourceResolverEndpoint = String(
+    systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
+  );
+  const taskResolutionEndpoint = String(
+    systemConfig.taskResolution || "/api/tasks/{taskId}/resolution",
+  );
   const supportedWorkerRuntimes =
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
     systemConfig.supportedWorkerRuntimes.length > 0
@@ -288,6 +325,60 @@
   };
 
   const submitRuntimeOptions = buildSubmitRuntimeOptions(supportedTaskRuntimes);
+
+  function extractTemporalActionExecution(payload) {
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const executionField = String(
+      temporalCompatibilityConfig.actionExecutionField || "execution",
+    );
+    const candidate = payload[executionField];
+    return candidate && typeof candidate === "object" ? candidate : null;
+  }
+
+  function describeTemporalCompatibilityFreshness(payload) {
+    const refreshField = String(
+      temporalCompatibilityConfig.actionRefreshField || "refresh",
+    );
+    const staleField = String(
+      temporalCompatibilityConfig.staleStateField || "staleState",
+    );
+    const refreshedAtField = String(
+      temporalCompatibilityConfig.refreshedAtField || "refreshedAt",
+    );
+    const degradedCountField = String(
+      temporalCompatibilityConfig.degradedCountField || "degradedCount",
+    );
+    const refresh =
+      payload &&
+      typeof payload === "object" &&
+      payload[refreshField] &&
+      typeof payload[refreshField] === "object"
+        ? payload[refreshField]
+        : null;
+    return {
+      stale: Boolean(
+        (payload && typeof payload === "object" && payload[staleField]) ||
+          (refresh && refresh.listStale),
+      ),
+      refetchSuggested: Boolean(refresh && refresh.refetchSuggested),
+      refreshedAt:
+        (payload && typeof payload === "object" && payload[refreshedAtField]) ||
+        (refresh && refresh.refreshedAt) ||
+        null,
+      degradedCount: Boolean(
+        payload && typeof payload === "object" && payload[degradedCountField],
+      ),
+    };
+  }
+
+  if (typeof window !== "undefined") {
+    window.__taskDashboardTemporalCompatibilityTest = {
+      describeTemporalCompatibilityFreshness,
+      extractTemporalActionExecution,
+    };
+  }
 
   const formatRuntimeLabel = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
@@ -487,6 +578,7 @@
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const ACTIVE_QUEUE_FETCH_LIMIT = 50;
   const ACTIVE_ORCHESTRATOR_FETCH_LIMIT = 50;
+  const ACTIVE_TEMPORAL_FETCH_LIMIT = 50;
   const QUEUE_PAGE_SIZE_OPTIONS = [20, 25, 50, 100];
   const DEFAULT_QUEUE_PAGE_SIZE = 50;
   const pollers = [];
@@ -956,6 +1048,17 @@
     });
   }
 
+  function syncTemporalNavVisibility() {
+    const temporalLinks = document.querySelectorAll("[data-temporal-nav]");
+    temporalLinks.forEach((link) => {
+      if (temporalListEnabled) {
+        link.removeAttribute("hidden");
+      } else {
+        link.setAttribute("hidden", "hidden");
+      }
+    });
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -1006,6 +1109,34 @@
       return "/tasks/list";
     }
     return `/tasks/${safeId}${sourceParam}`;
+  }
+
+  function resolveTemporalWorkflowTitle(workflowType, memo) {
+    const explicitTitle = String(pick(memo, "title") || "").trim();
+    if (explicitTitle) {
+      return explicitTitle;
+    }
+    if (workflowType === "MoonMind.ManifestIngest") {
+      return "Manifest Ingest";
+    }
+    if (workflowType === "MoonMind.Run") {
+      return "Run Task";
+    }
+    const fallback = String(workflowType || "").trim();
+    return fallback || "Temporal Execution";
+  }
+
+  function temporalWaitingReason(execution) {
+    const explicit = String(pick(execution, "waitingReason") || "").trim();
+    if (explicit) {
+      return explicit;
+    }
+    const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
+    if (rawState !== "awaiting_external") {
+      return "";
+    }
+    const memo = pick(execution, "memo") || {};
+    return String(pick(memo, "summary") || "").trim();
   }
 
   function formatTimestamp(value) {
@@ -1983,6 +2114,12 @@
         createdAt: pick(item, "createdAt"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "finishedAt"),
+        updatedAt: pick(item, "updatedAt"),
+        sortTimestamp:
+          pick(item, "updatedAt") ||
+          pick(item, "startedAt") ||
+          pick(item, "createdAt") ||
+          pick(item, "finishedAt"),
         link: buildUnifiedTaskDetailRoute(pick(item, "id"), "queue"),
       };
     });
@@ -2371,7 +2508,16 @@
     };
   };
 
-  const determineSubmitDestination = (runtimeMode, endpoints = {}) => {
+  const shouldUseTemporalSubmit = (runtimeMode, options = {}) => {
+    const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
+    return (
+      Boolean(options.temporalSubmitEnabled) &&
+      !Boolean(options.isEditMode) &&
+      normalizedMode !== ORCHESTRATOR_RUNTIME
+    );
+  };
+
+  const determineSubmitDestination = (runtimeMode, endpoints = {}, options = {}) => {
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     const queueEndpoint = String(endpoints.queue || "/api/queue/jobs").trim();
     const orchestratorEndpoint = String(
@@ -2379,6 +2525,12 @@
     ).trim();
     if (normalizedMode === "orchestrator") {
       return { mode: "orchestrator", endpoint: orchestratorEndpoint };
+    }
+    if (shouldUseTemporalSubmit(normalizedMode, options)) {
+      return {
+        mode: "temporal",
+        endpoint: String(endpoints.temporal || "/api/executions").trim(),
+      };
     }
     return { mode: "worker", endpoint: queueEndpoint };
   };
@@ -2495,6 +2647,77 @@
       ok: false,
       error: "Primary step requires instructions or an explicit skill selection.",
     };
+  };
+
+  const cloneTemporalSubmitRequest = (requestBody = {}) =>
+    cloneForTestHarness(
+      requestBody && typeof requestBody === "object" && !Array.isArray(requestBody)
+        ? requestBody
+        : {},
+    );
+
+  const createTemporalInputArtifact = async ({ instructions, repository }) => {
+    const normalizedInstructions = String(instructions || "");
+    const byteSize = new TextEncoder().encode(normalizedInstructions).length;
+    const createResponse = await fetchJson(
+      temporalSourceConfig.artifactCreate || "/api/artifacts",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          content_type: "text/plain; charset=utf-8",
+          size_bytes: byteSize,
+          metadata: {
+            label: "Submitted Instructions",
+            repository: String(repository || "").trim() || null,
+            source: "task-dashboard-submit",
+          },
+        }),
+      },
+    );
+    const artifactRef =
+      pick(createResponse, "artifact_ref", "artifactRef") || {};
+    const artifactId = String(
+      pick(artifactRef, "artifact_id", "artifactId")
+        || pick(createResponse, "artifact_id", "artifactId")
+        || "",
+    ).trim();
+    if (!artifactId) {
+      throw new Error("artifact create response missing artifact id");
+    }
+    const upload = pick(createResponse, "upload") || {};
+    const uploadUrl = String(pick(upload, "upload_url", "uploadUrl") || "").trim()
+      || endpoint("/api/artifacts/{artifactId}/content", { artifactId });
+    await fetchJson(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: normalizedInstructions,
+    });
+    return { artifactId };
+  };
+
+  const linkTemporalArtifactToExecution = async ({ artifactId, execution }) => {
+    const normalizedArtifactId = String(artifactId || "").trim();
+    if (!normalizedArtifactId) {
+      return;
+    }
+    const workflowId = String(pick(execution, "workflowId", "taskId") || "").trim();
+    const runId = String(pick(execution, "temporalRunId", "runId") || "").trim();
+    if (!workflowId || !runId) {
+      return;
+    }
+    await fetchJson(
+      endpoint("/api/artifacts/{artifactId}/links", { artifactId: normalizedArtifactId }),
+      {
+        method: "POST",
+        body: JSON.stringify({
+          namespace: String(pick(execution, "namespace") || "moonmind").trim() || "moonmind",
+          workflow_id: workflowId,
+          run_id: runId,
+          link_type: "input.instructions",
+          label: "Submitted Instructions",
+        }),
+      },
+    );
   };
 
   const SUBMIT_DRAFT_STORAGE_KEY = "moonmind.submitWorkDrafts.v1";
@@ -2818,6 +3041,7 @@
     window.__submitRuntimeTest = {
       createSubmitDraftController,
       determineSubmitDestination,
+      shouldUseTemporalSubmit,
       validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
       hasExplicitSkillSelection,
@@ -2838,6 +3062,7 @@
       normalizeOrchestratorPriority,
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
+      validateSubmitRuntime,
       applyElementVisibility,
       persistSubmitDraftsToStorage,
       submitDraftController,
@@ -2847,7 +3072,28 @@
       stringifySkillArgs,
       buildQueueSubmissionDraftFromJob,
     };
-      window.__queueLayoutTest = {
+    window.__temporalDashboardTest = {
+      buildTemporalActionRequest,
+      buildTemporalArtifactCreatePayload,
+      buildTemporalArtifactEditUpdatePayload,
+      buildTemporalArtifactLinkPayload,
+      completeTemporalArtifactUpload,
+      createTemporalArtifactPlaceholder,
+      fetchTemporalArtifactMetadata,
+      normalizeDashboardRoutePath,
+      renderTemporalActionButtons,
+      resolveTemporalActionResultMessage,
+      resolveTemporalActionSurface,
+      resolveTemporalArtifactPresentation,
+      resolveTemporalArtifactsRequest,
+      resolveTemporalDetailModel,
+      resolveTemporalRunId,
+      resolveTemporalWorkflowTitle,
+      temporalWaitingReason,
+      toTemporalRows,
+      uploadTemporalArtifactContent,
+    };
+    window.__queueLayoutTest = {
         queueFieldDefinitions,
         renderQueueFieldValue,
         renderQueueTable,
@@ -2858,13 +3104,18 @@
       filterProposalsByTag,
       renderProposalTable,
       renderProposalCards,
-      renderProposalLayouts,
+        renderProposalLayouts,
         renderProposalActionFeedback,
         toQueueRows,
+        toTemporalRows,
         parseQueuePaginationFromSearch,
         applyQueuePaginationToSearch,
         resetQueuePaginationState,
       };
+    window.__temporalRunHistoryTest = {
+      resolveTemporalDetailContext,
+      resolveManifestIngestContext,
+    };
     }
 
   async function apiPromoteProposal(proposalId, overrides = {}) {
@@ -2998,6 +3249,12 @@
       createdAt: pick(run, "queuedAt"),
       startedAt: pick(run, "startedAt"),
       finishedAt: pick(run, "completedAt"),
+      updatedAt: pick(run, "updatedAt") || pick(run, "completedAt") || pick(run, "startedAt"),
+      sortTimestamp:
+        pick(run, "updatedAt") ||
+        pick(run, "completedAt") ||
+        pick(run, "startedAt") ||
+        pick(run, "queuedAt"),
       link: buildUnifiedTaskDetailRoute(
         pick(run, "taskId") || pick(run, "runId"),
         "orchestrator",
@@ -3005,18 +3262,86 @@
     }));
   }
 
+  function toTemporalRows(items) {
+    return (Array.isArray(items) ? items : []).map((item) => {
+      const memo = pick(item, "memo") || {};
+      const searchAttributes = pick(item, "searchAttributes") || {};
+      const workflowId = String(pick(item, "workflowId") || "").trim();
+      const rawState = String(pick(item, "state") || "initializing").trim();
+      const updatedAt =
+        pick(searchAttributes, "mm_updated_at") ||
+        pick(item, "updatedAt") ||
+        pick(item, "startedAt");
+      return {
+        source: "temporal",
+        sourceLabel: "Temporal",
+        id: workflowId,
+        taskId: workflowId,
+        workflowId,
+        temporalRunId: pick(item, "temporalRunId", "runId") || "",
+        namespace: pick(item, "namespace") || "",
+        workflowType: pick(item, "workflowType") || "",
+        entry: pick(searchAttributes, "mm_entry") || "",
+        ownerType: pick(searchAttributes, "mm_owner_type") || "user",
+        ownerId: pick(searchAttributes, "mm_owner_id") || "",
+        repository: pick(searchAttributes, "mm_repo") || "",
+        integration: pick(searchAttributes, "mm_integration") || "",
+        queueName: "-",
+        runtimeMode: null,
+        skillId: null,
+        rawStatus: rawState,
+        rawState,
+        temporalStatus: pick(item, "temporalStatus") || "",
+        closeStatus: pick(item, "closeStatus") || "",
+        summary: String(pick(memo, "summary") || "").trim(),
+        waitingReason: temporalWaitingReason(item),
+        attentionRequired: rawState.toLowerCase() === "awaiting_external",
+        title: resolveTemporalWorkflowTitle(pick(item, "workflowType"), memo),
+        createdAt: pick(item, "startedAt"),
+        startedAt: pick(item, "startedAt"),
+        finishedAt: pick(item, "closedAt"),
+        updatedAt,
+        closedAt: pick(item, "closedAt"),
+        sortTimestamp: updatedAt || pick(item, "startedAt") || pick(item, "closedAt"),
+        link: buildUnifiedTaskDetailRoute(workflowId, "temporal"),
+      };
+    });
+  }
+
   function sortRows(rows) {
     return rows.sort((left, right) => {
-      const leftTime = Date.parse(left.startedAt || left.createdAt || 0) || 0;
-      const rightTime = Date.parse(right.startedAt || right.createdAt || 0) || 0;
-      return rightTime - leftTime;
+      const leftTime =
+        Date.parse(
+          left.sortTimestamp ||
+            left.updatedAt ||
+            left.startedAt ||
+            left.createdAt ||
+            left.finishedAt ||
+            0,
+        ) || 0;
+      const rightTime =
+        Date.parse(
+          right.sortTimestamp ||
+            right.updatedAt ||
+            right.startedAt ||
+            right.createdAt ||
+            right.finishedAt ||
+            0,
+        ) || 0;
+      if (rightTime !== leftTime) {
+        return rightTime - leftTime;
+      }
+      return String(right.id || "").localeCompare(String(left.id || ""));
     });
   }
 
   async function renderActivePage() {
+    const activeSubtitle = temporalListEnabled
+      ? `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`
+      : `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`;
     setView(
       "Active Tasks",
-      `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+      activeSubtitle,
       "<p class='loading'>Loading active runs...</p>",
       { showAutoRefreshControls: true },
     );
@@ -3076,6 +3401,20 @@
           transform: (payload) => toOrchestratorRows(payload?.runs || []),
         },
       ];
+      if (temporalListEnabled) {
+        requests.push({
+          source: "temporal-active",
+          call: () =>
+            fetchJson(
+              `${temporalSourceConfig.list || "/api/executions"}?pageSize=${ACTIVE_TEMPORAL_FETCH_LIMIT}`,
+            ),
+          transform: (payload) =>
+            toTemporalRows(payload?.items || []).filter((row) => {
+              const state = String(row.rawState || "").trim().toLowerCase();
+              return !["succeeded", "failed", "canceled"].includes(state);
+            }),
+        });
+      }
 
       const settled = await Promise.allSettled(requests.map((req) => req.call()));
       settled.forEach((result, index) => {
@@ -3093,7 +3432,7 @@
       }
       setView(
         "Active Tasks",
-        `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`,
+        activeSubtitle,
         renderActivePageContent(rows, errors),
         { showAutoRefreshControls: true },
       );
@@ -3105,30 +3444,36 @@
   async function renderQueueListPage() {
     const initialQuery = new URLSearchParams(window.location.search || "");
     const initialSource = String(initialQuery.get("source") || "").trim().toLowerCase();
-    const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "")
-      .trim()
-      .toLowerCase();
-    const initialPagination = parseQueuePaginationFromSearch(
-      window.location.search || "",
-    );
+    const initialPagination = parseQueuePaginationFromSearch(window.location.search || "");
+    const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "").trim().toLowerCase();
+    const initialTemporalToken = String(initialQuery.get("nextPageToken") || "").trim() || null;
+    const allowedSources = temporalListEnabled
+      ? ["", "queue", "orchestrator", "temporal"]
+      : ["", "queue", "orchestrator"];
     setView(
       "Tasks List",
-      `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
+      "Unified tasks across available execution sources.",
       "<p class='loading'>Loading tasks...</p>",
       { showAutoRefreshControls: true },
     );
 
     const filterState = {
-      runtime: "",
-      skill: "",
-      stageStatus: "",
-      publishMode: "",
-      source:
-        initialFilterRuntime === ORCHESTRATOR_RUNTIME
-          ? "orchestrator"
-          : ["queue", "orchestrator"].includes(initialSource)
-            ? initialSource
-            : "",
+      runtime: initialFilterRuntime,
+      skill: String(initialQuery.get("skill") || "").trim().toLowerCase(),
+      stageStatus: String(initialQuery.get("stageStatus") || "").trim().toLowerCase(),
+      publishMode: String(initialQuery.get("publishMode") || "").trim().toLowerCase(),
+      source: initialFilterRuntime === ORCHESTRATOR_RUNTIME
+        ? "orchestrator"
+        : allowedSources.includes(initialSource)
+          ? initialSource
+          : "",
+      workflowType: String(initialQuery.get("workflowType") || "").trim(),
+      temporalState: String(initialQuery.get("state") || "").trim().toLowerCase(),
+      entry: String(initialQuery.get("entry") || "").trim().toLowerCase(),
+      ownerType: String(initialQuery.get("ownerType") || "").trim().toLowerCase(),
+      ownerId: String(initialQuery.get("ownerId") || "").trim(),
+      repository: String(initialQuery.get("repo") || "").trim(),
+      integration: String(initialQuery.get("integration") || "").trim(),
     };
     const telemetryEndpoint =
       (queueSourceConfig.migrationTelemetry || "/api/queue/telemetry/migration") +
@@ -3141,9 +3486,11 @@
     let telemetryInFlight = null;
     let telemetryLastRequestedAt = 0;
     let currentRows = [];
+    let currentTemporalCount = null;
+    let currentTemporalCountMode = "";
     const paginationState = {
       limit: initialPagination.limit,
-      cursor: initialPagination.cursor,
+      cursor: initialSource === "temporal" ? initialTemporalToken : initialPagination.cursor,
       cursorStack: [],
       nextCursor: null,
       hasMore: false,
@@ -3155,12 +3502,46 @@
       pageActive = false;
     });
 
-    function syncPaginationQueryParams() {
-      const queryText = applyQueuePaginationToSearch(
-        window.location.search || "",
-        paginationState.limit,
-        paginationState.cursor,
-      );
+    function syncListQueryParams() {
+      const params = new URLSearchParams(window.location.search || "");
+      const filterEntries = [
+        ["source", filterState.source],
+        ["filterRuntime", filterState.runtime],
+        ["skill", filterState.skill],
+        ["stageStatus", filterState.stageStatus],
+        ["publishMode", filterState.publishMode],
+        ["workflowType", filterState.workflowType],
+        ["state", filterState.temporalState],
+        ["entry", filterState.entry],
+        ["ownerType", filterState.ownerType],
+        ["ownerId", filterState.ownerId],
+        ["repo", filterState.repository],
+        ["integration", filterState.integration],
+      ];
+      filterEntries.forEach(([key, value]) => {
+        if (value) {
+          params.set(key, value);
+        } else {
+          params.delete(key);
+        }
+      });
+      params.set("limit", String(paginationState.limit));
+      if (filterState.source === "temporal") {
+        if (paginationState.cursor) {
+          params.set("nextPageToken", paginationState.cursor);
+        } else {
+          params.delete("nextPageToken");
+        }
+        params.delete("cursor");
+      } else {
+        if (paginationState.cursor) {
+          params.set("cursor", paginationState.cursor);
+        } else {
+          params.delete("cursor");
+        }
+        params.delete("nextPageToken");
+      }
+      const queryText = params.toString();
       const nextUrl = queryText
         ? `${window.location.pathname}?${queryText}`
         : window.location.pathname;
@@ -3169,7 +3550,7 @@
 
     function resetPaginationToFirstPage() {
       resetQueuePaginationState(paginationState);
-      syncPaginationQueryParams();
+      syncListQueryParams();
     }
 
     function applyQueueFilters(rows) {
@@ -3179,6 +3560,27 @@
           if (rowSource !== filterState.source) {
             return false;
           }
+        }
+        if (filterState.source === "temporal") {
+          if (filterState.workflowType) {
+            const rowWorkflowType = String(row.workflowType || "").trim();
+            if (rowWorkflowType !== filterState.workflowType) {
+              return false;
+            }
+          }
+          if (filterState.temporalState) {
+            const rowState = String(row.rawState || "").trim().toLowerCase();
+            if (rowState !== filterState.temporalState) {
+              return false;
+            }
+          }
+          if (filterState.entry) {
+            const rowEntry = String(row.entry || "").trim().toLowerCase();
+            if (rowEntry !== filterState.entry) {
+              return false;
+            }
+          }
+          return true;
         }
         if (filterState.runtime) {
           const rowRuntime = String(row.runtimeMode || "").trim().toLowerCase();
@@ -3217,16 +3619,97 @@
     }
 
     function renderQueueFilters() {
-      const runtimeOptions = renderRuntimeOptions(
-        supportedTaskRuntimes,
-        filterState.runtime,
-      );
+      const sourceOptions = [
+        ["", "All sources"],
+        ["queue", "Queue"],
+        ["orchestrator", "Orchestrator"],
+        ...(temporalListEnabled ? [["temporal", "Temporal"]] : []),
+      ]
+        .map(
+          ([value, label]) =>
+            `<option value="${escapeHtml(value)}" ${
+              filterState.source === value ? "selected" : ""
+            }>${escapeHtml(label)}</option>`,
+        )
+        .join("");
       const pageSizeOptions = QUEUE_PAGE_SIZE_OPTIONS.map(
         (value) =>
           `<option value="${escapeHtml(value)}" ${
             paginationState.limit === value ? "selected" : ""
           }>${escapeHtml(value)}</option>`,
       ).join("");
+      if (filterState.source === "temporal") {
+        const workflowTypeOptions = ["MoonMind.Run", "MoonMind.ManifestIngest"]
+          .map(
+            (value) =>
+              `<option value="${escapeHtml(value)}" ${
+                filterState.workflowType === value ? "selected" : ""
+              }>${escapeHtml(value)}</option>`,
+          )
+          .join("");
+        const rawStateOptions = [
+          "initializing",
+          "planning",
+          "executing",
+          "awaiting_external",
+          "finalizing",
+          "succeeded",
+          "failed",
+          "canceled",
+        ]
+          .map(
+            (value) =>
+              `<option value="${escapeHtml(value)}" ${
+                filterState.temporalState === value ? "selected" : ""
+              }>${escapeHtml(value)}</option>`,
+          )
+          .join("");
+        const entryOptions = ["run", "manifest"]
+          .map(
+            (value) =>
+              `<option value="${escapeHtml(value)}" ${
+                filterState.entry === value ? "selected" : ""
+              }>${escapeHtml(value)}</option>`,
+          )
+          .join("");
+        return `
+          <form id="queue-filter-form">
+            <div class="grid-2">
+              <label>Source
+                <select name="source">
+                  ${sourceOptions}
+                </select>
+              </label>
+              <label>Page Size
+                <select name="pageSize">
+                  ${pageSizeOptions}
+                </select>
+              </label>
+            </div>
+            <div class="grid-2">
+              <label>Workflow Type
+                <select name="workflowType">
+                  <option value="">(all)</option>
+                  ${workflowTypeOptions}
+                </select>
+              </label>
+              <label>Temporal State
+                <select name="temporalState">
+                  <option value="">(all)</option>
+                  ${rawStateOptions}
+                </select>
+              </label>
+            </div>
+            <label>Entry
+              <select name="entry">
+                <option value="">(all)</option>
+                ${entryOptions}
+              </select>
+            </label>
+          </form>
+        `;
+      }
+      const runtimeOptions = renderRuntimeOptions(supportedTaskRuntimes, filterState.runtime);
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
@@ -3252,6 +3735,11 @@
 
       return `
         <form id="queue-filter-form">
+          <label>Source
+            <select name="source">
+              ${sourceOptions}
+            </select>
+          </label>
           <div class="grid-2">
             <label>Runtime
               <select name="runtime">
@@ -3294,12 +3782,20 @@
       const showingRange = paginationState.pageEnd > 0
         ? `${paginationState.pageStart}-${paginationState.pageEnd}`
         : "0";
+      const temporalCountText =
+        filterState.source === "temporal" && typeof currentTemporalCount === "number"
+          ? ` Exact count: ${currentTemporalCount}${
+              currentTemporalCountMode ? ` (${currentTemporalCountMode})` : ""
+            }.`
+          : "";
       return `
         <div class="actions">
           <div class="small">
             Page ${escapeHtml(page)} · Showing ${escapeHtml(
               showingRange,
-            )} · ${escapeHtml(filteredRows.length)} of ${escapeHtml(rows.length)} tasks in this page.
+            )} · ${escapeHtml(filteredRows.length)} of ${escapeHtml(rows.length)} tasks in this page.${escapeHtml(
+              temporalCountText,
+            )}
           </div>
           <div>
             <button type="button" class="secondary" data-queue-page-prev ${
@@ -3341,11 +3837,18 @@
         return;
       }
       const filteredRows = applyQueueFilters(rows);
-      const telemetryHtml = renderTelemetrySummary(telemetryPayload);
+      const telemetryHtml =
+        filterState.source === "temporal" ? "" : renderTelemetrySummary(telemetryPayload);
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
+      const subtitle =
+        filterState.source === "temporal"
+          ? "Temporal-backed tasks with exact Temporal pagination."
+          : temporalListEnabled
+            ? `Unified queue, orchestrator, and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`
+            : `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`;
       setView(
         "Tasks List",
-        `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`,
+        subtitle,
         `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
           filteredRows,
         )}`,
@@ -3363,10 +3866,24 @@
       const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
+      const sourceField = filterForm.elements.namedItem("source");
+      const workflowTypeField = filterForm.elements.namedItem("workflowType");
+      const temporalStateField = filterForm.elements.namedItem("temporalState");
+      const entryField = filterForm.elements.namedItem("entry");
       const pageSizeField = filterForm.elements.namedItem("pageSize");
       const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
       const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
+      if (sourceField) {
+        sourceField.addEventListener("change", () => {
+          const nextSource = String(sourceField.value || "").trim().toLowerCase();
+          filterState.source = allowedSources.includes(nextSource) ? nextSource : "";
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("queue source filter update failed", error);
+          });
+        });
+      }
       if (runtimeField) {
         runtimeField.addEventListener("change", () => {
           filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
@@ -3403,6 +3920,33 @@
           });
         });
       }
+      if (workflowTypeField) {
+        workflowTypeField.addEventListener("change", () => {
+          filterState.workflowType = String(workflowTypeField.value || "").trim();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("temporal workflow type filter update failed", error);
+          });
+        });
+      }
+      if (temporalStateField) {
+        temporalStateField.addEventListener("change", () => {
+          filterState.temporalState = String(temporalStateField.value || "").trim().toLowerCase();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("temporal state filter update failed", error);
+          });
+        });
+      }
+      if (entryField) {
+        entryField.addEventListener("change", () => {
+          filterState.entry = String(entryField.value || "").trim().toLowerCase();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("temporal entry filter update failed", error);
+          });
+        });
+      }
       if (pageSizeField) {
         pageSizeField.addEventListener("change", () => {
           const parsed = Number(pageSizeField.value || DEFAULT_QUEUE_PAGE_SIZE);
@@ -3424,7 +3968,7 @@
           }
           const previousCursor = paginationState.cursorStack.pop() || null;
           paginationState.cursor = previousCursor || null;
-          syncPaginationQueryParams();
+          syncListQueryParams();
           load().catch((error) => {
             console.error("queue previous page load failed", error);
           });
@@ -3438,7 +3982,7 @@
           }
           paginationState.cursorStack.push(paginationState.cursor || "");
           paginationState.cursor = paginationState.nextCursor;
-          syncPaginationQueryParams();
+          syncListQueryParams();
           load().catch((error) => {
             console.error("queue next page load failed", error);
           });
@@ -3477,19 +4021,96 @@
     }
 
     const load = async () => {
+      syncListQueryParams();
+      if (filterState.source === "temporal" && temporalListEnabled) {
+        const params = new URLSearchParams();
+        params.set("pageSize", String(paginationState.limit));
+        if (paginationState.cursor) {
+          params.set("nextPageToken", paginationState.cursor);
+        }
+        if (filterState.workflowType) {
+          params.set("workflowType", filterState.workflowType);
+        }
+        if (filterState.temporalState) {
+          params.set("state", filterState.temporalState);
+        }
+        if (filterState.entry) {
+          params.set("entry", filterState.entry);
+        }
+        if (filterState.ownerType) {
+          params.set("ownerType", filterState.ownerType);
+        }
+        if (filterState.ownerId) {
+          params.set("ownerId", filterState.ownerId);
+        }
+        if (filterState.repository) {
+          params.set("repo", filterState.repository);
+        }
+        if (filterState.integration) {
+          params.set("integration", filterState.integration);
+        }
+        const temporalListEndpoint = temporalSourceConfig.list || "/api/executions";
+        const payload = await fetchJson(`${temporalListEndpoint}?${params.toString()}`);
+        if (!pageActive) {
+          return;
+        }
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        const filteredTemporalRows = toTemporalRows(items);
+        const payloadNextCursor = payload && typeof payload === "object"
+          ? String(payload.nextPageToken || "").trim() || null
+          : null;
+        currentTemporalCount =
+          payload
+          && typeof payload === "object"
+          && typeof payload.count === "number"
+            ? payload.count
+            : null;
+        currentTemporalCountMode =
+          currentTemporalCount !== null && payload && typeof payload === "object"
+            ? String(payload.countMode || "").trim()
+            : "";
+        paginationState.nextCursor = payloadNextCursor;
+        paginationState.hasMore = Boolean(payloadNextCursor);
+        if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
+          const previousCursor = paginationState.cursorStack.pop() || null;
+          paginationState.cursor = previousCursor || null;
+          syncListQueryParams();
+          await load();
+          return;
+        }
+        const pageIndex = paginationState.cursorStack.length;
+        paginationState.pageStart = filteredTemporalRows.length > 0
+          ? pageIndex * paginationState.limit + 1
+          : 0;
+        paginationState.pageEnd = pageIndex * paginationState.limit + filteredTemporalRows.length;
+        currentRows = sortRows(filteredTemporalRows);
+        renderQueueList(currentRows);
+        return;
+      }
+
+      currentTemporalCount = null;
+      currentTemporalCountMode = "";
       const params = new URLSearchParams();
       params.set("limit", String(paginationState.limit));
       if (paginationState.cursor) {
         params.set("cursor", paginationState.cursor);
       }
-      syncPaginationQueryParams();
       const queueListEndpoint = queueSourceConfig.list || "/api/tasks";
-      const [payload, orchestratorPayload] = await Promise.all([
+      const requests = [
         fetchJson(withQueueSummaryFlag(`${queueListEndpoint}?${params.toString()}`)),
         fetchJson(
           `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=${paginationState.limit}`,
         ).catch(() => ({ runs: [], tasks: [] })),
-      ]);
+      ];
+      const includeTemporalInMixed = !filterState.source && temporalListEnabled;
+      if (includeTemporalInMixed) {
+        requests.push(
+          fetchJson(
+            `${temporalSourceConfig.list || "/api/executions"}?pageSize=${paginationState.limit}`,
+          ).catch(() => ({ items: [] })),
+        );
+      }
+      const [payload, orchestratorPayload, temporalPayload] = await Promise.all(requests);
       if (!pageActive) {
         return;
       }
@@ -3507,7 +4128,7 @@
       if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
         const previousCursor = paginationState.cursorStack.pop() || null;
         paginationState.cursor = previousCursor || null;
-        syncPaginationQueryParams();
+        syncListQueryParams();
         await load();
         return;
       }
@@ -3517,6 +4138,7 @@
       currentRows = sortRows([
         ...toQueueRows(items),
         ...toOrchestratorRows(orchestratorItems),
+        ...(includeTemporalInMixed ? toTemporalRows(temporalPayload?.items || []) : []),
       ]);
       renderQueueList(currentRows);
       refreshTelemetryIfStale().catch(() => {
@@ -5965,12 +6587,86 @@
         !isEditMode &&
         Array.isArray(attachmentValidation.files) &&
         attachmentValidation.files.length > 0;
+      const submitDestination = determineSubmitDestination(
+        runtimeMode,
+        {
+          queue: queueSourceConfig.create || "/api/queue/jobs",
+          orchestrator: orchestratorSourceConfig.create || "/orchestrator/tasks",
+          temporal: temporalSourceConfig.create || "/api/executions",
+        },
+        {
+          temporalSubmitEnabled,
+          isEditMode,
+        },
+      );
+      if (submitDestination.mode === "temporal" && hasAttachments) {
+        message.className = "notice error queue-submit-message";
+        message.textContent =
+          "Temporal-backed submit currently supports artifact-first text inputs only; remove file attachments and retry.";
+        return;
+      }
 
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
       }
 
       try {
+        if (submitDestination.mode === "temporal") {
+          const temporalRequestBody = cloneTemporalSubmitRequest(requestBody);
+          const currentTaskPayload =
+            temporalRequestBody.payload &&
+            typeof temporalRequestBody.payload === "object" &&
+            !Array.isArray(temporalRequestBody.payload) &&
+            temporalRequestBody.payload.task &&
+            typeof temporalRequestBody.payload.task === "object" &&
+            !Array.isArray(temporalRequestBody.payload.task)
+              ? temporalRequestBody.payload.task
+              : null;
+          if (!currentTaskPayload) {
+            throw new Error("temporal submit request missing task payload");
+          }
+
+          let uploadedArtifactId = "";
+          const shouldExternalizeInstructions =
+            String(objectiveInstructions || "").length > TEMPORAL_INLINE_INPUT_MAX_CHARS;
+          if (shouldExternalizeInstructions) {
+            const uploadedArtifact = await createTemporalInputArtifact({
+              instructions: objectiveInstructions,
+              repository,
+            });
+            uploadedArtifactId = uploadedArtifact.artifactId;
+            currentTaskPayload.inputArtifactRef = uploadedArtifactId;
+            currentTaskPayload.instructions =
+              "Task instructions were uploaded as an artifact for Temporal execution.";
+          }
+
+          const created = await fetchJson(submitDestination.endpoint, {
+            method: "POST",
+            body: JSON.stringify(temporalRequestBody),
+          });
+          if (uploadedArtifactId) {
+            await linkTemporalArtifactToExecution({
+              artifactId: uploadedArtifactId,
+              execution: created,
+            });
+          }
+          const createdTaskId = String(
+            pick(created, "taskId") || pick(created, "workflowId") || "",
+          ).trim();
+          if (!createdTaskId) {
+            throw new Error("temporal creation response missing task id");
+          }
+          try {
+            clearWorkerSubmissionDraftAfterCreate();
+          } catch (cleanupError) {
+            console.warn("worker draft cleanup failed after temporal creation", cleanupError);
+          }
+          window.location.href =
+            String(pick(created, "redirectPath") || "").trim()
+            || buildUnifiedTaskDetailRoute(createdTaskId, "temporal");
+          return;
+        }
+
         if (isEditMode) {
           const updateEndpointTemplate = queueSourceConfig.update || "/api/queue/jobs/{id}";
           const updated = await fetchJson(endpoint(updateEndpointTemplate, { id: editJobId }), {
@@ -7651,6 +8347,1038 @@
       .join("");
   }
 
+  function buildTemporalTimeline(execution) {
+    const entries = [
+      {
+        label: "Started",
+        value: pick(execution, "startedAt"),
+        detail: "Execution created and admitted.",
+      },
+      {
+        label: "Updated",
+        value: pick(execution, "updatedAt"),
+        detail: String(pick(pick(execution, "memo") || {}, "summary") || "").trim() || "-",
+      },
+    ];
+    if (pick(execution, "closedAt")) {
+      entries.push({
+        label: "Closed",
+        value: pick(execution, "closedAt"),
+        detail: String(pick(execution, "closeStatus") || "terminal").trim(),
+      });
+    }
+    const waitingReason = temporalWaitingReason(execution);
+    if (waitingReason) {
+      entries.push({
+        label: "Waiting",
+        value: pick(execution, "updatedAt"),
+        detail: waitingReason,
+      });
+    }
+    return entries
+      .map(
+        (entry) => `
+          <tr>
+            <td>${escapeHtml(entry.label)}</td>
+            <td>${escapeHtml(formatTimestamp(entry.value))}</td>
+            <td>${escapeHtml(entry.detail)}</td>
+          </tr>
+        `,
+      )
+      .join("");
+  }
+
+  function resolveTemporalRunId(execution) {
+    return String(
+      pick(execution, "temporalRunId") || pick(execution, "runId") || "",
+    ).trim();
+  }
+
+  function formatTemporalWorkflowType(workflowType) {
+    const raw = String(workflowType || "").trim();
+    if (!raw) {
+      return "-";
+    }
+    if (raw === "MoonMind.Run") {
+      return "Run";
+    }
+    if (raw === "MoonMind.ManifestIngest") {
+      return "Manifest Ingest";
+    }
+    return raw;
+  }
+
+  function deriveTemporalTitle(execution) {
+    return (
+      pick(pick(execution, "memo"), "title") ||
+      formatTemporalWorkflowType(pick(execution, "workflowType")) ||
+      pick(execution, "workflowId") ||
+      "Temporal execution"
+    );
+  }
+
+  function deriveTemporalSummary(execution) {
+    return (
+      pick(pick(execution, "memo"), "summary") ||
+      `Execution is ${String(pick(execution, "state") || "running").replaceAll("_", " ")}.`
+    );
+  }
+
+  function resolveTemporalWaitingContext(execution) {
+    const waitingReason =
+      pick(execution, "waitingReason") ||
+      pick(pick(execution, "memo"), "waitingReason") ||
+      pick(pick(execution, "searchAttributes"), "mm_waiting_reason");
+    const attentionRequired = Boolean(
+      pick(execution, "attentionRequired") ||
+      pick(pick(execution, "memo"), "attentionRequired"),
+    );
+    if (!waitingReason && !attentionRequired) {
+      return "";
+    }
+    return `${waitingReason || "Awaiting external input."}${attentionRequired ? " Attention required." : ""}`;
+  }
+
+  function renderTemporalTimelineRows(execution) {
+    const rows = [
+      {
+        label: "Started",
+        timestamp: pick(execution, "startedAt"),
+        detail: "Execution created.",
+      },
+      {
+        label: "Last update",
+        timestamp: pick(execution, "updatedAt"),
+        detail: `State: ${String(pick(execution, "state") || "-").replaceAll("_", " ")}`,
+      },
+    ];
+    const waitingContext = resolveTemporalWaitingContext(execution);
+    if (waitingContext) {
+      rows.push({
+        label: "Waiting",
+        timestamp: pick(execution, "updatedAt"),
+        detail: waitingContext,
+      });
+    }
+    if (pick(execution, "closedAt")) {
+      rows.push({
+        label: "Closed",
+        timestamp: pick(execution, "closedAt"),
+        detail: `Close status: ${pick(execution, "closeStatus") || pick(execution, "temporalStatus") || "-"}`,
+      });
+    }
+    return rows
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.label)}</td>
+            <td>${formatTimestamp(row.timestamp)}</td>
+            <td>${escapeHtml(row.detail)}</td>
+          </tr>
+        `,
+      )
+      .join("");
+  }
+
+  function resolveTemporalArtifactsRequest(execution, workflowId) {
+    const namespace = String(pick(execution, "namespace") || "").trim();
+    const resolvedWorkflowId = String(
+      pick(execution, "workflowId") || workflowId || "",
+    ).trim();
+    const temporalRunId = resolveTemporalRunId(execution);
+    return {
+      namespace,
+      workflowId: resolvedWorkflowId,
+      temporalRunId,
+      canFetch: Boolean(namespace && resolvedWorkflowId && temporalRunId),
+    };
+  }
+
+  function resolveTemporalDetailModel(execution, workflowId, options = {}) {
+    const artifactsRequest = resolveTemporalArtifactsRequest(execution, workflowId);
+    const rawState = String(
+      pick(execution, "state") || pick(execution, "temporalStatus") || "",
+    )
+      .trim()
+      .toLowerCase();
+    return {
+      attentionRequired: Boolean(
+        pick(execution, "attentionRequired") ||
+        pick(pick(execution, "memo"), "attentionRequired"),
+      ),
+      closeStatus: pick(execution, "closeStatus") || "-",
+      debugFieldsEnabled: Object.prototype.hasOwnProperty.call(
+        options,
+        "debugFieldsEnabled",
+      )
+        ? Boolean(options.debugFieldsEnabled)
+        : Boolean(temporalDebugFieldsEnabled),
+      namespace: pick(execution, "namespace") || "-",
+      rawState,
+      summary: deriveTemporalSummary(execution),
+      temporalRunId: artifactsRequest.temporalRunId || "-",
+      temporalStatus: pick(execution, "temporalStatus") || "-",
+      timelineRows: renderTemporalTimelineRows(execution),
+      title: deriveTemporalTitle(execution),
+      waitingContext: resolveTemporalWaitingContext(execution),
+      workflowId: pick(execution, "workflowId") || workflowId || "-",
+      workflowType: formatTemporalWorkflowType(pick(execution, "workflowType")),
+    };
+  }
+
+  const TEMPORAL_ACTION_LABELS = {
+    approve: "Approve task",
+    cancel: "Cancel task",
+    edit_inputs: "Edit inputs",
+    pause: "Pause task",
+    rename: "Rename task",
+    rerun: "Rerun task",
+    resume: "Resume task",
+  };
+
+  const TEMPORAL_ACTION_MATRIX = {
+    awaiting_external: ["approve", "pause", "resume", "cancel"],
+    canceled: ["rerun"],
+    cancelled: ["rerun"],
+    completed: ["rerun"],
+    executing: ["pause", "rename", "cancel"],
+    failed: ["rerun"],
+    finalizing: ["cancel"],
+    initializing: ["rename", "cancel"],
+    planning: ["rename", "cancel"],
+    running: ["pause", "rename", "cancel"],
+    succeeded: ["rerun"],
+  };
+
+  function resolveTemporalActionSurface(execution, options = {}) {
+    const actionsEnabled = Object.prototype.hasOwnProperty.call(options, "actionsEnabled")
+      ? Boolean(options.actionsEnabled)
+      : Boolean(temporalActionsEnabled);
+    if (!actionsEnabled) {
+      return [];
+    }
+    const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
+    const configuredActions = Array.isArray(pick(execution, "availableActions"))
+      ? pick(execution, "availableActions")
+          .map((value) => String(value || "").trim().toLowerCase())
+          .filter(Boolean)
+      : [];
+    let actions = TEMPORAL_ACTION_MATRIX[rawState] || [];
+    if (configuredActions.length > 0) {
+      actions = actions.filter((actionKey) => configuredActions.includes(actionKey));
+    }
+    return actions.map((actionKey) => ({
+      actionKey,
+      label: TEMPORAL_ACTION_LABELS[actionKey] || actionKey,
+    }));
+  }
+
+  function resolveTemporalArtifactPresentation(artifact) {
+    const links = Array.isArray(pick(artifact, "links")) ? pick(artifact, "links") : [];
+    const firstLink = links[0] || null;
+    const defaultReadRef = pick(artifact, "default_read_ref") || {};
+    const previewRef = pick(artifact, "preview_artifact_ref") || {};
+    const rawAccessAllowed = Boolean(pick(artifact, "raw_access_allowed"));
+    const previewArtifactId = pick(previewRef, "artifact_id");
+    const defaultArtifactId =
+      pick(defaultReadRef, "artifact_id") || pick(artifact, "artifact_id");
+    const rawArtifactId = pick(artifact, "artifact_id");
+    const rawDownloadArtifactId =
+      rawArtifactId === previewArtifactId && defaultArtifactId
+        ? defaultArtifactId
+        : rawArtifactId;
+    const accessNotes = [];
+    const actions = [];
+
+    if (previewArtifactId) {
+      actions.push({
+        artifactId: previewArtifactId,
+        label: "Open preview",
+        variant: "preview",
+      });
+      accessNotes.push("Preview available");
+    }
+    if (rawAccessAllowed && rawDownloadArtifactId) {
+      actions.push({
+        artifactId: rawDownloadArtifactId,
+        label: previewArtifactId ? "Download raw" : "Download",
+        variant: "download",
+      });
+    }
+    if (!rawAccessAllowed) {
+      accessNotes.push("Raw restricted");
+    }
+    if (!rawAccessAllowed && !previewArtifactId) {
+      accessNotes.push("No safe preview");
+    }
+
+    return {
+      accessNotes,
+      actions,
+      artifactId: pick(artifact, "artifact_id") || "",
+      artifactLabel:
+        (firstLink && (pick(firstLink, "label") || pick(firstLink, "link_type"))) ||
+        pick(artifact, "artifact_id") ||
+        "artifact",
+      contentType:
+        pick(defaultReadRef, "content_type") ||
+        pick(previewRef, "content_type") ||
+        pick(artifact, "content_type") ||
+        "-",
+      linkType: (firstLink && pick(firstLink, "link_type")) || "-",
+      size:
+        pick(defaultReadRef, "size_bytes") ||
+        pick(previewRef, "size_bytes") ||
+        pick(artifact, "size_bytes") ||
+        "-",
+      status: pick(artifact, "status") || "-",
+    };
+  }
+
+  function buildTemporalArtifactLinkPayload(execution, options = {}) {
+    const namespace = String(pick(execution, "namespace") || "").trim();
+    const workflowId = String(pick(execution, "workflowId") || "").trim();
+    const runId = resolveTemporalRunId(execution);
+    const linkType = String(options.linkType || "").trim();
+    if (!namespace || !workflowId || !runId || !linkType) {
+      throw new Error("Temporal artifact link payload requires namespace, workflowId, runId, and linkType.");
+    }
+    const payload = {
+      namespace,
+      workflow_id: workflowId,
+      run_id: runId,
+      link_type: linkType,
+    };
+    if (options.label) {
+      payload.label = String(options.label);
+    }
+    return payload;
+  }
+
+  function buildTemporalArtifactCreatePayload(execution, options = {}) {
+    const payload = {
+      content_type: options.contentType || null,
+      metadata:
+        options.metadata && typeof options.metadata === "object" && !Array.isArray(options.metadata)
+          ? options.metadata
+          : {},
+    };
+    if (Number.isFinite(options.sizeBytes)) {
+      payload.size_bytes = Number(options.sizeBytes);
+    }
+    if (options.linkType) {
+      payload.link = buildTemporalArtifactLinkPayload(execution, options);
+    }
+    return payload;
+  }
+
+  function buildTemporalArtifactEditUpdatePayload(
+    previousArtifactRef,
+    nextArtifactRef,
+    options = {},
+  ) {
+    const previousArtifactId = String(
+      pick(previousArtifactRef, "artifact_id") || "",
+    ).trim();
+    const nextArtifactId = String(pick(nextArtifactRef, "artifact_id") || "").trim();
+    if (!nextArtifactId) {
+      throw new Error("A replacement artifact reference is required.");
+    }
+    if (previousArtifactId && previousArtifactId === nextArtifactId) {
+      throw new Error("Artifact edits must create a new artifact reference.");
+    }
+    const payload = {
+      updateName: "UpdateInputs",
+      inputArtifactRef: nextArtifactRef,
+    };
+    if (
+      options.parametersPatch &&
+      typeof options.parametersPatch === "object" &&
+      !Array.isArray(options.parametersPatch) &&
+      Object.keys(options.parametersPatch).length > 0
+    ) {
+      payload.parametersPatch = options.parametersPatch;
+    }
+    return payload;
+  }
+
+  async function createTemporalArtifactPlaceholder(execution, options = {}) {
+    return fetchJson(temporalSourceConfig.artifactCreate || "/api/artifacts", {
+      method: "POST",
+      body: JSON.stringify(buildTemporalArtifactCreatePayload(execution, options)),
+    });
+  }
+
+  async function uploadTemporalArtifactContent(
+    artifactId,
+    payload,
+    contentType = "application/octet-stream",
+  ) {
+    return fetchJson(
+      endpoint("/api/artifacts/{artifactId}/content", { artifactId }),
+      {
+        method: "PUT",
+        body: payload,
+        headers: { "Content-Type": contentType },
+      },
+    );
+  }
+
+  async function completeTemporalArtifactUpload(artifactId, parts = []) {
+    return fetchJson(
+      endpoint("/api/artifacts/{artifactId}/complete", { artifactId }),
+      {
+        method: "POST",
+        body: JSON.stringify({ parts }),
+      },
+    );
+  }
+
+  async function fetchTemporalArtifactMetadata(artifactId, includeDownload = false) {
+    const metadataUrl = endpoint(
+      temporalSourceConfig.artifactMetadata || "/api/artifacts/{artifactId}",
+      { artifactId },
+    );
+    return fetchJson(
+      includeDownload ? `${metadataUrl}?include_download=true` : metadataUrl,
+    );
+  }
+
+  function buildTemporalApprovalPayload(options = {}) {
+    const payload =
+      options.payload && typeof options.payload === "object" && !Array.isArray(options.payload)
+        ? { ...options.payload }
+        : {};
+    if (!String(payload.approval_type || "").trim()) {
+      payload.approval_type = "human";
+    }
+    return payload;
+  }
+
+  function resolveTemporalActionResultMessage(actionRequest, responsePayload) {
+    const payload =
+      responsePayload && typeof responsePayload === "object" && !Array.isArray(responsePayload)
+        ? responsePayload
+        : null;
+    if (payload && Object.prototype.hasOwnProperty.call(payload, "accepted")) {
+      if (payload.accepted === false) {
+        const rejectionMessage =
+          String(payload.message || "").trim() ||
+          String(actionRequest.rejectedMessage || "").trim() ||
+          "Task action was rejected.";
+        const error = new Error(rejectionMessage);
+        error.code = "temporal_action_rejected";
+        error.payload = payload;
+        throw error;
+      }
+      const acceptedMessage = String(payload.message || "").trim();
+      if (acceptedMessage) {
+        return acceptedMessage;
+      }
+    }
+    return actionRequest.successMessage;
+  }
+
+  function buildTemporalActionRequest(workflowId, actionKey, options = {}) {
+    const normalizedAction = String(actionKey || "").trim().toLowerCase();
+    const normalizedWorkflowId = String(workflowId || "").trim();
+    if (!normalizedWorkflowId || !normalizedAction) {
+      throw new Error("Temporal action request requires workflowId and action.");
+    }
+
+    if (normalizedAction === "rename") {
+      const title = String(options.title || "").trim();
+      if (!title) {
+        throw new Error("Task title is required.");
+      }
+      return {
+        successMessage: "Task title updated.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              updateName: "SetTitle",
+              title,
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "rerun") {
+      return {
+        successMessage: "Task rerun requested.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({ updateName: "RequestRerun" }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "edit_inputs") {
+      return {
+        successMessage: "Task inputs updated.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify(
+              buildTemporalArtifactEditUpdatePayload(
+                options.previousArtifactRef,
+                options.nextArtifactRef,
+                { parametersPatch: options.parametersPatch },
+              ),
+            ),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "approve") {
+      return {
+        successMessage: "Task approval sent.",
+        rejectedMessage: "Task approval was rejected.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              signalName: "Approve",
+              payload: buildTemporalApprovalPayload(options),
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "pause" || normalizedAction === "resume") {
+      return {
+        successMessage: normalizedAction === "pause" ? "Task paused." : "Task resumed.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              signalName: normalizedAction === "pause" ? "Pause" : "Resume",
+              payload: options.payload || {},
+            }),
+          },
+        },
+      };
+    }
+
+    if (normalizedAction === "cancel") {
+      return {
+        successMessage: "Task cancellation requested.",
+        request: {
+          url: endpoint(
+            temporalSourceConfig.cancel || "/api/executions/{workflowId}/cancel",
+            { workflowId: normalizedWorkflowId },
+          ),
+          options: {
+            method: "POST",
+            body: JSON.stringify({
+              graceful: true,
+              reason: String(options.reason || "").trim() || "Cancelled from task dashboard",
+            }),
+          },
+        },
+      };
+    }
+
+    throw new Error(`Unsupported Temporal action: ${normalizedAction}`);
+  }
+
+  function resolveTemporalDetailContext(
+    execution,
+    workflowId,
+    sourceConfig = temporalSourceConfig,
+  ) {
+    const namespace = pick(execution, "namespace");
+    const taskId = pick(execution, "taskId") || workflowId;
+    const temporalRunId =
+      pick(execution, "temporalRunId") || pick(execution, "runId") || null;
+    const memo = pick(execution, "memo") || {};
+    const continueAsNewCause =
+      pick(execution, "continueAsNewCause") ||
+      pick(memo, "continue_as_new_cause") ||
+      "-";
+    const artifactsEndpointTemplate =
+      sourceConfig.artifacts ||
+      "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts";
+    const artifactsEndpoint =
+      namespace && temporalRunId
+        ? endpoint(artifactsEndpointTemplate, {
+            namespace,
+            workflowId,
+            temporalRunId,
+          })
+        : "";
+    return {
+      namespace,
+      taskId,
+      temporalRunId,
+      memo,
+      continueAsNewCause,
+      artifactsEndpoint,
+    };
+  }
+
+  function renderTemporalArtifactRows(artifacts) {
+    return (Array.isArray(artifacts) ? artifacts : [])
+      .map((artifact) => {
+        const artifactId = String(pick(artifact, "artifact_id", "artifactId") || "").trim();
+        const previewRef = pick(artifact, "preview_artifact_ref", "previewArtifactRef") || {};
+        const defaultReadRef = pick(artifact, "default_read_ref", "defaultReadRef") || {};
+        const links = Array.isArray(pick(artifact, "links")) ? pick(artifact, "links") : [];
+        const previewArtifactId = String(pick(previewRef, "artifact_id", "artifactId") || "").trim();
+        const defaultReadArtifactId = String(
+          pick(defaultReadRef, "artifact_id", "artifactId") || "",
+        ).trim();
+        const linkedLabel = String(pick(links[0] || {}, "label") || "").trim();
+        const label =
+          linkedLabel ||
+          String(pick(artifact, "metadata")?.label || "").trim() ||
+          artifactId ||
+          "artifact";
+        const size = pick(artifact, "size_bytes", "sizeBytes");
+        const contentType = pick(artifact, "content_type", "contentType") || "-";
+        const rawAccessAllowed = Boolean(pick(artifact, "raw_access_allowed", "rawAccessAllowed"));
+        const readableArtifactId = previewArtifactId || defaultReadArtifactId || artifactId;
+        const actionLabel = previewArtifactId ? "Preview" : "Download";
+        const action = readableArtifactId
+          && (previewArtifactId || defaultReadArtifactId || rawAccessAllowed)
+          ? `<a href="${escapeHtml(
+              endpoint(
+                temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download",
+                { artifactId: readableArtifactId },
+              ),
+            )}">${escapeHtml(actionLabel)}</a>`
+          : "<span class='small'>Restricted</span>";
+        return `
+          <tr>
+            <td><code>${escapeHtml(label)}</code></td>
+            <td>${escapeHtml(String(size ?? "-"))}</td>
+            <td>${escapeHtml(String(contentType))}</td>
+            <td>${escapeHtml(String(pick(artifact, "status") || "-"))}</td>
+            <td>${action}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function renderTemporalActionButtons(execution) {
+    if (!temporalActionsEnabled) {
+      return "";
+    }
+    const capabilityNode =
+      pick(execution, "actions") && typeof pick(execution, "actions") === "object"
+        ? pick(execution, "actions")
+        : null;
+    const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
+    const terminal = ["succeeded", "failed", "canceled"].includes(rawState);
+    const buttons = [];
+    if (
+      capabilityNode
+        ? Boolean(pick(capabilityNode, "canSetTitle"))
+        : ["initializing", "planning", "executing", "awaiting_external"].includes(rawState)
+    ) {
+      buttons.push('<button type="button" data-temporal-action="set-title">Set Title</button>');
+    }
+    if (capabilityNode ? Boolean(pick(capabilityNode, "canCancel")) : !terminal) {
+      buttons.push('<button type="button" class="queue-action queue-action-danger" data-temporal-action="cancel">Cancel</button>');
+    }
+    if (
+      capabilityNode
+        ? Boolean(pick(capabilityNode, "canPause"))
+        : rawState === "executing" || rawState === "awaiting_external"
+    ) {
+      buttons.push('<button type="button" class="secondary" data-temporal-action="pause">Pause</button>');
+    }
+    if (capabilityNode ? Boolean(pick(capabilityNode, "canResume")) : rawState === "awaiting_external") {
+      buttons.push('<button type="button" class="secondary" data-temporal-action="resume">Resume</button>');
+    }
+    if (capabilityNode ? Boolean(pick(capabilityNode, "canApprove")) : rawState === "awaiting_external") {
+      buttons.push('<button type="button" class="secondary" data-temporal-action="approve">Approve</button>');
+    }
+    if (capabilityNode ? Boolean(pick(capabilityNode, "canRerun")) : terminal) {
+      buttons.push('<button type="button" class="secondary" data-temporal-action="rerun">Rerun</button>');
+    }
+    if (!buttons.length) {
+      return "";
+    }
+    return `<div class="actions" data-temporal-actions>${buttons.join("")}</div>`;
+  }
+
+  async function fetchTemporalDetailData(workflowId) {
+    const execution = await fetchJson(
+      endpoint(
+        temporalSourceConfig.detail || "/api/executions/{workflowId}",
+        { workflowId },
+      ),
+    );
+    const latestWorkflowId = String(pick(execution, "workflowId") || workflowId).trim();
+    const latestRunId = String(pick(execution, "temporalRunId", "runId") || "").trim();
+    const artifacts = latestRunId
+      ? await fetchJson(
+          endpoint(
+            temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+            {
+              namespace: pick(execution, "namespace") || "moonmind",
+              workflowId: latestWorkflowId,
+              temporalRunId: latestRunId,
+            },
+          ),
+        ).catch(() => ({ artifacts: [] }))
+      : { artifacts: [] };
+    return { execution, latestWorkflowId, latestRunId, artifacts };
+  }
+
+  function renderTemporalDebugSection(execution, latestWorkflowId) {
+    if (!temporalDebugFieldsEnabled) {
+      return "";
+    }
+    return `
+      <section>
+        <h3>Debug Metadata</h3>
+        <div class="grid-2">
+          <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
+          <div class="card"><strong>Temporal Run ID:</strong> <code>${escapeHtml(String(pick(execution, "temporalRunId", "runId") || "-"))}</code></div>
+          <div class="card"><strong>Namespace:</strong> ${escapeHtml(String(pick(execution, "namespace") || "-"))}</div>
+          <div class="card"><strong>Temporal Status:</strong> ${escapeHtml(String(pick(execution, "temporalStatus") || "-"))}</div>
+          <div class="card"><strong>Raw State:</strong> ${escapeHtml(String(pick(execution, "state") || "-"))}</div>
+          <div class="card"><strong>Close Status:</strong> ${escapeHtml(String(pick(execution, "closeStatus") || "-"))}</div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderTemporalDetailMarkup(detail) {
+    const {
+      execution,
+      latestWorkflowId,
+      latestRunId,
+      artifacts,
+      memo,
+      waitingReason,
+      detailTitle,
+      attentionRequired,
+      noticeHtml,
+      debugFields,
+    } = detail;
+    return `
+      ${noticeHtml}
+      <div class="grid-2">
+        <div class="card"><strong>Status:</strong> ${statusBadge("temporal", pick(execution, "state"))}</div>
+        <div class="card"><strong>Source:</strong> Temporal</div>
+        <div class="card"><strong>Title:</strong> ${escapeHtml(detailTitle)}</div>
+        <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(pick(execution, "workflowType") || "-"))}</div>
+        <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
+        <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
+        <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
+        <div class="card"><strong>Closed:</strong> ${escapeHtml(formatTimestamp(pick(execution, "closedAt")))}</div>
+        <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
+      </div>
+      <section>
+        <h3>Summary</h3>
+        <p>${escapeHtml(String(pick(memo, "summary") || "-"))}</p>
+      </section>
+      ${
+        waitingReason
+          ? `<section><h3>Waiting Reason</h3><p>${escapeHtml(waitingReason)}</p></section>`
+          : ""
+      }
+      ${
+        attentionRequired
+          ? "<section><h3>Attention Required</h3><p>This task is waiting for external input before it can continue.</p></section>"
+          : ""
+      }
+      ${renderTemporalActionButtons(execution)}
+      <section>
+        <h3>Timeline</h3>
+        <table>
+          <thead><tr><th>Stage</th><th>Timestamp</th><th>Detail</th></tr></thead>
+          <tbody>${buildTemporalTimeline(execution)}</tbody>
+        </table>
+      </section>
+      <section>
+        <h3>Artifacts</h3>
+        <table>
+          <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>${
+            renderTemporalArtifactRows(artifacts?.artifacts || []) ||
+            "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
+          }</tbody>
+        </table>
+      </section>
+      ${debugFields}
+    `;
+  }
+
+  async function renderTemporalDetailPage(workflowId) {
+    setView(
+      "Temporal Task Detail",
+      `Task ${workflowId}`,
+      "<p class='loading'>Loading Temporal task...</p>",
+      { showAutoRefreshControls: true },
+    );
+
+    let detailNotice = "";
+    let detailNoticeLevel = "ok";
+
+    const runTemporalAction = async (execution, action) => {
+      const normalizedAction = String(action || "").trim().toLowerCase();
+      const detailWorkflowId = String(pick(execution, "workflowId") || workflowId).trim();
+      if (!detailWorkflowId) {
+        return;
+      }
+      if (normalizedAction === "set-title") {
+        const nextTitle = window.prompt(
+          "Task title",
+          resolveTemporalWorkflowTitle(pick(execution, "workflowType"), pick(execution, "memo") || {}),
+        );
+        if (nextTitle === null) {
+          return;
+        }
+        await fetchJson(
+          endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: detailWorkflowId },
+          ),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              updateName: "SetTitle",
+              title: nextTitle,
+              idempotencyKey: `set-title-${Date.now()}`,
+            }),
+          },
+        );
+        detailNotice = "Task title updated.";
+        detailNoticeLevel = "ok";
+        return;
+      }
+      if (normalizedAction === "rerun") {
+        await fetchJson(
+          endpoint(
+            temporalSourceConfig.update || "/api/executions/{workflowId}/update",
+            { workflowId: detailWorkflowId },
+          ),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              updateName: "RequestRerun",
+              idempotencyKey: `rerun-${Date.now()}`,
+            }),
+          },
+        );
+        detailNotice = "Task rerun requested.";
+        detailNoticeLevel = "ok";
+        return;
+      }
+      if (normalizedAction === "cancel") {
+        const confirmed = window.confirm("Cancel this task?");
+        if (!confirmed) {
+          return;
+        }
+        await fetchJson(
+          endpoint(
+            temporalSourceConfig.cancel || "/api/executions/{workflowId}/cancel",
+            { workflowId: detailWorkflowId },
+          ),
+          {
+            method: "POST",
+            body: JSON.stringify({ graceful: true }),
+          },
+        );
+        detailNotice = "Task cancellation requested.";
+        detailNoticeLevel = "ok";
+        return;
+      }
+      if (normalizedAction === "pause" || normalizedAction === "resume") {
+        await fetchJson(
+          endpoint(
+            temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
+            { workflowId: detailWorkflowId },
+          ),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              signalName: normalizedAction === "pause" ? "Pause" : "Resume",
+            }),
+          },
+        );
+        detailNotice = normalizedAction === "pause" ? "Task paused." : "Task resumed.";
+        detailNoticeLevel = "ok";
+        return;
+      }
+      if (normalizedAction === "approve") {
+        const approvalType = window.prompt("Approval type", "operator");
+        if (approvalType === null) {
+          return;
+        }
+        await fetchJson(
+          endpoint(
+            temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
+            { workflowId: detailWorkflowId },
+          ),
+          {
+            method: "POST",
+            body: JSON.stringify({
+              signalName: "Approve",
+              payload: { approval_type: approvalType || "operator" },
+            }),
+          },
+        );
+        detailNotice = "Approval signal sent.";
+        detailNoticeLevel = "ok";
+      }
+    };
+
+    const attachTemporalActionHandlers = (execution, reload) => {
+      const actionRoot = document.querySelector("[data-temporal-actions]");
+      if (!actionRoot) {
+        return;
+      }
+      actionRoot.querySelectorAll("[data-temporal-action]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const action = button.getAttribute("data-temporal-action");
+          if (!action) {
+            return;
+          }
+          button.setAttribute("disabled", "disabled");
+          try {
+            await runTemporalAction(execution, action);
+            await reload(true);
+          } catch (error) {
+            console.error("temporal action failed", error);
+            detailNotice = error instanceof Error && error.message
+              ? error.message
+              : "Temporal action failed.";
+            detailNoticeLevel = "error";
+            await reload(true);
+          } finally {
+            button.removeAttribute("disabled");
+          }
+        });
+      });
+    };
+
+    const load = async (silent = false) => {
+      try {
+        const { execution, latestWorkflowId, latestRunId, artifacts } =
+          await fetchTemporalDetailData(workflowId);
+        const memo = pick(execution, "memo") || {};
+        const waitingReason = temporalWaitingReason(execution);
+        const detailTitle = resolveTemporalWorkflowTitle(
+          pick(execution, "workflowType"),
+          memo,
+        );
+        const attentionRequired = Boolean(
+          pick(execution, "attentionRequired")
+            || String(pick(execution, "state") || "").trim().toLowerCase() === "awaiting_external",
+        );
+        const debugFields = renderTemporalDebugSection(execution, latestWorkflowId);
+        const noticeHtml = detailNotice
+          ? `<div class="notice ${escapeHtml(detailNoticeLevel)}">${escapeHtml(detailNotice)}</div>`
+          : "";
+        setView(
+          "Temporal Task Detail",
+          detailTitle,
+          renderTemporalDetailMarkup({
+            execution,
+            latestWorkflowId,
+            latestRunId,
+            artifacts,
+            memo,
+            waitingReason,
+            detailTitle,
+            attentionRequired,
+            noticeHtml,
+            debugFields,
+          }),
+          { showAutoRefreshControls: true },
+        );
+        attachTemporalActionHandlers(execution, load);
+      } catch (error) {
+        console.error("temporal detail load failed", error);
+        if (silent && detailNotice) {
+          setView(
+            "Temporal Task Detail",
+            `Task ${workflowId}`,
+            `<div class='notice error'>${escapeHtml(detailNotice)}</div>`,
+            { showAutoRefreshControls: true },
+          );
+          return;
+        }
+        setView(
+          "Temporal Task Detail",
+          `Task ${workflowId}`,
+          "<div class='notice error'>Failed to load task detail.</div>",
+          { showAutoRefreshControls: true },
+        );
+      }
+    };
+
+    await load();
+    startPolling(() => load(true), pollIntervals.detail);
+  }
+
+  async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
+    const safeTaskId = normalizeDashboardDetailSegment(taskId);
+    if (!safeTaskId) {
+      return "";
+    }
+    try {
+      const resolutionUrl = new URL(
+        endpoint(taskResolutionEndpoint, { taskId: safeTaskId }),
+        window.location.origin,
+      );
+      const normalizedSourceHint = String(sourceHint || "").trim().toLowerCase();
+      if (normalizedSourceHint) {
+        resolutionUrl.searchParams.set("source", normalizedSourceHint);
+      }
+      const payload = await fetchJson(`${resolutionUrl.pathname}${resolutionUrl.search}`);
+      const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
+      return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
+        ? resolvedSource
+        : "";
+    }
+    catch (_error) {
+      try {
+        const payload = await fetchJson(
+          endpoint(taskSourceResolverEndpoint, { taskId: safeTaskId }),
+        );
+        const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
+        return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
+          ? resolvedSource
+          : "";
+      } catch (_fallbackError) {
+        return "";
+      }
+    }
+  }
+
   async function renderOrchestratorDetailPage(runId) {
     setView(
       "Orchestrator Task Detail",
@@ -8268,6 +9996,31 @@
     startPolling(() => load(true), pollIntervals.detail);
   }
 
+  function resolveManifestIngestContext(
+    execution,
+    workflowId,
+    sourceConfig = temporalSourceConfig,
+  ) {
+    const detailContext = resolveTemporalDetailContext(execution, workflowId, sourceConfig);
+    const resolvedWorkflowId = detailContext.taskId || workflowId;
+    const statusEndpointTemplate =
+      sourceConfig.manifestStatus || "/api/executions/{workflowId}/manifest-status";
+    const nodesEndpointTemplate =
+      sourceConfig.manifestNodes || "/api/executions/{workflowId}/manifest-nodes";
+    return {
+      ...detailContext,
+      manifestStatusEndpoint: endpoint(statusEndpointTemplate, {
+        workflowId: resolvedWorkflowId,
+      }),
+      manifestNodesEndpoint: endpoint(nodesEndpointTemplate, {
+        workflowId: resolvedWorkflowId,
+      }),
+      runIndexArtifactRef:
+        pick(execution, "runIndexArtifactRef")
+        || pick(execution, "run_index_artifact_ref")
+        || null,
+    };
+  }
   async function renderSystemSettingsPage() {
     if (!workerPauseTransport) {
       setView(
@@ -8620,6 +10373,7 @@
     const orchestratorDetailMatch = normalizedRoute.match(
       /^\/tasks\/orchestrator\/([^/]+)$/,
     );
+    const temporalDetailMatch = normalizedRoute.match(/^\/tasks\/temporal\/([^/]+)$/);
     const unifiedDetailMatch = normalizedRoute.match(/^\/tasks\/([^/]+)$/);
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
     const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
@@ -8638,6 +10392,10 @@
     }
     if (normalizedRoute === "/tasks/orchestrator") {
       window.location.replace("/tasks/list?filterRuntime=orchestrator");
+      return;
+    }
+    if (normalizedRoute === "/tasks/temporal") {
+      window.location.replace("/tasks/list?source=temporal");
       return;
     }
     if (normalizedRoute === "/tasks/manifests") {
@@ -8694,6 +10452,12 @@
       );
       return;
     }
+    if (temporalDetailMatch) {
+      window.location.replace(
+        `/tasks/${encodeURIComponent(temporalDetailMatch[1])}?source=temporal`,
+      );
+      return;
+    }
     if (unifiedDetailMatch) {
       const candidateTaskId = normalizeDashboardDetailSegment(unifiedDetailMatch[1]);
       if (!candidateTaskId) {
@@ -8709,6 +10473,23 @@
       }
       if (explicitSource === "orchestrator") {
         await renderOrchestratorDetailPage(candidateTaskId);
+        return;
+      }
+      if (explicitSource === "temporal" && temporalDetailEnabled) {
+        await renderTemporalDetailPage(candidateTaskId);
+        return;
+      }
+      const resolvedSource = await resolveUnifiedTaskSource(candidateTaskId);
+      if (resolvedSource === "queue") {
+        await renderQueueDetailPage(candidateTaskId);
+        return;
+      }
+      if (resolvedSource === "orchestrator") {
+        await renderOrchestratorDetailPage(candidateTaskId);
+        return;
+      }
+      if (resolvedSource === "temporal" && temporalDetailEnabled) {
+        await renderTemporalDetailPage(candidateTaskId);
         return;
       }
       try {
@@ -8731,9 +10512,25 @@
         await renderOrchestratorDetailPage(candidateTaskId);
         return;
       } catch (_error) {
-        renderNotFound();
-        return;
+        // fall through and probe temporal
       }
+      if (temporalDetailEnabled) {
+        try {
+          await fetchJson(
+            endpoint(
+              temporalSourceConfig.detail || "/api/executions/{workflowId}",
+              { workflowId: candidateTaskId },
+            ),
+          );
+          await renderTemporalDetailPage(candidateTaskId);
+          return;
+        } catch (_error) {
+          renderNotFound();
+          return;
+        }
+      }
+      renderNotFound();
+      return;
     }
     if (proposalDetailMatch) {
       await renderProposalDetailPage(proposalDetailMatch[1]);
@@ -8758,6 +10555,7 @@
 
   const disposeTheme = initTheme();
   initButtonClickGlow();
+  syncTemporalNavVisibility();
   if (typeof window.addEventListener === "function") {
     window.addEventListener("beforeunload", () => {
       stopPolling();
