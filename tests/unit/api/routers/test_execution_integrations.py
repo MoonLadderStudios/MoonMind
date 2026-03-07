@@ -16,10 +16,6 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
-from moonmind.workflows.temporal.client import (
-    TemporalClientAdapter,
-    WorkflowStartResult,
-)
 
 CURRENT_USER_DEP = get_current_user()
 
@@ -29,18 +25,6 @@ def _reset_dependency_overrides():
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
-
-
-@pytest.fixture(autouse=True)
-def _mock_temporal_client_adapter(monkeypatch):
-    async def _mock_start_workflow(self, *args, **kwargs):
-        workflow_id = kwargs.get("workflow_id") or "mm:dummy"
-        return WorkflowStartResult(
-            workflow_id=str(workflow_id),
-            run_id=str(uuid4()),
-        )
-
-    monkeypatch.setattr(TemporalClientAdapter, "start_workflow", _mock_start_workflow)
 
 
 @pytest.fixture(autouse=True)
