@@ -8,14 +8,14 @@ import uuid
 from typing import Any
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from temporalio.client import Client
 
-from api_service.main import app
-from api_service.db.models import User, Base
 from api_service.auth_providers import get_current_user
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from api_service.db.base import get_async_session
+from api_service.db.models import Base, User
+from api_service.main import app
 
 # Ignore the env file so we can run isolated in pytest
 os.environ["IGNORE_ENV_FILE"] = "1"
@@ -24,11 +24,16 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
 async def _poll_for_status(
-    client: AsyncClient, task_id: str, target_statuses: set[str], max_attempts: int = 120
+    client: AsyncClient,
+    task_id: str,
+    target_statuses: set[str],
+    max_attempts: int = 120,
 ) -> dict[str, Any]:
     for _ in range(max_attempts):
         resp = await client.get(f"/api/executions/{task_id}")
-        assert resp.status_code == 200, f"Detail fetch failed with {resp.status_code}: {resp.text}"
+        assert (
+            resp.status_code == 200
+        ), f"Detail fetch failed with {resp.status_code}: {resp.text}"
         detail = resp.json()
         if detail.get("status") in target_statuses:
             return detail
@@ -44,7 +49,9 @@ async def test_temporal_switchover_e2e() -> None:
     try:
         await Client.connect("localhost:7233")
     except Exception as e:
-        pytest.skip(f"Skipping e2e test because Temporal is not available on localhost:7233: {e}")
+        pytest.skip(
+            f"Skipping e2e test because Temporal is not available on localhost:7233: {e}"
+        )
 
     test_user_id = uuid.uuid4()
     test_user = User(id=test_user_id, email="test@example.com", is_superuser=True)
@@ -53,7 +60,9 @@ async def test_temporal_switchover_e2e() -> None:
 
     # Setup an isolated test DB to satisfy the API's database dependencies
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async_session_maker = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async_session_maker = async_sessionmaker(
+        bind=engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -64,7 +73,9 @@ async def test_temporal_switchover_e2e() -> None:
 
     app.dependency_overrides[get_async_session] = override_get_async_session
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         # Create execution
         create_req = {
             "workflowType": "MoonMind.Run",
@@ -76,6 +87,7 @@ async def test_temporal_switchover_e2e() -> None:
 
         # Override the hardcoded auth logic inside executions router
         from api_service import auth
+
         auth._DEFAULT_USER_ID = test_user_id
 
         response = await client.post("/api/executions", json=create_req)
@@ -92,7 +104,9 @@ async def test_temporal_switchover_e2e() -> None:
         list_resp = await client.get("/api/executions")
         assert list_resp.status_code == 200
         items = list_resp.json().get("items", [])
-        assert any(item.get("taskId") == task_id for item in items), "Execution not found in list"
+        assert any(
+            item.get("taskId") == task_id for item in items
+        ), "Execution not found in list"
 
         # Wait until the execution leaves the 'initializing' status, proving workers are polling
         # and moving the state forward.
@@ -104,13 +118,22 @@ async def test_temporal_switchover_e2e() -> None:
         await asyncio.sleep(2)
 
         # Check artifact link works
-        artifacts_resp = await client.get(f"/api/executions/moonmind/{workflow_id}/{detail.get('runId')}/artifacts")
-        assert artifacts_resp.status_code == 200, f"Failed to fetch artifacts: {artifacts_resp.text}"
+        artifacts_resp = await client.get(
+            f"/api/executions/moonmind/{workflow_id}/{detail.get('runId')}/artifacts"
+        )
+        assert (
+            artifacts_resp.status_code == 200
+        ), f"Failed to fetch artifacts: {artifacts_resp.text}"
 
         # Perform an operator action: cancel
         cancel_resp = await client.post(f"/api/executions/{task_id}/cancel", json={})
-        assert cancel_resp.status_code in (200, 400), f"Cancel failed: {cancel_resp.text}"
+        assert cancel_resp.status_code in (
+            200,
+            400,
+        ), f"Cancel failed: {cancel_resp.text}"
 
         # Ensure the cancel action reflects on the workflow
-        final_detail = await _poll_for_status(client, task_id, {"success", "failed", "canceled"})
+        final_detail = await _poll_for_status(
+            client, task_id, {"success", "failed", "canceled"}
+        )
         assert final_detail.get("status") in {"success", "failed", "canceled"}
