@@ -27,7 +27,6 @@ from moonmind.workflows.temporal import (
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-
 DEFAULT_MANIFEST_MAX_CONCURRENCY = (
     manifest_ingest_module.DEFAULT_MANIFEST_MAX_CONCURRENCY
 )

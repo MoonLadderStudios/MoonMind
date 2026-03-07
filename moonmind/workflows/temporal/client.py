@@ -114,8 +114,7 @@ class TemporalExecutionCreatorProtocol(Protocol):
         repository: str | None = ...,
         integration: str | None = ...,
         summary: str | None = ...,
-    ) -> TemporalExecutionRecord:
-        ...
+    ) -> TemporalExecutionRecord: ...
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 def mock_temporal_client_adapter(monkeypatch):
     import uuid
     from dataclasses import dataclass
+
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     @dataclass(frozen=True, slots=True)
