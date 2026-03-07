@@ -1,15 +1,97 @@
-"""Temporal client helpers for manifest-ingest execution bootstrap."""
+"""Temporal client adapter and helpers for runtime execution."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
+
+from temporalio.client import Client
+from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
+from moonmind.config.settings import settings
 from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel
-from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.workflows.temporal.workers import (
+    WORKFLOW_FLEET,
+    describe_configured_worker,
+)
 
 MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowStartResult:
+    """Result of starting a Temporal workflow."""
+
+    workflow_id: str
+    run_id: str
+
+
+class TemporalClientAdapter:
+    """Adapter for communicating with the Temporal server."""
+
+    def __init__(self, client: Client | None = None) -> None:
+        """Initialize the Temporal client adapter."""
+        self._client = client
+        self._lock = asyncio.Lock()
+
+    async def get_client(self) -> Client:
+        """Get or initialize the Temporal client connection."""
+        if self._client is not None:
+            return self._client
+        async with self._lock:
+            if self._client is None:
+                self._client = await Client.connect(
+                    settings.temporal.address,
+                    namespace=settings.temporal.namespace,
+                )
+            return self._client
+
+    def _get_task_queue(self, workflow_type: str) -> str:
+        """Resolve the task queue for the given workflow type."""
+        topology = describe_configured_worker(
+            temporal_settings=settings.temporal.model_copy(
+                update={"worker_fleet": WORKFLOW_FLEET}
+            )
+        )
+        return topology.task_queues[0]
+
+    async def start_workflow(
+        self,
+        *,
+        workflow_type: str,
+        workflow_id: str,
+        input_args: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        memo: Mapping[str, Any] | None = None,
+        search_attributes: Mapping[str, Any] | None = None,
+    ) -> WorkflowStartResult:
+        """Start a new Temporal workflow."""
+        client = await self.get_client()
+
+        task_queue = self._get_task_queue(workflow_type)
+
+        args = [input_args] if input_args is not None else []
+        try:
+            handle = await client.start_workflow(
+                workflow_type,
+                *args,
+                id=workflow_id,
+                task_queue=task_queue,
+                memo=memo,
+                search_attributes=search_attributes,
+            )
+            return WorkflowStartResult(
+                workflow_id=handle.id,
+                run_id=handle.result_run_id,
+            )
+        except WorkflowAlreadyStartedError as err:
+            return WorkflowStartResult(
+                workflow_id=err.workflow_id,
+                run_id=err.run_id,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +130,7 @@ def build_manifest_child_parameters(
 
 async def start_manifest_child_runs(
     *,
-    execution_service: TemporalExecutionService,
+    execution_service: Any,
     parent_execution: TemporalExecutionRecord,
     requested_by: RequestedByModel | Mapping[str, object],
     nodes: Sequence[ManifestNodeModel],

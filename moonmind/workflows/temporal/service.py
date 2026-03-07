@@ -154,6 +154,9 @@ class TemporalExecutionService:
         self._integration_task_queue = str(integration_task_queue).strip() or (
             "mm.activity.integrations"
         )
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+        self._client_adapter = TemporalClientAdapter()
         self._integration_poll_initial_seconds = max(
             1, int(integration_poll_initial_seconds)
         )
@@ -222,7 +225,6 @@ class TemporalExecutionService:
 
         now = _utc_now()
         workflow_id = f"mm:{uuid4()}"
-        run_id = str(uuid4())
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
@@ -254,6 +256,17 @@ class TemporalExecutionService:
             for ref in (input_artifact_ref, plan_artifact_ref, manifest_artifact_ref)
             if ref
         ]
+
+        start_result = await self._client_adapter.start_workflow(
+            workflow_type=workflow_type_enum.value,
+            workflow_id=workflow_id,
+            input_args=params,
+            idempotency_key=idempotency_key,
+            memo=memo,
+            search_attributes=search_attributes,
+        )
+
+        run_id = start_result.run_id
 
         record = TemporalExecutionCanonicalRecord(
             workflow_id=workflow_id,
