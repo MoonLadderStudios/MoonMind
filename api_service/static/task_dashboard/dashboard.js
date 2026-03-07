@@ -1113,7 +1113,23 @@
 
 
   function temporalWaitingReason(execution) {
-    return String(pick(execution, "waitingReason") || "").trim();
+    const waitingReason = String(pick(execution, "waitingReason") || "").trim();
+    if (waitingReason) {
+      return waitingReason;
+    }
+
+    const state = String(pick(execution, "state") || "").trim().toLowerCase();
+    if (state !== "awaiting_external") {
+      return "";
+    }
+
+    const memo = pick(execution, "memo") || {};
+    const memoWaitingReason = String(pick(memo, "waitingReason") || "").trim();
+    if (memoWaitingReason) {
+      return memoWaitingReason;
+    }
+
+    return String(pick(memo, "summary") || "").trim();
   }
 
   function formatTimestamp(value) {
@@ -3241,9 +3257,16 @@
 
   function toTemporalRows(items) {
     return (Array.isArray(items) ? items : []).map((item) => {
+      const memo = pick(item, "memo") || {};
+      const searchAttributes = pick(item, "searchAttributes") || {};
       const workflowId = String(pick(item, "workflowId", "taskId") || "").trim();
-      const rawState = String(pick(item, "rawState", "state") || "initializing").trim();
+      const rawState = String(pick(item, "rawState", "state") || "initializing").trim().toLowerCase();
       const updatedAt = pick(item, "updatedAt") || pick(item, "startedAt");
+      const ownerType = String(
+        pick(item, "ownerType", "OwnerType") ||
+          pick(searchAttributes, "mm_owner_type", "ownerType") ||
+          "user",
+      ).trim().toLowerCase() || "user";
       return {
         source: "temporal",
         sourceLabel: "Temporal",
@@ -3253,11 +3276,26 @@
         temporalRunId: pick(item, "temporalRunId", "runId") || "",
         namespace: pick(item, "namespace") || "",
         workflowType: pick(item, "workflowType") || "",
-        entry: pick(item, "entry") || "",
-        ownerType: pick(item, "ownerType") || "user",
-        ownerId: pick(item, "ownerId") || "",
-        repository: pick(item, "repository") || "",
-        integration: pick(item, "integration") || "",
+        entry: String(
+          pick(item, "entry", "Entry") ||
+            pick(searchAttributes, "mm_entry", "entry") ||
+            pick(memo, "entry") ||
+            "",
+        ).trim(),
+        ownerType,
+        ownerId: String(
+          pick(item, "ownerId", "OwnerId") || pick(searchAttributes, "mm_owner_id", "ownerId") || "",
+        ).trim(),
+        repository: String(
+          pick(item, "repository", "Repository") ||
+            pick(searchAttributes, "mm_repository", "mm_repo", "repository") ||
+            "",
+        ).trim(),
+        integration: String(
+          pick(item, "integration", "Integration") ||
+            pick(searchAttributes, "mm_integration", "integration") ||
+            "",
+        ).trim(),
         queueName: "-",
         runtimeMode: null,
         skillId: null,
@@ -8393,7 +8431,7 @@
   }
 
   function resolveTemporalWaitingContext(execution) {
-    const waitingReason = pick(execution, "waitingReason");
+    const waitingReason = temporalWaitingReason(execution);
     const attentionRequired = Boolean(pick(execution, "attentionRequired"));
     if (!waitingReason && !attentionRequired) {
       return "";
@@ -8458,7 +8496,7 @@
 
   function resolveTemporalDetailModel(execution, workflowId, options = {}) {
     const artifactsRequest = resolveTemporalArtifactsRequest(execution, workflowId);
-    const rawState = String(pick(execution, "rawState", "state") || "initializing").trim();
+    const rawState = String(pick(execution, "rawState", "state") || "initializing").trim().toLowerCase();
     return {
       attentionRequired: Boolean(pick(execution, "attentionRequired")),
       closeStatus: pick(execution, "closeStatus") || "-",
