@@ -207,8 +207,7 @@ def _backup_existing_tables() -> None:
 def _copy_legacy_table_data(target_table: str) -> None:
     """Copy data from a legacy backup table into the new schema."""
 
-    # Data is not critical in this environment; skip copying legacy rows.
-    return
+    # No-op safely when the source table or schema metadata is missing.
 
     columns = LEGACY_TABLE_COLUMNS.get(target_table)
     if not columns:
@@ -336,7 +335,7 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_task_states",
         "spec_workflow_runs",
     ):
-        op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+        op.execute(f"DROP TABLE IF EXISTS {_quote_ident(table)} CASCADE")
 
     _backup_existing_tables()
     _detach_legacy_tables_from_enums()
@@ -347,7 +346,7 @@ def upgrade() -> None:  # noqa: D401
         "ix_spec_workflow_runs_requested_by",
         "ix_spec_workflow_runs_created_by",
     ):
-        op.execute(f"DROP INDEX IF EXISTS {idx_name}")
+        op.execute(f"DROP INDEX IF EXISTS {_quote_ident(idx_name)}")
 
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)
