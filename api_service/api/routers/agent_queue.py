@@ -1330,17 +1330,15 @@ async def resolve_manifest_job_secrets(
         )
         if payload.include_profile:
 
-            async def resolve_secret(ref: dict) -> tuple[dict, Any]:
-                return ref, await auth_manager.get_secret(
+            resolution_results = []
+            for ref in profile_refs:
+                value = await auth_manager.get_secret(
                     "profile",
                     key=ref["envKey"],
                     user=requester_user,
+                    allow_env_fallback=False,
                 )
-
-            # Avoid N+1 sequential await by resolving secrets concurrently
-            resolution_results = await asyncio.gather(
-                *(resolve_secret(ref) for ref in profile_refs)
-            )
+                resolution_results.append((ref, value))
 
             for ref, value in resolution_results:
                 env_key = ref["envKey"]
