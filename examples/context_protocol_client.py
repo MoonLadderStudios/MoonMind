@@ -36,7 +36,7 @@ def send_context_request(messages, model="gemini-pro"):
 
     headers = {"Content-Type": "application/json"}
 
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(url, json=payload, headers=headers, timeout=30)
 
     if response.status_code != 200:
         print(f"Error: {response.status_code}")

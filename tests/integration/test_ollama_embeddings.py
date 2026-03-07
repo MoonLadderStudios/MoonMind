@@ -33,7 +33,7 @@ logger.addHandler(ch)
 def ollama_running():
     """Fixture to check if Ollama is running at the specified URL."""
     try:
-        response = requests.get(settings.ollama.ollama_base_url + "/api/tags")
+        response = requests.get(settings.ollama.ollama_base_url + "/api/tags", timeout=30)
         if response.status_code == 200:
             return True
     except requests.ConnectionError:
