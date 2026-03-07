@@ -137,14 +137,14 @@ const helpers = loadTemporalHelpers();
   assert.strictEqual(
     helpers.temporalWaitingReason({
       state: "awaiting_external",
-      memo: { summary: "Waiting on approval." },
+      waitingReason: "Waiting on approval.",
     }),
     "Waiting on approval.",
   );
   assert.strictEqual(
     helpers.temporalWaitingReason({
       state: "executing",
-      memo: { summary: "Still running." },
+      waitingReason: "",
     }),
     "",
   );
@@ -199,12 +199,12 @@ const helpers = loadTemporalHelpers();
 
 (function testTemporalTitleAndRouteNormalizationStayTaskOriented() {
   assert.strictEqual(
-    helpers.resolveTemporalWorkflowTitle("MoonMind.Run", { title: "Review PR" }),
+    helpers.deriveTemporalTitle({ workflowType: "MoonMind.Run", title: "Review PR" }),
     "Review PR",
   );
   assert.strictEqual(
-    helpers.resolveTemporalWorkflowTitle("MoonMind.ManifestIngest", {}),
-    "Manifest Ingest",
+    helpers.deriveTemporalTitle({ workflowType: "MoonMind.ManifestIngest", workflowId: "mm:abcd" }),
+    "mm:abcd",
   );
   assert.strictEqual(
     helpers.normalizeDashboardRoutePath("/tasks/new"),
