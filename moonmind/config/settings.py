@@ -1373,10 +1373,10 @@ class SecuritySettings(BaseSettings):
     """Security settings"""
 
     JWT_SECRET_KEY: Optional[str] = Field(
-        "test_jwt_secret_key", env="JWT_SECRET_KEY"
+        None, env="JWT_SECRET_KEY"
     )  # Made Optional and added default
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
-        "test_encryption_master_key", env="ENCRYPTION_MASTER_KEY"
+        None, env="ENCRYPTION_MASTER_KEY"
     )  # Made Optional and added default
 
     model_config = SettingsConfigDict(env_prefix="")
