@@ -41,7 +41,11 @@ def ollama_running():
         if response.status_code == 200:
             return True
     except requests.RequestException:
-        pass
+        logger.warning(
+            "Ollama health probe failed for %s/api/tags; treating service as unavailable.",
+            settings.ollama.ollama_base_url,
+            exc_info=True,
+        )
     return False
 
 
