@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+import asyncio
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -212,8 +213,8 @@ class MoonMindRunWorkflow:
         metadata.setdefault("planRef", plan_ref)
         integration_parameters["metadata"] = metadata
 
-        await workflow.execute_activity(
-            self._integration_activity_type(),
+        start_result = await workflow.execute_activity(
+            self._integration_activity_type("start"),
             {
                 "principal": self._principal(),
                 "parameters": integration_parameters,
@@ -222,12 +223,67 @@ class MoonMindRunWorkflow:
             task_queue=INTEGRATIONS_TASK_QUEUE,
         )
 
-        self._wait_cycle_count += 1
-        await workflow.wait_condition(
-            lambda: self._resume_requested or self._cancel_requested
-        )
+        correlation_id = start_result.get("correlation_id") if isinstance(start_result, dict) else getattr(start_result, "correlation_id", None)
+
+        poll_interval_seconds = 5
+        max_poll_interval_seconds = 300
+
+        self._waiting_reason = "external_completion"
+        self._attention_required = False
+        self._update_search_attributes()
+
+        while not self._resume_requested and not self._cancel_requested:
+            self._wait_cycle_count += 1
+
+            # Wait for callback, user resume, cancel, or poll timer
+            try:
+                await workflow.wait_condition(
+                    lambda: self._resume_requested or self._cancel_requested,
+                    timeout=timedelta(seconds=poll_interval_seconds)
+                )
+            except asyncio.TimeoutError:
+                pass # Timeout occurred
+
+            if self._resume_requested or self._cancel_requested:
+                break
+
+            # If we didn't resume or cancel, it was a timeout, so we poll
+            try:
+                poll_result = await workflow.execute_activity(
+                    self._integration_activity_type("status"),
+                    {
+                        "principal": self._principal(),
+                        "correlation_id": correlation_id,
+                        "parameters": integration_parameters,
+                    },
+                    start_to_close_timeout=timedelta(minutes=5),
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                )
+
+                if isinstance(poll_result, dict):
+                    status = poll_result.get("normalized_status")
+                else:
+                    status = getattr(poll_result, "normalized_status", None)
+
+                if status in ("succeeded", "failed", "canceled"):
+                    self._resume_requested = True
+                    if status == "failed":
+                        workflow.logger.warning(f"Integration failed: {poll_result}")
+                    elif status == "canceled":
+                        self._cancel_requested = True
+
+                # Backoff polling interval
+                poll_interval_seconds = min(poll_interval_seconds * 2, max_poll_interval_seconds)
+            except Exception as exc:
+                workflow.logger.warning(f"Integration polling failed: {exc}")
+                # Backoff on error as well
+                poll_interval_seconds = min(poll_interval_seconds * 2, max_poll_interval_seconds)
+
         self._resume_requested = False
         self._awaiting_external = False
+        self._waiting_reason = None
+        self._attention_required = False
+        self._update_search_attributes()
 
     def _set_state(self, state: str) -> None:
         self._state = state
@@ -238,10 +294,10 @@ class MoonMindRunWorkflow:
             raise ValueError("Trusted owner metadata is required")
         return self._owner_id
 
-    def _integration_activity_type(self) -> str:
+    def _integration_activity_type(self, operation: str = "start") -> str:
         if not self._integration:
             raise ValueError("integration is required for integration activities")
-        return f"integration.{self._integration}.start"
+        return f"integration.{self._integration}.{operation}"
 
     def _trusted_owner_metadata(self) -> tuple[str, str]:
         search_attributes = workflow.info().search_attributes
@@ -332,6 +388,20 @@ class MoonMindRunWorkflow:
             "mm_state": self._state,
             "mm_entry": self._entry,
         }
+
+        memo: dict[str, Any] = {
+            "waiting_reason": self._waiting_reason,
+            "attention_required": self._attention_required,
+        }
+
+        try:
+            workflow.upsert_memo(memo)
+        except Exception as exc:
+            workflow.logger.warning(
+                "Failed to upsert memo",
+                extra={"error": str(exc)},
+            )
+
         if self._owner_type:
             attributes["mm_owner_type"] = self._owner_type
         if self._owner_id:
@@ -353,7 +423,7 @@ class MoonMindRunWorkflow:
     @workflow.signal
     def pause(self) -> None:
         self._paused = True
-        self._waiting_reason = "Paused by user"
+        self._waiting_reason = "operator_paused"
         self._update_search_attributes()
 
     @workflow.signal
@@ -379,6 +449,18 @@ class MoonMindRunWorkflow:
         self._close_status = CLOSE_STATUS_CANCELED
         self._state = STATE_CANCELED
         self._update_search_attributes()
+
+    @workflow.signal(name="ExternalEvent")
+    def external_event(self, payload: dict[str, Any]) -> None:
+        event_type = payload.get("event_type")
+        normalized_status = payload.get("normalized_status")
+
+        if event_type == "completed" or normalized_status in ("succeeded", "failed", "canceled"):
+            if normalized_status == "failed":
+                workflow.logger.warning(f"Integration failed: {payload}")
+            elif normalized_status == "canceled":
+                self._cancel_requested = True
+            self._resume_requested = True
 
     @workflow.update
     def update_title(self, new_title: str) -> None:

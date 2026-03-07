@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
+INTEGRATION_STATUS_CALLS: list[Dict[str, Any]] = []
 
 
 def _trusted_search_attributes() -> TypedSearchAttributes:
@@ -74,12 +75,20 @@ async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_START_CALLS.append(args)
     return {"correlation_id": "corr-123"}
 
+@activity.defn(name="integration.jules.status")
+async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    INTEGRATION_STATUS_CALLS.append(args)
+    if len(INTEGRATION_STATUS_CALLS) <= 1:
+        return {"normalized_status": "running"}
+    return {"normalized_status": "succeeded"}
+
 
 class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         PLAN_GENERATE_CALLS.clear()
         SANDBOX_COMMAND_CALLS.clear()
         INTEGRATION_START_CALLS.clear()
+        INTEGRATION_STATUS_CALLS.clear()
 
     async def test_moonmind_run_workflow(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -95,7 +104,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
             ), Worker(
                 env.client,
                 task_queue=INTEGRATIONS_TASK_QUEUE,
-                activities=[mock_integration_start],
+                activities=[mock_integration_start, mock_integration_status],
             ), Worker(
                 env.client,
                 task_queue="test-task-queue",
@@ -121,9 +130,10 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     search_attributes=_trusted_search_attributes(),
                 )
 
-                # We need to resume it because integration forces wait
-                await handle.signal(MoonMindRunWorkflow.resume)
-
+                # The mock_integration_status activity returns running then succeeded.
+                # Because the workflow uses wait_condition with a timeout, the time-skipping
+                # environment will automatically fast-forward through the timeouts and
+                # execute the polling activity until it succeeds.
                 result = await handle.result()
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
@@ -131,6 +141,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
                 )
+                self.assertTrue(len(INTEGRATION_STATUS_CALLS) > 0)
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -145,11 +156,15 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 activities=[mock_sandbox_command],
             ), Worker(
                 env.client,
+                task_queue=INTEGRATIONS_TASK_QUEUE,
+                activities=[mock_integration_start, mock_integration_status],
+            ), Worker(
+                env.client,
                 task_queue="test-task-queue",
                 workflows=[MoonMindRunWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
-                result = await env.client.execute_workflow(
+                handle = await env.client.start_workflow(
                     MoonMindRunWorkflow.run,
                     {
                         "workflowType": "MoonMind.Run",
@@ -160,6 +175,9 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     task_queue="test-task-queue",
                     search_attributes=_trusted_search_attributes(),
                 )
+
+                # The payload above has no integration, so it should finish immediately without polling.
+                result = await handle.result()
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
