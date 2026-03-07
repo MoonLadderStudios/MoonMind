@@ -1114,8 +1114,8 @@ class AgentQueueRepository:
     async def _requeue_expired_jobs(self, *, now: datetime) -> None:
         """Move expired running jobs back to queue or dead-letter by retry policy."""
 
-        stmt: Select[tuple[models.AgentJob]] = (
-            select(models.AgentJob)
+        stmt: Select[tuple[UUID]] = (
+            select(models.AgentJob.id)
             .where(
                 models.AgentJob.status == models.AgentJobStatus.RUNNING,
                 models.AgentJob.lease_expires_at.is_not(None),
@@ -1124,35 +1124,72 @@ class AgentQueueRepository:
             .with_for_update(skip_locked=True)
         )
         result = await self._session.execute(stmt)
-        expired_jobs = list(result.scalars().all())
+        expired_ids = list(result.scalars().all())
 
-        for job in expired_jobs:
-            if job.cancel_requested_at is not None:
-                job.status = models.AgentJobStatus.CANCELLED
-                job.finished_at = now
-                job.next_attempt_at = None
-            elif job.attempt >= job.max_attempts:
-                job.status = models.AgentJobStatus.DEAD_LETTER
-                job.finished_at = now
-                job.next_attempt_at = None
-                if not job.error_message:
-                    job.error_message = (
-                        "Lease expired and max attempts reached before reclaim."
-                    )
-            else:
-                job.status = models.AgentJobStatus.QUEUED
-                job.attempt += 1
-                job.finished_at = None
-                job.next_attempt_at = now + timedelta(
-                    seconds=self._lease_retry_delay_seconds
-                )
+        if not expired_ids:
+            return
 
-            job.claimed_by = None
-            job.lease_expires_at = None
-            job.updated_at = now
+        from sqlalchemy import update, case, and_, or_
 
-        if expired_jobs:
-            await self._session.flush()
+        delay = self._lease_retry_delay_seconds
+
+        update_stmt = (
+            update(models.AgentJob)
+            .where(models.AgentJob.id.in_(expired_ids))
+            .values(
+                status=case(
+                    (
+                        models.AgentJob.cancel_requested_at.is_not(None),
+                        models.AgentJobStatus.CANCELLED,
+                    ),
+                    (
+                        models.AgentJob.attempt >= models.AgentJob.max_attempts,
+                        models.AgentJobStatus.DEAD_LETTER,
+                    ),
+                    else_=models.AgentJobStatus.QUEUED,
+                ),
+                finished_at=case(
+                    (models.AgentJob.cancel_requested_at.is_not(None), now),
+                    (models.AgentJob.attempt >= models.AgentJob.max_attempts, now),
+                    else_=None,
+                ),
+                next_attempt_at=case(
+                    (models.AgentJob.cancel_requested_at.is_not(None), None),
+                    (models.AgentJob.attempt >= models.AgentJob.max_attempts, None),
+                    else_=now + timedelta(seconds=delay),
+                ),
+                error_message=case(
+                    (
+                        and_(
+                            models.AgentJob.cancel_requested_at.is_(None),
+                            models.AgentJob.attempt >= models.AgentJob.max_attempts,
+                            or_(
+                                models.AgentJob.error_message.is_(None),
+                                models.AgentJob.error_message == "",
+                            ),
+                        ),
+                        "Lease expired and max attempts reached before reclaim.",
+                    ),
+                    else_=models.AgentJob.error_message,
+                ),
+                attempt=case(
+                    (
+                        and_(
+                            models.AgentJob.cancel_requested_at.is_(None),
+                            models.AgentJob.attempt < models.AgentJob.max_attempts,
+                        ),
+                        models.AgentJob.attempt + 1,
+                    ),
+                    else_=models.AgentJob.attempt,
+                ),
+                claimed_by=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+        )
+
+        await self._session.execute(update_stmt)
+        await self._session.flush()
 
     async def _require_running_owned_job(
         self,
