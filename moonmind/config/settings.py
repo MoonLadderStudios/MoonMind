@@ -1379,7 +1379,11 @@ class SecuritySettings(BaseSettings):
         None, env="ENCRYPTION_MASTER_KEY"
     )  # Made Optional and added default
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+    )
 
 
 class GoogleSettings(BaseSettings):
