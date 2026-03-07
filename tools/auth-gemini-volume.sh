@@ -27,7 +27,7 @@ if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[
   COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
 fi
 
-docker compose run --rm -it --service-ports \
+docker compose run --rm -it --publish 8080:8080 \
   -e MOONMIND_GEMINI_CLI_AUTH_MODE=oauth \
   -e GOOGLE_API_KEY= \
   -e GEMINI_API_KEY= \
