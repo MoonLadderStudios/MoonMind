@@ -1,0 +1,155 @@
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from moonmind.workflows.temporal.worker_runtime import (
+    MoonMindManifestIngest,
+    MoonMindRun,
+    _build_runtime_activities,
+    main_async,
+)
+from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
+@patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
+@patch("moonmind.workflows.temporal.worker_runtime.Worker")
+async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_describe):
+    # Setup mocks
+    mock_topology = MagicMock()
+    mock_topology.fleet = WORKFLOW_FLEET
+    mock_topology.task_queues = ["mm.workflow"]
+    mock_topology.concurrency_limit = 7
+    mock_describe.return_value = mock_topology
+
+    mock_client = MagicMock()
+    mock_connect.return_value = mock_client
+
+    mock_worker = MagicMock()
+    mock_worker_cls.return_value = mock_worker
+    mock_worker.run = AsyncMock()
+
+    # Run
+    await main_async()
+
+    # Verify Worker creation uses the mock workflows
+    mock_worker_cls.assert_called_once()
+    kwargs = mock_worker_cls.call_args.kwargs
+    assert kwargs["task_queue"] == "mm.workflow"
+    assert kwargs["workflows"] == [MoonMindRun, MoonMindManifestIngest]
+    assert kwargs["activities"] == []
+    assert kwargs["max_concurrent_workflow_tasks"] == 7
+    assert "max_concurrent_activities" not in kwargs
+
+    # Verify worker run is called
+    mock_worker.run.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
+@patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
+@patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
+@patch("moonmind.workflows.temporal.worker_runtime.Worker")
+async def test_main_async_activity_fleet(
+    mock_worker_cls, mock_connect, mock_describe, mock_runtime_activities
+):
+    # Setup mocks
+    mock_topology = MagicMock()
+    mock_topology.fleet = "artifacts"
+    mock_topology.task_queues = ["mm.activity.artifacts"]
+    mock_topology.concurrency_limit = 3
+    mock_describe.return_value = mock_topology
+
+    mock_client = MagicMock()
+    mock_connect.return_value = mock_client
+
+    mock_worker = MagicMock()
+    mock_worker_cls.return_value = mock_worker
+    mock_worker.run = AsyncMock()
+
+    mock_resources = AsyncMock()
+    mock_runtime_activities.return_value = (mock_resources, ["test_handler"])
+
+    # Run
+    await main_async()
+
+    # Verify Worker creation uses activities
+    mock_worker_cls.assert_called_once()
+    kwargs = mock_worker_cls.call_args.kwargs
+    assert kwargs["task_queue"] == "mm.activity.artifacts"
+    assert kwargs["workflows"] == []
+    assert kwargs["activities"] == ["test_handler"]
+    assert kwargs["max_concurrent_activities"] == 3
+    assert "max_concurrent_workflow_tasks" not in kwargs
+
+    # Verify worker run is called
+    mock_runtime_activities.assert_awaited_once_with(mock_topology)
+    mock_worker.run.assert_awaited_once()
+    mock_resources.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_build_runtime_activities_injects_concrete_handlers(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "artifacts"
+
+    mock_binding = MagicMock()
+    mock_binding.handler = "artifact_handler"
+    mock_build_bindings.return_value = [mock_binding]
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, handlers = await _build_runtime_activities(topology)
+
+    assert handlers == ["artifact_handler"]
+    mock_repository_cls.assert_called_once_with("session")
+    mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
+    mock_artifact_activities_cls.assert_called_once_with(mock_service_cls.return_value)
+    mock_plan_activities_cls.assert_called_once_with(
+        artifact_service=mock_service_cls.return_value
+    )
+    mock_skill_activities_cls.assert_called_once_with(
+        dispatcher=mock_dispatcher_cls.return_value
+    )
+    mock_sandbox_activities_cls.assert_called_once_with(
+        artifact_service=mock_service_cls.return_value
+    )
+    mock_jules_activities_cls.assert_called_once_with(
+        artifact_service=mock_service_cls.return_value
+    )
+    mock_build_bindings.assert_called_once_with(
+        fleet="artifacts",
+        artifact_activities=mock_artifact_activities_cls.return_value,
+        plan_activities=mock_plan_activities_cls.return_value,
+        skill_activities=mock_skill_activities_cls.return_value,
+        sandbox_activities=mock_sandbox_activities_cls.return_value,
+        integration_activities=mock_jules_activities_cls.return_value,
+    )
+    await resources.aclose()

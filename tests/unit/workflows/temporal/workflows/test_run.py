@@ -6,6 +6,8 @@ import pytest
 pytest.importorskip("temporalio")
 
 from temporalio import activity, client, exceptions
+from temporalio.api.enums.v1 import IndexedValueType
+from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
@@ -41,6 +43,20 @@ def _trusted_search_attributes() -> TypedSearchAttributes:
     )
 
 
+async def _register_test_search_attributes(
+    env: WorkflowEnvironment,
+) -> None:
+    await env.client.operator_service.add_search_attributes(
+        AddSearchAttributesRequest(
+            namespace=env.client.namespace,
+            search_attributes={
+                "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+            },
+        )
+    )
+
+
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
@@ -67,6 +83,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
     async def test_moonmind_run_workflow(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
             async with Worker(
                 env.client,
                 task_queue=LLM_TASK_QUEUE,
@@ -117,6 +134,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
             async with Worker(
                 env.client,
                 task_queue=LLM_TASK_QUEUE,
