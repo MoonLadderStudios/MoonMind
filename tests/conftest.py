@@ -1,6 +1,7 @@
-import pytest
 import asyncio
 import inspect
+
+import pytest
 
 from moonmind.config.settings import settings
 
