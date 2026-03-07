@@ -1375,7 +1375,11 @@ class SecuritySettings(BaseSettings):
     JWT_SECRET_KEY: Optional[str] = Field(None, env="JWT_SECRET_KEY")
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(None, env="ENCRYPTION_MASTER_KEY")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+    )
 
 
 class GoogleSettings(BaseSettings):
