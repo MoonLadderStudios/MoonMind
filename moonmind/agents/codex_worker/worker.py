@@ -1710,6 +1710,14 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
+    async def _put_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await self._client.put(path, json=json)
+            response.raise_for_status()
+            return dict(response.json()) if response.content else {}
+        except httpx.HTTPError as exc:
+            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
+
     async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
         """Submit a task proposal to the MoonMind API."""
 
@@ -1722,7 +1730,7 @@ class QueueApiClient:
     ) -> None:
         """Publish worker runtime capabilities to queue metadata."""
 
-        await self._post_json(
+        await self._put_json(
             "/api/queue/workers/tokens/capabilities",
             json={"runtimeCapabilities": runtime_capabilities},
         )
