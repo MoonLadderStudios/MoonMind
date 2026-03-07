@@ -51,7 +51,9 @@ def _assert_execution_ref(
     self.assertNotEqual(actual["run_id"], "")
 
 
-def _expected_execution_ref(namespace: str, kind: str, workflow_id: str) -> Dict[str, str]:
+def _expected_execution_ref(
+    namespace: str, kind: str, workflow_id: str
+) -> Dict[str, str]:
     return {
         "namespace": namespace,
         "workflow_id": workflow_id,
