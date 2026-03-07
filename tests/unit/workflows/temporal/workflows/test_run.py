@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from typing import Any, Dict
 
@@ -72,6 +73,8 @@ async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
 @activity.defn(name="integration.jules.start")
 async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_START_CALLS.append(args)
+    if hasattr(mock_integration_start, "event") and mock_integration_start.event:
+        mock_integration_start.event.set()
     return {"correlation_id": "corr-123"}
 
 
