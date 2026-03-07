@@ -1144,10 +1144,13 @@ class TemporalExecutionService:
         workflow_id: str,
         sync_error: str | None = None,
     ) -> TemporalExecutionRecord:
+        source = await self._load_source_execution(workflow_id)
         record = await self._require_projection_execution(
             workflow_id,
             include_orphaned=True,
         )
+        if source is not None:
+            self._touch(source)
         record.sync_state = TemporalExecutionProjectionSyncState.ORPHANED
         record.sync_error = (sync_error or "").strip() or None
         await self._session.commit()
