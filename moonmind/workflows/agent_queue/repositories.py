@@ -1129,7 +1129,7 @@ class AgentQueueRepository:
         if not expired_ids:
             return
 
-        from sqlalchemy import update, case, and_, or_
+        from sqlalchemy import and_, case, or_, update
 
         delay = self._lease_retry_delay_seconds
 
