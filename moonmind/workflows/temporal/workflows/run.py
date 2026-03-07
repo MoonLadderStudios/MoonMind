@@ -280,9 +280,7 @@ class MoonMindRunWorkflow:
             return self._json_mapping(value, path=key)
         return {}
 
-    def _json_mapping(
-        self, value: Mapping[str, Any], *, path: str
-    ) -> dict[str, Any]:
+    def _json_mapping(self, value: Mapping[str, Any], *, path: str) -> dict[str, Any]:
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
