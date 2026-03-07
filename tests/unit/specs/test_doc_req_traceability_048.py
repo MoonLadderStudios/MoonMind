@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 
 _DOC_REQ_PATTERN = re.compile(r"\bDOC-REQ-(\d{3})\b")
-_FEATURE_SPEC = Path("specs/048-jules-external-events/spec.md")
+_FEATURE_SPEC = Path("specs/066-jules-external-events/spec.md")
 _FEATURE_TRACEABILITY = Path(
-    "specs/048-jules-external-events/contracts/requirements-traceability.md"
+    "specs/066-jules-external-events/contracts/requirements-traceability.md"
 )
 
 

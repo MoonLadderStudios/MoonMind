@@ -12,6 +12,28 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+
+@pytest.fixture(autouse=True)
+def mock_temporal_client_adapter(monkeypatch):
+    import uuid
+    from dataclasses import dataclass
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    @dataclass(frozen=True, slots=True)
+    class DummyWorkflowStartResult:
+        workflow_id: str
+        run_id: str
+
+    async def mock_start_workflow(self, *args, **kwargs):
+        workflow_id = kwargs.get("workflow_id") or "mm:dummy"
+        return DummyWorkflowStartResult(
+            workflow_id=workflow_id, run_id=str(uuid.uuid4())
+        )
+
+    monkeypatch.setattr(TemporalClientAdapter, "start_workflow", mock_start_workflow)
+
+
 from api_service.db.models import Base, MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
@@ -348,16 +370,17 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 compile_result.nodes,
                 requested_by={"type": "user", "id": "user-1"},
             )
-            summary_ref, run_index_ref = (
-                await manifest_activities.manifest_write_summary(
-                    principal="user-1",
-                    workflow_id="mm:manifest-1",
-                    state="executing",
-                    phase="executing",
-                    manifest_ref=completed.artifact_id,
-                    plan_ref=compile_result.plan_ref.artifact_id,
-                    nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
-                )
+            (
+                summary_ref,
+                run_index_ref,
+            ) = await manifest_activities.manifest_write_summary(
+                principal="user-1",
+                workflow_id="mm:manifest-1",
+                state="executing",
+                phase="executing",
+                manifest_ref=completed.artifact_id,
+                plan_ref=compile_result.plan_ref.artifact_id,
+                nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
             )
 
             assert compile_result.plan_ref.artifact_id.startswith("art_")
