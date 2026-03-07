@@ -1329,13 +1329,19 @@ async def resolve_manifest_job_secrets(
             else None
         )
         if payload.include_profile:
+
+            resolution_results = []
             for ref in profile_refs:
-                env_key = ref["envKey"]
                 value = await auth_manager.get_secret(
                     "profile",
-                    key=env_key,
+                    key=ref["envKey"],
                     user=requester_user,
+                    allow_env_fallback=False,
                 )
+                resolution_results.append((ref, value))
+
+            for ref, value in resolution_results:
+                env_key = ref["envKey"]
                 if not value:
                     unresolved.append(env_key)
                     continue
@@ -1943,8 +1949,7 @@ async def stream_job_events(
                     else {"message": str(http_exc.detail)}
                 )
                 yield (
-                    "event: error\n"
-                    f"data: {json.dumps(detail, ensure_ascii=True)}\n\n"
+                    f"event: error\ndata: {json.dumps(detail, ensure_ascii=True)}\n\n"
                 )
                 break
 
