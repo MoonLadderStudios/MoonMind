@@ -100,7 +100,7 @@ class MoonMindRunWorkflow:
         self, input_payload: dict[str, Any]
     ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
-            raise self._invalid_input_error("input_payload must be a dictionary")
+            raise self._validation_error("input_payload must be a dictionary")
 
         workflow_type = self._required_string(
             input_payload,
@@ -109,7 +109,7 @@ class MoonMindRunWorkflow:
             error_message="workflowType is required",
         )
         if workflow_type != WORKFLOW_NAME:
-            raise self._invalid_input_error(f"workflowType must be {WORKFLOW_NAME}")
+            raise self._validation_error(f"workflowType must be {WORKFLOW_NAME}")
 
         self._workflow_type = workflow_type
         self._entry = "run"
@@ -205,7 +205,7 @@ class MoonMindRunWorkflow:
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
-            raise self._invalid_input_error(
+            raise self._validation_error(
                 "integration metadata must be an object when provided"
             )
         metadata.setdefault("repo", self._repo)
@@ -236,12 +236,14 @@ class MoonMindRunWorkflow:
 
     def _principal(self) -> str:
         if not self._owner_id:
-            raise self._invalid_input_error("Trusted owner metadata is required")
+            raise self._validation_error("Trusted owner metadata is required")
         return self._owner_id
 
     def _integration_activity_type(self) -> str:
         if not self._integration:
-            raise ValueError("integration is required for integration activities")
+            raise self._validation_error(
+                "integration is required for integration activities"
+            )
         return f"integration.{self._integration}.start"
 
     def _execution_ref(self, link_type: str) -> dict[str, str]:
@@ -263,17 +265,10 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise self._invalid_input_error(
-                "Trusted owner metadata is required in Temporal search attributes",
+            raise self._validation_error(
+                "Trusted owner metadata is required in Temporal search attributes"
             )
         return owner_type, owner_id
-
-    def _invalid_input_error(self, message: str) -> exceptions.ApplicationError:
-        return exceptions.ApplicationError(
-            message,
-            type="INVALID_INPUT",
-            non_retryable=True,
-        )
 
     def _search_attribute_value(
         self, search_attributes: Mapping[str, list[Any]], key: str
@@ -292,7 +287,7 @@ class MoonMindRunWorkflow:
     ) -> str:
         value = self._optional_string(payload, *keys)
         if value is None:
-            raise self._invalid_input_error(error_message)
+            raise self._validation_error(error_message)
         return value
 
     def _optional_string(self, payload: Mapping[str, Any], *keys: str) -> Optional[str]:
@@ -301,9 +296,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise self._invalid_input_error(
-                    f"{key} must be a string when provided"
-                )
+                raise self._validation_error(f"{key} must be a string when provided")
             normalized = value.strip()
             if normalized:
                 return normalized
@@ -315,7 +308,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, Mapping):
-                raise self._invalid_input_error(f"{key} must be an object when provided")
+                raise self._validation_error(f"{key} must be an object when provided")
             return self._json_mapping(value, path=key)
         return {}
 
@@ -323,7 +316,7 @@ class MoonMindRunWorkflow:
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
-                raise self._invalid_input_error(f"{path} keys must be strings")
+                raise self._validation_error(f"{path} keys must be strings")
             normalized[key] = self._json_value(item, path=f"{path}.{key}")
         return normalized
 
@@ -334,9 +327,7 @@ class MoonMindRunWorkflow:
             return self._json_mapping(value, path=path)
         if isinstance(value, list):
             return [self._json_value(item, path=f"{path}[]") for item in value]
-        raise self._invalid_input_error(
-            f"{path} must contain only JSON-compatible values"
-        )
+        raise self._validation_error(f"{path} must contain only JSON-compatible values")
 
     def _string_from_mapping(
         self, payload: Mapping[str, Any], key: str
@@ -345,9 +336,12 @@ class MoonMindRunWorkflow:
         if value is None:
             return None
         if not isinstance(value, str):
-            raise self._invalid_input_error(f"{key} must be a string when provided")
+            raise self._validation_error(f"{key} must be a string when provided")
         normalized = value.strip()
         return normalized or None
+
+    def _validation_error(self, message: str) -> exceptions.ApplicationError:
+        return exceptions.ApplicationError(message, non_retryable=True)
 
     def _update_search_attributes(self) -> None:
         attributes: dict[str, Any] = {
