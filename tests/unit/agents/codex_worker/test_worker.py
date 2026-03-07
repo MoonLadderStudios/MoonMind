@@ -6,7 +6,6 @@ import asyncio
 import gzip
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
