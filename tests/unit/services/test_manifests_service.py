@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from moonmind.config.settings import settings
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -144,9 +145,10 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
 
 
 async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     """submit_manifest_run should stage registry YAML as an artifact and create a Temporal ingest execution."""
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -228,9 +230,10 @@ async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
 
 
 async def test_submit_manifest_run_reuses_idempotent_execution_without_side_effects(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
     """submit_manifest_run should return the original Temporal submission for idempotent retries."""
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:

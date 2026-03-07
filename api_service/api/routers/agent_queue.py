@@ -38,6 +38,11 @@ from api_service.auth_providers import (
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
+from moonmind.workflows.tasks.routing import get_routing_target_for_task
+from moonmind.workflows.temporal import TemporalExecutionService
+from api_service.api.routers.executions import _create_execution_from_task_request, _get_service as _get_temporal_service
+from moonmind.workflows.agent_queue.job_types import CANONICAL_TASK_JOB_TYPE, MANIFEST_JOB_TYPE
+
 from moonmind.schemas.agent_queue_models import (
     AppendJobEventRequest,
     ArtifactListResponse,
@@ -746,9 +751,31 @@ async def create_job(
     request: Request,
     payload: CreateJobRequest,
     service: AgentQueueService = Depends(_get_service),
+    temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
     user: User = Depends(get_current_user()),
-) -> JobModel:
+) -> JobModel | dict[str, Any]:
     """Create a queued job for worker execution."""
+
+    target = get_routing_target_for_task(
+        is_manifest=(payload.type == MANIFEST_JOB_TYPE),
+        is_run=(payload.type == CANONICAL_TASK_JOB_TYPE),
+    )
+
+    if target == "temporal":
+        execution = await _create_execution_from_task_request(
+            request=payload,
+            service=temporal_service,
+            user=user,
+        )
+        # Mock JobModel shape for UI compatibility
+        return {
+            "id": execution.workflow_id,
+            "status": "queued",
+            "type": payload.type,
+            "created_at": execution.start_time or execution.created_at,
+            "updated_at": execution.update_time or execution.created_at,
+            "payload": execution.initial_parameters or {},
+        }
 
     try:
         user_id = getattr(user, "id", None)
@@ -865,8 +892,25 @@ async def create_job_with_attachments(
     captions_json: str | None = Form(None, alias="captions"),
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
-) -> JobWithAttachmentsResponse:
+) -> JobWithAttachmentsResponse | dict[str, Any]:
     """Create a queued job that includes user-provided attachments."""
+    try:
+        parsed_payload = CreateJobRequest.model_validate_json(request_payload)
+        target = get_routing_target_for_task(
+            is_manifest=(parsed_payload.type == MANIFEST_JOB_TYPE),
+            is_run=(parsed_payload.type == CANONICAL_TASK_JOB_TYPE),
+        )
+    except Exception:
+        target = "queue"
+
+    if target == "temporal":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_routing_target",
+                "message": "Legacy attachment submission is not supported for Temporal-backed workflows.",
+            }
+        )
 
     if not files:
         raise HTTPException(
