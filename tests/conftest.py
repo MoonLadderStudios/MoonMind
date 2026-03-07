@@ -1,10 +1,12 @@
+import pytest
 import asyncio
 import inspect
 
-import pytest
-
-from api_service.auth import _DEFAULT_USER_ID
 from moonmind.config.settings import settings
+
+# Mirror the auth module's disabled-mode default user id to avoid importing
+# api_service.auth during global pytest collection.
+_DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 settings.spec_workflow.test_mode = True
 
