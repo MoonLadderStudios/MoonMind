@@ -181,6 +181,10 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "cmd": "echo executing",
                 "timeout_seconds": 300,
+                "execution_ref": {
+                    "workflow_id": workflow.info().workflow_id,
+                    "run_id": workflow.info().run_id,
+                },
             },
             start_to_close_timeout=timedelta(minutes=10),
             task_queue=SANDBOX_TASK_QUEUE,
@@ -217,6 +221,10 @@ class MoonMindRunWorkflow:
             {
                 "principal": self._principal(),
                 "parameters": integration_parameters,
+                "execution_ref": {
+                    "workflow_id": workflow.info().workflow_id,
+                    "run_id": workflow.info().run_id,
+                },
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
