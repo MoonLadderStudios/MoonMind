@@ -230,7 +230,7 @@ class TemporalDashboardSettings(BaseSettings):
     list_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_LIST_ENABLED")
     detail_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_DETAIL_ENABLED")
     actions_enabled: bool = Field(False, env="TEMPORAL_DASHBOARD_ACTIONS_ENABLED")
-    submit_enabled: bool = Field(False, env="TEMPORAL_DASHBOARD_SUBMIT_ENABLED")
+    submit_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_SUBMIT_ENABLED")
     debug_fields_enabled: bool = Field(
         False, env="TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED"
     )
