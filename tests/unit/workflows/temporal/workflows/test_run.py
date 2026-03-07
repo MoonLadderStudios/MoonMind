@@ -5,8 +5,12 @@ import pytest
 
 pytest.importorskip("temporalio")
 
-from temporalio import activity, exceptions
-from temporalio.common import SearchAttributeKey, TypedSearchAttributes
+from temporalio import activity, client, exceptions
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -20,6 +24,21 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
+
+
+def _trusted_search_attributes() -> TypedSearchAttributes:
+    return TypedSearchAttributes(
+        [
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_owner_id"),
+                "trusted-owner",
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_owner_type"),
+                "user",
+            ),
+        ]
+    )
 
 
 @activity.defn(name="plan.generate")
@@ -82,16 +101,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     id="test-workflow-id",
                     task_queue="test-task-queue",
                     memo={"title": "Trusted title"},
-                    search_attributes=TypedSearchAttributes(
-                        [
-                            SearchAttributeKey.for_keyword("mm_owner_type").value_set(
-                                "user"
-                            ),
-                            SearchAttributeKey.for_keyword("mm_owner_id").value_set(
-                                "trusted-owner"
-                            ),
-                        ]
-                    ),
+                    search_attributes=_trusted_search_attributes(),
                 )
 
                 # We need to resume it because integration forces wait
@@ -130,16 +140,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     },
                     id="test-workflow-id-trusted-owner",
                     task_queue="test-task-queue",
-                    search_attributes=TypedSearchAttributes(
-                        [
-                            SearchAttributeKey.for_keyword("mm_owner_type").value_set(
-                                "user"
-                            ),
-                            SearchAttributeKey.for_keyword("mm_owner_id").value_set(
-                                "trusted-owner"
-                            ),
-                        ]
-                    ),
+                    search_attributes=_trusted_search_attributes(),
                 )
 
         self.assertEqual(result["status"], "success")
@@ -159,7 +160,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     # Missing workflowType
                 }
 
-                with self.assertRaises(exceptions.WorkflowFailureError) as exc_info:
+                with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         request,
@@ -182,7 +183,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 workflows=[MoonMindRunWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
-                with self.assertRaises(exceptions.WorkflowFailureError) as exc_info:
+                with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         {"workflowType": "MoonMind.Run"},
