@@ -162,6 +162,7 @@ services:
       - VISIBILITY_DBNAME=${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
       - NUM_HISTORY_SHARDS=${TEMPORAL_NUM_HISTORY_SHARDS:-1}
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml
+      - BIND_ON_IP=0.0.0.0
     expose:
       - "7233"
     volumes:
@@ -546,7 +547,7 @@ services:
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_CONFIG_HOME:-/home/app/.codex}
-      - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
+      - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - MOONMIND_WORKER_ID=${MOONMIND_WORKER_ID:-codex-worker-1}
       - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
