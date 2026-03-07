@@ -1329,13 +1329,21 @@ async def resolve_manifest_job_secrets(
             else None
         )
         if payload.include_profile:
-            for ref in profile_refs:
-                env_key = ref["envKey"]
-                value = await auth_manager.get_secret(
+
+            async def resolve_secret(ref: dict) -> tuple[dict, Any]:
+                return ref, await auth_manager.get_secret(
                     "profile",
-                    key=env_key,
+                    key=ref["envKey"],
                     user=requester_user,
                 )
+
+            # Avoid N+1 sequential await by resolving secrets concurrently
+            resolution_results = await asyncio.gather(
+                *(resolve_secret(ref) for ref in profile_refs)
+            )
+
+            for ref, value in resolution_results:
+                env_key = ref["envKey"]
                 if not value:
                     unresolved.append(env_key)
                     continue
@@ -1943,8 +1951,7 @@ async def stream_job_events(
                     else {"message": str(http_exc.detail)}
                 )
                 yield (
-                    "event: error\n"
-                    f"data: {json.dumps(detail, ensure_ascii=True)}\n\n"
+                    f"event: error\ndata: {json.dumps(detail, ensure_ascii=True)}\n\n"
                 )
                 break
 
