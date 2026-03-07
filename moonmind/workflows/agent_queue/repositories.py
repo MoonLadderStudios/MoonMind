@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, func, or_, select, update
+from sqlalchemy import Select, and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import User
@@ -1129,8 +1129,6 @@ class AgentQueueRepository:
         if not expired_ids:
             return
 
-        from sqlalchemy import and_, case, or_, update
-
         delay = self._lease_retry_delay_seconds
 
         update_stmt = (
@@ -1188,8 +1186,9 @@ class AgentQueueRepository:
             )
         )
 
-        await self._session.execute(update_stmt)
-        await self._session.flush()
+        await self._session.execute(
+            update_stmt.execution_options(synchronize_session="fetch")
+        )
 
     async def _require_running_owned_job(
         self,
