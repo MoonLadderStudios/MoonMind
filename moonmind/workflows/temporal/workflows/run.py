@@ -318,9 +318,7 @@ class MoonMindRunWorkflow:
             return self._json_mapping(value, path=path)
         if isinstance(value, list):
             return [self._json_value(item, path=f"{path}[]") for item in value]
-        raise self._validation_error(
-            f"{path} must contain only JSON-compatible values"
-        )
+        raise self._validation_error(f"{path} must contain only JSON-compatible values")
 
     def _string_from_mapping(
         self, payload: Mapping[str, Any], key: str
