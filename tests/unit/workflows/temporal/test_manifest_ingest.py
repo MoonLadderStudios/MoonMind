@@ -25,18 +25,19 @@ from moonmind.workflows.temporal import (
     plan_nodes_to_runtime_nodes,
     start_manifest_child_runs,
 )
-from moonmind.workflows.temporal.manifest_ingest import (
-    DEFAULT_MANIFEST_MAX_CONCURRENCY,
-    ManifestIngestValidationError,
-    ManifestIngestWorkflow,
-    _apply_manifest_node_update,
-    _resolve_workflow_requested_by,
-    _runtime_manifest_nodes,
-    apply_manifest_update,
-    build_manifest_status_snapshot,
-    initialize_manifest_projection,
-    list_manifest_nodes,
+
+DEFAULT_MANIFEST_MAX_CONCURRENCY = (
+    manifest_ingest_module.DEFAULT_MANIFEST_MAX_CONCURRENCY
 )
+ManifestIngestValidationError = manifest_ingest_module.ManifestIngestValidationError
+ManifestIngestWorkflow = manifest_ingest_module.ManifestIngestWorkflow
+_apply_manifest_node_update = manifest_ingest_module._apply_manifest_node_update
+_resolve_workflow_requested_by = manifest_ingest_module._resolve_workflow_requested_by
+_runtime_manifest_nodes = manifest_ingest_module._runtime_manifest_nodes
+apply_manifest_update = manifest_ingest_module.apply_manifest_update
+build_manifest_status_snapshot = manifest_ingest_module.build_manifest_status_snapshot
+initialize_manifest_projection = manifest_ingest_module.initialize_manifest_projection
+list_manifest_nodes = manifest_ingest_module.list_manifest_nodes
 
 MANIFEST_YAML = """
 version: "v0"
