@@ -196,7 +196,9 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_AWAITING_EXTERNAL)
 
         integration_parameters = dict(parameters)
-        integration_parameters.setdefault("title", self._title or "MoonMind Integration")
+        integration_parameters.setdefault(
+            "title", self._title or "MoonMind Integration"
+        )
         integration_parameters.setdefault(
             "description",
             f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",

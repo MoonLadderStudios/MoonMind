@@ -166,7 +166,9 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                         id="test-workflow-id-error",
                         task_queue="test-task-queue",
                     )
-                self.assertIsInstance(exc_info.exception.cause, exceptions.ApplicationError)
+                self.assertIsInstance(
+                    exc_info.exception.cause, exceptions.ApplicationError
+                )
                 self.assertEqual(
                     "workflowType is required",
                     exc_info.exception.cause.message,
@@ -187,7 +189,9 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                         id="test-workflow-id-missing-owner",
                         task_queue="test-task-queue",
                     )
-                self.assertIsInstance(exc_info.exception.cause, exceptions.ApplicationError)
+                self.assertIsInstance(
+                    exc_info.exception.cause, exceptions.ApplicationError
+                )
                 self.assertEqual(
                     "Trusted owner metadata is required in Temporal search attributes",
                     exc_info.exception.cause.message,

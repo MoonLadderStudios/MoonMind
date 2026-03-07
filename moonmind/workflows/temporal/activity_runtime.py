@@ -386,7 +386,9 @@ class TemporalPlanActivities:
         registry_snapshot_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> PlanGenerateActivityResult:
-        request_payload = _coerce_activity_request(request, activity_type="plan.generate")
+        request_payload = _coerce_activity_request(
+            request, activity_type="plan.generate"
+        )
         if request_payload:
             if principal is None:
                 principal = request_payload.get("principal")
