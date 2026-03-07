@@ -2,14 +2,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
-# client = TestClient(app) # Removed global client
-from api_service import main as api_service_main
 from llama_index.core.embeddings import BaseEmbedding  # For spec (corrected path)
 from qdrant_client.http.models import (  # For mocking, if needed for detailed get_collection mock
     Distance,
 )
 
+# client = TestClient(app) # Removed global client
+from api_service import main as api_service_main
 from api_service.main import app
 
 

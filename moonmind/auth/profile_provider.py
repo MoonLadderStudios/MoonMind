@@ -16,22 +16,26 @@ class ProfileAuthProvider(AuthProvider):
     async def get_secret(self, *, key: str, user: User | None, **kwargs) -> str | None:
         if not user:
             return None
-            
+
         user_id_str = str(user.id)
         if user_id_str in self._profile_cache:
             profile = self._profile_cache[user_id_str]
         else:
             try:
-                profile = await self.profile_svc.get_profile_by_user_id(self.db, user.id)
+                profile = await self.profile_svc.get_profile_by_user_id(
+                    self.db, user.id
+                )
                 if profile is None:
                     await self.profile_svc.get_or_create_profile(self.db, user.id)
                     profile = await self.profile_svc.get_profile_by_user_id(
                         self.db, user.id
                     )
                 self._profile_cache[user_id_str] = profile
-            except Exception as exc:  # pragma: no cover - graceful fallback on DB errors
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - graceful fallback on DB errors
                 import logging
-    
+
                 logging.warning("Profile lookup failed: %s", exc)
                 return None
 

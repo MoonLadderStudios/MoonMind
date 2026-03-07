@@ -14,7 +14,13 @@ class AuthProviderManager:
         self.env_provider = env_provider
 
     async def get_secret(
-        self, provider: str, *, key: str, user: User | None = None, allow_env_fallback: bool = True, **kwargs
+        self,
+        provider: str,
+        *,
+        key: str,
+        user: User | None = None,
+        allow_env_fallback: bool = True,
+        **kwargs,
     ) -> str | None:
         provider = provider.lower()
         if provider == "profile":
