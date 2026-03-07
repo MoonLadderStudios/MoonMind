@@ -14,8 +14,8 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
-
 from temporalio import workflow
+
 from yaml import YAMLError, safe_load
 
 from api_service.db.models import MoonMindWorkflowState, TemporalExecutionRecord
@@ -662,13 +662,17 @@ def _coerce_runtime_nodes(
     ]
 
 
-import asyncio
-from datetime import timedelta
 
+
+
+from datetime import timedelta
+import asyncio
+from typing import Any
+from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    pass
+    from moonmind.schemas.manifest_ingest_models import ManifestNodeModel
 
 
 @workflow.defn(name="MoonMind.ManifestIngest")
@@ -720,17 +724,15 @@ class ManifestIngestWorkflow:
 
             compile_result = await workflow.execute_activity(
                 "manifest_compile",
-                args=[
-                    {
-                        "principal": "system",
-                        "manifest_ref": self._manifest_ref,
-                        "manifest_payload": manifest_payload,
-                        "action": "run",
-                        "options": None,
-                        "requested_by": self._requested_by,
-                        "execution_policy": self._execution_policy,
-                    }
-                ],
+                args=[{
+                    "principal": "system",
+                    "manifest_ref": self._manifest_ref,
+                    "manifest_payload": manifest_payload,
+                    "action": "run",
+                    "options": None,
+                    "requested_by": self._requested_by,
+                    "execution_policy": self._execution_policy,
+                }],
                 start_to_close_timeout=timedelta(minutes=10),
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
@@ -746,10 +748,7 @@ class ManifestIngestWorkflow:
         failure_policy = self._execution_policy.get("failurePolicy", "fail_fast")
 
         # Build dependency graph
-        deps = {
-            n_id: set(node_data.get("dependencies", []))
-            for n_id, node_data in self._nodes.items()
-        }
+        deps = {n_id: set(node_data.get("dependencies", [])) for n_id, node_data in self._nodes.items()}
 
         running_tasks = {}
 
@@ -774,11 +773,8 @@ class ManifestIngestWorkflow:
                     "manifestArtifactRef": self._manifest_ref,
                     "nodeId": node_id,
                     "requestedBy": self._requested_by,
-                    "runtimeHints": {
-                        "manifestNodeState": "running",
-                        "workflowType": "MoonMind.Run",
-                    },
-                    "parentClosePolicy": "REQUEST_CANCEL",
+                    "runtimeHints": {"manifestNodeState": "running", "workflowType": "MoonMind.Run"},
+                    "parentClosePolicy": "REQUEST_CANCEL"
                 }
 
                 child_id = f"{self._workflow_id}:{self._run_id}:{node_id}"
@@ -786,17 +782,15 @@ class ManifestIngestWorkflow:
 
                 child_result = await workflow.execute_child_workflow(
                     "MoonMind.Run",
-                    args=[
-                        {
-                            "workflow_type": "MoonMind.Run",
-                            "owner_id": self._requested_by.get("userId"),
-                            "title": node.get("title", f"Manifest node {node_id}"),
-                            "input_artifact_ref": self._manifest_ref,
-                            "plan_artifact_ref": self._plan_ref,
-                            "manifest_artifact_ref": None,
-                            "initial_parameters": run_params,
-                        }
-                    ],
+                    args=[{
+                        "workflow_type": "MoonMind.Run",
+                        "owner_id": self._requested_by.get("userId"),
+                        "title": node.get("title", f"Manifest node {node_id}"),
+                        "input_artifact_ref": self._manifest_ref,
+                        "plan_artifact_ref": self._plan_ref,
+                        "manifest_artifact_ref": None,
+                        "initial_parameters": run_params,
+                    }],
                     id=child_id,
                     parent_close_policy=workflow.ParentClosePolicy.REQUEST_CANCEL,
                 )
@@ -830,9 +824,7 @@ class ManifestIngestWorkflow:
                 break
 
             # Wait for at least one task to complete
-            done, _ = await asyncio.wait(
-                list(running_tasks.values()), return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _ = await asyncio.wait(list(running_tasks.values()), return_when=asyncio.FIRST_COMPLETED)
 
             for d in done:
                 # Remove completed tasks from tracking
@@ -846,21 +838,15 @@ class ManifestIngestWorkflow:
         nodes_list = list(self._nodes.values())
         summary_result = await workflow.execute_activity(
             "manifest_write_summary",
-            args=[
-                {
-                    "principal": "system",
-                    "workflow_id": self._workflow_id,
-                    "state": (
-                        "succeeded"
-                        if all(n["state"] == "succeeded" for n in nodes_list)
-                        else "failed"
-                    ),
-                    "phase": "completed",
-                    "manifest_ref": self._manifest_ref,
-                    "plan_ref": self._plan_ref,
-                    "nodes": nodes_list,
-                }
-            ],
+            args=[{
+                "principal": "system",
+                "workflow_id": self._workflow_id,
+                "state": "succeeded" if all(n["state"] == "succeeded" for n in nodes_list) else "failed",
+                "phase": "completed",
+                "manifest_ref": self._manifest_ref,
+                "plan_ref": self._plan_ref,
+                "nodes": nodes_list,
+            }],
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
@@ -876,7 +862,7 @@ class ManifestIngestWorkflow:
         return {
             "status": final_status,
             "summaryRef": self._summary_ref,
-            "runIndexRef": self._run_index_ref,
+            "runIndexRef": self._run_index_ref
         }
 
     @workflow.update(name="UpdateManifest")
@@ -913,9 +899,6 @@ class ManifestIngestWorkflow:
     async def retry_nodes(self, payload: dict[str, Any]) -> dict[str, Any]:
         node_ids = payload.get("nodeIds", [])
         for nid in node_ids:
-            if nid in self._nodes and self._nodes[nid]["state"] in [
-                "failed",
-                "canceled",
-            ]:
+            if nid in self._nodes and self._nodes[nid]["state"] in ["failed", "canceled"]:
                 self._nodes[nid]["state"] = "pending"
         return {"accepted": True, "applied": "immediate"}
