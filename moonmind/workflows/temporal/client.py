@@ -114,7 +114,6 @@ class TemporalExecutionCreatorProtocol(Protocol):
         repository: str | None = ...,
         integration: str | None = ...,
         summary: str | None = ...,
-<<<<<<< HEAD
     ) -> TemporalExecutionRecord: ...
 
 
