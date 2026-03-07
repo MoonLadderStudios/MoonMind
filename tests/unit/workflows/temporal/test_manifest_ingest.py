@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,28 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-
-@pytest.fixture(autouse=True)
-def mock_temporal_client_adapter(monkeypatch):
-    import uuid
-    from dataclasses import dataclass
-
-    from moonmind.workflows.temporal.client import TemporalClientAdapter
-
-    @dataclass(frozen=True, slots=True)
-    class DummyWorkflowStartResult:
-        workflow_id: str
-        run_id: str
-
-    async def mock_start_workflow(self, *args, **kwargs):
-        workflow_id = kwargs.get("workflow_id") or "mm:dummy"
-        return DummyWorkflowStartResult(
-            workflow_id=workflow_id, run_id=str(uuid.uuid4())
-        )
-
-    monkeypatch.setattr(TemporalClientAdapter, "start_workflow", mock_start_workflow)
-
-
+import moonmind.workflows.temporal.manifest_ingest as manifest_ingest_module
 from api_service.db.models import Base, MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
@@ -45,13 +25,19 @@ from moonmind.workflows.temporal import (
     plan_nodes_to_runtime_nodes,
     start_manifest_child_runs,
 )
-from moonmind.workflows.temporal.manifest_ingest import (
-    DEFAULT_MANIFEST_MAX_CONCURRENCY,
-    apply_manifest_update,
-    build_manifest_status_snapshot,
-    initialize_manifest_projection,
-    list_manifest_nodes,
+
+DEFAULT_MANIFEST_MAX_CONCURRENCY = (
+    manifest_ingest_module.DEFAULT_MANIFEST_MAX_CONCURRENCY
 )
+ManifestIngestValidationError = manifest_ingest_module.ManifestIngestValidationError
+ManifestIngestWorkflow = manifest_ingest_module.ManifestIngestWorkflow
+_apply_manifest_node_update = manifest_ingest_module._apply_manifest_node_update
+_resolve_workflow_requested_by = manifest_ingest_module._resolve_workflow_requested_by
+_runtime_manifest_nodes = manifest_ingest_module._runtime_manifest_nodes
+apply_manifest_update = manifest_ingest_module.apply_manifest_update
+build_manifest_status_snapshot = manifest_ingest_module.build_manifest_status_snapshot
+initialize_manifest_projection = manifest_ingest_module.initialize_manifest_projection
+list_manifest_nodes = manifest_ingest_module.list_manifest_nodes
 
 MANIFEST_YAML = """
 version: "v0"
@@ -329,6 +315,218 @@ def test_compile_manifest_plan_produces_stable_node_ids() -> None:
     ]
 
 
+def test_resolve_workflow_requested_by_rejects_owner_mismatch() -> None:
+    with pytest.raises(
+        ManifestIngestValidationError,
+        match="immutable workflow owner metadata",
+    ):
+        _resolve_workflow_requested_by(
+            {"requestedBy": {"type": "user", "id": "user-2"}},
+            owner_id="user-1",
+        )
+
+
+def test_runtime_manifest_nodes_preserve_dependencies_and_requester() -> None:
+    nodes = _runtime_manifest_nodes(
+        [
+            {
+                "nodeId": "node-a",
+                "title": "A",
+                "sourceType": "github",
+                "sourceId": "repo-docs",
+                "requiredCapabilities": ["repo.read"],
+                "runtimeHints": {"taskQueueClass": "activity_routed"},
+                "dependencies": ["node-b"],
+            }
+        ],
+        requested_by={"type": "user", "id": "user-1"},
+    )
+
+    assert nodes == [
+        {
+            "nodeId": "node-a",
+            "state": "ready",
+            "title": "A",
+            "workflowType": "MoonMind.Run",
+            "childWorkflowId": None,
+            "childRunId": None,
+            "resultArtifactRef": None,
+            "requestedBy": {"type": "user", "id": "user-1"},
+            "startedAt": None,
+            "completedAt": None,
+            "dependencies": ["node-b"],
+            "runtimeHints": {"taskQueueClass": "activity_routed"},
+            "requiredCapabilities": ["repo.read"],
+            "sourceType": "github",
+            "sourceId": "repo-docs",
+        }
+    ]
+
+
+def test_apply_manifest_node_update_replace_future_preserves_started_nodes() -> None:
+    updated = _apply_manifest_node_update(
+        {
+            "node-running": {"nodeId": "node-running", "state": "running"},
+            "node-ready": {"nodeId": "node-ready", "state": "ready"},
+        },
+        updated_nodes=[
+            {"nodeId": "node-running", "state": "ready"},
+            {"nodeId": "node-fresh", "state": "ready"},
+        ],
+        mode="REPLACE_FUTURE",
+    )
+
+    assert updated == {
+        "node-running": {"nodeId": "node-running", "state": "running"},
+        "node-fresh": {"nodeId": "node-fresh", "state": "ready"},
+    }
+
+
+def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[tuple[str, dict[str, object]]] = []
+    child_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-1",
+            run_id="run-1",
+            search_attributes={"mm_owner_id": "user-1"},
+        ),
+    )
+
+    async def fake_execute_activity(name: str, *, args, **_kwargs):
+        payload = dict(args[0])
+        activity_calls.append((name, payload))
+        if name == "manifest_read":
+            return MANIFEST_YAML
+        if name == "manifest_compile":
+            return {
+                "plan_ref": "art_plan_1",
+                "nodes": [
+                    {
+                        "nodeId": "node-a",
+                        "title": "A",
+                        "sourceType": "github",
+                        "sourceId": "repo-docs",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": [],
+                    }
+                ],
+            }
+        if name == "manifest_write_summary":
+            return ("art_summary_1", "art_index_1")
+        raise AssertionError(f"unexpected activity {name}")
+
+    async def fake_execute_child_workflow(_name: str, *, args, **_kwargs):
+        child_calls.append(dict(args[0]))
+        return {"output_artifact_ref": "art_result_1"}
+
+    async def fake_wait_condition(_predicate):
+        return None
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+    result = asyncio.run(
+        workflow_instance.run(
+            {
+                "manifestArtifactRef": "art_manifest_1",
+                "requestedBy": {"type": "user", "id": "user-1"},
+            }
+        )
+    )
+
+    assert result["status"] == "succeeded"
+    assert activity_calls[0] == (
+        "manifest_read",
+        {"principal": "user-1", "manifest_ref": "art_manifest_1"},
+    )
+    assert activity_calls[1][1]["principal"] == "user-1"
+    assert activity_calls[2][1]["principal"] == "user-1"
+    assert child_calls == [
+        {
+            "workflow_type": "MoonMind.Run",
+            "owner_id": "user-1",
+            "title": "A",
+            "input_artifact_ref": "art_manifest_1",
+            "plan_artifact_ref": "art_plan_1",
+            "manifest_artifact_ref": None,
+            "initial_parameters": {
+                "manifestIngestWorkflowId": "mm:manifest-1",
+                "manifestIngestRunId": "run-1",
+                "manifestArtifactRef": "art_manifest_1",
+                "nodeId": "node-a",
+                "requestedBy": {"type": "user", "id": "user-1"},
+                "runtimeHints": {
+                    "manifestNodeState": "running",
+                    "workflowType": "MoonMind.Run",
+                },
+                "parentClosePolicy": "REQUEST_CANCEL",
+            },
+        }
+    ]
+
+
+def test_manifest_workflow_cancel_nodes_cancels_running_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTask:
+        def __init__(self) -> None:
+            self.canceled = False
+
+        def cancel(self) -> None:
+            self.canceled = True
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-1",
+            run_id="run-1",
+            search_attributes={"mm_owner_id": "user-1"},
+        ),
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+    workflow_instance._nodes = {
+        "node-a": {"nodeId": "node-a", "state": "pending"},
+        "node-b": {"nodeId": "node-b", "state": "running"},
+        "node-c": {"nodeId": "node-c", "state": "failed"},
+    }
+    task = FakeTask()
+    workflow_instance._running_tasks = {"node-b": task}
+
+    response = asyncio.run(
+        workflow_instance.cancel_nodes({"nodeIds": ["node-a", "node-b", "missing"]})
+    )
+
+    assert workflow_instance._nodes["node-a"]["state"] == "canceled"
+    assert task.canceled is True
+    assert response["result"] == {
+        "acceptedNodeIds": ["node-a", "node-b"],
+        "rejectedNodeIds": ["missing"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_manifest_activities_compile_plan_and_write_summary(
     tmp_path: Path,
@@ -370,17 +568,16 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 compile_result.nodes,
                 requested_by={"type": "user", "id": "user-1"},
             )
-            (
-                summary_ref,
-                run_index_ref,
-            ) = await manifest_activities.manifest_write_summary(
-                principal="user-1",
-                workflow_id="mm:manifest-1",
-                state="executing",
-                phase="executing",
-                manifest_ref=completed.artifact_id,
-                plan_ref=compile_result.plan_ref.artifact_id,
-                nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
+            summary_ref, run_index_ref = (
+                await manifest_activities.manifest_write_summary(
+                    principal="user-1",
+                    workflow_id="mm:manifest-1",
+                    state="executing",
+                    phase="executing",
+                    manifest_ref=completed.artifact_id,
+                    plan_ref=compile_result.plan_ref.artifact_id,
+                    nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
+                )
             )
 
             assert compile_result.plan_ref.artifact_id.startswith("art_")
