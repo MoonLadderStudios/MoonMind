@@ -2510,9 +2510,11 @@
 
   const shouldUseTemporalSubmit = (runtimeMode, options = {}) => {
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
+    const hasAttachments = Boolean(options.hasAttachments);
     return (
       Boolean(options.temporalSubmitEnabled) &&
       !Boolean(options.isEditMode) &&
+      !hasAttachments &&
       normalizedMode !== ORCHESTRATOR_RUNTIME
     );
   };
@@ -6597,14 +6599,9 @@
         {
           temporalSubmitEnabled,
           isEditMode,
+          hasAttachments,
         },
       );
-      if (submitDestination.mode === "temporal" && hasAttachments) {
-        message.className = "notice error queue-submit-message";
-        message.textContent =
-          "Temporal-backed submit currently supports artifact-first text inputs only; remove file attachments and retry.";
-        return;
-      }
 
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;
