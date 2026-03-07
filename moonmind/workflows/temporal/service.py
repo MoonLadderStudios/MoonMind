@@ -259,20 +259,9 @@ class TemporalExecutionService:
             if ref
         ]
 
-        start_result = await self._client_adapter.start_workflow(
-            workflow_type=workflow_type_enum.value,
-            workflow_id=workflow_id,
-            input_args=params,
-            idempotency_key=idempotency_key,
-            memo=memo,
-            search_attributes=search_attributes,
-        )
-
-        run_id = start_result.run_id
-
         record = TemporalExecutionCanonicalRecord(
             workflow_id=workflow_id,
-            run_id=run_id,
+            run_id=str(uuid4()),
             namespace=self._namespace,
             workflow_type=workflow_type_enum,
             owner_id=owner,
