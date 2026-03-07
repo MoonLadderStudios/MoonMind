@@ -1,9 +1,14 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-import temporalio
-from moonmind.workflows.temporal.worker_runtime import main_async, MoonMindRun, MoonMindManifestIngest
+import pytest
+
+from moonmind.workflows.temporal.worker_runtime import (
+    MoonMindManifestIngest,
+    MoonMindRun,
+    main_async,
+)
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
+
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
@@ -21,8 +26,11 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
 
     mock_worker = MagicMock()
     mock_worker_cls.return_value = mock_worker
-    mock_worker.run = MagicMock(return_value=None)  # Must be async if awaited, but wait, run() is awaited
+    mock_worker.run = MagicMock(
+        return_value=None
+    )  # Must be async if awaited, but wait, run() is awaited
     import asyncio
+
     future = asyncio.Future()
     future.set_result(None)
     mock_worker.run.return_value = future
@@ -46,7 +54,9 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
-async def test_main_async_activity_fleet(mock_worker_cls, mock_connect, mock_describe, mock_bindings):
+async def test_main_async_activity_fleet(
+    mock_worker_cls, mock_connect, mock_describe, mock_bindings
+):
     # Setup mocks
     mock_topology = MagicMock()
     mock_topology.fleet = "artifacts"
@@ -59,6 +69,7 @@ async def test_main_async_activity_fleet(mock_worker_cls, mock_connect, mock_des
     mock_worker = MagicMock()
     mock_worker_cls.return_value = mock_worker
     import asyncio
+
     future = asyncio.Future()
     future.set_result(None)
     mock_worker.run.return_value = future
