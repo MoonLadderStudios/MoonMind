@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+import moonmind.workflows.temporal.manifest_ingest as manifest_ingest_module
 from api_service.db.models import Base, MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
@@ -36,7 +37,6 @@ from moonmind.workflows.temporal.manifest_ingest import (
     initialize_manifest_projection,
     list_manifest_nodes,
 )
-import moonmind.workflows.temporal.manifest_ingest as manifest_ingest_module
 
 MANIFEST_YAML = """
 version: "v0"

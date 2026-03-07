@@ -898,7 +898,9 @@ class ManifestIngestWorkflow:
                     self._nodes[node_id] = dict(n)
         else:
             # 1. Compile Plan
-            compile_result = await self._compile_manifest(manifest_ref=self._manifest_ref)
+            compile_result = await self._compile_manifest(
+                manifest_ref=self._manifest_ref
+            )
             self._plan_ref = compile_result.get("plan_ref")
             for n in _runtime_manifest_nodes(
                 compile_result.get("nodes", []),
