@@ -238,6 +238,8 @@ class TemporalExecutionService:
             memo["input_ref"] = input_artifact_ref
         if manifest_artifact_ref:
             memo["manifest_ref"] = manifest_artifact_ref
+        if idempotency_key:
+            memo["idempotency_key"] = idempotency_key
 
         search_attributes = {
             "mm_owner_type": owner_type_enum.value,
@@ -319,6 +321,26 @@ class TemporalExecutionService:
             if existing is None:
                 raise exc
             return await self._sync_projection_best_effort(existing)
+        try:
+            start_result = await self._client_adapter.start_workflow(
+                workflow_id=workflow_id,
+                input_args=params,
+                memo=memo,
+                search_attributes=search_attributes,
+            )
+        except Exception:
+            await self._session.delete(record)
+            await self._session.commit()
+            raise
+
+        record.run_id = start_result.run_id
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            await self._session.delete(record)
+            await self._session.commit()
+            raise
         await self._session.refresh(record)
         return await self._sync_projection_best_effort(record)
 

@@ -64,7 +64,6 @@ class TemporalClientAdapter:
     async def start_workflow(
         self,
         *,
-        workflow_type: str,
         workflow_id: str,
         input_args: Mapping[str, Any] | None = None,
         memo: Mapping[str, Any] | None = None,
@@ -114,7 +113,8 @@ class TemporalExecutionCreatorProtocol(Protocol):
         repository: str | None = ...,
         integration: str | None = ...,
         summary: str | None = ...,
-    ) -> TemporalExecutionRecord: ...
+    ) -> TemporalExecutionRecord:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
