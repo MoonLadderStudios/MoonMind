@@ -46,6 +46,8 @@ from moonmind.workflows.temporal.manifest_ingest import (
     initialize_manifest_projection,
     list_manifest_nodes,
 )
+from moonmind.config.settings import settings
+from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.SUCCEEDED,
@@ -2032,12 +2034,124 @@ class TemporalExecutionService:
             await self._session.rollback()
             return None
 
+    async def _projection_payload_from_temporal(
+        self,
+        handle_description: WorkflowExecutionDescription,
+    ) -> dict[str, Any]:
+        memo = await handle_description.memo()
+
+        status = handle_description.status
+        close_status = None
+        state_value = MoonMindWorkflowState.EXECUTING
+
+        if status == WorkflowExecutionStatus.COMPLETED:
+            state_value = MoonMindWorkflowState.SUCCEEDED
+            close_status = TemporalExecutionCloseStatus.COMPLETED
+        elif status == WorkflowExecutionStatus.FAILED:
+            state_value = MoonMindWorkflowState.FAILED
+            close_status = TemporalExecutionCloseStatus.FAILED
+        elif status == WorkflowExecutionStatus.CANCELED:
+            state_value = MoonMindWorkflowState.CANCELED
+            close_status = TemporalExecutionCloseStatus.CANCELED
+        elif status == WorkflowExecutionStatus.TERMINATED:
+            state_value = MoonMindWorkflowState.FAILED
+            close_status = TemporalExecutionCloseStatus.TERMINATED
+        elif status == WorkflowExecutionStatus.TIMED_OUT:
+            state_value = MoonMindWorkflowState.FAILED
+            close_status = TemporalExecutionCloseStatus.TIMED_OUT
+        elif status == WorkflowExecutionStatus.CONTINUED_AS_NEW:
+            state_value = MoonMindWorkflowState.SUCCEEDED
+            close_status = TemporalExecutionCloseStatus.COMPLETED
+
+        workflow_type_str = handle_description.workflow_type
+        try:
+            workflow_type = TemporalWorkflowType(workflow_type_str)
+        except ValueError:
+            workflow_type = TemporalWorkflowType.RUN
+
+        artifact_refs = memo.get("artifact_refs", [])
+        return {
+            "workflow_id": handle_description.id,
+            "run_id": handle_description.run_id,
+            "namespace": handle_description.namespace,
+            "workflow_type": workflow_type,
+            "owner_id": memo.get("owner_id", "system"),
+            "owner_type": TemporalExecutionOwnerType.USER,
+            "state": state_value,
+            "close_status": close_status,
+            "entry": memo.get("entry", "api"),
+            "search_attributes": {},
+            "memo": dict(memo),
+            "artifact_refs": artifact_refs,
+            "input_ref": memo.get("input_ref"),
+            "plan_ref": memo.get("plan_ref"),
+            "manifest_ref": memo.get("manifest_ref"),
+            "parameters": memo.get("parameters", {}),
+            "integration_state": memo.get("integration_state"),
+            "pending_parameters_patch": memo.get("pending_parameters_patch"),
+            "paused": memo.get("paused", False),
+            "awaiting_external": memo.get("awaiting_external", False),
+            "waiting_reason": memo.get("waiting_reason"),
+            "attention_required": memo.get("attention_required", False),
+            "step_count": memo.get("step_count", 0),
+            "wait_cycle_count": memo.get("wait_cycle_count", 0),
+            "rerun_count": memo.get("rerun_count", 0),
+            "create_idempotency_key": memo.get("create_idempotency_key"),
+            "last_update_idempotency_key": memo.get("last_update_idempotency_key"),
+            "last_update_response": memo.get("last_update_response"),
+            "started_at": handle_description.start_time,
+            "updated_at": _utc_now(),
+            "closed_at": handle_description.close_time,
+        }
+
+    async def _upsert_projection_from_temporal(
+        self,
+        handle_description: WorkflowExecutionDescription,
+        *,
+        synced_at: datetime | None = None,
+    ) -> TemporalExecutionRecord:
+        payload = await self._projection_payload_from_temporal(handle_description)
+        projection = await self._session.get(TemporalExecutionRecord, handle_description.id)
+        previous_version = int(projection.projection_version or 0) if projection else 0
+        if projection is None:
+            projection = TemporalExecutionRecord(
+                **payload,
+                projection_version=1,
+                last_synced_at=synced_at or _utc_now(),
+                sync_state=TemporalExecutionProjectionSyncState.FRESH,
+                sync_error=None,
+                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+            )
+            self._session.add(projection)
+
+        self._apply_projection_payload(projection, payload)
+        projection.projection_version = max(previous_version + 1, 1)
+        projection.last_synced_at = synced_at or _utc_now()
+        projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
+        projection.sync_error = None
+        projection.source_mode = (
+            TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+        return projection
+
     async def _upsert_projection_from_source(
         self,
         source: TemporalExecutionCanonicalRecord,
         *,
         synced_at: datetime | None = None,
     ) -> TemporalExecutionRecord:
+        if settings.temporal.temporal_authoritative_read_enabled:
+            try:
+                from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
+                client = await get_temporal_client(
+                    settings.temporal.address, settings.temporal.namespace
+                )
+                desc = await fetch_workflow_execution(client, source.workflow_id)
+                return await self._upsert_projection_from_temporal(desc, synced_at=synced_at)
+            except Exception as exc:
+                # If temporal fetch fails, fallback to source logic below
+                pass
+
         payload = self._projection_payload_from_source(source)
         projection = await self._load_projection_execution(
             source.workflow_id,

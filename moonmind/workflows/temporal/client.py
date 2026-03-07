@@ -8,8 +8,21 @@ from dataclasses import dataclass
 from api_service.db.models import TemporalExecutionRecord
 from moonmind.schemas.manifest_ingest_models import ManifestNodeModel, RequestedByModel
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from temporalio.client import Client as TemporalClient
+from temporalio.client import WorkflowExecutionDescription
 
 MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
+
+async def get_temporal_client(address: str, namespace: str) -> TemporalClient:
+    """Connect to and return a Temporal client."""
+    return await TemporalClient.connect(address, namespace=namespace)
+
+async def fetch_workflow_execution(
+    client: TemporalClient, workflow_id: str
+) -> WorkflowExecutionDescription:
+    """Fetch the latest execution description for a workflow."""
+    handle = client.get_workflow_handle(workflow_id)
+    return await handle.describe()
 
 
 @dataclass(frozen=True, slots=True)
