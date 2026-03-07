@@ -16,7 +16,10 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
-from moonmind.workflows.temporal.client import TemporalClientAdapter, WorkflowStartResult
+from moonmind.workflows.temporal.client import (
+    TemporalClientAdapter,
+    WorkflowStartResult,
+)
 
 CURRENT_USER_DEP = get_current_user()
 

@@ -19,7 +19,6 @@ from api_service.services.manifests_service import (
     ManifestRegistryNotFoundError,
     ManifestsService,
 )
-from moonmind.workflows.temporal.client import TemporalClientAdapter, WorkflowStartResult
 from moonmind.workflows.agent_queue import models as queue_models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.temporal import (
@@ -27,6 +26,10 @@ from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
     TemporalExecutionService,
+)
+from moonmind.workflows.temporal.client import (
+    TemporalClientAdapter,
+    WorkflowStartResult,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
