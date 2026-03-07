@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,8 @@ from moonmind.workflows.temporal.manifest_ingest import (
 )
 from moonmind.config.settings import settings
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
+
+logger = logging.getLogger(__name__)
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.SUCCEEDED,
@@ -1967,8 +1970,26 @@ class TemporalExecutionService:
         source: TemporalExecutionCanonicalRecord,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         snapshot = self._snapshot_source(source)
+        temporal_client = None
         try:
-            projection = await self._upsert_projection_from_source(source)
+            if settings.temporal.temporal_authoritative_read_enabled:
+                try:
+                    from moonmind.workflows.temporal.client import get_temporal_client
+
+                    temporal_client = await get_temporal_client(
+                        settings.temporal.address, settings.temporal.namespace
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to initialize Temporal client for projection sync, using fallback source payload for %s",
+                        source.workflow_id,
+                    )
+
+            projection = await self._upsert_projection_from_source(
+                source,
+                synced_at=None,
+                temporal_client=temporal_client,
+            )
             await self._session.commit()
             await self._session.refresh(projection)
             return projection
@@ -1984,6 +2005,15 @@ class TemporalExecutionService:
                 snapshot,
                 sync_error=str(exc),
             )
+        finally:
+            if temporal_client is not None:
+                try:
+                    await temporal_client.close()
+                except Exception:
+                    logger.exception(
+                        "Failed to close Temporal client for projection sync %s",
+                        source.workflow_id,
+                    )
 
     async def _sync_projections_best_effort(
         self,
@@ -1992,10 +2022,27 @@ class TemporalExecutionService:
         if not sources:
             return []
 
+        temporal_client = None
         synced_at = _utc_now()
         try:
+            if settings.temporal.temporal_authoritative_read_enabled:
+                try:
+                    from moonmind.workflows.temporal.client import get_temporal_client
+
+                    temporal_client = await get_temporal_client(
+                        settings.temporal.address, settings.temporal.namespace
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to initialize Temporal client for projection sync, using fallback source payload",
+                    )
+
             projections = [
-                await self._upsert_projection_from_source(source, synced_at=synced_at)
+                await self._upsert_projection_from_source(
+                    source,
+                    synced_at=synced_at,
+                    temporal_client=temporal_client,
+                )
                 for source in sources
             ]
             await self._session.commit()
@@ -2007,6 +2054,14 @@ class TemporalExecutionService:
             return [
                 await self._sync_projection_best_effort(source) for source in sources
             ]
+        finally:
+            if temporal_client is not None:
+                try:
+                    await temporal_client.close()
+                except Exception:
+                    logger.exception(
+                        "Failed to close shared Temporal client for projection sync batch",
+                    )
 
     async def _mark_projection_repair_pending_from_snapshot(
         self,
@@ -2037,31 +2092,41 @@ class TemporalExecutionService:
     async def _projection_payload_from_temporal(
         self,
         handle_description: WorkflowExecutionDescription,
+        source: TemporalExecutionCanonicalRecord | None = None,
     ) -> dict[str, Any]:
         memo = await handle_description.memo()
 
-        status = handle_description.status
-        close_status = None
-        state_value = MoonMindWorkflowState.EXECUTING
+        status_map = {
+            WorkflowExecutionStatus.COMPLETED: (
+                MoonMindWorkflowState.SUCCEEDED,
+                TemporalExecutionCloseStatus.COMPLETED,
+            ),
+            WorkflowExecutionStatus.FAILED: (
+                MoonMindWorkflowState.FAILED,
+                TemporalExecutionCloseStatus.FAILED,
+            ),
+            WorkflowExecutionStatus.CANCELED: (
+                MoonMindWorkflowState.CANCELED,
+                TemporalExecutionCloseStatus.CANCELED,
+            ),
+            WorkflowExecutionStatus.TERMINATED: (
+                MoonMindWorkflowState.FAILED,
+                TemporalExecutionCloseStatus.TERMINATED,
+            ),
+            WorkflowExecutionStatus.TIMED_OUT: (
+                MoonMindWorkflowState.FAILED,
+                TemporalExecutionCloseStatus.TIMED_OUT,
+            ),
+            WorkflowExecutionStatus.CONTINUED_AS_NEW: (
+                MoonMindWorkflowState.SUCCEEDED,
+                TemporalExecutionCloseStatus.COMPLETED,
+            ),
+        }
 
-        if status == WorkflowExecutionStatus.COMPLETED:
-            state_value = MoonMindWorkflowState.SUCCEEDED
-            close_status = TemporalExecutionCloseStatus.COMPLETED
-        elif status == WorkflowExecutionStatus.FAILED:
-            state_value = MoonMindWorkflowState.FAILED
-            close_status = TemporalExecutionCloseStatus.FAILED
-        elif status == WorkflowExecutionStatus.CANCELED:
-            state_value = MoonMindWorkflowState.CANCELED
-            close_status = TemporalExecutionCloseStatus.CANCELED
-        elif status == WorkflowExecutionStatus.TERMINATED:
-            state_value = MoonMindWorkflowState.FAILED
-            close_status = TemporalExecutionCloseStatus.TERMINATED
-        elif status == WorkflowExecutionStatus.TIMED_OUT:
-            state_value = MoonMindWorkflowState.FAILED
-            close_status = TemporalExecutionCloseStatus.TIMED_OUT
-        elif status == WorkflowExecutionStatus.CONTINUED_AS_NEW:
-            state_value = MoonMindWorkflowState.SUCCEEDED
-            close_status = TemporalExecutionCloseStatus.COMPLETED
+        state_value, close_status = status_map.get(
+            handle_description.status,
+            (MoonMindWorkflowState.EXECUTING, None),
+        )
 
         workflow_type_str = handle_description.workflow_type
         try:
@@ -2069,18 +2134,52 @@ class TemporalExecutionService:
         except ValueError:
             workflow_type = TemporalWorkflowType.RUN
 
+        source_entry = source.entry if source is not None else None
+        try:
+            entry = self._parse_entry(str(memo.get("entry")))
+        except Exception:
+            fallback_entry = source_entry or WORKFLOW_ENTRY_BY_TYPE.get(
+                workflow_type,
+                "run",
+            )
+            logger.warning(
+                "Invalid Temporal memo entry '%s' for %s; using fallback '%s'.",
+                memo.get("entry"),
+                handle_description.id,
+                fallback_entry,
+            )
+            entry = fallback_entry
+
+        search_attributes = {}
+        try:
+            raw_search_attributes = handle_description.search_attributes or {}
+            for key, value in raw_search_attributes.items():
+                raw_value = getattr(value, "data", value)
+                if isinstance(raw_value, bytes):
+                    try:
+                        search_attributes[key] = json.loads(raw_value.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        search_attributes[key] = raw_value.decode("utf-8", errors="replace")
+                else:
+                    search_attributes[key] = raw_value
+        except Exception:
+            logger.exception(
+                "Failed to decode Temporal search attributes for %s", handle_description.id
+            )
+            search_attributes = {}
+
         artifact_refs = memo.get("artifact_refs", [])
         return {
             "workflow_id": handle_description.id,
             "run_id": handle_description.run_id,
             "namespace": handle_description.namespace,
             "workflow_type": workflow_type,
-            "owner_id": memo.get("owner_id", "system"),
-            "owner_type": TemporalExecutionOwnerType.USER,
+            "owner_id": source.owner_id if source is not None else memo.get("owner_id"),
+            "owner_type": source.owner_type if source is not None else TemporalExecutionOwnerType.USER,
             "state": state_value,
             "close_status": close_status,
-            "entry": memo.get("entry", "api"),
-            "search_attributes": {},
+            "entry": entry,
+            "search_attributes": search_attributes,
             "memo": dict(memo),
             "artifact_refs": artifact_refs,
             "input_ref": memo.get("input_ref"),
@@ -2109,8 +2208,12 @@ class TemporalExecutionService:
         handle_description: WorkflowExecutionDescription,
         *,
         synced_at: datetime | None = None,
+        source: TemporalExecutionCanonicalRecord | None = None,
     ) -> TemporalExecutionRecord:
-        payload = await self._projection_payload_from_temporal(handle_description)
+        payload = await self._projection_payload_from_temporal(
+            handle_description,
+            source=source,
+        )
         projection = await self._session.get(TemporalExecutionRecord, handle_description.id)
         previous_version = int(projection.projection_version or 0) if projection else 0
         if projection is None:
@@ -2139,18 +2242,29 @@ class TemporalExecutionService:
         source: TemporalExecutionCanonicalRecord,
         *,
         synced_at: datetime | None = None,
+        temporal_client=None,
     ) -> TemporalExecutionRecord:
-        if settings.temporal.temporal_authoritative_read_enabled:
+        if settings.temporal.temporal_authoritative_read_enabled and temporal_client is not None:
             try:
-                from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
-                client = await get_temporal_client(
-                    settings.temporal.address, settings.temporal.namespace
+                from moonmind.workflows.temporal.client import fetch_workflow_execution
+
+                desc = await fetch_workflow_execution(
+                    temporal_client,
+                    source.workflow_id,
                 )
-                desc = await fetch_workflow_execution(client, source.workflow_id)
-                return await self._upsert_projection_from_temporal(desc, synced_at=synced_at)
+                return await self._upsert_projection_from_temporal(
+                    desc,
+                    synced_at=synced_at,
+                    source=source,
+                )
             except Exception as exc:
                 # If temporal fetch fails, fallback to source logic below
-                pass
+                logger.warning(
+                    "Failed to fetch Temporal execution description for %s, falling back to source snapshot: %s",
+                    source.workflow_id,
+                    exc,
+                    exc_info=True,
+                )
 
         payload = self._projection_payload_from_source(source)
         projection = await self._load_projection_execution(
