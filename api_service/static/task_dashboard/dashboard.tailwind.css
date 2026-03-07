@@ -605,6 +605,8 @@ textarea {
 
 button {
   width: fit-content;
+  position: relative;
+  isolation: isolate;
   border: 1px solid transparent;
   border-radius: 999px;
   padding: 0.52rem 0.9rem;
@@ -613,6 +615,29 @@ button {
   color: #fff;
   cursor: pointer;
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease;
+}
+
+button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 135deg,
+    rgb(255 255 255 / 0.58) 0deg,
+    rgb(255 255 255 / 0.22) 70deg,
+    rgb(255 255 255 / 0.08) 120deg,
+    rgb(255 255 255 / 0.5) 180deg,
+    rgb(255 255 255 / 0.2) 250deg,
+    rgb(255 255 255 / 0.08) 300deg,
+    rgb(255 255 255 / 0.58) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.95;
 }
 
 button:not(.secondary):not(.queue-action):not(.queue-submit-primary):not(.queue-step-icon-button) {
@@ -668,6 +693,8 @@ button.secondary:hover {
   display: inline-block;
   text-decoration: none;
   width: fit-content;
+  position: relative;
+  isolation: isolate;
   border: 1px solid transparent;
   border-radius: 999px;
   padding: 0.52rem 0.9rem;
@@ -676,6 +703,29 @@ button.secondary:hover {
   color: #fff;
   cursor: pointer;
   transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 135deg,
+    rgb(255 255 255 / 0.58) 0deg,
+    rgb(255 255 255 / 0.22) 70deg,
+    rgb(255 255 255 / 0.08) 120deg,
+    rgb(255 255 255 / 0.5) 180deg,
+    rgb(255 255 255 / 0.2) 250deg,
+    rgb(255 255 255 / 0.08) 300deg,
+    rgb(255 255 255 / 0.58) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.95;
 }
 
 .button:not(.secondary):not(.queue-action):not(.queue-submit-primary) {
@@ -757,6 +807,13 @@ button.secondary:hover {
 .queue-submit-primary:focus-visible {
   outline: 2px solid rgb(var(--queue-action-color));
   outline-offset: 3px;
+}
+
+@supports not ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  button::before,
+  .button::before {
+    display: none;
+  }
 }
 
 .queue-action:active,
