@@ -64,6 +64,7 @@ async def _wait_for_condition(
     poll_interval_seconds: float = 0.05,
 ) -> None:
     import asyncio
+
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     while not predicate():
         if asyncio.get_running_loop().time() >= deadline:
