@@ -27,6 +27,37 @@ PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
 
+WORKFLOW_LINK_TYPES = {
+    "plan": "input.plan",
+    "command": "output.logs",
+    "integration": "output.summary",
+}
+
+
+def _assert_execution_ref(
+    self: unittest.TestCase,
+    actual: Dict[str, Any],
+    *,
+    namespace: str,
+    workflow_id: str,
+    run_id: str,
+    kind: str,
+) -> None:
+    expected = _expected_execution_ref(namespace, kind, workflow_id)
+    self.assertEqual(actual["namespace"], expected["namespace"])
+    self.assertEqual(actual["workflow_id"], expected["workflow_id"])
+    self.assertEqual(actual["link_type"], expected["link_type"])
+    self.assertEqual(actual["run_id"], run_id)
+    self.assertNotEqual(actual["run_id"], "")
+
+
+def _expected_execution_ref(namespace: str, kind: str, workflow_id: str) -> Dict[str, str]:
+    return {
+        "namespace": namespace,
+        "workflow_id": workflow_id,
+        "link_type": WORKFLOW_LINK_TYPES[kind],
+    }
+
 
 def _trusted_search_attributes() -> TypedSearchAttributes:
     return TypedSearchAttributes(
@@ -120,6 +151,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     memo={"title": "Trusted title"},
                     search_attributes=_trusted_search_attributes(),
                 )
+                workflow_namespace = env.client.namespace
 
                 # We need to resume it because integration forces wait
                 await handle.signal(MoonMindRunWorkflow.resume)
@@ -130,6 +162,31 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(SANDBOX_COMMAND_CALLS[0]["principal"], "trusted-owner")
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
+                )
+                run_id = PLAN_GENERATE_CALLS[0]["execution_ref"]["run_id"]
+                _assert_execution_ref(
+                    self,
+                    PLAN_GENERATE_CALLS[0]["execution_ref"],
+                    namespace=workflow_namespace,
+                    workflow_id="test-workflow-id",
+                    run_id=run_id,
+                    kind="plan",
+                )
+                _assert_execution_ref(
+                    self,
+                    SANDBOX_COMMAND_CALLS[0]["execution_ref"],
+                    namespace=workflow_namespace,
+                    workflow_id="test-workflow-id",
+                    run_id=run_id,
+                    kind="command",
+                )
+                _assert_execution_ref(
+                    self,
+                    INTEGRATION_START_CALLS[0]["execution_ref"],
+                    namespace=workflow_namespace,
+                    workflow_id="test-workflow-id",
+                    run_id=run_id,
+                    kind="integration",
                 )
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
@@ -164,6 +221,22 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
         self.assertEqual(SANDBOX_COMMAND_CALLS[0]["principal"], "trusted-owner")
+        _assert_execution_ref(
+            self,
+            PLAN_GENERATE_CALLS[0]["execution_ref"],
+            namespace=env.client.namespace,
+            workflow_id="test-workflow-id-trusted-owner",
+            run_id=PLAN_GENERATE_CALLS[0]["execution_ref"]["run_id"],
+            kind="plan",
+        )
+        _assert_execution_ref(
+            self,
+            SANDBOX_COMMAND_CALLS[0]["execution_ref"],
+            namespace=env.client.namespace,
+            workflow_id="test-workflow-id-trusted-owner",
+            run_id=PLAN_GENERATE_CALLS[0]["execution_ref"]["run_id"],
+            kind="command",
+        )
 
     async def test_moonmind_run_workflow_validation_error(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
