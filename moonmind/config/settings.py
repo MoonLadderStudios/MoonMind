@@ -202,6 +202,10 @@ class TemporalSettings(BaseSettings):
         env="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
         ge=1,
     )
+    temporal_authoritative_read_enabled: bool = Field(
+        False,
+        env="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="",

@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionDescription
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
@@ -28,6 +28,21 @@ class WorkflowStartResult:
 
     workflow_id: str
     run_id: str
+
+
+async def get_temporal_client(address: str, namespace: str) -> Client:
+    """Connect to and return a Temporal client."""
+
+    return await Client.connect(address, namespace=namespace)
+
+
+async def fetch_workflow_execution(
+    client: Client, workflow_id: str
+) -> WorkflowExecutionDescription:
+    """Fetch the latest execution description for a workflow."""
+
+    handle = client.get_workflow_handle(workflow_id)
+    return await handle.describe()
 
 
 class TemporalClientAdapter:
