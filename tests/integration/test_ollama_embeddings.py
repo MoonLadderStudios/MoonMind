@@ -27,6 +27,7 @@ ch.setLevel(logging.DEBUG)  # Set handler level
 
 # Add the handler to your logger
 logger.addHandler(ch)
+OLLAMA_API_TIMEOUT_SECONDS = 30
 
 
 @pytest.fixture(scope="session")
@@ -34,11 +35,12 @@ def ollama_running():
     """Fixture to check if Ollama is running at the specified URL."""
     try:
         response = requests.get(
-            settings.ollama.ollama_base_url + "/api/tags", timeout=30
+            settings.ollama.ollama_base_url + "/api/tags",
+            timeout=OLLAMA_API_TIMEOUT_SECONDS,
         )
         if response.status_code == 200:
             return True
-    except requests.ConnectionError:
+    except requests.RequestException:
         pass
     return False
 
