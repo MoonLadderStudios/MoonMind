@@ -41,7 +41,9 @@ async def _poll_for_status(
             return detail
         await asyncio.sleep(1.0)
     pytest.fail(f"Task {task_id} did not reach one of {target_statuses} within timeout")
-    raise AssertionError(f"Task {task_id} did not reach one of {target_statuses} within timeout")
+    raise AssertionError(
+        f"Task {task_id} did not reach one of {target_statuses} within timeout"
+    )
 
 
 async def _poll_for_artifact_refs(
@@ -153,7 +155,9 @@ async def test_temporal_switchover_e2e() -> None:
             assert artifact_refs
 
             # Perform an operator action: cancel
-            cancel_resp = await client.post(f"/api/executions/{task_id}/cancel", json={})
+            cancel_resp = await client.post(
+                f"/api/executions/{task_id}/cancel", json={}
+            )
             assert (
                 cancel_resp.status_code == 202
             ), f"Cancel failed: {cancel_resp.status_code} {cancel_resp.text}"
