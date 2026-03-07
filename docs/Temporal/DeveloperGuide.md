@@ -41,7 +41,7 @@ TEMPORAL_ARTIFACT_S3_USE_SSL="false"
 To start the required Temporal services, worker fleets, and supporting infrastructure (API, DB, MinIO), run the following command from the repository root:
 
 ```bash
-docker compose up -d minio temporal-db temporal temporal-namespace-init \
+docker compose up -d minio temporal-db qdrant temporal temporal-namespace-init \
   temporal-worker-workflow temporal-worker-artifacts \
   temporal-worker-llm temporal-worker-sandbox temporal-worker-integrations \
   api
@@ -129,8 +129,11 @@ To prove that the stack is functioning correctly without manually executing comm
 curl -X POST http://localhost:5000/api/executions \
   -H "Content-Type: application/json" \
   -d '{
-    "entry": "Test execution",
-    "inputs": {}
+    "workflowType": "MoonMind.Run",
+    "title": "Local verification run",
+    "initialParameters": {
+      "entry": "Test execution"
+    }
   }'
 ```
 
