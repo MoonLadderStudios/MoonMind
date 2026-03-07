@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import base64
 import binascii
-import logging
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -30,6 +31,7 @@ from api_service.db.models import (
     TemporalIntegrationCorrelationRecord,
     TemporalWorkflowType,
 )
+from moonmind.config.settings import settings
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -47,8 +49,6 @@ from moonmind.workflows.temporal.manifest_ingest import (
     initialize_manifest_projection,
     list_manifest_nodes,
 )
-from moonmind.config.settings import settings
-from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -2187,12 +2187,15 @@ class TemporalExecutionService:
                     try:
                         search_attributes[key] = json.loads(raw_value.decode("utf-8"))
                     except (UnicodeDecodeError, json.JSONDecodeError):
-                        search_attributes[key] = raw_value.decode("utf-8", errors="replace")
+                        search_attributes[key] = raw_value.decode(
+                            "utf-8", errors="replace"
+                        )
                 else:
                     search_attributes[key] = raw_value
         except Exception:
             logger.exception(
-                "Failed to decode Temporal search attributes for %s", handle_description.id
+                "Failed to decode Temporal search attributes for %s",
+                handle_description.id,
             )
             search_attributes = {}
 
@@ -2203,7 +2206,11 @@ class TemporalExecutionService:
             "namespace": handle_description.namespace,
             "workflow_type": workflow_type,
             "owner_id": source.owner_id if source is not None else memo.get("owner_id"),
-            "owner_type": source.owner_type if source is not None else TemporalExecutionOwnerType.USER,
+            "owner_type": (
+                source.owner_type
+                if source is not None
+                else TemporalExecutionOwnerType.USER
+            ),
             "state": state_value,
             "close_status": close_status,
             "entry": entry,
@@ -2242,7 +2249,9 @@ class TemporalExecutionService:
             handle_description,
             source=source,
         )
-        projection = await self._session.get(TemporalExecutionRecord, handle_description.id)
+        projection = await self._session.get(
+            TemporalExecutionRecord, handle_description.id
+        )
         previous_version = int(projection.projection_version or 0) if projection else 0
         if projection is None:
             projection = TemporalExecutionRecord(
@@ -2272,7 +2281,10 @@ class TemporalExecutionService:
         synced_at: datetime | None = None,
         temporal_client=None,
     ) -> TemporalExecutionRecord:
-        if settings.temporal.temporal_authoritative_read_enabled and temporal_client is not None:
+        if (
+            settings.temporal.temporal_authoritative_read_enabled
+            and temporal_client is not None
+        ):
             try:
                 from moonmind.workflows.temporal.client import fetch_workflow_execution
 

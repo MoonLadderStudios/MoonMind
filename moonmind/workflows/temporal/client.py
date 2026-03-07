@@ -144,7 +144,6 @@ class ManifestChildWorkflowStart:
     parent_close_policy: str = MANIFEST_CHILD_PARENT_CLOSE_POLICY
 
 
-
 def build_manifest_child_parameters(
     *,
     parent_execution: TemporalExecutionRecord,
