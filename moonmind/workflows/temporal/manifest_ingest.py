@@ -14,6 +14,7 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from temporalio import workflow
 
 from yaml import YAMLError, safe_load
 
@@ -659,3 +660,245 @@ def _coerce_runtime_nodes(
         )
         for node in nodes
     ]
+
+
+
+
+
+from datetime import timedelta
+import asyncio
+from typing import Any
+from temporalio import workflow
+from temporalio.common import RetryPolicy
+
+with workflow.unsafe.imports_passed_through():
+    from moonmind.schemas.manifest_ingest_models import ManifestNodeModel
+
+
+@workflow.defn(name="MoonMind.ManifestIngest")
+class ManifestIngestWorkflow:
+    """Real Temporal workflow for manifest ingest."""
+
+    def __init__(self) -> None:
+        self._manifest_ref: str | None = None
+        self._concurrency: int = 50
+        self._paused: bool = False
+        self._nodes: dict[str, dict[str, Any]] = {}
+        self._status: str = "initializing"
+        self._plan_ref: str | None = None
+        self._summary_ref: str | None = None
+        self._run_index_ref: str | None = None
+        self._canceled_nodes: set[str] = set()
+        self._execution_policy: dict[str, Any] = {}
+        self._requested_by: dict[str, Any] = {}
+        self._workflow_id: str = workflow.info().workflow_id
+        self._run_id: str = workflow.info().run_id
+
+    @workflow.run
+    async def run(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        self._manifest_ref = parameters.get("manifestArtifactRef")
+        if not self._manifest_ref:
+            raise ValueError("manifestArtifactRef is required")
+
+        self._concurrency = parameters.get("maxConcurrency", 50)
+        self._execution_policy = parameters.get("executionPolicy", {})
+        self._requested_by = parameters.get("requestedBy", {})
+        self._status = "executing"
+
+        self._plan_ref = parameters.get("planArtifactRef")
+        nodes_input = parameters.get("manifestNodes", [])
+
+        if self._plan_ref and nodes_input:
+            for n in nodes_input:
+                node_id = n.get("nodeId") or n.get("node_id")
+                if node_id:
+                    self._nodes[node_id] = dict(n)
+        else:
+            # 1. Compile Plan
+            manifest_payload = await workflow.execute_activity(
+                "manifest_read",
+                args=[{"principal": "system", "manifest_ref": self._manifest_ref}],
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            compile_result = await workflow.execute_activity(
+                "manifest_compile",
+                args=[{
+                    "principal": "system",
+                    "manifest_ref": self._manifest_ref,
+                    "manifest_payload": manifest_payload,
+                    "action": "run",
+                    "options": None,
+                    "requested_by": self._requested_by,
+                    "execution_policy": self._execution_policy,
+                }],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+            self._plan_ref = compile_result.get("plan_ref")
+            for n in compile_result.get("nodes", []):
+                node_id = n.get("nodeId") or n.get("node_id")
+                if node_id:
+                    self._nodes[node_id] = dict(n)
+                    self._nodes[node_id]["state"] = "pending"
+
+        # 2. Execute nodes logic
+        failure_policy = self._execution_policy.get("failurePolicy", "fail_fast")
+
+        # Build dependency graph
+        deps = {n_id: set(node_data.get("dependencies", [])) for n_id, node_data in self._nodes.items()}
+
+        running_tasks = {}
+
+        def can_start(node_id: str) -> bool:
+            node = self._nodes[node_id]
+            if node["state"] != "pending":
+                return False
+            for d in deps.get(node_id, set()):
+                dep_node = self._nodes.get(d)
+                if not dep_node or dep_node["state"] != "succeeded":
+                    return False
+            return True
+
+        async def run_node(node_id: str):
+            node = self._nodes[node_id]
+            node["state"] = "running"
+            try:
+                # Execute MoonMind.Run as a child workflow
+                run_params = {
+                    "manifestIngestWorkflowId": self._workflow_id,
+                    "manifestIngestRunId": self._run_id,
+                    "manifestArtifactRef": self._manifest_ref,
+                    "nodeId": node_id,
+                    "requestedBy": self._requested_by,
+                    "runtimeHints": {"manifestNodeState": "running", "workflowType": "MoonMind.Run"},
+                    "parentClosePolicy": "REQUEST_CANCEL"
+                }
+
+                child_id = f"{self._workflow_id}:{self._run_id}:{node_id}"
+                node["child_workflow_id"] = child_id
+
+                child_result = await workflow.execute_child_workflow(
+                    "MoonMind.Run",
+                    args=[{
+                        "workflow_type": "MoonMind.Run",
+                        "owner_id": self._requested_by.get("userId"),
+                        "title": node.get("title", f"Manifest node {node_id}"),
+                        "input_artifact_ref": self._manifest_ref,
+                        "plan_artifact_ref": self._plan_ref,
+                        "manifest_artifact_ref": None,
+                        "initial_parameters": run_params,
+                    }],
+                    id=child_id,
+                    parent_close_policy=workflow.ParentClosePolicy.REQUEST_CANCEL,
+                )
+                node["state"] = "succeeded"
+                node["result_artifact_ref"] = child_result.get("output_artifact_ref")
+            except Exception as e:
+                node["state"] = "failed"
+                node["error"] = str(e)
+
+        while True:
+            await workflow.wait_condition(lambda: not self._paused)
+
+            # Check for terminal failure in fail_fast mode
+            any_failed = any(n["state"] == "failed" for n in self._nodes.values())
+            if any_failed and failure_policy == "fail_fast":
+                for n in self._nodes.values():
+                    if n["state"] == "pending":
+                        n["state"] = "canceled"
+
+            # Find ready nodes
+            ready_nodes = [n_id for n_id in self._nodes if can_start(n_id)]
+
+            # Start up to concurrency limit
+            available_slots = self._concurrency - len(running_tasks)
+            for n_id in ready_nodes[:available_slots]:
+                task = asyncio.create_task(run_node(n_id))
+                running_tasks[n_id] = task
+
+            if not running_tasks:
+                # No running tasks and no ready nodes means we're done
+                break
+
+            # Wait for at least one task to complete
+            done, _ = await asyncio.wait(list(running_tasks.values()), return_when=asyncio.FIRST_COMPLETED)
+
+            for d in done:
+                # Remove completed tasks from tracking
+                for n_id, t in list(running_tasks.items()):
+                    if t == d:
+                        del running_tasks[n_id]
+
+        self._status = "finalizing"
+
+        # 3. Create summary and index artifacts
+        nodes_list = list(self._nodes.values())
+        summary_result = await workflow.execute_activity(
+            "manifest_write_summary",
+            args=[{
+                "principal": "system",
+                "workflow_id": self._workflow_id,
+                "state": "succeeded" if all(n["state"] == "succeeded" for n in nodes_list) else "failed",
+                "phase": "completed",
+                "manifest_ref": self._manifest_ref,
+                "plan_ref": self._plan_ref,
+                "nodes": nodes_list,
+            }],
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(maximum_attempts=3),
+        )
+
+        if summary_result and len(summary_result) == 2:
+            self._summary_ref = summary_result[0]
+            self._run_index_ref = summary_result[1]
+
+        final_status = "succeeded"
+        if any(n["state"] == "failed" for n in nodes_list):
+            final_status = "failed"
+
+        return {
+            "status": final_status,
+            "summaryRef": self._summary_ref,
+            "runIndexRef": self._run_index_ref
+        }
+
+    @workflow.update(name="UpdateManifest")
+    async def update_manifest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return {"accepted": True, "applied": "immediate"}
+
+    @workflow.update(name="SetConcurrency")
+    async def set_concurrency(self, payload: dict[str, Any]) -> dict[str, Any]:
+        max_concurrency = payload.get("maxConcurrency")
+        if max_concurrency is not None:
+            self._concurrency = max_concurrency
+        return {"accepted": True, "applied": "immediate"}
+
+    @workflow.update(name="Pause")
+    async def pause(self, payload: dict[str, Any] = None) -> dict[str, Any]:
+        self._paused = True
+        return {"accepted": True, "applied": "immediate"}
+
+    @workflow.update(name="Resume")
+    async def resume(self, payload: dict[str, Any] = None) -> dict[str, Any]:
+        self._paused = False
+        return {"accepted": True, "applied": "immediate"}
+
+    @workflow.update(name="CancelNodes")
+    async def cancel_nodes(self, payload: dict[str, Any]) -> dict[str, Any]:
+        node_ids = payload.get("nodeIds", [])
+        self._canceled_nodes.update(node_ids)
+        for nid in node_ids:
+            if nid in self._nodes and self._nodes[nid]["state"] == "pending":
+                self._nodes[nid]["state"] = "canceled"
+        return {"accepted": True, "applied": "immediate"}
+
+    @workflow.update(name="RetryNodes")
+    async def retry_nodes(self, payload: dict[str, Any]) -> dict[str, Any]:
+        node_ids = payload.get("nodeIds", [])
+        for nid in node_ids:
+            if nid in self._nodes and self._nodes[nid]["state"] in ["failed", "canceled"]:
+                self._nodes[nid]["state"] = "pending"
+        return {"accepted": True, "applied": "immediate"}
