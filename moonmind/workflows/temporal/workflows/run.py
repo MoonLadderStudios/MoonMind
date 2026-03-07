@@ -176,10 +176,10 @@ class MoonMindRunWorkflow:
         self._step_count += 1
 
         await workflow.execute_activity(
-            "sandbox.command",
+            "sandbox.run_command",
             {
                 "principal": self._principal(),
-                "command": "echo executing",
+                "cmd": "echo executing",
                 "timeout_seconds": 300,
             },
             start_to_close_timeout=timedelta(minutes=10),
@@ -195,14 +195,26 @@ class MoonMindRunWorkflow:
         self._awaiting_external = True
         self._set_state(STATE_AWAITING_EXTERNAL)
 
+        integration_parameters = dict(parameters)
+        integration_parameters.setdefault("title", self._title or "MoonMind Integration")
+        integration_parameters.setdefault(
+            "description",
+            f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
+        )
+        metadata = integration_parameters.get("metadata")
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            raise ValueError("integration metadata must be an object when provided")
+        metadata.setdefault("repo", self._repo)
+        metadata.setdefault("planRef", plan_ref)
+        integration_parameters["metadata"] = metadata
+
         await workflow.execute_activity(
-            "integration.start",
+            self._integration_activity_type(),
             {
                 "principal": self._principal(),
-                "integration_name": self._integration,
-                "repo": self._repo,
-                "plan_ref": plan_ref,
-                "parameters": parameters,
+                "parameters": integration_parameters,
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -223,6 +235,11 @@ class MoonMindRunWorkflow:
         if not self._owner_id:
             raise ValueError("Trusted owner metadata is required")
         return self._owner_id
+
+    def _integration_activity_type(self) -> str:
+        if not self._integration:
+            raise ValueError("integration is required for integration activities")
+        return f"integration.{self._integration}.start"
 
     def _trusted_owner_metadata(self) -> tuple[str, str]:
         search_attributes = workflow.info().search_attributes

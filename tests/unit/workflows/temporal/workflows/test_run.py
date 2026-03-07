@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("temporalio")
 
-from temporalio import activity
+from temporalio import activity, exceptions
 from temporalio.common import SearchAttributeKey, TypedSearchAttributes
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
@@ -28,13 +28,13 @@ async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"plan_ref": "artifact://plan/123"}
 
 
-@activity.defn(name="sandbox.command")
+@activity.defn(name="sandbox.run_command")
 async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
     SANDBOX_COMMAND_CALLS.append(args)
     return {"exit_code": 0, "stdout": "executing", "stderr": ""}
 
 
-@activity.defn(name="integration.start")
+@activity.defn(name="integration.jules.start")
 async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_START_CALLS.append(args)
     return {"correlation_id": "corr-123"}
@@ -71,7 +71,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     "title": "Test Run",
                     "initialParameters": {
                         "repo": "moonladder/moonmind",
-                        "integration": "github",
+                        "integration": "jules",
                     },
                 }
 
@@ -159,13 +159,18 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     # Missing workflowType
                 }
 
-                with self.assertRaises(Exception):
+                with self.assertRaises(exceptions.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         request,
                         id="test-workflow-id-error",
                         task_queue="test-task-queue",
                     )
+                self.assertIsInstance(exc_info.exception.cause, exceptions.ApplicationError)
+                self.assertEqual(
+                    "workflowType is required",
+                    exc_info.exception.cause.message,
+                )
 
     async def test_moonmind_run_workflow_requires_trusted_owner_metadata(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -175,10 +180,15 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 workflows=[MoonMindRunWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
-                with self.assertRaises(Exception):
+                with self.assertRaises(exceptions.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
                         MoonMindRunWorkflow.run,
                         {"workflowType": "MoonMind.Run"},
                         id="test-workflow-id-missing-owner",
                         task_queue="test-task-queue",
                     )
+                self.assertIsInstance(exc_info.exception.cause, exceptions.ApplicationError)
+                self.assertEqual(
+                    "Trusted owner metadata is required in Temporal search attributes",
+                    exc_info.exception.cause.message,
+                )
