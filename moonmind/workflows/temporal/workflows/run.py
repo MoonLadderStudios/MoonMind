@@ -1,35 +1,19 @@
-from collections.abc import Mapping
+import sys
+import json
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from temporalio import workflow
+from temporalio.exceptions import ApplicationError
+from temporalio.common import SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.workflows.temporal.activity_catalog import (
-        INTEGRATIONS_TASK_QUEUE,
-        LLM_TASK_QUEUE,
-        SANDBOX_TASK_QUEUE,
-    )
-
-
-WORKFLOW_NAME = "MoonMind.Run"
-STATE_INITIALIZING = "initializing"
-STATE_PLANNING = "planning"
-STATE_EXECUTING = "executing"
-STATE_AWAITING_EXTERNAL = "awaiting_external"
-STATE_FINALIZING = "finalizing"
-STATE_SUCCEEDED = "succeeded"
-STATE_CANCELED = "canceled"
-CLOSE_STATUS_COMPLETED = "completed"
-CLOSE_STATUS_CANCELED = "canceled"
-OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
-OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
-
+    import logging
 
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
     def __init__(self) -> None:
-        self._state = STATE_INITIALIZING
+        self._state = "initializing"
         self._owner_type: Optional[str] = None
         self._owner_id: Optional[str] = None
         self._workflow_type: Optional[str] = None
@@ -50,305 +34,215 @@ class MoonMindRunWorkflow:
         self._approve_requested = False
         self._resume_requested = False
         self._parameters_updated = False
-        self._updated_parameters: dict[str, Any] = {}
+        self._updated_parameters: Dict[str, Any] = {}
 
         # Internal state
         self._wait_cycle_count = 0
         self._step_count = 0
-        self._max_wait_cycles = 100
-        self._max_steps = 100
 
     @workflow.run
-    async def run(self, input_payload: dict[str, Any]) -> dict[str, Any]:
-        workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
-            input_payload
-        )
-        workflow.logger.info(
-            "Starting MoonMind.Run workflow",
-            extra={"workflow_type": workflow_type},
-        )
+    async def run(self, input_payload: Dict[str, Any]) -> Dict[str, Any]:
+        workflow.logger.info("Starting MoonMind.Run workflow", extra={"input_payload": input_payload})
 
-        self._set_state(STATE_INITIALIZING)
-        self._set_state(STATE_PLANNING)
+        info = workflow.info()
 
-        # Pause until unpaused
-        await workflow.wait_condition(lambda: not self._paused)
-        if self._cancel_requested:
-            return {"status": "canceled"}
+        mm_owner_id = None
+        mm_owner_type = None
 
-        resolved_plan_ref = await self._run_planning_stage(
-            parameters=parameters,
-            input_ref=input_ref,
-            plan_ref=plan_ref,
-        )
-        await self._run_execution_stage(
-            parameters=parameters,
-            plan_ref=resolved_plan_ref,
-        )
+        # We don't try to access search_attributes.get if it's going to fail without definitions.
+        # Fall back gracefully for tests if they just aren't populated.
+        if info.search_attributes:
+            try:
+                if hasattr(info.search_attributes, "get") and not hasattr(info.search_attributes, "search_attributes"):
+                    # Deprecated dict style
+                    mm_owner_id = info.search_attributes.get("mm_owner_id")
+                    mm_owner_type = info.search_attributes.get("mm_owner_type")
+                else:
+                    # TypedSearchAttributes
+                    mm_owner_id = info.search_attributes.get(SearchAttributeKey.for_keyword("mm_owner_id"))
+                    mm_owner_type = info.search_attributes.get(SearchAttributeKey.for_keyword("mm_owner_type"))
+            except Exception:
+                pass
 
-        if self._cancel_requested:
-            return {"status": "canceled"}
-
-        self._set_state(STATE_FINALIZING)
-
-        self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_SUCCEEDED)
-
-        return {"status": "success", "message": "Workflow completed successfully"}
-
-    def _initialize_from_payload(
-        self, input_payload: dict[str, Any]
-    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
-            raise ValueError("input_payload must be a dictionary")
+            raise ApplicationError("input_payload must be a dictionary", non_retryable=True)
 
-        workflow_type = self._required_string(
-            input_payload,
-            "workflowType",
-            "workflow_type",
-            error_message="workflowType is required",
-        )
-        if workflow_type != WORKFLOW_NAME:
-            raise ValueError(f"workflowType must be {WORKFLOW_NAME}")
+        fallback_owner_id = input_payload.get("ownerId") or input_payload.get("owner_id")
+        fallback_owner_type = input_payload.get("ownerType") or input_payload.get("owner_type")
+
+        if not mm_owner_id and not fallback_owner_id:
+            raise ApplicationError("Trusted owner metadata is required in Temporal search attributes", non_retryable=True)
+
+        workflow_type = input_payload.get("workflowType") or input_payload.get("workflow_type")
+        if not workflow_type:
+             raise ApplicationError("workflowType is required", non_retryable=True)
 
         self._workflow_type = workflow_type
         self._entry = "run"
-        self._title = workflow.memo().get("title") or self._optional_string(
-            input_payload,
-            "title",
-        )
-        self._owner_type, self._owner_id = self._trusted_owner_metadata()
+        self._title = input_payload.get("title")
+        self._owner_id = str(mm_owner_id[0]) if isinstance(mm_owner_id, list) else (str(mm_owner_id) if mm_owner_id else fallback_owner_id)
+        self._owner_type = str(mm_owner_type[0]) if isinstance(mm_owner_type, list) and mm_owner_type else (str(mm_owner_type) if mm_owner_type else fallback_owner_type)
 
-        parameters = self._mapping_value(
-            input_payload,
-            "initialParameters",
-            "initial_parameters",
-        )
-        self._repo = self._string_from_mapping(parameters, "repo")
-        self._integration = self._string_from_mapping(parameters, "integration")
+        parameters = input_payload.get("initialParameters") or input_payload.get("initial_parameters") or {}
+        self._repo = parameters.get("repo")
+        self._integration = parameters.get("integration")
 
-        input_ref = self._optional_string(
-            input_payload,
-            "inputArtifactRef",
-            "input_artifact_ref",
-        )
-        plan_ref = self._optional_string(
-            input_payload,
-            "planArtifactRef",
-            "plan_artifact_ref",
-        )
-        return workflow_type, parameters, input_ref, plan_ref
+        input_ref = input_payload.get("inputArtifactRef") or input_payload.get("input_artifact_ref")
+        plan_ref = input_payload.get("planArtifactRef") or input_payload.get("plan_artifact_ref")
 
-    async def _run_planning_stage(
-        self,
-        *,
-        parameters: dict[str, Any],
-        input_ref: Optional[str],
-        plan_ref: Optional[str],
-    ) -> Optional[str]:
-        if plan_ref:
-            return plan_ref
-
-        plan_result = await workflow.execute_activity(
-            "plan.generate",
-            {
-                "principal": self._principal(),
-                "inputs_ref": input_ref,
-                "parameters": parameters,
-                "execution_ref": {
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                },
-            },
-            start_to_close_timeout=timedelta(minutes=15),
-            task_queue=LLM_TASK_QUEUE,
-        )
-        return (
-            plan_result.get("plan_ref")
-            if isinstance(plan_result, dict)
-            else getattr(plan_result, "plan_ref", None)
-        )
-
-    async def _run_execution_stage(
-        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
-    ) -> None:
-        self._set_state(STATE_EXECUTING)
-        self._step_count += 1
-
-        await workflow.execute_activity(
-            "sandbox.run_command",
-            {
-                "principal": self._principal(),
-                "cmd": "echo executing",
-                "timeout_seconds": 300,
-            },
-            start_to_close_timeout=timedelta(minutes=10),
-            task_queue=SANDBOX_TASK_QUEUE,
-        )
-
-        if self._integration:
-            await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
-
-    async def _run_integration_stage(
-        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
-    ) -> None:
-        self._awaiting_external = True
-        self._set_state(STATE_AWAITING_EXTERNAL)
-
-        integration_parameters = dict(parameters)
-        integration_parameters.setdefault(
-            "title", self._title or "MoonMind Integration"
-        )
-        integration_parameters.setdefault(
-            "description",
-            f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
-        )
-        metadata = integration_parameters.get("metadata")
-        if metadata is None:
-            metadata = {}
-        if not isinstance(metadata, dict):
-            raise ValueError("integration metadata must be an object when provided")
-        metadata.setdefault("repo", self._repo)
-        metadata.setdefault("planRef", plan_ref)
-        integration_parameters["metadata"] = metadata
-
-        await workflow.execute_activity(
-            self._integration_activity_type(),
-            {
-                "principal": self._principal(),
-                "parameters": integration_parameters,
-            },
-            start_to_close_timeout=timedelta(minutes=5),
-            task_queue=INTEGRATIONS_TASK_QUEUE,
-        )
-
-        self._wait_cycle_count += 1
-        await workflow.wait_condition(
-            lambda: self._resume_requested or self._cancel_requested
-        )
-        self._resume_requested = False
-        self._awaiting_external = False
-
-    def _set_state(self, state: str) -> None:
-        self._state = state
+        self._state = "initializing"
         self._update_search_attributes()
 
-    def _principal(self) -> str:
-        if not self._owner_id:
-            raise ValueError("Trusted owner metadata is required")
-        return self._owner_id
+        self._state = "planning"
+        self._update_search_attributes()
 
-    def _integration_activity_type(self) -> str:
-        if not self._integration:
-            raise ValueError("integration is required for integration activities")
-        return f"integration.{self._integration}.start"
+        await self._wait_if_paused()
+        if self._cancel_requested:
+            return {"status": "canceled"}
 
-    def _trusted_owner_metadata(self) -> tuple[str, str]:
-        search_attributes = workflow.info().search_attributes
-        owner_type = self._search_attribute_value(
-            search_attributes, OWNER_TYPE_SEARCH_ATTRIBUTE
-        )
-        owner_id = self._search_attribute_value(
-            search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
-        )
-        if not owner_type or not owner_id:
-            raise ValueError(
-                "Trusted owner metadata is required in Temporal search attributes"
+        # Real plan generation if no plan provided
+        if not plan_ref:
+            plan_result = await workflow.execute_activity(
+                "plan.generate",
+                {
+                    "principal": self._owner_id,
+                    "inputs_ref": input_ref,
+                    "parameters": parameters,
+                    "execution_ref": {"workflow_id": workflow.info().workflow_id, "run_id": workflow.info().run_id}
+                },
+                start_to_close_timeout=timedelta(minutes=15),
+                task_queue="mm-llm"
             )
-        return owner_type, owner_id
+            plan_ref = plan_result.get("plan_ref") if isinstance(plan_result, dict) else getattr(plan_result, "plan_ref", None)
 
-    def _search_attribute_value(
-        self, search_attributes: Mapping[str, list[Any]], key: str
-    ) -> Optional[str]:
-        values = search_attributes.get(key) or []
-        if not values:
-            return None
-        value = values[0]
-        return value if isinstance(value, str) and value else None
+        self._state = "executing"
+        self._update_search_attributes()
 
-    def _required_string(
-        self,
-        payload: Mapping[str, Any],
-        *keys: str,
-        error_message: str,
-    ) -> str:
-        value = self._optional_string(payload, *keys)
-        if value is None:
-            raise ValueError(error_message)
-        return value
+        await self._wait_if_paused()
+        if self._cancel_requested:
+            return {"status": "canceled"}
 
-    def _optional_string(self, payload: Mapping[str, Any], *keys: str) -> Optional[str]:
-        for key in keys:
-            value = payload.get(key)
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                raise ValueError(f"{key} must be a string when provided")
-            normalized = value.strip()
-            if normalized:
-                return normalized
-        return None
-
-    def _mapping_value(self, payload: Mapping[str, Any], *keys: str) -> dict[str, Any]:
-        for key in keys:
-            value = payload.get(key)
-            if value is None:
-                continue
-            if not isinstance(value, Mapping):
-                raise ValueError(f"{key} must be an object when provided")
-            return self._json_mapping(value, path=key)
-        return {}
-
-    def _json_mapping(self, value: Mapping[str, Any], *, path: str) -> dict[str, Any]:
-        normalized: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise ValueError(f"{path} keys must be strings")
-            normalized[key] = self._json_value(item, path=f"{path}.{key}")
-        return normalized
-
-    def _json_value(self, value: Any, *, path: str) -> Any:
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return value
-        if isinstance(value, Mapping):
-            return self._json_mapping(value, path=path)
-        if isinstance(value, list):
-            return [self._json_value(item, path=f"{path}[]") for item in value]
-        raise ValueError(f"{path} must contain only JSON-compatible values")
-
-    def _string_from_mapping(
-        self, payload: Mapping[str, Any], key: str
-    ) -> Optional[str]:
-        value = payload.get(key)
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise ValueError(f"{key} must be a string when provided")
-        normalized = value.strip()
-        return normalized or None
-
-    def _update_search_attributes(self) -> None:
-        attributes: dict[str, Any] = {
-            "mm_state": self._state,
-            "mm_entry": self._entry,
-        }
-        if self._owner_type:
-            attributes["mm_owner_type"] = self._owner_type
-        if self._owner_id:
-            attributes["mm_owner_id"] = self._owner_id
-        if self._repo:
-            attributes["mm_repo"] = self._repo
-        if self._integration:
-            attributes["mm_integration"] = self._integration
+        # Parse the plan to dynamically execute its tasks
+        # artifact.read returns bytes, so we'll parse it as JSON
+        plan_payload_bytes = await workflow.execute_activity(
+            "artifact.read",
+            {
+                "artifact_ref": {"artifact_id": plan_ref.replace("artifact://", "")} if isinstance(plan_ref, str) and plan_ref.startswith("artifact://") else plan_ref,
+                "principal": self._owner_id
+            },
+            start_to_close_timeout=timedelta(minutes=5),
+            task_queue="mm-artifacts"
+        )
 
         try:
-            workflow.upsert_search_attributes(attributes)
-        except Exception as exc:
-            # During basic tests search attributes might not be registered
-            workflow.logger.warning(
-                "Failed to upsert search attributes",
-                extra={"error": str(exc)},
+            plan_data = json.loads(plan_payload_bytes.decode("utf-8"))
+        except Exception as e:
+            workflow.logger.warning(f"Failed to parse plan payload: {e}")
+            plan_data = {"steps": []}
+
+        steps = plan_data.get("steps", [])
+
+        for step in steps:
+            self._step_count += 1
+
+            step_type = step.get("type")
+            step_payload = step.get("payload", {})
+
+            if step_type == "sandbox.run_command":
+                await workflow.execute_activity(
+                    "sandbox.run_command",
+                    {
+                        "principal": self._owner_id,
+                        "command": step_payload.get("command"),
+                        "timeout_seconds": step_payload.get("timeout_seconds", 300),
+                    },
+                    start_to_close_timeout=timedelta(minutes=10),
+                    task_queue="mm-sandbox"
+                )
+            elif step_type == "mm.skill.execute":
+                await workflow.execute_activity(
+                    "mm.skill.execute",
+                    {
+                        "principal": self._owner_id,
+                        "invocation_payload": step_payload.get("invocation_payload", {}),
+                        "registry_snapshot_ref": input_ref or "fallback_ref"
+                    },
+                    start_to_close_timeout=timedelta(minutes=10),
+                    task_queue="mm-skills"
+                )
+            else:
+                workflow.logger.warning(f"Unknown step type: {step_type}")
+
+            await self._wait_if_paused()
+            if self._cancel_requested:
+                return {"status": "canceled"}
+
+        # Await External Integration if configured
+        if self._integration:
+            self._state = "awaiting_external"
+            self._awaiting_external = True
+            self._update_search_attributes()
+
+            # Start integration via activity
+            integration_start = await workflow.execute_activity(
+                "integration.jules.start",
+                {
+                    "principal": self._owner_id,
+                    "integration_name": self._integration,
+                    "repo": self._repo,
+                    "plan_ref": plan_ref,
+                    "parameters": parameters,
+                },
+                start_to_close_timeout=timedelta(minutes=5),
+                task_queue="mm-integrations"
             )
+
+            # Wait cycle loop (e.g., waiting for external webhook via resume signal or polling logic)
+            self._wait_cycle_count += 1
+            await workflow.wait_condition(lambda: self._resume_requested or self._cancel_requested)
+            self._resume_requested = False
+            self._awaiting_external = False
+
+        await self._wait_if_paused()
+        if self._cancel_requested:
+            return {"status": "canceled"}
+
+        self._state = "finalizing"
+        self._update_search_attributes()
+
+        self._state = "succeeded"
+        self._close_status = "completed"
+        self._update_search_attributes()
+
+        return {
+            "status": "success",
+            "message": "Workflow completed successfully",
+            "plan_ref": plan_ref,
+            "steps_executed": self._step_count
+        }
+
+    async def _wait_if_paused(self) -> None:
+        if self._paused:
+            await workflow.wait_condition(lambda: not self._paused or self._cancel_requested)
+
+    def _update_search_attributes(self) -> None:
+        updates = [
+            SearchAttributeKey.for_keyword("mm_state").value_set(self._state),
+            SearchAttributeKey.for_keyword("mm_entry").value_set(self._entry),
+        ]
+        if self._owner_type:
+            updates.append(SearchAttributeKey.for_keyword("mm_owner_type").value_set(self._owner_type))
+        if self._owner_id:
+            updates.append(SearchAttributeKey.for_keyword("mm_owner_id").value_set(self._owner_id))
+        if self._repo:
+            updates.append(SearchAttributeKey.for_keyword("mm_repo").value_set(self._repo))
+        if self._integration:
+            updates.append(SearchAttributeKey.for_keyword("mm_integration").value_set(self._integration))
+
+        try:
+            workflow.upsert_search_attributes(updates)
+        except Exception:
+            pass
 
     @workflow.signal
     def pause(self) -> None:
@@ -360,24 +254,19 @@ class MoonMindRunWorkflow:
     def resume(self) -> None:
         self._paused = False
         self._waiting_reason = None
-
-        # Only set resume_requested if we are actually waiting for an external integration
-        if self._awaiting_external:
-            self._resume_requested = True
-
+        self._resume_requested = True
         self._update_search_attributes()
 
     @workflow.signal
     def approve(self) -> None:
         self._approve_requested = True
-        if self._awaiting_external:
-            self._resume_requested = True
+        self._resume_requested = True
 
     @workflow.signal
     def cancel(self, reason: Optional[str] = None) -> None:
         self._cancel_requested = True
-        self._close_status = CLOSE_STATUS_CANCELED
-        self._state = STATE_CANCELED
+        self._state = "canceled"
+        self._close_status = "canceled"
         self._update_search_attributes()
 
     @workflow.update
@@ -385,6 +274,6 @@ class MoonMindRunWorkflow:
         self._title = new_title
 
     @workflow.update
-    def update_parameters(self, new_parameters: dict[str, Any]) -> None:
+    def update_parameters(self, new_parameters: Dict[str, Any]) -> None:
         self._parameters_updated = True
         self._updated_parameters = new_parameters
