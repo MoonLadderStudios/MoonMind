@@ -312,6 +312,7 @@ class TemporalExecutionService:
             return await self._sync_projection_best_effort(existing)
         try:
             start_result = await self._client_adapter.start_workflow(
+                workflow_type=workflow_type_enum.value,
                 workflow_id=workflow_id,
                 input_args=params,
                 memo=memo,

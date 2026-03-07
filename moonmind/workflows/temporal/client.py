@@ -64,6 +64,7 @@ class TemporalClientAdapter:
     async def start_workflow(
         self,
         *,
+        workflow_type: str,
         workflow_id: str,
         input_args: Mapping[str, Any] | None = None,
         memo: Mapping[str, Any] | None = None,
