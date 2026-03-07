@@ -155,10 +155,7 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "inputs_ref": input_ref,
                 "parameters": parameters,
-                "execution_ref": {
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                },
+                "execution_ref": self._execution_ref("input.plan"),
             },
             start_to_close_timeout=timedelta(minutes=15),
             task_queue=LLM_TASK_QUEUE,
@@ -181,6 +178,7 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "cmd": "echo executing",
                 "timeout_seconds": 300,
+                "execution_ref": self._execution_ref("output.logs"),
             },
             start_to_close_timeout=timedelta(minutes=10),
             task_queue=SANDBOX_TASK_QUEUE,
@@ -219,6 +217,7 @@ class MoonMindRunWorkflow:
             {
                 "principal": self._principal(),
                 "parameters": integration_parameters,
+                "execution_ref": self._execution_ref("output.summary"),
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -246,6 +245,16 @@ class MoonMindRunWorkflow:
                 "integration is required for integration activities"
             )
         return f"integration.{self._integration}.start"
+
+    def _execution_ref(self, link_type: str) -> dict[str, str]:
+        info = workflow.info()
+        namespace = (info.namespace or "").strip() or "default"
+        return {
+            "namespace": namespace,
+            "workflow_id": info.workflow_id,
+            "run_id": info.run_id,
+            "link_type": link_type,
+        }
 
     def _trusted_owner_metadata(self) -> tuple[str, str]:
         search_attributes = workflow.info().search_attributes
