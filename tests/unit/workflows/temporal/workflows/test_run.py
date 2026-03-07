@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from typing import Any, Dict
 
@@ -52,9 +53,26 @@ async def _register_test_search_attributes(
             search_attributes={
                 "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_state": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_entry": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_repo": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_integration": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
             },
         )
     )
+
+
+async def _wait_for_condition(
+    predicate,
+    *,
+    timeout_seconds: float = 5.0,
+    poll_interval_seconds: float = 0.05,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError("Timed out waiting for test condition")
+        await asyncio.sleep(poll_interval_seconds)
 
 
 @activity.defn(name="plan.generate")
@@ -121,7 +139,10 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     search_attributes=_trusted_search_attributes(),
                 )
 
-                # We need to resume it because integration forces wait
+                # Resume only after the integration activity has started; early resume
+                # signals are intentionally ignored before the workflow enters the
+                # awaiting_external state.
+                await _wait_for_condition(lambda: bool(INTEGRATION_START_CALLS))
                 await handle.signal(MoonMindRunWorkflow.resume)
 
                 result = await handle.result()
