@@ -38,6 +38,7 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -154,8 +155,6 @@ class TemporalExecutionService:
         self._integration_task_queue = str(integration_task_queue).strip() or (
             "mm.activity.integrations"
         )
-        from moonmind.workflows.temporal.client import TemporalClientAdapter
-
         self._client_adapter = TemporalClientAdapter()
         self._integration_poll_initial_seconds = max(
             1, int(integration_poll_initial_seconds)
@@ -257,20 +256,9 @@ class TemporalExecutionService:
             if ref
         ]
 
-        start_result = await self._client_adapter.start_workflow(
-            workflow_type=workflow_type_enum.value,
-            workflow_id=workflow_id,
-            input_args=params,
-            idempotency_key=idempotency_key,
-            memo=memo,
-            search_attributes=search_attributes,
-        )
-
-        run_id = start_result.run_id
-
         record = TemporalExecutionCanonicalRecord(
             workflow_id=workflow_id,
-            run_id=run_id,
+            run_id=str(uuid4()),
             namespace=self._namespace,
             workflow_type=workflow_type_enum,
             owner_id=owner,
@@ -319,6 +307,29 @@ class TemporalExecutionService:
             if existing is None:
                 raise exc
             return await self._sync_projection_best_effort(existing)
+
+        try:
+            start_result = await self._client_adapter.start_workflow(
+                workflow_type=workflow_type_enum.value,
+                workflow_id=workflow_id,
+                input_args=params,
+                memo=memo,
+                search_attributes=search_attributes,
+            )
+        except Exception:
+            await self._session.delete(record)
+            await self._session.commit()
+            raise
+
+        record.run_id = start_result.run_id
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            await self._session.delete(record)
+            await self._session.commit()
+            raise
+
         await self._session.refresh(record)
         return await self._sync_projection_best_effort(record)
 
