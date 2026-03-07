@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 from typing import Any, Dict
 
