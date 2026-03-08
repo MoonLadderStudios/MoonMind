@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
+from moonmind.config import settings
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -34,8 +36,9 @@ async def _db(tmp_path: Path):
 
 
 async def test_callback_first_completion_uses_single_terminal_path(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -69,6 +72,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 provider_summary={},
                 result_refs=[],
             )
+            assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
 
             completed = await service.ingest_integration_callback(
                 integration_name="jules",
@@ -82,7 +86,6 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 payload_artifact_ref="art_callback",
             )
 
-            assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
             assert completed.state is MoonMindWorkflowState.EXECUTING
             assert completed.awaiting_external is False
             assert completed.integration_state["normalized_status"] == "succeeded"
@@ -90,8 +93,9 @@ async def test_callback_first_completion_uses_single_terminal_path(
 
 
 async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -159,8 +163,9 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
 
 
 async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)
@@ -190,57 +195,59 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 result_refs=[],
             )
 
-            first = await service.ingest_integration_callback(
-                integration_name="jules",
-                callback_correlation_key="cb-safe",
-                payload={
-                    "event_type": "status_changed",
-                    "provider_event_id": "evt-dup",
-                    "normalized_status": "running",
-                    "provider_status": "running",
-                },
-                payload_artifact_ref=None,
-            )
-            duplicate = await service.ingest_integration_callback(
-                integration_name="jules",
-                callback_correlation_key="cb-safe",
-                payload={
-                    "event_type": "status_changed",
-                    "provider_event_id": "evt-dup",
-                    "normalized_status": "running",
-                    "provider_status": "running",
-                },
-                payload_artifact_ref=None,
-            )
-            terminal = await service.ingest_integration_callback(
-                integration_name="jules",
-                callback_correlation_key="cb-safe",
-                payload={
-                    "event_type": "completed",
-                    "provider_event_id": "evt-terminal",
-                    "normalized_status": "succeeded",
-                    "provider_status": "completed",
-                },
-                payload_artifact_ref=None,
-            )
-            reordered = await service.ingest_integration_callback(
-                integration_name="jules",
-                callback_correlation_key="cb-safe",
-                payload={
-                    "event_type": "late-progress",
-                    "provider_event_id": "evt-late",
-                    "normalized_status": "running",
-                    "provider_status": "running",
-                },
-                payload_artifact_ref=None,
-            )
-
-            assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
-            assert "Ignored duplicate external event" in duplicate.memo["summary"]
-            assert terminal.integration_state["normalized_status"] == "succeeded"
-            assert reordered.integration_state["normalized_status"] == "succeeded"
-            with pytest.raises(TemporalExecutionNotFoundError):
-                await service.ingest_integration_callback(
+        first = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-safe",
+            payload={
+                "event_type": "status_changed",
+                "provider_event_id": "evt-dup",
+                "normalized_status": "running",
+                "provider_status": "running",
+            },
+            payload_artifact_ref=None,
+        )
+        assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
+                            
+        duplicate = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-safe",
+            payload={
+                "event_type": "status_changed",
+                "provider_event_id": "evt-dup",
+                "normalized_status": "running",
+                "provider_status": "running",
+            },
+            payload_artifact_ref=None,
+        )
+        assert "Ignored duplicate external event" in duplicate.memo["summary"]
+                            
+        terminal = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-safe",
+            payload={
+                "event_type": "completed",
+                "provider_event_id": "evt-terminal",
+                "normalized_status": "succeeded",
+                "provider_status": "completed",
+            },
+            payload_artifact_ref=None,
+        )
+        assert terminal.integration_state["normalized_status"] == "succeeded"
+                            
+        reordered = await service.ingest_integration_callback(
+            integration_name="jules",
+            callback_correlation_key="cb-safe",
+            payload={
+                "event_type": "late-progress",
+                "provider_event_id": "evt-late",
+                "normalized_status": "running",
+                "provider_status": "running",
+            },
+            payload_artifact_ref=None,
+        )
+        assert reordered.integration_state["normalized_status"] == "succeeded"
+                            
+        with pytest.raises(TemporalExecutionNotFoundError):                await service.ingest_integration_callback(
                     integration_name="jules",
                     callback_correlation_key="missing-key",
                     payload={"event_type": "completed"},
@@ -249,8 +256,9 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
 
 
 async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)
@@ -290,12 +298,13 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
                 result_refs=[],
                 completed_wait_cycles=0,
             )
+            assert failed.memo["error_category"] == "integration_error"
+            assert failed.integration_state["normalized_status"] == "failed"
+
             canceled = await service.cancel_execution(
                 workflow_id=created.workflow_id,
                 reason="operator stop",
                 graceful=True,
             )
 
-            assert failed.memo["error_category"] == "integration_error"
-            assert failed.integration_state["normalized_status"] == "failed"
             assert canceled.state is MoonMindWorkflowState.CANCELED

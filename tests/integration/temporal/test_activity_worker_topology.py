@@ -243,8 +243,8 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                     ),
                 )
             }
-            workspace = tmp_path / "workspace"
-            workspace.mkdir()
+            workspace = tmp_path / "workspaces" / "temporal_sandbox" / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
             sandbox_result = await sandbox_bindings["sandbox.run_command"].handler(
                 workspace_ref=workspace,
                 cmd="printf 'sandbox ok'",

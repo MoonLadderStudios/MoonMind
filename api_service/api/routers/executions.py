@@ -681,6 +681,7 @@ async def list_executions(
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionListResponse:
     if _is_execution_admin(user):
         effective_owner_type = owner_type
@@ -718,6 +719,26 @@ async def list_executions(
             page_size=page_size,
             next_page_token=next_page_token,
         )
+        
+        from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
+        from api_service.core.sync import sync_execution_projection
+        
+        if settings.temporal.temporal_authoritative_read_enabled and result.items:
+            try:
+                client = await get_temporal_client(settings.temporal.address, settings.temporal.namespace)
+                updated_items = []
+                for item in result.items:
+                    try:
+                        desc = await fetch_workflow_execution(client, item.workflow_id)
+                        updated_item = await sync_execution_projection(session, desc)
+                        updated_items.append(updated_item)
+                    except Exception:
+                        updated_items.append(item)
+                await session.commit()
+                result.items = updated_items
+            except Exception:
+                pass
+                
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -749,8 +770,22 @@ async def describe_execution(
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    
+    from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
+    from api_service.core.sync import sync_execution_projection
+    
+    try:
+        if settings.temporal.temporal_authoritative_read_enabled:
+            client = await get_temporal_client(settings.temporal.address, settings.temporal.namespace)
+            desc = await fetch_workflow_execution(client, canonical_workflow_id)
+            await sync_execution_projection(session, desc)
+            await session.commit()
+    except Exception:
+        pass
+
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
