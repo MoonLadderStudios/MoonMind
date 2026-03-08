@@ -8473,8 +8473,16 @@ class CodexWorker:
     ) -> tuple[str | None, tuple[str, ...]]:
         """Capture current diff hash + changed files for no-progress detection."""
 
+        await self._run_stage_command(
+            ["git", "add", "-A"],
+            cwd=prepared.repo_dir,
+            log_path=prepared.execute_log_path,
+            check=False,
+            env=prepared.repo_command_env,
+        )
+
         name_result = await self._run_stage_command(
-            ["git", "diff", "--name-only"],
+            ["git", "diff", "--name-only", "HEAD"],
             cwd=prepared.repo_dir,
             log_path=prepared.execute_log_path,
             check=False,
@@ -8490,7 +8498,7 @@ class CodexWorker:
             )
         )
         patch_result = await self._run_stage_command(
-            ["git", "diff"],
+            ["git", "diff", "HEAD"],
             cwd=prepared.repo_dir,
             log_path=prepared.execute_log_path,
             check=False,
@@ -9348,8 +9356,14 @@ class CodexWorker:
                             log_path=step_log_path,
                             env=runtime_env,
                         )
+                    await self._run_stage_command(
+                        ["git", "add", "-A"],
+                        cwd=prepared.repo_dir,
+                        log_path=step_log_path,
+                        check=False,
+                    )
                     patch_result = await self._run_stage_command(
-                        ["git", "diff"],
+                        ["git", "diff", "HEAD"],
                         cwd=prepared.repo_dir,
                         log_path=step_log_path,
                         check=False,
@@ -9546,7 +9560,7 @@ class CodexWorker:
 
         patch_path = prepared.artifacts_dir / "changes.patch"
         patch_result = await self._run_stage_command(
-            ["git", "diff"],
+            ["git", "diff", "HEAD"],
             cwd=prepared.repo_dir,
             log_path=prepared.execute_log_path,
             check=False,
