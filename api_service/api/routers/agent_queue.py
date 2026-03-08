@@ -762,19 +762,33 @@ async def create_job(
     )
 
     if target == "temporal":
-        execution = await _create_execution_from_task_request(
-            request=payload,
-            service=temporal_service,
-            user=user,
-        )
+        if payload.type == MANIFEST_JOB_TYPE:
+            from api_service.api.routers.executions import _create_execution_from_manifest_request
+            execution = await _create_execution_from_manifest_request(
+                request=payload,
+                service=temporal_service,
+                user=user,
+            )
+        else:
+            execution = await _create_execution_from_task_request(
+                request=payload,
+                service=temporal_service,
+                user=user,
+            )
+            
+        import uuid
         # Mock JobModel shape for UI compatibility
         return {
-            "id": execution.workflow_id,
+            "id": uuid.uuid4(),
             "status": "queued",
             "type": payload.type,
-            "created_at": execution.start_time or execution.created_at,
-            "updated_at": execution.update_time or execution.created_at,
-            "payload": execution.initial_parameters or {},
+            "priority": payload.priority,
+            "attempt": 1,
+            "max_attempts": payload.max_attempts,
+            "created_at": execution.created_at,
+            "updated_at": execution.updated_at,
+            "started_at": execution.started_at,
+            "payload": payload.payload if isinstance(payload.payload, dict) else {},
         }
 
     try:
@@ -900,7 +914,7 @@ async def create_job_with_attachments(
             is_manifest=(parsed_payload.type == MANIFEST_JOB_TYPE),
             is_run=(parsed_payload.type == CANONICAL_TASK_JOB_TYPE),
         )
-    except Exception:
+    except ValidationError:
         target = "queue"
 
     if target == "temporal":
