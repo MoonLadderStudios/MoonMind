@@ -5,6 +5,13 @@ from typing import Any, Optional, TypedDict
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 
+DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=1),
+    maximum_attempts=5,
+)
+
 with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.activity_catalog import (
         INTEGRATIONS_TASK_QUEUE,
@@ -14,14 +21,10 @@ with workflow.unsafe.imports_passed_through():
 
 
 class RunWorkflowInput(TypedDict, total=False):
-    workflowType: str
     workflow_type: str
     title: Optional[str]
-    initialParameters: dict[str, Any]
     initial_parameters: dict[str, Any]
-    inputArtifactRef: Optional[str]
     input_artifact_ref: Optional[str]
-    planArtifactRef: Optional[str]
     plan_artifact_ref: Optional[str]
 
 
@@ -179,12 +182,7 @@ class MoonMindRunWorkflow:
             },
             start_to_close_timeout=timedelta(minutes=15),
             task_queue=LLM_TASK_QUEUE,
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=5),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(minutes=1),
-                maximum_attempts=5,
-            ),
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
         return (
             plan_result.get("plan_ref")
@@ -208,12 +206,7 @@ class MoonMindRunWorkflow:
             },
             start_to_close_timeout=timedelta(minutes=10),
             task_queue=SANDBOX_TASK_QUEUE,
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=5),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(minutes=1),
-                maximum_attempts=5,
-            ),
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
         if self._integration:
@@ -255,12 +248,7 @@ class MoonMindRunWorkflow:
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=5),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(minutes=1),
-                maximum_attempts=5,
-            ),
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
         self._wait_cycle_count += 1
