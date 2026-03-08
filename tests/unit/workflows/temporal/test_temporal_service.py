@@ -89,7 +89,7 @@ async def test_create_execution_returns_repair_pending_fallback_when_projection_
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 
-        async def fail_projection_sync(source):
+        async def fail_projection_sync(source, **kwargs):
             raise RuntimeError(f"projection write failed for {source.workflow_id}")
 
         monkeypatch.setattr(
@@ -1180,7 +1180,7 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
         )
         previous_sync_at = created.last_synced_at
 
-        async def fail_projection_sync(source):
+        async def fail_projection_sync(source, **kwargs):
             raise RuntimeError(f"projection write failed for {source.workflow_id}")
 
         monkeypatch.setattr(
