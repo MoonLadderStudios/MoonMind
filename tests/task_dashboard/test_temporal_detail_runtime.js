@@ -170,8 +170,8 @@ const { context, helpers } = loadTemporalHelpers();
       memo: {
         summary: "Operator review required.",
         waitingReason: "Awaiting operator approval.",
-        attentionRequired: true,
       },
+      attentionRequired: true,
     },
     "mm:workflow-321",
     { debugFieldsEnabled: true },

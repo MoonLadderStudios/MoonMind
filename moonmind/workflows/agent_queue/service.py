@@ -1680,16 +1680,6 @@ class AgentQueueService:
             actor_user_id=actor_user_id,
         )
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
-        await self._repository.append_event(
-            job_id=job_id,
-            level=models.AgentJobEventLevel.INFO,
-            message="Attachments listed",
-            payload={
-                "actorUserId": str(actor_user_id) if actor_user_id else None,
-                "limit": limit,
-            },
-        )
-        await self._repository.commit()
         return artifacts
 
     async def list_attachments_for_worker(
@@ -1705,13 +1695,6 @@ class AgentQueueService:
             raise AgentQueueValidationError("limit must be between 1 and 500")
         await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker_id)
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
-        await self._repository.append_event(
-            job_id=job_id,
-            level=models.AgentJobEventLevel.INFO,
-            message="Attachments listed",
-            payload={"workerId": worker_id, "limit": limit},
-        )
-        await self._repository.commit()
         return artifacts
 
     async def get_attachment_download_for_user(
