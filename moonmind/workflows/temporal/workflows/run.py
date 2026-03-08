@@ -356,10 +356,9 @@ class MoonMindRunWorkflow:
             attributes["mm_repo"] = self._repo
         if self._integration:
             attributes["mm_integration"] = self._integration
-            
+
         formatted_attributes = {
-            k: v if isinstance(v, list) else [v]
-            for k, v in attributes.items()
+            k: v if isinstance(v, list) else [v] for k, v in attributes.items()
         }
 
         try:

@@ -91,7 +91,7 @@ class TemporalClientAdapter:
         task_queue = self._get_task_queue()
 
         args = [input_args] if input_args is not None else []
-        
+
         formatted_search_attributes = None
         if search_attributes:
             formatted_search_attributes = {
