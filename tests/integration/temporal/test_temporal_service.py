@@ -38,7 +38,9 @@ def mock_temporal_client_adapter(monkeypatch):
     monkeypatch.setattr(TemporalClientAdapter, "update_workflow", mock_do_nothing)
     monkeypatch.setattr(TemporalClientAdapter, "signal_workflow", mock_do_nothing)
     monkeypatch.setattr(TemporalClientAdapter, "cancel_workflow", mock_do_nothing)
-    monkeypatch.setattr(TemporalClientAdapter, "describe_workflow", mock_describe_workflow)
+    monkeypatch.setattr(
+        TemporalClientAdapter, "describe_workflow", mock_describe_workflow
+    )
 
 
 from api_service.db.models import (

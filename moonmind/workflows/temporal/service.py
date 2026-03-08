@@ -430,7 +430,9 @@ class TemporalExecutionService:
         try:
             await self._client_adapter.describe_workflow(canonical_workflow_id)
         except Exception as exc:
-            logger.debug("Temporal describe failed for %s: %s", canonical_workflow_id, exc)
+            logger.debug(
+                "Temporal describe failed for %s: %s", canonical_workflow_id, exc
+            )
 
         record = await self._load_source_execution(
             canonical_workflow_id,
@@ -490,9 +492,13 @@ class TemporalExecutionService:
             }
             # Remove None values
             update_arg = {k: v for k, v in update_arg.items() if v is not None}
-            await self._client_adapter.update_workflow(record.workflow_id, update_name, update_arg)
+            await self._client_adapter.update_workflow(
+                record.workflow_id, update_name, update_arg
+            )
         except Exception as exc:
-            raise TemporalExecutionValidationError(f"Temporal update failed: {exc}") from exc
+            raise TemporalExecutionValidationError(
+                f"Temporal update failed: {exc}"
+            ) from exc
 
         if (
             update_name in MANIFEST_UPDATE_NAMES
@@ -615,9 +621,13 @@ class TemporalExecutionService:
                 "payload": payload,
                 "payload_artifact_ref": payload_artifact_ref,
             }
-            await self._client_adapter.signal_workflow(record.workflow_id, signal_name, signal_arg)
+            await self._client_adapter.signal_workflow(
+                record.workflow_id, signal_name, signal_arg
+            )
         except Exception as exc:
-            raise TemporalExecutionValidationError(f"Temporal signal failed: {exc}") from exc
+            raise TemporalExecutionValidationError(
+                f"Temporal signal failed: {exc}"
+            ) from exc
 
         signal_payload = dict(payload or {})
         if signal_name == "ExternalEvent":
@@ -956,7 +966,9 @@ class TemporalExecutionService:
         try:
             await self._client_adapter.cancel_workflow(record.workflow_id)
         except Exception as exc:
-            raise TemporalExecutionValidationError(f"Temporal cancel failed: {exc}") from exc
+            raise TemporalExecutionValidationError(
+                f"Temporal cancel failed: {exc}"
+            ) from exc
 
         if record.state in TERMINAL_STATES:
             return await self._sync_projection_best_effort(record)

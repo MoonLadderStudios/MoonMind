@@ -120,7 +120,9 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(workflow_id)
         await handle.cancel()
 
-    async def signal_workflow(self, workflow_id: str, signal_name: str, arg: Any = None) -> None:
+    async def signal_workflow(
+        self, workflow_id: str, signal_name: str, arg: Any = None
+    ) -> None:
         """Send a signal to an existing workflow execution."""
         handle = await self.get_workflow_handle(workflow_id)
         if arg is not None:
@@ -128,7 +130,9 @@ class TemporalClientAdapter:
         else:
             await handle.signal(signal_name)
 
-    async def update_workflow(self, workflow_id: str, update_name: str, arg: Any = None) -> Any:
+    async def update_workflow(
+        self, workflow_id: str, update_name: str, arg: Any = None
+    ) -> Any:
         """Execute an update on an existing workflow execution."""
         handle = await self.get_workflow_handle(workflow_id)
         if arg is not None:
