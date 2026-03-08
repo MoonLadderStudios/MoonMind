@@ -461,6 +461,7 @@ class TemporalExecutionService:
                         "Failed to rehydrate execution %s from Temporal: %s",
                         canonical_workflow_id,
                         exc,
+                        exc_info=True,
                     )
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"

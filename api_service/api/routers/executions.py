@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
@@ -720,29 +723,34 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
+        import asyncio
         from api_service.core.sync import sync_execution_projection
         from moonmind.workflows.temporal.client import (
             fetch_workflow_execution,
-            get_temporal_client,
+            TemporalClientAdapter,
         )
 
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             try:
-                client = await get_temporal_client(
-                    settings.temporal.address, settings.temporal.namespace
-                )
-                updated_items = []
-                for item in result.items:
+                global _shared_client_adapter
+                if '_shared_client_adapter' not in globals():
+                    _shared_client_adapter = TemporalClientAdapter()
+                client = await _shared_client_adapter.get_client()
+                
+                async def fetch_and_sync(item):
                     try:
                         desc = await fetch_workflow_execution(client, item.workflow_id)
-                        updated_item = await sync_execution_projection(session, desc)
-                        updated_items.append(updated_item)
-                    except Exception:
-                        updated_items.append(item)
+                        return await sync_execution_projection(session, desc)
+                    except Exception as exc:
+                        logger.warning("Failed to sync execution %s from Temporal: %s", item.workflow_id, exc)
+                        return item
+
+                tasks = [fetch_and_sync(item) for item in result.items]
+                updated_items = await asyncio.gather(*tasks)
                 await session.commit()
                 result.items = updated_items
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to sync executions from Temporal: %s", exc, exc_info=True)
 
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -782,19 +790,20 @@ async def describe_execution(
     from api_service.core.sync import sync_execution_projection
     from moonmind.workflows.temporal.client import (
         fetch_workflow_execution,
-        get_temporal_client,
+        TemporalClientAdapter,
     )
 
     try:
         if settings.temporal.temporal_authoritative_read_enabled:
-            client = await get_temporal_client(
-                settings.temporal.address, settings.temporal.namespace
-            )
+            global _shared_client_adapter
+            if '_shared_client_adapter' not in globals():
+                _shared_client_adapter = TemporalClientAdapter()
+            client = await _shared_client_adapter.get_client()
             desc = await fetch_workflow_execution(client, canonical_workflow_id)
             await sync_execution_projection(session, desc)
             await session.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to sync execution %s from Temporal: %s", canonical_workflow_id, exc, exc_info=True)
 
     record = await _get_owned_execution(
         service=service,
