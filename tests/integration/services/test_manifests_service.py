@@ -28,8 +28,24 @@ from moonmind.workflows.temporal import (
     TemporalArtifactService,
     TemporalExecutionService,
 )
+from moonmind.workflows.temporal.client import (
+    TemporalClientAdapter,
+    WorkflowStartResult,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+
+
+@pytest.fixture(autouse=True)
+def _mock_temporal_client_adapter(monkeypatch):
+    async def _mock_start_workflow(self, *args, **kwargs):
+        workflow_id = kwargs.get("workflow_id") or "mm:dummy"
+        return WorkflowStartResult(
+            workflow_id=str(workflow_id),
+            run_id=str(uuid4()),
+        )
+
+    monkeypatch.setattr(TemporalClientAdapter, "start_workflow", _mock_start_workflow)
 
 
 def _tests_root() -> Path:

@@ -37,7 +37,7 @@ fi
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build "$TEST_SERVICE"
 "${COMPOSE_CMD[@]}" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" run --rm "$TEST_SERVICE" bash -lc '
 set -euo pipefail
-pytest -s /app/tests/${TEST_TYPE}
+pytest -s /app/tests/${TEST_TYPE:-unit}
 if command -v node >/dev/null 2>&1; then
   node /app/tests/task_dashboard/test_queue_layouts.js
 else

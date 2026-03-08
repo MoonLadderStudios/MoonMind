@@ -31,10 +31,6 @@ from moonmind.agents.codex_worker.worker import (
     QueueApiClient,
     QueueClientError,
 )
-from moonmind.claude.runtime import (
-    CLAUDE_RUNTIME_DISABLED_MESSAGE,
-    build_runtime_gate_state,
-)
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
@@ -330,14 +326,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 raise RuntimeError(
                     format_invalid_claude_cli_auth_mode_error(claude_auth_mode_raw)
                 )
-            if claude_auth_mode == "api_key":
-                gate = build_runtime_gate_state(
-                    env=source,
-                    error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
-                )
-                if not gate.enabled:
-                    raise RuntimeError(gate.error_message)
-            elif claude_auth_mode == "oauth":
+            if claude_auth_mode == "oauth":
                 claude_home = source.get("CLAUDE_HOME")
                 _claude_home, issue = inspect_claude_home_for_auth_mode(
                     auth_mode="oauth",
