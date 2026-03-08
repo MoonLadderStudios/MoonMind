@@ -1110,6 +1110,7 @@ class CodexExecHandler:
                 *command,
                 cwd=str(cwd),
                 env=dict(env) if env is not None else None,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
