@@ -10696,7 +10696,7 @@ class CodexWorker:
     ) -> None:
         """Send lease renewals while a job is actively executing."""
 
-        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 5.0)
+        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 10.0)
         effective_pause_event = pause_event or asyncio.Event()
         while not stop_event.is_set():
             await asyncio.sleep(interval_seconds)
