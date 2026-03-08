@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, case, func, or_, select, update
+from sqlalchemy import Select, and_, case, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import User
@@ -1135,16 +1135,19 @@ class AgentQueueRepository:
             update(models.AgentJob)
             .where(models.AgentJob.id.in_(expired_ids))
             .values(
-                status=case(
-                    (
-                        models.AgentJob.cancel_requested_at.is_not(None),
-                        models.AgentJobStatus.CANCELLED,
+                status=cast(
+                    case(
+                        (
+                            models.AgentJob.cancel_requested_at.is_not(None),
+                            models.AgentJobStatus.CANCELLED,
+                        ),
+                        (
+                            models.AgentJob.attempt >= models.AgentJob.max_attempts,
+                            models.AgentJobStatus.DEAD_LETTER,
+                        ),
+                        else_=models.AgentJobStatus.QUEUED,
                     ),
-                    (
-                        models.AgentJob.attempt >= models.AgentJob.max_attempts,
-                        models.AgentJobStatus.DEAD_LETTER,
-                    ),
-                    else_=models.AgentJobStatus.QUEUED,
+                    models.AgentJob.status.type,
                 ),
                 finished_at=case(
                     (models.AgentJob.cancel_requested_at.is_not(None), now),
