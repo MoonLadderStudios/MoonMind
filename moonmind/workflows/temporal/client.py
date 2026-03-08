@@ -91,6 +91,14 @@ class TemporalClientAdapter:
         task_queue = self._get_task_queue()
 
         args = [input_args] if input_args is not None else []
+        
+        formatted_search_attributes = None
+        if search_attributes:
+            formatted_search_attributes = {
+                k: v if isinstance(v, list) else [v]
+                for k, v in search_attributes.items()
+            }
+
         try:
             handle = await client.start_workflow(
                 workflow_type,
@@ -98,7 +106,7 @@ class TemporalClientAdapter:
                 id=workflow_id,
                 task_queue=task_queue,
                 memo=memo,
-                search_attributes=search_attributes,
+                search_attributes=formatted_search_attributes,
             )
             return WorkflowStartResult(
                 workflow_id=handle.id,
