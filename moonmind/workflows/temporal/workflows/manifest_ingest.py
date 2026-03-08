@@ -12,11 +12,10 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.workflows.temporal.activity_catalog import (
-        WORKFLOW_TASK_QUEUE,
-    )
+    from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
 
 WORKFLOW_NAME = "MoonMind.ManifestIngest"
+
 
 class ManifestIngestWorkflowInput(TypedDict, total=False):
     workflow_type: str
@@ -24,11 +23,13 @@ class ManifestIngestWorkflowInput(TypedDict, total=False):
     action: str
     options: Optional[dict[str, Any]]
 
+
 class ManifestIngestWorkflowOutput(TypedDict):
     status: str
     manifest_digest: Optional[str]
     plan_ref: Optional[str]
     summary_ref: Optional[str]
+
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindManifestIngestWorkflow:
@@ -40,9 +41,11 @@ class MoonMindManifestIngestWorkflow:
     @workflow.run
     async def run(self, input_payload: dict[str, Any]) -> ManifestIngestWorkflowOutput:
         self._manifest_ref = input_payload.get("manifest_ref")
-        
+
         if not self._manifest_ref:
-            raise exceptions.ApplicationError("manifest_ref is required", non_retryable=True)
+            raise exceptions.ApplicationError(
+                "manifest_ref is required", non_retryable=True
+            )
 
         # 1. Compile Manifest
         compile_result = await workflow.execute_activity(
@@ -91,13 +94,17 @@ class MoonMindManifestIngestWorkflow:
         )
 
         # summary_result is a tuple of (summary_ref, run_index_ref)
-        if summary_result and isinstance(summary_result, (list, tuple)) and len(summary_result) > 0:
+        if (
+            summary_result
+            and isinstance(summary_result, (list, tuple))
+            and len(summary_result) > 0
+        ):
             self._summary_ref = summary_result[0]
         elif isinstance(summary_result, dict) and "summary_ref" in summary_result:
             self._summary_ref = summary_result["summary_ref"]
-            
+
         return {
-            "status": "success", 
+            "status": "success",
             "manifest_digest": manifest_digest,
             "plan_ref": self._plan_ref,
             "summary_ref": self._summary_ref,

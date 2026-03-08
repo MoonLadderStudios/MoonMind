@@ -168,12 +168,12 @@ class MoonMindRunWorkflow:
             "planArtifactRef",
             "plan_artifact_ref",
         )
-        
+
         if input_ref:
             self._input_ref = input_ref
         if plan_ref:
             self._plan_ref = plan_ref
-            
+
         return workflow_type, parameters, input_ref, plan_ref
 
     async def _run_planning_stage(
@@ -226,7 +226,7 @@ class MoonMindRunWorkflow:
             task_queue=SANDBOX_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
-        
+
         logs_ref = (
             sandbox_result.get("diagnostics_ref")
             if isinstance(sandbox_result, dict)
@@ -277,7 +277,7 @@ class MoonMindRunWorkflow:
             task_queue=INTEGRATIONS_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
-        
+
         summary_ref = (
             integration_result.get("tracking_ref")
             if isinstance(integration_result, dict)

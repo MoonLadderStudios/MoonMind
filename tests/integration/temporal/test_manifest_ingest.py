@@ -365,7 +365,7 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 requested_by={"type": "user", "id": "user-1"},
                 execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
             )
-            
+
             # Since nodes are no longer returned in ManifestCompileActivityResult,
             # we need to compile the plan directly here just for the test to get nodes.
             # In real workflow, nodes are not needed to be returned as large payloads.
@@ -377,7 +377,7 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 requested_by={"type": "user", "id": "user-1"},
                 execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
             )
-            
+
             runtime_nodes = plan_nodes_to_runtime_nodes(
                 plan.nodes,
                 requested_by={"type": "user", "id": "user-1"},
