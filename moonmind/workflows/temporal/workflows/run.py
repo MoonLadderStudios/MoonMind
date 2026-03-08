@@ -360,11 +360,7 @@ class MoonMindRunWorkflow:
     def resume(self) -> None:
         self._paused = False
         self._waiting_reason = None
-
-        # Only set resume_requested if we are actually waiting for an external integration
-        if self._awaiting_external:
-            self._resume_requested = True
-
+        self._resume_requested = True
         self._update_search_attributes()
 
     @workflow.signal
