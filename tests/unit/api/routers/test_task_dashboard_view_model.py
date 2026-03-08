@@ -193,7 +193,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["taskSourceResolver"] == "/api/tasks/{taskId}/source"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -251,11 +251,16 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
 
 def test_build_runtime_config_uses_runtime_env_for_task_default(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini")
+    monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-flash")
     config = build_runtime_config("/tasks")
     assert config["system"]["defaultTaskRuntime"] == "gemini"
-    assert config["system"]["defaultTaskModel"] == ""
+    assert config["system"]["defaultTaskModel"] == "gemini-2.5-flash"
     assert config["system"]["defaultTaskEffort"] == ""
+    assert config["system"]["defaultTaskModelByRuntime"]["gemini"] == (
+        "gemini-2.5-flash"
+    )
     monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
+    monkeypatch.delenv("MOONMIND_GEMINI_MODEL", raising=False)
 
 
 def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
@@ -275,6 +280,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
     monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
+    monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
     monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
@@ -283,6 +289,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
     assert config["system"]["defaultTaskEffort"] == "medium"
     assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
+    assert config["system"]["defaultTaskModelByRuntime"]["gemini"] == "gemini-2.5-pro"
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
 
@@ -351,5 +358,6 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     assert config["system"]["supportedTaskRuntimes"] == [
         "codex",
         "gemini",
+        "claude",
         "jules",
     ]

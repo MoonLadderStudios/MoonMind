@@ -621,6 +621,38 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
     assert job.payload["requiredCapabilities"] == ["claude", "git"]
 
 
+async def test_create_task_job_uses_default_model_for_configured_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing runtime model should resolve from the configured default runtime."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "gemini")
+    monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+
+    assert job.payload["targetRuntime"] == "gemini"
+    assert job.payload["task"]["runtime"]["mode"] == "gemini"
+    assert job.payload["task"]["runtime"]["model"] == "gemini-2.5-pro"
+    assert job.payload["task"]["runtime"]["effort"] is None
+    assert job.payload["requiredCapabilities"] == ["gemini", "git"]
+
+
 async def test_create_task_job_rejects_claude_runtime_without_api_key(
     tmp_path: Path,
 ) -> None:

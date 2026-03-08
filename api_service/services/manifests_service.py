@@ -18,6 +18,7 @@ from moonmind.workflows.agent_queue.manifest_contract import (
     normalize_manifest_job_payload,
 )
 from moonmind.workflows.agent_queue.service import AgentQueueService
+from moonmind.workflows.tasks.routing import get_routing_target_for_task
 from moonmind.workflows.temporal import (
     ManifestIngestValidationError,
     TemporalArtifactService,
@@ -143,7 +144,12 @@ class ManifestsService:
         idempotency_key: str | None = None,
         system_payload: dict[str, Any] | None = None,
     ) -> ManifestRunSubmission:
-        if self._execution_service is not None and self._artifact_service is not None:
+        target = get_routing_target_for_task(is_manifest=True)
+        if (
+            target == "temporal"
+            and self._execution_service is not None
+            and self._artifact_service is not None
+        ):
             return await self._submit_temporal_manifest_run(
                 name=name,
                 action=action,

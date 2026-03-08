@@ -7,6 +7,11 @@ from copy import deepcopy
 from typing import Any
 
 from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.runtime_defaults import (
+    DEFAULT_REPOSITORY,
+    resolve_default_task_runtime,
+    resolve_runtime_defaults,
+)
 
 _POLL_INTERVALS_MS = {
     "list": 5000,
@@ -15,9 +20,6 @@ _POLL_INTERVALS_MS = {
 }
 
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "jules", "universal")
-_DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
-_DEFAULT_CODEX_EFFORT = "high"
-_DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "queue": {
@@ -97,9 +99,7 @@ def status_maps() -> dict[str, dict[str, str]]:
 
 
 def _build_supported_task_runtimes() -> list[str]:
-    supported: list[str] = ["codex", "gemini"]
-    if settings.claude_runtime_gate.enabled:
-        supported.append("claude")
+    supported: list[str] = ["codex", "gemini", "claude"]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported
@@ -141,26 +141,27 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     if configured_runtime in supported_task_runtimes:
         default_task_runtime = configured_runtime
     else:
-        configured_default = (
-            str(settings.spec_workflow.default_task_runtime or "").strip().lower()
-        )
+        configured_default = resolve_default_task_runtime(settings.spec_workflow)
         if configured_default in supported_task_runtimes:
             default_task_runtime = configured_default
         else:
             default_task_runtime = supported_task_runtimes[0]
-    codex_default_model = (
-        str(settings.spec_workflow.codex_model or "").strip() or _DEFAULT_CODEX_MODEL
-    )
-    codex_default_effort = (
-        str(settings.spec_workflow.codex_effort or "").strip() or _DEFAULT_CODEX_EFFORT
-    )
-    default_task_model_by_runtime = {"codex": codex_default_model}
-    default_task_effort_by_runtime = {"codex": codex_default_effort}
+    default_task_model_by_runtime: dict[str, str] = {}
+    default_task_effort_by_runtime: dict[str, str] = {}
+    for runtime in supported_task_runtimes:
+        default_model, default_effort = resolve_runtime_defaults(
+            runtime,
+            spec_workflow_settings=settings.spec_workflow,
+        )
+        if default_model:
+            default_task_model_by_runtime[runtime] = default_model
+        if default_effort:
+            default_task_effort_by_runtime[runtime] = default_effort
     default_task_model = default_task_model_by_runtime.get(default_task_runtime, "")
     default_task_effort = default_task_effort_by_runtime.get(default_task_runtime, "")
     default_repository = (
         str(settings.spec_workflow.github_repository or "").strip()
-        or _DEFAULT_REPOSITORY
+        or DEFAULT_REPOSITORY
     )
     default_publish_mode = (
         str(settings.spec_workflow.default_publish_mode or "").strip().lower() or "pr"

@@ -34,6 +34,11 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
 )
+from moonmind.workflows.agent_queue.runtime_defaults import (
+    DEFAULT_REPOSITORY,
+    resolve_default_task_runtime,
+    resolve_runtime_defaults,
+)
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
@@ -46,10 +51,6 @@ from moonmind.workflows.tasks import compile_task_payload_templates
 
 logger = logging.getLogger(__name__)
 _TELEMETRY_EVENT_FETCH_LIMIT = 100000
-_DEFAULT_TASK_RUNTIME = "codex"
-_DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
-_DEFAULT_CODEX_EFFORT = "high"
-_DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ATTACHMENT_NAMESPACE = "inputs/"
 _ATTACHMENT_FILENAME_MAX_LENGTH = 120
@@ -365,17 +366,14 @@ class AgentQueueService:
         """Fill missing canonical task payload fields from configured defaults."""
 
         enriched = dict(payload)
-        default_runtime = (
-            self._clean_optional_str(settings.spec_workflow.default_task_runtime)
-            or _DEFAULT_TASK_RUNTIME
-        ).lower()
+        default_runtime = resolve_default_task_runtime(settings.spec_workflow)
         repository = self._clean_optional_str(
             enriched.get("repository") or enriched.get("repo")
         )
         if repository is None:
             repository = (
                 self._clean_optional_str(settings.spec_workflow.github_repository)
-                or _DEFAULT_REPOSITORY
+                or DEFAULT_REPOSITORY
             )
         self._validate_repository_reference(repository)
         enriched["repository"] = repository
@@ -403,17 +401,14 @@ class AgentQueueService:
             )
         enriched["targetRuntime"] = runtime_mode
 
-        if runtime_mode == "codex":
-            if self._clean_optional_str(runtime.get("model")) is None:
-                runtime["model"] = (
-                    self._clean_optional_str(settings.spec_workflow.codex_model)
-                    or _DEFAULT_CODEX_MODEL
-                )
-            if self._clean_optional_str(runtime.get("effort")) is None:
-                runtime["effort"] = (
-                    self._clean_optional_str(settings.spec_workflow.codex_effort)
-                    or _DEFAULT_CODEX_EFFORT
-                )
+        default_model, default_effort = resolve_runtime_defaults(
+            runtime_mode,
+            spec_workflow_settings=settings.spec_workflow,
+        )
+        if self._clean_optional_str(runtime.get("model")) is None and default_model:
+            runtime["model"] = default_model
+        if self._clean_optional_str(runtime.get("effort")) is None and default_effort:
+            runtime["effort"] = default_effort
 
         task["runtime"] = runtime
         enriched["task"] = task
@@ -427,10 +422,6 @@ class AgentQueueService:
         target_runtime = (
             str(normalized_payload.get("targetRuntime") or "").strip().lower()
         )
-        if target_runtime == "claude":
-            gate_state = settings.claude_runtime_gate
-            if not gate_state.enabled:
-                raise AgentQueueValidationError(gate_state.error_message)
         if target_runtime == "jules":
             gate_state = settings.jules_runtime_gate
             if not gate_state.enabled:
@@ -1680,16 +1671,6 @@ class AgentQueueService:
             actor_user_id=actor_user_id,
         )
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
-        await self._repository.append_event(
-            job_id=job_id,
-            level=models.AgentJobEventLevel.INFO,
-            message="Attachments listed",
-            payload={
-                "actorUserId": str(actor_user_id) if actor_user_id else None,
-                "limit": limit,
-            },
-        )
-        await self._repository.commit()
         return artifacts
 
     async def list_attachments_for_worker(
@@ -1705,13 +1686,6 @@ class AgentQueueService:
             raise AgentQueueValidationError("limit must be between 1 and 500")
         await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker_id)
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
-        await self._repository.append_event(
-            job_id=job_id,
-            level=models.AgentJobEventLevel.INFO,
-            message="Attachments listed",
-            payload={"workerId": worker_id, "limit": limit},
-        )
-        await self._repository.commit()
         return artifacts
 
     async def get_attachment_download_for_user(

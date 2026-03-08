@@ -6291,6 +6291,37 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     assert jules_effort == "low"
 
 
+async def test_build_proposal_task_request_template_defers_runtime_defaults(
+    tmp_path: Path,
+) -> None:
+    """Proposal templates should leave runtime unset until promotion."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    template = worker._build_proposal_task_request_template(
+        {"repository": "Moon/Repo", "task": {}}
+    )
+
+    assert "targetRuntime" not in template["payload"]
+    assert template["payload"]["task"]["runtime"] == {
+        "mode": None,
+        "model": None,
+        "effort": None,
+    }
+
+
 async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -8572,7 +8603,7 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     assert command[allowed_tools_index + 1] == (
         "activate_skill,run_shell_command,replace,write_file"
     )
-    assert command[-4:] == ["--model", "gemini-2.5-pro", "--effort", "high"]
+    assert command[-2:] == ["--model", "gemini-2.5-pro"]
 
 
 async def test_resolve_task_auth_context_includes_git_identity_without_token(

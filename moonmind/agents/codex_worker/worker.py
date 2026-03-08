@@ -7910,16 +7910,6 @@ class CodexWorker:
         git_node = task.get("git")
         git = git_node if isinstance(git_node, Mapping) else {}
 
-        runtime_mode = (
-            str(
-                runtime.get("mode") or canonical_payload.get("targetRuntime") or "codex"
-            )
-            .strip()
-            .lower()
-            or "codex"
-        )
-        runtime_model = str(runtime.get("model") or "").strip() or None
-        runtime_effort = str(runtime.get("effort") or "").strip() or None
         starting_branch = str(git.get("startingBranch") or "").strip() or None
         publish_mode = "pr"
 
@@ -7929,14 +7919,13 @@ class CodexWorker:
             "maxAttempts": 3,
             "payload": {
                 "repository": str(canonical_payload.get("repository") or "").strip(),
-                "targetRuntime": runtime_mode,
                 "task": {
                     "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
-                        "mode": runtime_mode,
-                        "model": runtime_model,
-                        "effort": runtime_effort,
+                        "mode": None,
+                        "model": None,
+                        "effort": None,
                     },
                     "git": {"startingBranch": starting_branch, "newBranch": None},
                     "publish": {
@@ -10094,7 +10083,7 @@ class CodexWorker:
 
         if model:
             command.extend(["--model", model])
-        if effort:
+        if effort and runtime_mode != "gemini":
             command.extend(["--effort", effort])
         return command
 
@@ -10688,7 +10677,7 @@ class CodexWorker:
     ) -> None:
         """Send lease renewals while a job is actively executing."""
 
-        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 5.0)
+        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 10.0)
         effective_pause_event = pause_event or asyncio.Event()
         while not stop_event.is_set():
             await asyncio.sleep(interval_seconds)
