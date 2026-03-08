@@ -140,12 +140,9 @@ class TestModelCache(unittest.TestCase):
         )  # This is the one asserted in test_singleton_behavior
         mock_thread_class.return_value = self.mock_thread_instance
         mock_thread_class.side_effect = (
-            None  # Ensure no side effect like raising an error# Patch time.sleep
+            None  # Ensure no side effect like raising an error
         )
-        self.time_sleep_patch = patch("time.sleep", MagicMock())
-        self.mock_time_sleep = (
-            self.time_sleep_patch.start()
-        )  # Patch ModelCache._periodic_refresh - but don't use autospec to avoid signature issues
+        # Patch ModelCache._periodic_refresh - but don't use autospec to avoid signature issues
         self.periodic_refresh_patch = patch(
             "moonmind.models_cache.ModelCache._periodic_refresh"
         )

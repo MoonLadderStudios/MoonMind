@@ -395,13 +395,13 @@ class ModelCache:
         self.logger.info("Starting synchronous model cache refresh.")
         try:
             self.models_data, self.model_to_provider = self._fetch_all_models()
-            self.last_refresh_time = time.time()
             self.logger.info(
-                f"Model cache refreshed. {len(self.models_data)} models loaded. Last refresh: {self.last_refresh_time}"
+                f"Model cache refreshed. {len(self.models_data)} models loaded. Last refresh: {time.time()}"
             )
         except Exception as e:
             self.logger.error(f"Failed to refresh model cache: {e}")
         finally:
+            self.last_refresh_time = time.time()
             with self._refresh_operation_lock:  # Changed to use new instance lock
                 self._refresh_in_progress = False
 
