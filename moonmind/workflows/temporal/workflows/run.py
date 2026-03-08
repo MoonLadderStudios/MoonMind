@@ -223,7 +223,9 @@ class MoonMindRunWorkflow:
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
         self._awaiting_external = True
-        self._set_state(STATE_AWAITING_EXTERNAL, summary="Waiting for external integration.")
+        self._set_state(
+            STATE_AWAITING_EXTERNAL, summary="Waiting for external integration."
+        )
 
         integration_parameters = dict(parameters)
         integration_parameters.setdefault(
@@ -410,10 +412,12 @@ class MoonMindRunWorkflow:
 
     def _update_memo(self) -> None:
         try:
-            workflow.upsert_memo({
-                "title": self._title or "Run",
-                "summary": self._summary,
-            })
+            workflow.upsert_memo(
+                {
+                    "title": self._title or "Run",
+                    "summary": self._summary,
+                }
+            )
         except Exception as exc:
             workflow.logger.warning(
                 "Failed to upsert memo",
