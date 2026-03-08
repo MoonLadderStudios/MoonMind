@@ -1,6 +1,4 @@
-import pytest
-from datetime import datetime, UTC
-from typing import Any
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
@@ -9,9 +7,10 @@ from api_service.core.sync import map_temporal_state_to_projection
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
-    TemporalWorkflowType,
     TemporalExecutionOwnerType,
+    TemporalWorkflowType,
 )
+
 
 def test_map_temporal_state_to_projection_success():
     start_time = datetime.now(UTC)

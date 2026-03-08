@@ -719,13 +719,18 @@ async def list_executions(
             page_size=page_size,
             next_page_token=next_page_token,
         )
-        
-        from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
+
         from api_service.core.sync import sync_execution_projection
-        
+        from moonmind.workflows.temporal.client import (
+            fetch_workflow_execution,
+            get_temporal_client,
+        )
+
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             try:
-                client = await get_temporal_client(settings.temporal.address, settings.temporal.namespace)
+                client = await get_temporal_client(
+                    settings.temporal.address, settings.temporal.namespace
+                )
                 updated_items = []
                 for item in result.items:
                     try:
@@ -738,7 +743,7 @@ async def list_executions(
                 result.items = updated_items
             except Exception:
                 pass
-                
+
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -773,13 +778,18 @@ async def describe_execution(
     session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
-    
-    from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
+
     from api_service.core.sync import sync_execution_projection
-    
+    from moonmind.workflows.temporal.client import (
+        fetch_workflow_execution,
+        get_temporal_client,
+    )
+
     try:
         if settings.temporal.temporal_authoritative_read_enabled:
-            client = await get_temporal_client(settings.temporal.address, settings.temporal.namespace)
+            client = await get_temporal_client(
+                settings.temporal.address, settings.temporal.namespace
+            )
             desc = await fetch_workflow_execution(client, canonical_workflow_id)
             await sync_execution_projection(session, desc)
             await session.commit()

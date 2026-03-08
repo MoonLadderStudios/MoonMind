@@ -103,6 +103,7 @@ def test_runtime_services_receive_temporal_namespace_and_address():
 
     namespace_init_env = _env_map(services["temporal-namespace-init"]["environment"])
     assert (
-        namespace_init_env["TEMPORAL_ADDRESS"] == "${TEMPORAL_ADDRESS:-temporal-internal:7233}"
+        namespace_init_env["TEMPORAL_ADDRESS"]
+        == "${TEMPORAL_ADDRESS:-temporal-internal:7233}"
     )
     assert namespace_init_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-moonmind}"

@@ -1,7 +1,9 @@
 import asyncio
-from temporalio.client import Client
+
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
+from temporalio.client import Client
+
 
 async def main():
     client = await Client.connect("temporal:7233", namespace="moonmind")
@@ -17,9 +19,10 @@ async def main():
                 "mm_repo": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_integration": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_continue_as_new_cause": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-            }
+            },
         )
     )
     print("Search attributes registered.")
+
 
 asyncio.run(main())

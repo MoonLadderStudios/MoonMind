@@ -73,12 +73,18 @@ def map_temporal_state_to_projection(
     except ValueError:
         workflow_type = TemporalWorkflowType.RUN
 
-    entry = str(memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "run")).strip()
+    entry = str(
+        memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "run")
+    ).strip()
     owner_id = memo.get("owner_id")
     owner_type_raw = memo.get("owner_type")
-    
+
     try:
-        owner_type = TemporalExecutionOwnerType(str(owner_type_raw)) if owner_type_raw else TemporalExecutionOwnerType.USER
+        owner_type = (
+            TemporalExecutionOwnerType(str(owner_type_raw))
+            if owner_type_raw
+            else TemporalExecutionOwnerType.USER
+        )
     except ValueError:
         owner_type = TemporalExecutionOwnerType.USER
 
@@ -142,11 +148,11 @@ async def sync_execution_projection(
 ) -> TemporalExecutionRecord:
     """Upsert the Temporal workflow state to the local projection database."""
     payload = map_temporal_state_to_projection(desc)
-    
+
     projection = await session.get(TemporalExecutionRecord, desc.id)
     previous_version = int(projection.projection_version or 0) if projection else 0
     synced_at = _utc_now()
-    
+
     if projection is None:
         projection = TemporalExecutionRecord(
             **payload,
@@ -164,6 +170,8 @@ async def sync_execution_projection(
         projection.last_synced_at = synced_at
         projection.sync_state = TemporalExecutionProjectionSyncState.FRESH
         projection.sync_error = None
-        projection.source_mode = TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
-        
+        projection.source_mode = (
+            TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+
     return projection

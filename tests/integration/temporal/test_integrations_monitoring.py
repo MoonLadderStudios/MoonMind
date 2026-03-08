@@ -6,13 +6,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from moonmind.config import settings
-
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, MoonMindWorkflowState
+from moonmind.config import settings
 from moonmind.schemas.jules_models import normalize_jules_status
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
@@ -207,7 +206,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             payload_artifact_ref=None,
         )
         assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
-                            
+
         duplicate = await service.ingest_integration_callback(
             integration_name="jules",
             callback_correlation_key="cb-safe",
@@ -220,7 +219,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             payload_artifact_ref=None,
         )
         assert "Ignored duplicate external event" in duplicate.memo["summary"]
-                            
+
         terminal = await service.ingest_integration_callback(
             integration_name="jules",
             callback_correlation_key="cb-safe",
@@ -233,7 +232,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             payload_artifact_ref=None,
         )
         assert terminal.integration_state["normalized_status"] == "succeeded"
-                            
+
         reordered = await service.ingest_integration_callback(
             integration_name="jules",
             callback_correlation_key="cb-safe",
@@ -246,13 +245,14 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
             payload_artifact_ref=None,
         )
         assert reordered.integration_state["normalized_status"] == "succeeded"
-                            
-        with pytest.raises(TemporalExecutionNotFoundError):                await service.ingest_integration_callback(
-                    integration_name="jules",
-                    callback_correlation_key="missing-key",
-                    payload={"event_type": "completed"},
-                    payload_artifact_ref=None,
-                )
+
+        with pytest.raises(TemporalExecutionNotFoundError):
+            await service.ingest_integration_callback(
+                integration_name="jules",
+                callback_correlation_key="missing-key",
+                payload={"event_type": "completed"},
+                payload_artifact_ref=None,
+            )
 
 
 async def test_failure_and_cancel_paths_keep_jules_normalization_compact(

@@ -436,7 +436,11 @@ class TemporalExecutionService:
         if record is None:
             if settings.temporal.temporal_authoritative_read_enabled:
                 try:
-                    from moonmind.workflows.temporal.client import get_temporal_client, fetch_workflow_execution
+                    from moonmind.workflows.temporal.client import (
+                        fetch_workflow_execution,
+                        get_temporal_client,
+                    )
+
                     temporal_client = await get_temporal_client(
                         settings.temporal.address, settings.temporal.namespace
                     )
