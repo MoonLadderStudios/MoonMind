@@ -378,7 +378,9 @@ async def test_promote_proposal_applies_runtime_defaults() -> None:
     assert kwargs["payload"]["targetRuntime"] == "gemini"
     assert kwargs["payload"]["task"]["runtime"]["mode"] == "gemini"
     assert kwargs["payload"]["task"]["runtime"]["model"] == "gemini-3.1-pro-preview"
-    assert proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini"
+    assert (
+        proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini"
+    )
 
 
 @pytest.mark.asyncio

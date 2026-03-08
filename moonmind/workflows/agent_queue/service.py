@@ -24,11 +24,6 @@ from moonmind.workflows.agent_queue.job_types import (
     MANIFEST_JOB_TYPE,
     SUPPORTED_QUEUE_JOB_TYPES,
 )
-from moonmind.workflows.agent_queue.runtime_defaults import (
-    DEFAULT_REPOSITORY,
-    resolve_default_task_runtime,
-    resolve_runtime_defaults,
-)
 from moonmind.workflows.agent_queue.manifest_contract import (
     ManifestContractError,
     normalize_manifest_job_payload,
@@ -38,6 +33,11 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentJobStateError,
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
+)
+from moonmind.workflows.agent_queue.runtime_defaults import (
+    DEFAULT_REPOSITORY,
+    resolve_default_task_runtime,
+    resolve_runtime_defaults,
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (

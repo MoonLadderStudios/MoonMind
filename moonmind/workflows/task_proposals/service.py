@@ -383,10 +383,9 @@ class TaskProposalService:
                 "git": {"startingBranch": None, "newBranch": None},
                 "publish": {"mode": "pr"},
             }
-        elif (
-            not self._clean_str(task.get("instructions"))
-            and not self._proposal_has_explicit_skill(task)
-        ):
+        elif not self._clean_str(
+            task.get("instructions")
+        ) and not self._proposal_has_explicit_skill(task):
             task["instructions"] = (
                 self._clean_str(
                     payload_for_validation.get("instructions")
