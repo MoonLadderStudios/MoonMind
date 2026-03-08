@@ -35,7 +35,7 @@ The system must safely handle large payloads, operator actions, and external int
 The frontend is scaffolded but needs to be wired to authoritative backend data:
 
 * **List and Detail Authority:** APIs must provide fully authoritative Temporal data (status, state, waiting reasons, artifact refs) to the Mission Control dashboard without relying on local DB approximations.
-* **Enable UI Actions & Submission:** Once the backend is stable, the `TEMPORAL_DASHBOARD_ACTIONS_ENABLED` and `TEMPORAL_DASHBOARD_SUBMIT_ENABLED` feature flags must be turned on to allow users to create and act on Temporal-backed tasks natively.
+* **Enable UI Actions & Submission:** Once the backend is stable, the `actionsEnabled` and `submitEnabled` feature flags (under the `temporalDashboard` feature) must be turned on to allow users to create and act on Temporal-backed tasks natively.
 * **Production Routing Policy:** Define deterministic, maintainable backend routing policies to resolve whether a task runs on the legacy queue, orchestrator, or Temporal.
 
 ## 5. Testing and Developer Experience
