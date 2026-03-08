@@ -427,10 +427,6 @@ class AgentQueueService:
         target_runtime = (
             str(normalized_payload.get("targetRuntime") or "").strip().lower()
         )
-        if target_runtime == "claude":
-            gate_state = settings.claude_runtime_gate
-            if not gate_state.enabled:
-                raise AgentQueueValidationError(gate_state.error_message)
         if target_runtime == "jules":
             gate_state = settings.jules_runtime_gate
             if not gate_state.enabled:
