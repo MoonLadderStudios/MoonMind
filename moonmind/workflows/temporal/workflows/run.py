@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
 
 
 class RunWorkflowInput(TypedDict, total=False):
+    """Input payload for the MoonMind.Run workflow."""
     workflow_type: str
     title: Optional[str]
     initial_parameters: dict[str, Any]
