@@ -2161,14 +2161,6 @@ class AppSettings(BaseSettings):
         configured_default = (
             str(self.spec_workflow.default_task_runtime or "").strip().lower()
         )
-        if configured_default == "claude":
-            default_runtime_gate = build_claude_runtime_gate_state(
-                env=os.environ,
-                api_key=self.anthropic.anthropic_api_key,
-                error_message="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY to be configured",
-            )
-            if not default_runtime_gate.enabled:
-                raise ValueError(default_runtime_gate.error_message)
         if configured_default == "jules":
             default_runtime_gate = build_jules_runtime_gate_state(
                 env=os.environ,
