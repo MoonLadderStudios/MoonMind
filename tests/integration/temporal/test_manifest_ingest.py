@@ -360,14 +360,26 @@ async def test_manifest_activities_compile_plan_and_write_summary(
             compile_result = await manifest_activities.manifest_compile(
                 principal="user-1",
                 manifest_ref=completed.artifact_id,
+                action="run",
+                options={"dryRun": True},
+                requested_by={"type": "user", "id": "user-1"},
+                execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
+            )
+            
+            # Since nodes are no longer returned in ManifestCompileActivityResult,
+            # we need to compile the plan directly here just for the test to get nodes.
+            # In real workflow, nodes are not needed to be returned as large payloads.
+            plan = compile_manifest_plan(
+                manifest_ref=completed.artifact_id,
                 manifest_payload=manifest_text,
                 action="run",
                 options={"dryRun": True},
                 requested_by={"type": "user", "id": "user-1"},
                 execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
             )
+            
             runtime_nodes = plan_nodes_to_runtime_nodes(
-                compile_result.nodes,
+                plan.nodes,
                 requested_by={"type": "user", "id": "user-1"},
             )
             (

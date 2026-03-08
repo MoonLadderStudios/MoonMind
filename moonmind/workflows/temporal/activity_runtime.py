@@ -85,7 +85,6 @@ class ManifestCompileActivityResult:
 
     plan_ref: ArtifactRef
     manifest_digest: str
-    nodes: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,13 +566,17 @@ class TemporalManifestActivities:
         *,
         principal: str,
         manifest_ref: ArtifactRef | str,
-        manifest_payload: bytes | str,
         action: str,
         options: Mapping[str, Any] | None,
         requested_by: Mapping[str, Any],
         execution_policy: Mapping[str, Any],
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> ManifestCompileActivityResult:
+        _artifact, manifest_payload = await self._artifact_service.read(
+            artifact_id=_artifact_id_from_ref(manifest_ref),
+            principal=principal,
+            allow_restricted_raw=True,
+        )
         plan = compile_manifest_plan(
             manifest_ref=_artifact_id_from_ref(manifest_ref),
             manifest_payload=manifest_payload,
@@ -596,7 +599,6 @@ class TemporalManifestActivities:
         return ManifestCompileActivityResult(
             plan_ref=plan_ref,
             manifest_digest=plan.manifest_digest,
-            nodes=tuple(node.model_dump(by_alias=True) for node in plan.nodes),
         )
 
     async def manifest_write_summary(
