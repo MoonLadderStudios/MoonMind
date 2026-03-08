@@ -1,8 +1,16 @@
 from collections.abc import Mapping
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
+from temporalio.common import RetryPolicy
+
+DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=1),
+    maximum_attempts=5,
+)
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.activity_catalog import (
@@ -10,6 +18,21 @@ with workflow.unsafe.imports_passed_through():
         LLM_TASK_QUEUE,
         SANDBOX_TASK_QUEUE,
     )
+
+
+class RunWorkflowInput(TypedDict, total=False):
+    """Input payload for the MoonMind.Run workflow."""
+
+    workflow_type: str
+    title: Optional[str]
+    initial_parameters: dict[str, Any]
+    input_artifact_ref: Optional[str]
+    plan_artifact_ref: Optional[str]
+
+
+class RunWorkflowOutput(TypedDict):
+    status: str
+    message: Optional[str]
 
 
 WORKFLOW_NAME = "MoonMind.Run"
@@ -38,6 +61,7 @@ class MoonMindRunWorkflow:
         self._integration: Optional[str] = None
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
+        self._summary: str = "Execution initialized."
 
         # State tracking
         self._paused: bool = False
@@ -59,7 +83,7 @@ class MoonMindRunWorkflow:
         self._max_steps = 100
 
     @workflow.run
-    async def run(self, input_payload: dict[str, Any]) -> dict[str, Any]:
+    async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
             input_payload
         )
@@ -68,8 +92,8 @@ class MoonMindRunWorkflow:
             extra={"workflow_type": workflow_type},
         )
 
-        self._set_state(STATE_INITIALIZING)
-        self._set_state(STATE_PLANNING)
+        self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
+        self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
 
         # Pause until unpaused
         await workflow.wait_condition(lambda: not self._paused)
@@ -89,10 +113,10 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        self._set_state(STATE_FINALIZING)
+        self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
         self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_SUCCEEDED)
+        self._set_state(STATE_SUCCEEDED, summary="Workflow completed successfully.")
 
         return {"status": "success", "message": "Workflow completed successfully"}
 
@@ -117,6 +141,7 @@ class MoonMindRunWorkflow:
             input_payload,
             "title",
         )
+        self._summary = workflow.memo().get("summary") or "Execution initialized."
         self._owner_type, self._owner_id = self._trusted_owner_metadata()
 
         parameters = self._mapping_value(
@@ -159,6 +184,7 @@ class MoonMindRunWorkflow:
             },
             start_to_close_timeout=timedelta(minutes=15),
             task_queue=LLM_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
         return (
             plan_result.get("plan_ref")
@@ -169,7 +195,7 @@ class MoonMindRunWorkflow:
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
-        self._set_state(STATE_EXECUTING)
+        self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
         await workflow.execute_activity(
@@ -182,6 +208,7 @@ class MoonMindRunWorkflow:
             },
             start_to_close_timeout=timedelta(minutes=10),
             task_queue=SANDBOX_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
         if self._integration:
@@ -191,7 +218,9 @@ class MoonMindRunWorkflow:
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
         self._awaiting_external = True
-        self._set_state(STATE_AWAITING_EXTERNAL)
+        self._set_state(
+            STATE_AWAITING_EXTERNAL, summary="Waiting for external integration."
+        )
 
         integration_parameters = dict(parameters)
         integration_parameters.setdefault(
@@ -221,6 +250,7 @@ class MoonMindRunWorkflow:
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
         self._wait_cycle_count += 1
@@ -230,9 +260,12 @@ class MoonMindRunWorkflow:
         self._resume_requested = False
         self._awaiting_external = False
 
-    def _set_state(self, state: str) -> None:
+    def _set_state(self, state: str, summary: Optional[str] = None) -> None:
         self._state = state
+        if summary:
+            self._summary = summary
         self._update_search_attributes()
+        self._update_memo()
 
     def _principal(self) -> str:
         if not self._owner_id:
@@ -347,6 +380,7 @@ class MoonMindRunWorkflow:
         attributes: dict[str, Any] = {
             "mm_state": self._state,
             "mm_entry": self._entry,
+            "mm_updated_at": workflow.now(),
         }
         if self._owner_type:
             attributes["mm_owner_type"] = self._owner_type
@@ -363,6 +397,20 @@ class MoonMindRunWorkflow:
             # During basic tests search attributes might not be registered
             workflow.logger.warning(
                 "Failed to upsert search attributes",
+                extra={"error": str(exc)},
+            )
+
+    def _update_memo(self) -> None:
+        try:
+            workflow.upsert_memo(
+                {
+                    "title": self._title or "Run",
+                    "summary": self._summary,
+                }
+            )
+        except Exception as exc:
+            workflow.logger.warning(
+                "Failed to upsert memo",
                 extra={"error": str(exc)},
             )
 
@@ -389,8 +437,8 @@ class MoonMindRunWorkflow:
     def cancel(self, reason: Optional[str] = None) -> None:
         self._cancel_requested = True
         self._close_status = CLOSE_STATUS_CANCELED
-        self._state = STATE_CANCELED
-        self._update_search_attributes()
+        summary = f"Canceled: {reason}" if reason else "Canceled."
+        self._set_state(STATE_CANCELED, summary=summary)
 
     @workflow.update
     def update_title(self, new_title: str) -> None:

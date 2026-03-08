@@ -88,6 +88,7 @@ async def _register_test_search_attributes(
                 "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_state": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_updated_at": IndexedValueType.INDEXED_VALUE_TYPE_DATETIME,
                 "mm_repo": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_integration": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
             },
