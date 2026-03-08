@@ -539,7 +539,9 @@ async def _create_execution_from_manifest_request(
         )
 
     payload = request.payload if isinstance(request.payload, dict) else {}
-    manifest_payload = payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+    manifest_payload = (
+        payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+    )
     if not manifest_payload:
         raise _invalid_task_request(
             "Manifest-shaped Temporal submit requests require payload.manifest."

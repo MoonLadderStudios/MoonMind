@@ -29,6 +29,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.routers.executions import _create_execution_from_task_request
+from api_service.api.routers.executions import _get_service as _get_temporal_service
 from api_service.api.schemas import QueueSystemMetadataModel
 from api_service.auth_providers import (
     get_auth_manager,
@@ -38,11 +40,6 @@ from api_service.auth_providers import (
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
-from moonmind.workflows.tasks.routing import get_routing_target_for_task
-from moonmind.workflows.temporal import TemporalExecutionService
-from api_service.api.routers.executions import _create_execution_from_task_request, _get_service as _get_temporal_service
-from moonmind.workflows.agent_queue.job_types import CANONICAL_TASK_JOB_TYPE, MANIFEST_JOB_TYPE
-
 from moonmind.schemas.agent_queue_models import (
     AppendJobEventRequest,
     ArtifactListResponse,
@@ -90,7 +87,10 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
-from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
+from moonmind.workflows.agent_queue.job_types import (
+    CANONICAL_TASK_JOB_TYPE,
+    MANIFEST_JOB_TYPE,
+)
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
@@ -116,6 +116,8 @@ from moonmind.workflows.agent_queue.service import (
     QueueSystemMetadata,
     WorkerAuthPolicy,
 )
+from moonmind.workflows.tasks.routing import get_routing_target_for_task
+from moonmind.workflows.temporal import TemporalExecutionService
 
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
@@ -763,7 +765,10 @@ async def create_job(
 
     if target == "temporal":
         if payload.type == MANIFEST_JOB_TYPE:
-            from api_service.api.routers.executions import _create_execution_from_manifest_request
+            from api_service.api.routers.executions import (
+                _create_execution_from_manifest_request,
+            )
+
             execution = await _create_execution_from_manifest_request(
                 request=payload,
                 service=temporal_service,
@@ -775,8 +780,9 @@ async def create_job(
                 service=temporal_service,
                 user=user,
             )
-            
+
         import uuid
+
         # Mock JobModel shape for UI compatibility
         return {
             "id": uuid.uuid4(),
@@ -923,7 +929,7 @@ async def create_job_with_attachments(
             detail={
                 "code": "invalid_routing_target",
                 "message": "Legacy attachment submission is not supported for Temporal-backed workflows.",
-            }
+            },
         )
 
     if not files:

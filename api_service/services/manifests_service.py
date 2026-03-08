@@ -145,7 +145,11 @@ class ManifestsService:
         system_payload: dict[str, Any] | None = None,
     ) -> ManifestRunSubmission:
         target = get_routing_target_for_task(is_manifest=True)
-        if target == "temporal" and self._execution_service is not None and self._artifact_service is not None:
+        if (
+            target == "temporal"
+            and self._execution_service is not None
+            and self._artifact_service is not None
+        ):
             return await self._submit_temporal_manifest_run(
                 name=name,
                 action=action,

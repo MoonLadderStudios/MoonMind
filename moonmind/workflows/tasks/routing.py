@@ -4,6 +4,7 @@ from moonmind.config.settings import settings
 
 TaskTarget = Literal["temporal", "orchestrator", "queue"]
 
+
 def get_routing_target_for_task(
     *,
     is_manifest: bool = False,
