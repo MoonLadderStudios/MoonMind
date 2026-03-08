@@ -137,16 +137,30 @@ const helpers = loadTemporalHelpers();
   assert.strictEqual(
     helpers.temporalWaitingReason({
       state: "awaiting_external",
-      memo: { summary: "Waiting on approval." },
+      waitingReason: "Waiting on approval.",
     }),
     "Waiting on approval.",
   );
   assert.strictEqual(
     helpers.temporalWaitingReason({
       state: "executing",
-      memo: { summary: "Still running." },
+      waitingReason: "",
     }),
     "",
+  );
+  assert.strictEqual(
+    helpers.temporalWaitingReason({
+      state: "awaiting_external",
+      memo: { waitingReason: "Waiting on memo." },
+    }),
+    "Waiting on memo.",
+  );
+  assert.strictEqual(
+    helpers.temporalWaitingReason({
+      state: "awaiting_external",
+      memo: { summary: "Fallback summary reason." },
+    }),
+    "Fallback summary reason.",
   );
 })();
 
@@ -181,10 +195,11 @@ const helpers = loadTemporalHelpers();
         mm_owner_id: "user-123",
         mm_owner_type: "user",
         mm_updated_at: "2026-03-06T11:00:00Z",
+        mm_entry: "legacy-entry",
+        mm_repo: "legacy-repo",
+        mm_integration: "legacy-integration",
       },
-      memo: {
-        title: "Temporal task",
-      },
+      memo: { title: "Temporal task", entry: "memo-entry" },
       startedAt: "2026-03-06T10:00:00Z",
       updatedAt: "2026-03-06T11:00:00Z",
     },
@@ -194,17 +209,23 @@ const helpers = loadTemporalHelpers();
   assert.strictEqual(rows[0].taskId, "mm:workflow-123");
   assert.strictEqual(rows[0].workflowId, "mm:workflow-123");
   assert.strictEqual(rows[0].temporalRunId, "run-999");
+  assert.strictEqual(rows[0].entry, "legacy-entry");
+  assert.strictEqual(rows[0].ownerType, "user");
+  assert.strictEqual(rows[0].ownerId, "user-123");
+  assert.strictEqual(rows[0].repository, "legacy-repo");
+  assert.strictEqual(rows[0].integration, "legacy-integration");
   assert.strictEqual(rows[0].link, "/tasks/mm:workflow-123?source=temporal");
+  assert.strictEqual(rows[0].rawState, "executing");
 })();
 
 (function testTemporalTitleAndRouteNormalizationStayTaskOriented() {
   assert.strictEqual(
-    helpers.resolveTemporalWorkflowTitle("MoonMind.Run", { title: "Review PR" }),
+    helpers.deriveTemporalTitle({ workflowType: "MoonMind.Run", title: "Review PR" }),
     "Review PR",
   );
   assert.strictEqual(
-    helpers.resolveTemporalWorkflowTitle("MoonMind.ManifestIngest", {}),
-    "Manifest Ingest",
+    helpers.deriveTemporalTitle({ workflowType: "MoonMind.ManifestIngest", workflowId: "mm:abcd" }),
+    "mm:abcd",
   );
   assert.strictEqual(
     helpers.normalizeDashboardRoutePath("/tasks/new"),
