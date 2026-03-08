@@ -326,6 +326,14 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 raise RuntimeError(
                     format_invalid_claude_cli_auth_mode_error(claude_auth_mode_raw)
                 )
+            if claude_auth_mode == "api_key":
+                anthropic_key = str(source.get("ANTHROPIC_API_KEY", "")).strip()
+                claude_key = str(source.get("CLAUDE_API_KEY", "")).strip()
+                if not anthropic_key and not claude_key:
+                    raise RuntimeError(
+                        "ANTHROPIC_API_KEY or CLAUDE_API_KEY is required when "
+                        "Claude runtime uses API key authentication."
+                    )
             if claude_auth_mode == "oauth":
                 claude_home = source.get("CLAUDE_HOME")
                 _claude_home, issue = inspect_claude_home_for_auth_mode(
