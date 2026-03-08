@@ -28,14 +28,14 @@ We propose a dedicated Temporal workflow, `MoonMind.ProposalDelivery` (or integr
 
 1. **Trigger:** The MoonMind API or an upstream workflow starts a `ProposalDelivery` execution when a new proposal targeting Jules is created, or when an existing proposal meets specific routing criteria.
 2. **Activity: `integration.jules.send_proposal`:** A new Temporal activity maps the MoonMind proposal schema into a Jules-compatible payload. If Jules does not have a native "proposal" entity, this maps to a Jules task with specific metadata (e.g., `type: proposal`).
-3. **Activity: `integration.jules.await_proposal_status` (Optional):** If Jules actions the proposal, a polling or callback activity waits for the resolution status and maps it back to MoonMind's proposal status (e.g., `promoted`, `rejected`).
+3. **Activity: `integration.jules.sync_proposal_status` (Optional):** If Jules actions the proposal, a polling or callback activity waits for the resolution status and maps it back to MoonMind's proposal status (e.g., `promoted`, `rejected`).
 4. **Resolution:** The workflow completes once Jules acknowledges receipt (and optionally, resolution) of the proposal.
 
 ### 3.2 Integration with Jules Adapter
 
 The existing Jules adapter (`moonmind/workflows/adapters/jules_client.py`) will be extended to support proposal delivery.
 
-**Payload Mapping Strategy:**
+#### Payload Mapping Strategy
 - MoonMind `proposal.title` -> Jules `title`
 - MoonMind `proposal.signal_metadata` and origin context -> Jules `description` or structured `metadata`
 - MoonMind `proposal.target_repository` -> Jules execution context
@@ -46,7 +46,7 @@ Once delivered, the lifecycle of the proposal in MoonMind and Jules must remain 
 - If Jules rejects or dismisses the proposal, MoonMind marks it as `rejected`.
 - If Jules accepts/promotes the proposal into an active run, MoonMind marks it as `promoted`.
 
-Since Jules is moving toward an ExternalEvent/Callback model (per `JulesTemporalExternalEventContract.md`), MoonMind will prefer receiving Temporal signals (`ExternalEvent`) from Jules to update the proposal's state. It will fall back to Temporal-managed polling (`integration.jules.poll_proposal_status`) if a verified callback path is not yet available.
+Since Jules is moving toward an ExternalEvent/Callback model (per `JulesTemporalExternalEventContract.md`), MoonMind will prefer receiving Temporal signals (`ExternalEvent`) from Jules to update the proposal's state. It will fall back to Temporal-managed polling (`integration.jules.sync_proposal_status`) if a verified callback path is not yet available.
 
 ## 4) Temporal Activity Contract Expansion
 
