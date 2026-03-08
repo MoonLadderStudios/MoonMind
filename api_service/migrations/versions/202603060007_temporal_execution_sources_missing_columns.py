@@ -22,8 +22,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_columns = {
-        column["name"]
-        for column in inspector.get_columns("temporal_execution_sources")
+        column["name"] for column in inspector.get_columns("temporal_execution_sources")
     }
 
     if "integration_state" not in existing_columns:
@@ -54,8 +53,7 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_columns = {
-        column["name"]
-        for column in inspector.get_columns("temporal_execution_sources")
+        column["name"] for column in inspector.get_columns("temporal_execution_sources")
     }
 
     if "attention_required" in existing_columns:
