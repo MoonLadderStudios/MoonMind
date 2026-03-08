@@ -8,15 +8,22 @@
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --------------- | --------- | -------- | ----- |
-| FR-001 | Yes | T004, T005, T011 | |
-| FR-002 | Yes | T006, T009 | |
-| FR-003 | Yes | T007, T010 | |
-| FR-004 | Yes | T008, T009 | |
-| FR-005 | Yes | T002, T003... | |
-| FR-006 | Yes | T013 | |
-| FR-007 | Yes | T014 | |
+| FR-001 | Yes | T002, T004 | |
+| FR-002 | Yes | T003, T004 | |
+| FR-003 | Yes | T005, T006, T007, T008 | |
+| FR-004 | Yes | T008 | |
+| FR-005 | Yes | T009, T010, T011, T012 | |
+| FR-006 | Yes | T012 | |
+| FR-007 | Yes | T004, T005, T006, T009, T010 | |
+
+**Constitution Alignment Issues:**
+None
+
+**Unmapped Tasks:**
+None
 
 **Metrics:**
+
 - Total Requirements: 7
 - Total Tasks: 14
 - Coverage %: 100%
@@ -26,7 +33,7 @@
 
 ## Remediation Discovery (Prompt A)
 
-No remaining remediations required. All functional requirements and `DOC-REQ-*` traceability links are fully mapped to implementation and validation tasks. Constraints such as RetryPolicies and Artifact offloading have explicit tasks.
+No remaining remediations required. All functional requirements and `DOC-REQ-*` traceability links are fully mapped to implementation and validation tasks. Constraints such as testing coverage and production code tasks have explicit tasks.
 
 Safe to Implement: YES
 Blocking Remediations: None

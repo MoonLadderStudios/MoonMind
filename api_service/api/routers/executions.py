@@ -843,6 +843,15 @@ async def update_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> UpdateExecutionResponse:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Temporal dashboard actions are currently disabled.",
+            },
+        )
+
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -1034,6 +1043,15 @@ async def signal_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Temporal dashboard actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     try:
@@ -1074,6 +1092,15 @@ async def cancel_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Temporal dashboard actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
