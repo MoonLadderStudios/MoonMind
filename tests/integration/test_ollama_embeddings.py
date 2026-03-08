@@ -36,8 +36,8 @@ def ollama_running():
         response = requests.get(settings.ollama.ollama_base_url + "/api/tags")
         if response.status_code == 200:
             return True
-    except requests.ConnectionError:
-        pass
+    except requests.ConnectionError as e:
+        logger.debug(f"Ollama connection error: {e}")
     return False
 
 
