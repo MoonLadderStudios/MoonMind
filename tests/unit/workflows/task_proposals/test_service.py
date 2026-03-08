@@ -18,15 +18,9 @@ from moonmind.workflows.task_proposals.service import (
 
 
 @pytest.mark.asyncio
-async def test_create_proposal_persists_normalized_payload() -> None:
+async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "Moon/Repo",
-            "task": {"instructions": "tests", "publish": {"mode": "none"}},
-        }
-    )
     record = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -80,6 +74,9 @@ async def test_create_proposal_persists_normalized_payload() -> None:
     assert kwargs["review_priority"] is TaskProposalReviewPriority.NORMAL
     assert kwargs["priority_override_reason"] is None
     assert kwargs["task_create_request"]["payload"]["task"]["publish"]["mode"] == "pr"
+    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["mode"] is None
+    assert kwargs["task_create_request"]["payload"]["task"]["runtime"]["model"] is None
+    assert kwargs["task_create_request"]["payload"].get("targetRuntime") is None
     service._emit_notification.assert_awaited_once()
     assert proposal is record
 
@@ -88,9 +85,6 @@ async def test_create_proposal_persists_normalized_payload() -> None:
 async def test_create_proposal_accepts_enum_origin_source() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={"repository": "Moon/Repo", "task": {"instructions": "tests"}}
-    )
     record = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -144,12 +138,6 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
 async def test_create_proposal_enforces_moonmind_metadata() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "MoonLadderStudios/MoonMind",
-            "task": {"instructions": "tests"},
-        }
-    )
     service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
 
     with pytest.raises(TaskProposalValidationError):
@@ -199,12 +187,6 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
     )
     repo.create_proposal.return_value = record
     queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "MoonLadderStudios/MoonMind",
-            "task": {"instructions": "tests"},
-        }
-    )
     service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
     service._emit_notification = AsyncMock()
 
@@ -239,12 +221,6 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
 async def test_create_proposal_honors_requested_priority_when_higher() -> None:
     repo = AsyncMock()
     queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "MoonLadderStudios/MoonMind",
-            "task": {"instructions": "tests"},
-        }
-    )
     record = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -345,6 +321,64 @@ async def test_promote_proposal_calls_queue_and_updates_record() -> None:
     assert created_job is job
     _, kwargs = queue.create_job.await_args
     assert kwargs["payload"]["task"]["publish"]["mode"] == "pr"
+
+
+@pytest.mark.asyncio
+async def test_promote_proposal_applies_runtime_defaults() -> None:
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.normalize_task_job_payload = MagicMock(
+        return_value={
+            "repository": "Moon/Repo",
+            "targetRuntime": "gemini",
+            "task": {
+                "instructions": "edited",
+                "runtime": {
+                    "mode": "gemini",
+                    "model": "gemini-3.1-pro-preview",
+                    "effort": None,
+                },
+                "publish": {"mode": "none"},
+            },
+        }
+    )
+    job = SimpleNamespace(id=uuid4())
+    queue.create_job = AsyncMock(return_value=job)
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=TaskProposalStatus.OPEN,
+        promoted_job_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        task_create_request={
+            "type": "task",
+            "priority": 0,
+            "maxAttempts": 3,
+            "affinityKey": None,
+            "payload": {
+                "repository": "Moon/Repo",
+                "task": {
+                    "instructions": "edited",
+                    "runtime": {"mode": None, "model": None, "effort": None},
+                },
+            },
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+
+    await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+    )
+
+    _, kwargs = queue.create_job.await_args
+    assert kwargs["payload"]["targetRuntime"] == "gemini"
+    assert kwargs["payload"]["task"]["runtime"]["mode"] == "gemini"
+    assert kwargs["payload"]["task"]["runtime"]["model"] == "gemini-3.1-pro-preview"
+    assert proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini"
 
 
 @pytest.mark.asyncio

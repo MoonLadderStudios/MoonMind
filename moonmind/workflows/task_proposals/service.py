@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 import httpx
+from pydantic import ValidationError
 
 from moonmind.config import settings
 from moonmind.utils.logging import SecretRedactor
@@ -18,6 +19,10 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueService,
     AgentQueueValidationError,
     WorkerAuthPolicy,
+)
+from moonmind.workflows.agent_queue.task_contract import (
+    CanonicalTaskPayload,
+    TaskContractError,
 )
 from moonmind.workflows.task_proposals.models import (
     TaskProposal,
@@ -348,8 +353,68 @@ class TaskProposalService:
         normalized_payload["task"] = task
         return normalized_payload
 
+    @staticmethod
+    def _proposal_has_explicit_skill(task: Mapping[str, Any]) -> bool:
+        skill = task.get("skill")
+        if not isinstance(skill, Mapping):
+            return False
+        skill_id = str(skill.get("id") or "").strip().lower()
+        return bool(skill_id and skill_id != "auto")
+
+    def _normalize_proposal_task_payload(
+        self, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], str]:
+        """Validate proposal payload shape without applying runtime defaults."""
+
+        payload_for_validation = dict(payload)
+        task_node = payload_for_validation.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        if not task:
+            task = {
+                "instructions": (
+                    self._clean_str(
+                        payload_for_validation.get("instructions")
+                        or payload_for_validation.get("instruction")
+                    )
+                    or "Queue job"
+                ),
+                "skill": {"id": "auto", "args": {}},
+                "runtime": {"mode": None, "model": None, "effort": None},
+                "git": {"startingBranch": None, "newBranch": None},
+                "publish": {"mode": "pr"},
+            }
+        elif (
+            not self._clean_str(task.get("instructions"))
+            and not self._proposal_has_explicit_skill(task)
+        ):
+            task["instructions"] = (
+                self._clean_str(
+                    payload_for_validation.get("instructions")
+                    or payload_for_validation.get("instruction")
+                )
+                or "Queue job"
+            )
+        payload_for_validation["task"] = task
+
+        try:
+            model = CanonicalTaskPayload.model_validate(payload_for_validation)
+        except (ValidationError, TaskContractError) as exc:
+            raise TaskProposalValidationError(str(exc)) from exc
+        normalized_payload = model.model_dump(by_alias=True, exclude_none=False)
+        normalized_payload = self._enforce_proposal_pr_publish_mode(normalized_payload)
+
+        repository = self._clean_str(normalized_payload.get("repository"))
+        if not repository:
+            raise TaskProposalValidationError(
+                "taskCreateRequest.payload.repository is required"
+            )
+        return normalized_payload, repository
+
     def _prepare_task_create_request(
-        self, request: dict[str, Any]
+        self,
+        request: dict[str, Any],
+        *,
+        apply_runtime_defaults: bool,
     ) -> tuple[dict[str, Any], str]:
         if not isinstance(request, dict):
             raise TaskProposalValidationError("taskCreateRequest must be an object")
@@ -384,16 +449,24 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 "taskCreateRequest.payload must be an object"
             )
-        try:
-            normalized_payload = self._queue_service.normalize_task_job_payload(payload)
-        except AgentQueueValidationError as exc:
-            raise TaskProposalValidationError(str(exc)) from exc
-        normalized_payload = self._enforce_proposal_pr_publish_mode(normalized_payload)
-
-        repository = self._clean_str(normalized_payload.get("repository"))
-        if not repository:
-            raise TaskProposalValidationError(
-                "taskCreateRequest.payload.repository is required"
+        if apply_runtime_defaults:
+            try:
+                normalized_payload = self._queue_service.normalize_task_job_payload(
+                    payload
+                )
+            except AgentQueueValidationError as exc:
+                raise TaskProposalValidationError(str(exc)) from exc
+            normalized_payload = self._enforce_proposal_pr_publish_mode(
+                normalized_payload
+            )
+            repository = self._clean_str(normalized_payload.get("repository"))
+            if not repository:
+                raise TaskProposalValidationError(
+                    "taskCreateRequest.payload.repository is required"
+                )
+        else:
+            normalized_payload, repository = self._normalize_proposal_task_payload(
+                payload
             )
 
         envelope: dict[str, Any] = {
@@ -533,7 +606,10 @@ class TaskProposalService:
         )
         priority_override_reason: str | None = None
 
-        envelope, repository = self._prepare_task_create_request(task_create_request)
+        envelope, repository = self._prepare_task_create_request(
+            task_create_request,
+            apply_runtime_defaults=False,
+        )
         scrubbed_request = self._scrub_json(envelope)
         if self._is_moonmind_repository(repository):
             normalized_category, normalized_tags, cleaned_title = (
@@ -657,7 +733,8 @@ class TaskProposalService:
 
         if task_create_request_override:
             override_envelope, _ = self._prepare_task_create_request(
-                task_create_request_override
+                task_create_request_override,
+                apply_runtime_defaults=True,
             )
             request = override_envelope
         else:

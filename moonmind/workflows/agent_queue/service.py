@@ -24,6 +24,11 @@ from moonmind.workflows.agent_queue.job_types import (
     MANIFEST_JOB_TYPE,
     SUPPORTED_QUEUE_JOB_TYPES,
 )
+from moonmind.workflows.agent_queue.runtime_defaults import (
+    DEFAULT_REPOSITORY,
+    resolve_default_task_runtime,
+    resolve_runtime_defaults,
+)
 from moonmind.workflows.agent_queue.manifest_contract import (
     ManifestContractError,
     normalize_manifest_job_payload,
@@ -46,10 +51,6 @@ from moonmind.workflows.tasks import compile_task_payload_templates
 
 logger = logging.getLogger(__name__)
 _TELEMETRY_EVENT_FETCH_LIMIT = 100000
-_DEFAULT_TASK_RUNTIME = "codex"
-_DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
-_DEFAULT_CODEX_EFFORT = "high"
-_DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ATTACHMENT_NAMESPACE = "inputs/"
 _ATTACHMENT_FILENAME_MAX_LENGTH = 120
@@ -365,17 +366,14 @@ class AgentQueueService:
         """Fill missing canonical task payload fields from configured defaults."""
 
         enriched = dict(payload)
-        default_runtime = (
-            self._clean_optional_str(settings.spec_workflow.default_task_runtime)
-            or _DEFAULT_TASK_RUNTIME
-        ).lower()
+        default_runtime = resolve_default_task_runtime(settings.spec_workflow)
         repository = self._clean_optional_str(
             enriched.get("repository") or enriched.get("repo")
         )
         if repository is None:
             repository = (
                 self._clean_optional_str(settings.spec_workflow.github_repository)
-                or _DEFAULT_REPOSITORY
+                or DEFAULT_REPOSITORY
             )
         self._validate_repository_reference(repository)
         enriched["repository"] = repository
@@ -403,17 +401,14 @@ class AgentQueueService:
             )
         enriched["targetRuntime"] = runtime_mode
 
-        if runtime_mode == "codex":
-            if self._clean_optional_str(runtime.get("model")) is None:
-                runtime["model"] = (
-                    self._clean_optional_str(settings.spec_workflow.codex_model)
-                    or _DEFAULT_CODEX_MODEL
-                )
-            if self._clean_optional_str(runtime.get("effort")) is None:
-                runtime["effort"] = (
-                    self._clean_optional_str(settings.spec_workflow.codex_effort)
-                    or _DEFAULT_CODEX_EFFORT
-                )
+        default_model, default_effort = resolve_runtime_defaults(
+            runtime_mode,
+            spec_workflow_settings=settings.spec_workflow,
+        )
+        if self._clean_optional_str(runtime.get("model")) is None and default_model:
+            runtime["model"] = default_model
+        if self._clean_optional_str(runtime.get("effort")) is None and default_effort:
+            runtime["effort"] = default_effort
 
         task["runtime"] = runtime
         enriched["task"] = task

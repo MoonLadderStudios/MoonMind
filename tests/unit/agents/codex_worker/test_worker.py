@@ -6290,6 +6290,37 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
     assert jules_effort == "low"
 
 
+async def test_build_proposal_task_request_template_defers_runtime_defaults(
+    tmp_path: Path,
+) -> None:
+    """Proposal templates should leave runtime unset until promotion."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:5000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    queue = FakeQueueClient(jobs=[])
+    handler = FakeHandler(
+        WorkerExecutionResult(succeeded=True, summary="unused", error_message=None)
+    )
+    worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
+
+    template = worker._build_proposal_task_request_template(
+        {"repository": "Moon/Repo", "task": {}}
+    )
+
+    assert "targetRuntime" not in template["payload"]
+    assert template["payload"]["task"]["runtime"] == {
+        "mode": None,
+        "model": None,
+        "effort": None,
+    }
+
+
 async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
