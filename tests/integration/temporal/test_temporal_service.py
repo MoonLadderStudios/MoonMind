@@ -28,7 +28,17 @@ def mock_temporal_client_adapter(monkeypatch):
             workflow_id=workflow_id, run_id=str(uuid.uuid4())
         )
 
+    async def mock_do_nothing(*args, **kwargs):
+        pass
+
+    async def mock_describe_workflow(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(TemporalClientAdapter, "start_workflow", mock_start_workflow)
+    monkeypatch.setattr(TemporalClientAdapter, "update_workflow", mock_do_nothing)
+    monkeypatch.setattr(TemporalClientAdapter, "signal_workflow", mock_do_nothing)
+    monkeypatch.setattr(TemporalClientAdapter, "cancel_workflow", mock_do_nothing)
+    monkeypatch.setattr(TemporalClientAdapter, "describe_workflow", mock_describe_workflow)
 
 
 from api_service.db.models import (
@@ -111,7 +121,7 @@ async def test_create_execution_returns_repair_pending_fallback_when_projection_
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
 
-        async def fail_projection_sync(source):
+        async def fail_projection_sync(source, **kwargs):
             raise RuntimeError(f"projection write failed for {source.workflow_id}")
 
         monkeypatch.setattr(
@@ -1205,7 +1215,7 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
         )
         previous_sync_at = created.last_synced_at
 
-        async def fail_projection_sync(source):
+        async def fail_projection_sync(source, **kwargs):
             raise RuntimeError(f"projection write failed for {source.workflow_id}")
 
         monkeypatch.setattr(

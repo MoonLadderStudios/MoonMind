@@ -110,6 +110,36 @@ class TemporalClientAdapter:
                 run_id=err.run_id,
             )
 
+    async def get_workflow_handle(self, workflow_id: str) -> Any:
+        """Get a handle to an existing workflow execution."""
+        client = await self.get_client()
+        return client.get_workflow_handle(workflow_id)
+
+    async def cancel_workflow(self, workflow_id: str) -> None:
+        """Cancel an existing workflow execution."""
+        handle = await self.get_workflow_handle(workflow_id)
+        await handle.cancel()
+
+    async def signal_workflow(self, workflow_id: str, signal_name: str, arg: Any = None) -> None:
+        """Send a signal to an existing workflow execution."""
+        handle = await self.get_workflow_handle(workflow_id)
+        if arg is not None:
+            await handle.signal(signal_name, arg)
+        else:
+            await handle.signal(signal_name)
+
+    async def update_workflow(self, workflow_id: str, update_name: str, arg: Any = None) -> Any:
+        """Execute an update on an existing workflow execution."""
+        handle = await self.get_workflow_handle(workflow_id)
+        if arg is not None:
+            return await handle.execute_update(update_name, arg)
+        return await handle.execute_update(update_name)
+
+    async def describe_workflow(self, workflow_id: str) -> WorkflowExecutionDescription:
+        """Describe an existing workflow execution."""
+        handle = await self.get_workflow_handle(workflow_id)
+        return await handle.describe()
+
 
 class TemporalExecutionCreatorProtocol(Protocol):
     """Protocol for the execution service used by manifest child scheduling."""
