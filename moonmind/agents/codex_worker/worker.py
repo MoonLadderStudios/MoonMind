@@ -10787,6 +10787,7 @@ class CodexWorker:
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=str(cwd),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
