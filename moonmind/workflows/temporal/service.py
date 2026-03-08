@@ -316,12 +316,16 @@ class TemporalExecutionService:
                 raise exc
             return await self._sync_projection_best_effort(existing)
         try:
+            temporal_search_attributes = {
+                k: [v] if not isinstance(v, list) else v
+                for k, v in search_attributes.items()
+            }
             start_result = await self._client_adapter.start_workflow(
                 workflow_type=workflow_type_enum.value,
                 workflow_id=workflow_id,
                 input_args=params,
                 memo=memo,
-                search_attributes=search_attributes,
+                search_attributes=temporal_search_attributes,
             )
         except Exception:
             await self._session.delete(record)
@@ -438,6 +442,35 @@ class TemporalExecutionService:
             canonical_workflow_id,
         )
         if record is None:
+            if settings.temporal.temporal_authoritative_read_enabled:
+                try:
+                    from moonmind.workflows.temporal.client import (
+                        fetch_workflow_execution,
+                        get_temporal_client,
+                    )
+
+                    temporal_client = await get_temporal_client(
+                        settings.temporal.address, settings.temporal.namespace
+                    )
+                    desc = await fetch_workflow_execution(
+                        temporal_client,
+                        canonical_workflow_id,
+                    )
+                    projection = await self._upsert_projection_from_temporal(
+                        desc,
+                        synced_at=None,
+                        source=None,
+                    )
+                    await self._session.commit()
+                    await self._session.refresh(projection)
+                    return projection
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to rehydrate execution %s from Temporal: %s",
+                        canonical_workflow_id,
+                        exc,
+                        exc_info=True,
+                    )
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
@@ -2246,6 +2279,7 @@ class TemporalExecutionService:
             search_attributes = {}
 
         artifact_refs = memo.get("artifact_refs", [])
+
         return {
             "workflow_id": handle_description.id,
             "run_id": handle_description.run_id,

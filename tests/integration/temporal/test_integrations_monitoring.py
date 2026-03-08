@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, MoonMindWorkflowState
+from moonmind.config import settings
 from moonmind.schemas.jules_models import normalize_jules_status
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
@@ -34,8 +35,9 @@ async def _db(tmp_path: Path):
 
 
 async def test_callback_first_completion_uses_single_terminal_path(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -90,8 +92,9 @@ async def test_callback_first_completion_uses_single_terminal_path(
 
 
 async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -159,8 +162,9 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
 
 
 async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)
@@ -251,8 +255,9 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
 
 
 async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)
