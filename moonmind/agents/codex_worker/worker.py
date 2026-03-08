@@ -9559,12 +9559,6 @@ class CodexWorker:
             )
 
         patch_path = prepared.artifacts_dir / "changes.patch"
-        await self._run_stage_command(
-            ["git", "add", "-A"],
-            cwd=prepared.repo_dir,
-            log_path=prepared.execute_log_path,
-            check=False,
-        )
         patch_result = await self._run_stage_command(
             ["git", "diff", "HEAD"],
             cwd=prepared.repo_dir,
