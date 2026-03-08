@@ -10102,7 +10102,7 @@ class CodexWorker:
 
         if model:
             command.extend(["--model", model])
-        if effort:
+        if effort and runtime_mode != "gemini":
             command.extend(["--effort", effort])
         return command
 

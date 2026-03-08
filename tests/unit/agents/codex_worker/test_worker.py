@@ -8571,7 +8571,7 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     assert command[allowed_tools_index + 1] == (
         "activate_skill,run_shell_command,replace,write_file"
     )
-    assert command[-4:] == ["--model", "gemini-2.5-pro", "--effort", "high"]
+    assert command[-2:] == ["--model", "gemini-2.5-pro"]
 
 
 async def test_resolve_task_auth_context_includes_git_identity_without_token(
