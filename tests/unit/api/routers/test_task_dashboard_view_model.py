@@ -195,7 +195,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["taskSourceResolver"] == "/api/tasks/{taskId}/source"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -355,5 +355,6 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     assert config["system"]["supportedTaskRuntimes"] == [
         "codex",
         "gemini",
+        "claude",
         "jules",
     ]
