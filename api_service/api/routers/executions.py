@@ -717,7 +717,10 @@ async def list_executions(
             from api_service.core.sync import map_temporal_state_to_projection
             from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-            if "_shared_client_adapter" not in globals() or _shared_client_adapter is None:
+            if (
+                "_shared_client_adapter" not in globals()
+                or _shared_client_adapter is None
+            ):
                 _shared_client_adapter = TemporalClientAdapter()
             client = await _shared_client_adapter.get_client()
 
@@ -748,7 +751,9 @@ async def list_executions(
                 record_obj = SimpleNamespace(**payload)
                 if not hasattr(record_obj, "updated_at"):
                     record_obj.updated_at = datetime.now(UTC)
-                items.append(_serialize_execution(record_obj, include_artifact_refs=False))
+                items.append(
+                    _serialize_execution(record_obj, include_artifact_refs=False)
+                )
                 if len(items) >= page_size:
                     break
 
@@ -761,10 +766,15 @@ async def list_executions(
                 refreshed_at=datetime.now(UTC),
             )
         except Exception as exc:
-            logger.warning("Failed to list Temporal executions directly: %s", exc, exc_info=True)
+            logger.warning(
+                "Failed to list Temporal executions directly: %s", exc, exc_info=True
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "temporal_unavailable", "message": "Temporal service unavailable."},
+                detail={
+                    "code": "temporal_unavailable",
+                    "message": "Temporal service unavailable.",
+                },
             ) from exc
 
     try:
@@ -858,9 +868,15 @@ async def describe_execution(
     )
 
     try:
-        if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
+        if (
+            settings.temporal.temporal_authoritative_read_enabled
+            or source == "temporal"
+        ):
             global _shared_client_adapter
-            if "_shared_client_adapter" not in globals() or _shared_client_adapter is None:
+            if (
+                "_shared_client_adapter" not in globals()
+                or _shared_client_adapter is None
+            ):
                 _shared_client_adapter = TemporalClientAdapter()
             client = await _shared_client_adapter.get_client()
             desc = await fetch_workflow_execution(client, canonical_workflow_id)
@@ -870,7 +886,10 @@ async def describe_execution(
         if source == "temporal":
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"code": "temporal_unavailable", "message": "Temporal service unavailable."},
+                detail={
+                    "code": "temporal_unavailable",
+                    "message": "Temporal service unavailable.",
+                },
             ) from exc
         logger.warning(
             "Failed to sync execution %s from Temporal: %s",

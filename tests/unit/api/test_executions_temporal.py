@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.executions import _get_service, router
 from api_service.auth_providers import get_current_user
-from moonmind.config.settings import settings
 
 
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> AsyncMock:
@@ -42,20 +41,26 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, AsyncMock]]:
 
 
 @pytest.mark.asyncio
-async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(client) -> None:
+async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
+    client,
+) -> None:
     test_client, service, user = client
-    
+
     import api_service.api.routers.executions as exec_module
+
     exec_module._shared_client_adapter = None
-    
-    with patch("moonmind.workflows.temporal.client.TemporalClientAdapter") as mock_adapter_cls:
+
+    with patch(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter"
+    ) as mock_adapter_cls:
         mock_adapter = mock_adapter_cls.return_value
         mock_client = AsyncMock()
         mock_adapter.get_client = AsyncMock(return_value=mock_client)
-        
+
         async def mock_list_workflows(query):
+            from datetime import UTC, datetime
             from types import SimpleNamespace
-            from datetime import datetime, UTC
+
             mock_wf = SimpleNamespace()
             mock_wf.id = "mm:wf-1"
             mock_wf.run_id = "run-1"
@@ -63,11 +68,14 @@ async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
             mock_wf.workflow_type = "MoonMind.Run"
             mock_wf.status = 1  # RUNNING
             mock_wf.memo = {"waiting_reason": "external_completion"}
-            mock_wf.search_attributes = {"mm_state": b'"awaiting_external"', "mm_entry": b'"run"'}
+            mock_wf.search_attributes = {
+                "mm_state": b'"awaiting_external"',
+                "mm_entry": b'"run"',
+            }
             mock_wf.start_time = datetime.now(UTC)
             mock_wf.close_time = None
             yield mock_wf
-            
+
         mock_client.list_workflows = mock_list_workflows
 
         response = test_client.get(
@@ -93,13 +101,18 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
     test_client, service, user = client
 
     import api_service.api.routers.executions as exec_module
+
     exec_module._shared_client_adapter = None
 
     # We patch fetch_workflow_execution and sync_execution_projection
     with (
-        patch("moonmind.workflows.temporal.client.fetch_workflow_execution") as mock_fetch, 
-        patch("api_service.core.sync.sync_execution_projection") as mock_sync, 
-        patch("moonmind.workflows.temporal.client.TemporalClientAdapter") as mock_adapter_cls
+        patch(
+            "moonmind.workflows.temporal.client.fetch_workflow_execution"
+        ) as mock_fetch,
+        patch("api_service.core.sync.sync_execution_projection") as mock_sync,
+        patch(
+            "moonmind.workflows.temporal.client.TemporalClientAdapter"
+        ) as mock_adapter_cls,
     ):
 
         mock_adapter = mock_adapter_cls.return_value
@@ -109,9 +122,11 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
         mock_desc = AsyncMock()
         mock_fetch.return_value = mock_desc
 
+        from datetime import UTC, datetime
         from types import SimpleNamespace
-        from datetime import datetime, UTC
+
         from api_service.db.models import MoonMindWorkflowState
+
         record = SimpleNamespace()
         record.workflow_id = "mm:wf-123"
         record.run_id = "run-1"
@@ -142,9 +157,11 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
 async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     test_client, service, user = client
 
+    from datetime import UTC, datetime
     from types import SimpleNamespace
-    from datetime import datetime, UTC
+
     from api_service.db.models import MoonMindWorkflowState
+
     record = SimpleNamespace()
     record.workflow_id = "mm:wf-123"
     record.run_id = "run-1"
@@ -164,7 +181,9 @@ async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     record.integration_state = None
     service.describe_execution.return_value = record
 
-    with patch("api_service.api.routers.executions._canonicalize_execution_identifier") as mock_canon:
+    with patch(
+        "api_service.api.routers.executions._canonicalize_execution_identifier"
+    ) as mock_canon:
         mock_canon.return_value = ("mm:wf-123", True)
         response = test_client.get("/api/executions/wf-123")
 
@@ -178,17 +197,20 @@ async def test_temporal_unavailability_returns_503(client) -> None:
     test_client, service, user = client
 
     import api_service.api.routers.executions as exec_module
+
     exec_module._shared_client_adapter = None
 
-    with patch("moonmind.workflows.temporal.client.TemporalClientAdapter") as mock_adapter_cls:
+    with patch(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter"
+    ) as mock_adapter_cls:
         mock_adapter = mock_adapter_cls.return_value
         mock_client = AsyncMock()
         mock_adapter.get_client = AsyncMock(return_value=mock_client)
-        
+
         async def mock_list_workflows(query):
             raise Exception("Connection failed")
             yield  # Ensure it's treated as an async generator
-            
+
         mock_client.list_workflows = mock_list_workflows
 
         response = test_client.get("/api/executions?source=temporal")

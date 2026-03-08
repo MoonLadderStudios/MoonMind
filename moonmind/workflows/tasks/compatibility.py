@@ -184,8 +184,10 @@ class TaskCompatibilityService:
                 raise RuntimeError(f"Temporal execution {task_id} disappeared.")
 
             from moonmind.config.settings import settings
+
             if settings.temporal.temporal_authoritative_read_enabled:
                 import logging
+
                 from api_service.core.sync import sync_execution_projection
                 from moonmind.workflows.temporal.client import (
                     TemporalClientAdapter,
@@ -395,9 +397,11 @@ class TaskCompatibilityService:
         total_count = int((await self._session.execute(count_stmt)).scalar_one())
 
         from moonmind.config.settings import settings
+
         if settings.temporal.temporal_authoritative_read_enabled and records:
             import asyncio
             import logging
+
             from api_service.core.sync import sync_execution_projection
             from moonmind.workflows.temporal.client import (
                 TemporalClientAdapter,
