@@ -154,7 +154,7 @@ class TestTemporalDashboardSettings:
     def test_env_overrides(self, monkeypatch):
         monkeypatch.setenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", "false")
         monkeypatch.setenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", "false")
-        
+
         settings = TemporalDashboardSettings(_env_file=None)
         assert settings.actions_enabled is False
         assert settings.submit_enabled is False

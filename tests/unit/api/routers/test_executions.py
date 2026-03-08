@@ -648,25 +648,19 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
     with TestClient(app) as test_client:
         # Test update endpoint
         update_response = test_client.post(
-            "/api/executions/mm:wf-1/update",
-            json={"updateName": "RequestRerun"}
+            "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
         )
         assert update_response.status_code == 403
         assert update_response.json()["detail"]["code"] == "actions_disabled"
 
         # Test signal endpoint
         signal_response = test_client.post(
-            "/api/executions/mm:wf-1/signal",
-            json={"signalName": "pause"}
+            "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
         )
         assert signal_response.status_code == 403
         assert signal_response.json()["detail"]["code"] == "actions_disabled"
 
         # Test cancel endpoint
-        cancel_response = test_client.post(
-            "/api/executions/mm:wf-1/cancel",
-            json={}
-        )
+        cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
         assert cancel_response.status_code == 403
         assert cancel_response.json()["detail"]["code"] == "actions_disabled"
-
