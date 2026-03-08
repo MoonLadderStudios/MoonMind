@@ -1660,6 +1660,7 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         limit: int = 50,
     ) -> list[models.AgentJobArtifact]:
         """List attachment metadata for a job scoped to the requesting user."""
@@ -1669,6 +1670,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
         return artifacts
@@ -1694,12 +1696,14 @@ class AgentQueueService:
         job_id: UUID,
         attachment_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> ArtifactDownload:
         """Resolve an attachment download for an authorized user."""
 
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         download = await self._get_attachment_download(
             job_id=job_id, attachment_id=attachment_id
@@ -2730,12 +2734,16 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> models.AgentJob:
         """Require actor user ownership for live-session and control operations."""
 
+        job = await self._repository.require_job(task_run_id)
+        if actor_is_superuser:
+            return job
+
         if actor_user_id is None:
             raise AgentQueueJobAuthorizationError("authenticated user id is required")
-        job = await self._repository.require_job(task_run_id)
         if actor_user_id in {job.created_by_user_id, job.requested_by_user_id}:
             return job
         raise AgentQueueJobAuthorizationError(
