@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
-from temporalio import exceptions, workflow
+from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
