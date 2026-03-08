@@ -682,10 +682,12 @@ async def list_executions(
     integration: Optional[str] = Query(None, alias="integration"),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
+    source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionListResponse:
+    global _shared_client_adapter
     if _is_execution_admin(user):
         effective_owner_type = owner_type
         effective_owner = owner_id
@@ -710,6 +712,61 @@ async def list_executions(
         effective_owner = _owner_id(user)
         effective_owner_type = "user" if normalized_owner_type == "user" else None
 
+    if source == "temporal":
+        try:
+            from api_service.core.sync import map_temporal_state_to_projection
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+            if "_shared_client_adapter" not in globals() or _shared_client_adapter is None:
+                _shared_client_adapter = TemporalClientAdapter()
+            client = await _shared_client_adapter.get_client()
+
+            query_parts = []
+            if workflow_type:
+                query_parts.append(f'WorkflowType="{workflow_type}"')
+            if state:
+                query_parts.append(f'mm_state="{state}"')
+            if entry:
+                query_parts.append(f'mm_entry="{entry}"')
+            if effective_owner_type:
+                query_parts.append(f'mm_owner_type="{effective_owner_type}"')
+            if effective_owner:
+                query_parts.append(f'mm_owner_id="{effective_owner}"')
+            if repo:
+                query_parts.append(f'mm_repo="{repo}"')
+            if integration:
+                query_parts.append(f'mm_integration="{integration}"')
+
+            query_str = " AND ".join(query_parts) if query_parts else ""
+
+            items = []
+            async for wf in client.list_workflows(query=query_str):
+                payload = map_temporal_state_to_projection(wf)
+                # We need a record-like object for serialization
+                from types import SimpleNamespace
+
+                record_obj = SimpleNamespace(**payload)
+                if not hasattr(record_obj, "updated_at"):
+                    record_obj.updated_at = datetime.now(UTC)
+                items.append(_serialize_execution(record_obj, include_artifact_refs=False))
+                if len(items) >= page_size:
+                    break
+
+            return ExecutionListResponse(
+                items=items,
+                next_page_token=None,
+                count=len(items),
+                count_mode="exact",
+                degraded_count=False,
+                refreshed_at=datetime.now(UTC),
+            )
+        except Exception as exc:
+            logger.warning("Failed to list Temporal executions directly: %s", exc, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "temporal_unavailable", "message": "Temporal service unavailable."},
+            ) from exc
+
     try:
         result = await service.list_executions(
             workflow_type=workflow_type,
@@ -733,7 +790,6 @@ async def list_executions(
 
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             try:
-                global _shared_client_adapter
                 if "_shared_client_adapter" not in globals():
                     _shared_client_adapter = TemporalClientAdapter()
                 client = await _shared_client_adapter.get_client()
@@ -788,6 +844,7 @@ async def list_executions(
 async def describe_execution(
     workflow_id: str,
     response: Response,
+    source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
@@ -801,15 +858,20 @@ async def describe_execution(
     )
 
     try:
-        if settings.temporal.temporal_authoritative_read_enabled:
+        if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
             global _shared_client_adapter
-            if "_shared_client_adapter" not in globals():
+            if "_shared_client_adapter" not in globals() or _shared_client_adapter is None:
                 _shared_client_adapter = TemporalClientAdapter()
             client = await _shared_client_adapter.get_client()
             desc = await fetch_workflow_execution(client, canonical_workflow_id)
             await sync_execution_projection(session, desc)
             await session.commit()
     except Exception as exc:
+        if source == "temporal":
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "temporal_unavailable", "message": "Temporal service unavailable."},
+            ) from exc
         logger.warning(
             "Failed to sync execution %s from Temporal: %s",
             canonical_workflow_id,

@@ -59,7 +59,8 @@ class TaskSourceMappingService:
         source_hint: TaskSource | None = None,
         user: db_models.User | None = None,
     ) -> ResolvedTaskSource:
-        mapping = await self._session.get(db_models.TaskSourceMapping, task_id)
+        canonical_task_id = db_models.TemporalExecutionRecord.canonicalize_identifier(task_id)
+        mapping = await self._session.get(db_models.TaskSourceMapping, canonical_task_id)
         if mapping is not None:
             if source_hint and mapping.source != source_hint:
                 raise TaskResolutionNotFoundError(
@@ -67,7 +68,7 @@ class TaskSourceMappingService:
                 )
             return self._serialize_mapping(mapping)
 
-        matches = await self._probe_backing_records(task_id=task_id, user=user)
+        matches = await self._probe_backing_records(task_id=canonical_task_id, user=user)
         if source_hint is not None:
             candidate = matches.get(source_hint)
             if candidate is None:

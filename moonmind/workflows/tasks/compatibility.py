@@ -182,6 +182,33 @@ class TaskCompatibilityService:
             )
             if record is None:
                 raise RuntimeError(f"Temporal execution {task_id} disappeared.")
+
+            from moonmind.config.settings import settings
+            if settings.temporal.temporal_authoritative_read_enabled:
+                import logging
+                from api_service.core.sync import sync_execution_projection
+                from moonmind.workflows.temporal.client import (
+                    TemporalClientAdapter,
+                    fetch_workflow_execution,
+                )
+
+                logger = logging.getLogger(__name__)
+                try:
+                    global _shared_client_adapter
+                    if "_shared_client_adapter" not in globals():
+                        _shared_client_adapter = TemporalClientAdapter()
+                    client = await _shared_client_adapter.get_client()
+                    desc = await fetch_workflow_execution(client, record.workflow_id)
+                    record = await sync_execution_projection(self._session, desc)
+                    await self._session.commit()
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sync execution %s from Temporal: %s",
+                        record.workflow_id,
+                        exc,
+                        exc_info=True,
+                    )
+
             return self._build_temporal_detail(record, user)
         if resolved.source == "queue":
             job = await self._session.get(
@@ -366,6 +393,44 @@ class TaskCompatibilityService:
         ).limit(limit)
         records = list((await self._session.execute(stmt)).scalars().all())
         total_count = int((await self._session.execute(count_stmt)).scalar_one())
+
+        from moonmind.config.settings import settings
+        if settings.temporal.temporal_authoritative_read_enabled and records:
+            import asyncio
+            import logging
+            from api_service.core.sync import sync_execution_projection
+            from moonmind.workflows.temporal.client import (
+                TemporalClientAdapter,
+                fetch_workflow_execution,
+            )
+
+            logger = logging.getLogger(__name__)
+            try:
+                global _shared_client_adapter
+                if "_shared_client_adapter" not in globals():
+                    _shared_client_adapter = TemporalClientAdapter()
+                client = await _shared_client_adapter.get_client()
+
+                async def fetch_and_sync(item):
+                    try:
+                        desc = await fetch_workflow_execution(client, item.workflow_id)
+                        return await sync_execution_projection(self._session, desc)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to sync execution %s from Temporal: %s",
+                            item.workflow_id,
+                            exc,
+                        )
+                        return item
+
+                tasks = [fetch_and_sync(item) for item in records]
+                records = await asyncio.gather(*tasks)
+                await self._session.commit()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to sync executions from Temporal: %s", exc, exc_info=True
+                )
+
         normalized: list[TaskCompatibilityRow] = []
         for record in records:
             row = self._build_temporal_row(record)

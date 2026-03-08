@@ -103,9 +103,23 @@ def map_temporal_state_to_projection(
     except Exception:
         logger.exception("Failed to decode Temporal search attributes for %s", desc.id)
 
+    if desc.status == WorkflowExecutionStatus.RUNNING:
+        mm_state = search_attributes.get("mm_state")
+        if isinstance(mm_state, list) and mm_state:
+            mm_state = mm_state[0]
+        if mm_state:
+            try:
+                state_value = MoonMindWorkflowState(str(mm_state))
+            except ValueError:
+                pass
+
     artifact_refs = memo.get("artifact_refs", [])
     if not isinstance(artifact_refs, list):
         artifact_refs = []
+
+    waiting_reason = memo.get("waiting_reason")
+    if not waiting_reason and state_value == MoonMindWorkflowState.AWAITING_EXTERNAL:
+        waiting_reason = "external_completion"
 
     return {
         "workflow_id": desc.id,
@@ -127,8 +141,8 @@ def map_temporal_state_to_projection(
         "integration_state": memo.get("integration_state"),
         "pending_parameters_patch": memo.get("pending_parameters_patch"),
         "paused": bool(memo.get("paused", False)),
-        "awaiting_external": bool(memo.get("awaiting_external", False)),
-        "waiting_reason": memo.get("waiting_reason"),
+        "awaiting_external": state_value == MoonMindWorkflowState.AWAITING_EXTERNAL,
+        "waiting_reason": waiting_reason,
         "attention_required": bool(memo.get("attention_required", False)),
         "step_count": int(memo.get("step_count", 0) or 0),
         "wait_cycle_count": int(memo.get("wait_cycle_count", 0) or 0),
