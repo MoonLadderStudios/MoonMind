@@ -201,3 +201,45 @@ async def fetch_and_sync_execution(
     
     desc = await fetch_workflow_execution(client, workflow_id)
     return await sync_execution_projection(session, desc)
+
+
+async def sync_temporal_executions_safely(
+    session: AsyncSession,
+    items: list[Any],
+    client: Any,
+) -> list[Any]:
+    import asyncio
+    
+    async def fetch_and_sync(item):
+        try:
+            return await fetch_and_sync_execution(session, item.workflow_id, client)
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync execution %s from Temporal: %s",
+                item.workflow_id,
+                exc,
+            )
+            return item
+
+    tasks = [fetch_and_sync(item) for item in items]
+    updated_items = list(await asyncio.gather(*tasks))
+    await session.commit()
+    return updated_items
+
+async def sync_single_temporal_execution_safely(
+    session: AsyncSession,
+    workflow_id: str,
+    client: Any,
+) -> Any:
+    try:
+        record = await fetch_and_sync_execution(session, workflow_id, client)
+        await session.commit()
+        return record
+    except Exception as exc:
+        logger.warning(
+            "Failed to sync execution %s from Temporal: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return None

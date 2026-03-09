@@ -192,20 +192,14 @@ class TaskCompatibilityService:
                 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
                 logger = logging.getLogger(__name__)
-                try:
-                    global _shared_client_adapter
-                    if "_shared_client_adapter" not in globals():
-                        _shared_client_adapter = TemporalClientAdapter()
-                    client = await _shared_client_adapter.get_client()
-                    record = await fetch_and_sync_execution(self._session, record.workflow_id, client)
-                    await self._session.commit()
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to sync execution %s from Temporal: %s",
-                        record.workflow_id,
-                        exc,
-                        exc_info=True,
-                    )
+                global _shared_client_adapter
+                if "_shared_client_adapter" not in globals():
+                    _shared_client_adapter = TemporalClientAdapter()
+                client = await _shared_client_adapter.get_client()
+                from api_service.core.sync import sync_single_temporal_execution_safely
+                synced_record = await sync_single_temporal_execution_safely(self._session, record.workflow_id, client)
+                if synced_record:
+                    record = synced_record
 
             return self._build_temporal_detail(record, user)
         if resolved.source == "queue":
@@ -402,26 +396,13 @@ class TaskCompatibilityService:
             from moonmind.workflows.temporal.client import TemporalClientAdapter
 
             logger = logging.getLogger(__name__)
+            global _shared_client_adapter
+            if "_shared_client_adapter" not in globals():
+                _shared_client_adapter = TemporalClientAdapter()
+            client = await _shared_client_adapter.get_client()
+            from api_service.core.sync import sync_temporal_executions_safely
             try:
-                global _shared_client_adapter
-                if "_shared_client_adapter" not in globals():
-                    _shared_client_adapter = TemporalClientAdapter()
-                client = await _shared_client_adapter.get_client()
-
-                async def fetch_and_sync(item):
-                    try:
-                        return await fetch_and_sync_execution(self._session, item.workflow_id, client)
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to sync execution %s from Temporal: %s",
-                            item.workflow_id,
-                            exc,
-                        )
-                        return item
-
-                tasks = [fetch_and_sync(item) for item in records]
-                records = await asyncio.gather(*tasks)
-                await self._session.commit()
+                records = await sync_temporal_executions_safely(self._session, records, client)
             except Exception as exc:
                 logger.warning(
                     "Failed to sync executions from Temporal: %s", exc, exc_info=True

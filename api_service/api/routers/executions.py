@@ -806,24 +806,10 @@ async def list_executions(
         from api_service.core.sync import fetch_and_sync_execution
 
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
+            from api_service.core.sync import sync_temporal_executions_safely
             try:
                 client = temporal_client
-
-                async def fetch_and_sync(item):
-                    try:
-                        return await fetch_and_sync_execution(session, item.workflow_id, client)
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to sync execution %s from Temporal: %s",
-                            item.workflow_id,
-                            exc,
-                        )
-                        return item
-
-                tasks = [fetch_and_sync(item) for item in result.items]
-                updated_items = await asyncio.gather(*tasks)
-                await session.commit()
-                result.items = updated_items
+                result.items = await sync_temporal_executions_safely(session, result.items, client)
             except Exception as exc:
                 logger.warning(
                     "Failed to sync executions from Temporal: %s", exc, exc_info=True
