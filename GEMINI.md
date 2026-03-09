@@ -33,4 +33,6 @@ Node.js 20+ (for CLI runtime), Python 3.11 (existing service): Follow standard c
 - 006-add-gemini-cli: Added Node.js 20+ (for CLI runtime), Python 3.11 (existing service) + Gemini CLI npm package (`@google` scope, `gemini-cli` name)
 
 <!-- MANUAL ADDITIONS START -->
+## Tool Execution Guardrails
+- **Strict Verification of Tool Results**: Never hallucinate success or fabricate data when a tool execution fails. If a tool (e.g., `read_file`, `run_shell_command`) returns an error such as 'File not found', you must correctly identify the failure and take appropriate remediating action instead of silently bypassing it.
 <!-- MANUAL ADDITIONS END -->
