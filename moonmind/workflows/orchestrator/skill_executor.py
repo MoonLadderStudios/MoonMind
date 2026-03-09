@@ -365,6 +365,7 @@ def _runtime_import_probe(
             capture_output=True,
             check=False,
             timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return (
@@ -492,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         text=True,
         capture_output=True,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
     if process.stdout:
         print(process.stdout, end="")

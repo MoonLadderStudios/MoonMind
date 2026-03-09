@@ -796,6 +796,7 @@ class TemporalSandboxActivities:
             env=merged_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         started = time.monotonic()
         stdout_buffer = bytearray()
