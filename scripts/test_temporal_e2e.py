@@ -67,7 +67,9 @@ def main():
     run_id = exec_data.get("runId")
     if run_id:
         namespace = os.getenv("TEMPORAL_NAMESPACE", "moonmind")
-        resp = requests.get(f"{API_URL}/api/executions/{namespace}/{workflow_id}/{run_id}/artifacts")
+        resp = requests.get(
+            f"{API_URL}/api/executions/{namespace}/{workflow_id}/{run_id}/artifacts"
+        )
         if resp.status_code == 200:
             artifacts = resp.json().get("artifacts", [])
             print(f"Found {len(artifacts)} artifacts.")
@@ -85,7 +87,9 @@ def main():
             f"Task source resolution: {source_data.get('sourceLabel')} -> {source_data.get('detailPath')}"
         )
     else:
-        print("Source resolution endpoint not found or workflow not available in dashboard yet.")
+        print(
+            "Source resolution endpoint not found or workflow not available in dashboard yet."
+        )
         sys.exit(1)
 
     print("\\n5. Cleaning up (cancelling execution if still running)...")
