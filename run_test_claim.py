@@ -1,9 +1,14 @@
 import asyncio
 from pathlib import Path
 from uuid import uuid4
-from tests.integration.workflows.agent_queue.test_service_update import queue_db, _create_task_job
+
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
+from tests.integration.workflows.agent_queue.test_service_update import (
+    _create_task_job,
+    queue_db,
+)
+
 
 async def main():
     async with queue_db(Path("/tmp")) as session_maker:
@@ -21,6 +26,7 @@ async def main():
             print("Claim result:", res.job.id if res.job else "None")
             job_after = await service.get_job(job.id)
             print("Job after claim:", job_after.status)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
