@@ -34,5 +34,5 @@ Node.js 20+ (for CLI runtime), Python 3.11 (existing service): Follow standard c
 
 <!-- MANUAL ADDITIONS START -->
 ## Agent Guidelines
-- **Heredocs in `run_shell_command`**: Explicitly forbid the use of bare heredocs (e.g. `<< 'EOF' > file.md`) in `run_shell_command`. You MUST use `cat << 'EOF' > file.md` or the `write_file` tool to prevent Bash parsing errors and subsequent artifact gaps.
+- Please refer to `AGENTS.md` for common agent guidelines and tool usage directives.
 <!-- MANUAL ADDITIONS END -->
