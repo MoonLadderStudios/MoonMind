@@ -146,6 +146,10 @@ class TemporalSettings(BaseSettings):
         "mm.activity.integrations",
         env="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
     )
+    temporal_authoritative_read_enabled: bool = Field(
+        False,
+        env="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
+    )
     workflow_worker_concurrency: int | None = Field(
         8,
         env="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
