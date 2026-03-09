@@ -113,6 +113,7 @@ def gemini_generate(prompt: str, model: str | None = None) -> dict[str, Any]:
             text=True,
             timeout=300,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
         logger.info("Gemini CLI execution successful")
 

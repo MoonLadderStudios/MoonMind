@@ -1061,11 +1061,20 @@ async def cancel_execution(
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
-    record = await service.cancel_execution(
-        workflow_id=workflow_id,
-        reason=request.reason,
-        graceful=request.graceful,
-    )
+    try:
+        record = await service.cancel_execution(
+            workflow_id=workflow_id,
+            reason=request.reason,
+            graceful=request.graceful,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "cancel_rejected",
+                "message": str(exc),
+            },
+        ) from exc
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(

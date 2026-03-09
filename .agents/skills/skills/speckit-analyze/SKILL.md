@@ -21,7 +21,7 @@ Identify inconsistencies, duplications, ambiguities, and underspecified items ac
 
 ## Operating Constraints
 
-**STRICTLY READ-ONLY**: Do **not** modify any files. Output a structured analysis report. Offer an optional remediation plan (user must explicitly approve before any follow-up edits are performed manually).
+**STRICTLY READ-ONLY FOR SPEC ARTIFACTS**: Do **not** modify any source or spec files. You MUST use the `write_file` tool to save your structured analysis report to `speckit_analyze_report.md`. If writing fails, report the error to the user. Offer an optional remediation plan (user must explicitly approve before any follow-up edits are performed manually).
 
 **Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this analysis scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside this skill.
 
@@ -129,7 +129,7 @@ Use this heuristic to prioritize findings:
 
 ### 6. Produce Compact Analysis Report
 
-Output a Markdown report (no file writes) with the following structure:
+Use the `write_file` tool to save a Markdown report to `speckit_analyze_report.md` with the following structure:
 
 ## Specification Analysis Report
 
@@ -171,7 +171,7 @@ Ask the user: "Would you like me to suggest concrete remediation edits for the t
 
 ## Outputs
 
-- Read-only analysis report in the response (no file writes)
+- Save the analysis report to `speckit_analyze_report.md` using the `write_file` tool
 
 ## Operating Principles
 
@@ -184,7 +184,7 @@ Ask the user: "Would you like me to suggest concrete remediation edits for the t
 
 ### Analysis Guidelines
 
-- **NEVER modify files** (this is read-only analysis)
+- **NEVER modify spec or source files** (analysis is read-only, but report MUST be saved to `speckit_analyze_report.md` using the `write_file` tool)
 - **NEVER hallucinate missing sections** (if absent, report them accurately)
 - **Prioritize constitution violations** (these are always CRITICAL)
 - **Use examples over exhaustive rules** (cite specific instances, not generic patterns)
