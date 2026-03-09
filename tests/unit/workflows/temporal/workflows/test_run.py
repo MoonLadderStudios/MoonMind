@@ -53,6 +53,8 @@ async def _register_test_search_attributes(
             search_attributes={
                 "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_state": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_entry": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
             },
         )
     )
@@ -141,7 +143,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
                 )
-                self.assertTrue(len(INTEGRATION_STATUS_CALLS) > 0)
+                self.assertGreater(len(INTEGRATION_STATUS_CALLS), 0)
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
