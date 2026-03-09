@@ -2754,11 +2754,13 @@ class AgentQueueService:
     ) -> models.AgentJob:
         """Require actor user ownership for live-session and control operations."""
 
-        job = await self._repository.require_job(task_run_id)
         if actor_is_superuser:
-            return job
+            return await self._repository.require_job(task_run_id)
+
         if actor_user_id is None:
             raise AgentQueueJobAuthorizationError("authenticated user id is required")
+
+        job = await self._repository.require_job(task_run_id)
         if actor_user_id in {job.created_by_user_id, job.requested_by_user_id}:
             return job
         raise AgentQueueJobAuthorizationError(

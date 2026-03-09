@@ -402,14 +402,9 @@ class ManifestsService:
             "link_type": "output.primary",
             "label": record.name,
         }
-        manifest_text = await manifest_activities.manifest_read(
-            principal=principal,
-            manifest_ref=manifest_artifact_ref,
-        )
         compile_result = await manifest_activities.manifest_compile(
             principal=principal,
             manifest_ref=manifest_artifact_ref,
-            manifest_payload=manifest_text,
             action=action,
             options=options,
             requested_by=execution.parameters["requestedBy"],
@@ -417,8 +412,18 @@ class ManifestsService:
             execution_ref=execution_ref,
         )
         execution.plan_ref = compile_result.plan_ref.artifact_id
+        
+        plan_artifact, plan_payload = await self._artifact_service.read(
+            artifact_id=compile_result.plan_ref.artifact_id,
+            principal=principal,
+            allow_restricted_raw=True,
+        )
+        import json
+        from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
+        plan = CompiledManifestPlanModel.model_validate(json.loads(plan_payload))
+        
         child_nodes = plan_nodes_to_runtime_nodes(
-            compile_result.nodes,
+            plan.nodes,
             requested_by=execution.parameters["requestedBy"],
         )
         child_starts = await start_manifest_child_runs(

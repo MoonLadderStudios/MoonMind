@@ -489,12 +489,13 @@ async def test_claim_requeues_expired_lease_before_selecting_job(tmp_path):
                 worker_capabilities=["codex", "git"],
             )
             await repo.commit()
+            await session.refresh(expired)
 
-    assert claimed is not None
-    assert claimed.id == ready.id
-    assert claimed.claimed_by == "new-worker"
-    assert claimed.status is models.AgentJobStatus.RUNNING
-    assert expired.next_attempt_at is not None
+            assert claimed is not None
+            assert claimed.id == ready.id
+            assert claimed.claimed_by == "new-worker"
+            assert claimed.status is models.AgentJobStatus.RUNNING
+            assert expired.next_attempt_at is not None
 
 
 async def test_claim_skips_jobs_waiting_for_retry_window(tmp_path):
@@ -921,9 +922,10 @@ async def test_expired_running_job_with_cancel_request_is_not_requeued(tmp_path)
                 worker_capabilities=["codex", "git"],
             )
             await repo.commit()
+            await session.refresh(job)
 
-    assert job.status is models.AgentJobStatus.CANCELLED
-    assert job.finished_at is not None
+            assert job.status is models.AgentJobStatus.CANCELLED
+            assert job.finished_at is not None
 
 
 async def test_set_job_runtime_state_sets_and_clears_runtime_checkpoint(tmp_path):

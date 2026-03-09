@@ -727,31 +727,6 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
-        if settings.temporal.temporal_authoritative_read_enabled and result.items:
-            try:
-                client = await service._client_adapter.get_client()
-
-                async def fetch_and_sync(item):
-                    try:
-                        desc = await fetch_workflow_execution(client, item.workflow_id)
-                        return await sync_execution_projection(session, desc)
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to sync execution %s from Temporal: %s",
-                            item.workflow_id,
-                            exc,
-                        )
-                        return item
-
-                tasks = [fetch_and_sync(item) for item in result.items]
-                updated_items = await asyncio.gather(*tasks)
-                await session.commit()
-                result.items = updated_items
-            except Exception as exc:
-                logger.warning(
-                    "Failed to sync executions from Temporal: %s", exc, exc_info=True
-                )
-
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -786,20 +761,6 @@ async def describe_execution(
     session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
-
-    try:
-        if settings.temporal.temporal_authoritative_read_enabled:
-            client = await service._client_adapter.get_client()
-            desc = await fetch_workflow_execution(client, canonical_workflow_id)
-            await sync_execution_projection(session, desc)
-            await session.commit()
-    except Exception as exc:
-        logger.warning(
-            "Failed to sync execution %s from Temporal: %s",
-            canonical_workflow_id,
-            exc,
-            exc_info=True,
-        )
 
     record = await _get_owned_execution(
         service=service,

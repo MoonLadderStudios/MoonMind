@@ -65,6 +65,12 @@ class MoonMindRunWorkflow:
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
 
+        # Artifact refs
+        self._input_ref: Optional[str] = None
+        self._plan_ref: Optional[str] = None
+        self._logs_ref: Optional[str] = None
+        self._summary_ref: Optional[str] = None
+
         # State tracking
         self._paused: bool = False
         self._awaiting_external: bool = False
@@ -164,6 +170,12 @@ class MoonMindRunWorkflow:
             "planArtifactRef",
             "plan_artifact_ref",
         )
+
+        if input_ref:
+            self._input_ref = input_ref
+        if plan_ref:
+            self._plan_ref = plan_ref
+
         return workflow_type, parameters, input_ref, plan_ref
 
     async def _run_planning_stage(
@@ -191,11 +203,15 @@ class MoonMindRunWorkflow:
             task_queue=LLM_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
-        return (
+        resolved_plan_ref = (
             plan_result.get("plan_ref")
             if isinstance(plan_result, dict)
             else getattr(plan_result, "plan_ref", None)
         )
+        if resolved_plan_ref:
+            self._plan_ref = resolved_plan_ref
+            self._update_memo()
+        return resolved_plan_ref
 
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
@@ -203,7 +219,7 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
-        await workflow.execute_activity(
+        sandbox_result = await workflow.execute_activity(
             "sandbox.run_command",
             {
                 "principal": self._principal(),
@@ -214,6 +230,15 @@ class MoonMindRunWorkflow:
             task_queue=SANDBOX_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
+
+        logs_ref = (
+            sandbox_result.get("diagnostics_ref")
+            if isinstance(sandbox_result, dict)
+            else getattr(sandbox_result, "diagnostics_ref", None)
+        )
+        if logs_ref:
+            self._logs_ref = logs_ref
+            self._update_memo()
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
@@ -258,6 +283,10 @@ class MoonMindRunWorkflow:
             task_queue=INTEGRATIONS_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
+        summary_ref = self._get_from_result(start_result, "tracking_ref")
+        if summary_ref:
+            self._summary_ref = summary_ref
+            self._update_memo()
 
         correlation_id = self._get_from_result(start_result, "correlation_id")
         self._correlation_id = correlation_id
@@ -299,6 +328,10 @@ class MoonMindRunWorkflow:
                     task_queue=INTEGRATIONS_TASK_QUEUE,
                     retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
                 )
+                summary_ref = self._get_from_result(poll_result, "tracking_ref")
+                if summary_ref:
+                    self._summary_ref = summary_ref
+                    self._update_memo()
 
                 status = self._get_from_result(poll_result, "normalized_status")
                 if status in ("succeeded", "failed", "canceled"):
@@ -313,7 +346,6 @@ class MoonMindRunWorkflow:
                 poll_interval_seconds = min(
                     poll_interval_seconds * 2, max_poll_interval_seconds
                 )
-
         self._resume_requested = False
         self._awaiting_external = False
         self._waiting_reason = None
@@ -463,13 +495,21 @@ class MoonMindRunWorkflow:
             )
 
     def _update_memo(self) -> None:
+        memo_dict: dict[str, Any] = {
+            "title": self._title or "Run",
+            "summary": self._summary,
+        }
+        if self._input_ref:
+            memo_dict["input_artifact_ref"] = self._input_ref
+        if self._plan_ref:
+            memo_dict["plan_artifact_ref"] = self._plan_ref
+        if self._logs_ref:
+            memo_dict["logs_artifact_ref"] = self._logs_ref
+        if self._summary_ref:
+            memo_dict["summary_artifact_ref"] = self._summary_ref
+
         try:
-            workflow.upsert_memo(
-                {
-                    "title": self._title or "Run",
-                    "summary": self._summary,
-                }
-            )
+            workflow.upsert_memo(memo_dict)
         except Exception as exc:
             workflow.logger.warning(
                 "Failed to upsert memo",

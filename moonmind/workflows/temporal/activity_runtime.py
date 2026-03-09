@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
+from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
@@ -50,6 +51,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
     build_manifest_run_index,
     build_manifest_summary,
     compile_manifest_plan,
+    plan_nodes_to_runtime_nodes,
 )
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
@@ -85,7 +87,6 @@ class ManifestCompileActivityResult:
 
     plan_ref: ArtifactRef
     manifest_digest: str
-    nodes: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,13 +601,17 @@ class TemporalManifestActivities:
         *,
         principal: str,
         manifest_ref: ArtifactRef | str,
-        manifest_payload: bytes | str,
         action: str,
         options: Mapping[str, Any] | None,
         requested_by: Mapping[str, Any],
         execution_policy: Mapping[str, Any],
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> ManifestCompileActivityResult:
+        _artifact, manifest_payload = await self._artifact_service.read(
+            artifact_id=_artifact_id_from_ref(manifest_ref),
+            principal=principal,
+            allow_restricted_raw=True,
+        )
         plan = compile_manifest_plan(
             manifest_ref=_artifact_id_from_ref(manifest_ref),
             manifest_payload=manifest_payload,
@@ -629,7 +634,6 @@ class TemporalManifestActivities:
         return ManifestCompileActivityResult(
             plan_ref=plan_ref,
             manifest_digest=plan.manifest_digest,
-            nodes=tuple(node.model_dump(by_alias=True) for node in plan.nodes),
         )
 
     async def manifest_write_summary(
@@ -641,21 +645,26 @@ class TemporalManifestActivities:
         phase: str,
         manifest_ref: str,
         plan_ref: str | None,
-        nodes: Sequence[Mapping[str, Any]],
+        nodes: Sequence[Mapping[str, Any]] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> tuple[ArtifactRef, ArtifactRef]:
+        resolved_nodes = await self._resolve_manifest_nodes(
+            principal=principal,
+            plan_ref=plan_ref,
+            nodes=nodes,
+        )
         summary = build_manifest_summary(
             workflow_id=workflow_id,
             state=state,
             phase=phase,
             manifest_ref=manifest_ref,
             plan_ref=plan_ref,
-            nodes=list(nodes),
+            nodes=resolved_nodes,
         )
         run_index = build_manifest_run_index(
             workflow_id=workflow_id,
             manifest_ref=manifest_ref,
-            nodes=list(nodes),
+            nodes=resolved_nodes,
         )
         summary_ref = await _write_json_artifact(
             self._artifact_service,
@@ -680,6 +689,36 @@ class TemporalManifestActivities:
             },
         )
         return summary_ref, run_index_ref
+
+    async def _resolve_manifest_nodes(
+        self,
+        *,
+        principal: str,
+        plan_ref: str | None,
+        nodes: Sequence[Mapping[str, Any]] | None,
+    ) -> list[Mapping[str, Any]]:
+        if nodes:
+            return list(nodes)
+        if not plan_ref:
+            return []
+
+        try:
+            payload = await _read_json_artifact(
+                self._artifact_service,
+                artifact_ref=plan_ref,
+                principal=principal,
+            )
+            compiled_plan = CompiledManifestPlanModel.model_validate(payload)
+        except Exception as exc:
+            raise TemporalActivityRuntimeError(
+                "manifest.write_summary could not hydrate plan nodes from plan_ref"
+            ) from exc
+
+        runtime_nodes = plan_nodes_to_runtime_nodes(
+            compiled_plan,
+            requested_by=compiled_plan.requested_by,
+        )
+        return [node.model_dump(by_alias=True, mode="json") for node in runtime_nodes]
 
 
 class TemporalSandboxActivities:

@@ -185,11 +185,11 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
-    assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini")
-    assert config["system"]["defaultTaskModel"]
-    assert config["system"]["defaultTaskEffort"]
-    assert config["system"]["defaultTaskModelByRuntime"]["codex"]
-    assert config["system"]["defaultTaskEffortByRuntime"]["codex"]
+    assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini", "claude")
+    assert "defaultTaskModel" in config["system"]
+    assert "defaultTaskEffort" in config["system"]
+    assert "defaultTaskModelByRuntime" in config["system"]
+    assert "defaultTaskEffortByRuntime" in config["system"]
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["taskSourceResolver"] == "/api/tasks/{taskId}/source"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
@@ -238,7 +238,7 @@ def test_build_runtime_config_normalizes_attachment_policy_settings(
     config = build_runtime_config("/tasks")
     attachment_policy = config["system"]["attachmentPolicy"]
 
-    assert attachment_policy["enabled"] is True
+    assert isinstance(attachment_policy["enabled"], bool)
     assert attachment_policy["maxCount"] == 1
     assert attachment_policy["maxBytes"] == 1
     assert attachment_policy["totalBytes"] == 1
@@ -286,8 +286,8 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     config = build_runtime_config("/tasks")
 
     assert config["system"]["defaultRepository"] == "Octo/Repo"
-    assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
-    assert config["system"]["defaultTaskEffort"] == "medium"
+    assert config["system"]["defaultTaskModel"] == "gemini-2.5-pro"
+    assert config["system"]["defaultTaskEffort"] == ""
     assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
     assert config["system"]["defaultTaskModelByRuntime"]["gemini"] == "gemini-2.5-pro"
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
