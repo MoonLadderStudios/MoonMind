@@ -20,8 +20,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
-from moonmind.workflows.temporal.client import fetch_workflow_execution
-
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCanonicalRecord,
@@ -43,6 +41,7 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
 )
+from moonmind.workflows.temporal.client import fetch_workflow_execution
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
