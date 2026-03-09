@@ -193,7 +193,10 @@ class TaskCompatibilityService:
                     _shared_client_adapter = TemporalClientAdapter()
                 client = await _shared_client_adapter.get_client()
                 from api_service.core.sync import sync_single_temporal_execution_safely
-                synced_record = await sync_single_temporal_execution_safely(self._session, record.workflow_id, client)
+
+                synced_record = await sync_single_temporal_execution_safely(
+                    self._session, record.workflow_id, client
+                )
                 if synced_record:
                     record = synced_record
 
@@ -385,10 +388,8 @@ class TaskCompatibilityService:
         from moonmind.config.settings import settings
 
         if settings.temporal.temporal_authoritative_read_enabled and records:
-            import asyncio
             import logging
 
-            from api_service.core.sync import fetch_and_sync_execution
             from moonmind.workflows.temporal.client import TemporalClientAdapter
 
             logger = logging.getLogger(__name__)
@@ -397,8 +398,11 @@ class TaskCompatibilityService:
                 _shared_client_adapter = TemporalClientAdapter()
             client = await _shared_client_adapter.get_client()
             from api_service.core.sync import sync_temporal_executions_safely
+
             try:
-                records = await sync_temporal_executions_safely(self._session, records, client)
+                records = await sync_temporal_executions_safely(
+                    self._session, records, client
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to sync executions from Temporal: %s", exc, exc_info=True

@@ -203,6 +203,7 @@ async def test_temporal_unavailability_returns_503(client) -> None:
 
         async def mock_list_workflows(query):
             from temporalio.service import RPCError, RPCStatusCode
+
             raise RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
             yield  # Ensure it's treated as an async generator
 

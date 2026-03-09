@@ -9,13 +9,13 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+from functools import lru_cache
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
-from temporalio.service import RPCError
 from temporalio.client import Client
-from moonmind.workflows.temporal.client import TemporalClientAdapter
-from functools import lru_cache
+from temporalio.service import RPCError
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
@@ -51,6 +51,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
