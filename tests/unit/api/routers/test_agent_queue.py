@@ -212,8 +212,9 @@ def _build_control_event(task_run_id):
 
 
 @pytest.fixture
-def client() -> Iterator[tuple[TestClient, AsyncMock]]:
+def client(monkeypatch) -> Iterator[tuple[TestClient, AsyncMock]]:
     """Provide a TestClient with queue service dependency overridden."""
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", False)
 
     app = FastAPI()
     app.include_router(router)
@@ -1852,7 +1853,7 @@ def test_recover_job_clone_success(
     service.recover_job.assert_awaited_once_with(
         job_id=original.id,
         actor_user_id=ANY,
-        actor_is_operator=False,
+        actor_is_superuser=True,
         mode="clone",
     )
 

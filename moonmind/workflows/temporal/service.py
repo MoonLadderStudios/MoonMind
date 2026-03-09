@@ -18,6 +18,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCanonicalRecord,
@@ -34,10 +35,13 @@ from moonmind.schemas.manifest_ingest_models import (
     ManifestStatusSnapshotModel,
 )
 from moonmind.schemas.temporal_models import (
+    ExecutionActionCapabilityModel,
+    ExecutionDebugFieldsModel,
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
 )
+
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -52,6 +56,10 @@ TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
 }
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.INITIALIZING,
@@ -140,6 +148,7 @@ class TemporalExecutionService:
         self,
         session: AsyncSession,
         *,
+        client_adapter: TemporalClientAdapter | None = None,
         namespace: str = "moonmind",
         integration_task_queue: str = "mm.activity.integrations",
         integration_poll_initial_seconds: int = 5,
@@ -171,6 +180,7 @@ class TemporalExecutionService:
         self._manifest_continue_as_new_phase_threshold = (
             manifest_continue_as_new_phase_threshold
         )
+        self._client_adapter = client_adapter or TemporalClientAdapter()
 
     async def create_execution(
         self,
@@ -396,10 +406,19 @@ class TemporalExecutionService:
         include_orphaned: bool = False,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
+
+        try:
+            await self._client_adapter.describe_workflow(canonical_workflow_id)
+        except Exception as exc:
+            logger.debug(
+                "Temporal describe failed for %s: %s", canonical_workflow_id, exc
+            )
+
         record = await self._load_source_execution(
             canonical_workflow_id,
         )
         if record is None:
+
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
@@ -439,6 +458,29 @@ class TemporalExecutionService:
             )
 
         record = await self._require_source_execution(workflow_id)
+
+        try:
+            update_arg = {
+                "input_artifact_ref": input_artifact_ref,
+                "plan_artifact_ref": plan_artifact_ref,
+                "parameters_patch": parameters_patch,
+                "title": title,
+                "new_manifest_artifact_ref": new_manifest_artifact_ref,
+                "mode": mode,
+                "max_concurrency": max_concurrency,
+                "node_ids": node_ids,
+                "idempotency_key": idempotency_key,
+            }
+            # Remove None values
+            update_arg = {k: v for k, v in update_arg.items() if v is not None}
+            await self._client_adapter.update_workflow(
+                record.workflow_id, update_name, update_arg
+            )
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                f"Temporal update failed: {exc}"
+            ) from exc
+
         if (
             update_name in MANIFEST_UPDATE_NAMES
             and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
@@ -555,10 +597,18 @@ class TemporalExecutionService:
             )
         record = await self._require_source_execution(workflow_id)
 
-        if record.state in TERMINAL_STATES:
-            raise TemporalExecutionValidationError(
-                "Workflow is in a terminal state and no longer accepts signals."
+        try:
+            signal_arg = {
+                "payload": payload,
+                "payload_artifact_ref": payload_artifact_ref,
+            }
+            await self._client_adapter.signal_workflow(
+                record.workflow_id, signal_name, signal_arg
             )
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                f"Temporal signal failed: {exc}"
+            ) from exc
 
         signal_payload = dict(payload or {})
         if signal_name == "ExternalEvent":
@@ -893,6 +943,13 @@ class TemporalExecutionService:
         graceful: bool,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_source_execution(workflow_id)
+
+        try:
+            await self._client_adapter.cancel_workflow(record.workflow_id)
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                f"Temporal cancel failed: {exc}"
+            ) from exc
 
         if record.state in TERMINAL_STATES:
             return await self._sync_projection_best_effort(record)

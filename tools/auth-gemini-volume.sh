@@ -34,6 +34,6 @@ docker compose run --rm -it \
   -e TERM="${GEMINI_TERM}" \
   -e GEMINI_HOME="${GEMINI_HOME}" \
   -e GEMINI_CLI_HOME="${GEMINI_CLI_HOME}" \
-  "${COMPOSE_NETWORK_ARGS[@]}" \
+  ${COMPOSE_NETWORK_ARGS[@]+"${COMPOSE_NETWORK_ARGS[@]}"} \
   gemini-worker \
   bash -lc 'unset GOOGLE_API_KEY GEMINI_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${GEMINI_CLI_HOME:-/var/lib/gemini-auth}/.gemini"; exec gemini'

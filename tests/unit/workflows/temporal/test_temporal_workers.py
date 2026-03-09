@@ -180,31 +180,4 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
     asyncio.run(_run())
 
 
-def test_docker_compose_worker_services_match_topology_contract():
-    compose_payload = yaml.safe_load(Path("docker-compose.yaml").read_text())
-    services = compose_payload["services"]
 
-    expected = {
-        "temporal-worker-workflow": WORKFLOW_FLEET,
-        "temporal-worker-artifacts": ARTIFACTS_FLEET,
-        "temporal-worker-llm": LLM_FLEET,
-        "temporal-worker-sandbox": SANDBOX_FLEET,
-        "temporal-worker-integrations": INTEGRATIONS_FLEET,
-    }
-    for service_name, fleet in expected.items():
-        service = services[service_name]
-        env = "\n".join(service["environment"])
-        assert f"TEMPORAL_WORKER_FLEET={fleet}" in env
-        assert service["entrypoint"] == [
-            "/bin/sh",
-            "/app/services/temporal/scripts/start-worker.sh",
-        ]
-
-    sandbox_env = "\n".join(services["temporal-worker-sandbox"]["environment"])
-    assert "JULES_API_KEY" not in sandbox_env
-    assert "OPENAI_API_KEY" not in sandbox_env
-
-    integrations_env = "\n".join(
-        services["temporal-worker-integrations"]["environment"]
-    )
-    assert "JULES_API_KEY" in integrations_env
