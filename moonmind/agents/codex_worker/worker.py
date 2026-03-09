@@ -4290,6 +4290,15 @@ class CodexWorker:
                 env=auth_context.repo_command_env,
             )
 
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                (repo_dir / "skills_active").symlink_to(
+                    "../skills_active", target_is_directory=True
+                )
+            except FileExistsError:
+                # Symlink already exists; this is safe to ignore for idempotent setup.
+                pass
+
             context_payload = {
                 "repository": repository,
                 "runtime": canonical_payload.get("targetRuntime"),
@@ -8251,7 +8260,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
-                            skills_active_path=prepared.job_root / "skills_active",
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -9347,7 +9356,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
-                            skills_active_path=prepared.job_root / "skills_active",
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -10088,12 +10097,12 @@ class CodexWorker:
         instruction: str,
         model: str | None,
         effort: str | None,
-        skills_active_path: Path | str | None = None,
+        prepared: PreparedTaskWorkspace,
     ) -> list[str]:
         if runtime_mode == "gemini":
             command = [self._config.gemini_binary, "--prompt", instruction]
-            if skills_active_path:
-                command.extend(["--include-directories", str(skills_active_path)])
+            skills_active_path = prepared.job_root / "skills_active"
+            command.extend(["--include-directories", str(skills_active_path)])
             if self._config.gemini_allowed_tools:
                 # Gemini CLI excludes or prompts for these tools in non-interactive
                 # mode unless they are explicitly allowed.
@@ -10103,6 +10112,7 @@ class CodexWorker:
                         ",".join(self._config.gemini_allowed_tools),
                     ]
                 )
+            command.extend(["--include-directories", "skills_active"])
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
