@@ -1,5 +1,5 @@
-from collections.abc import Mapping
 import asyncio
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
