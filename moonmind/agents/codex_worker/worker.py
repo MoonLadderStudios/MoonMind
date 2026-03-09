@@ -4292,7 +4292,9 @@ class CodexWorker:
 
             repo_dir.mkdir(parents=True, exist_ok=True)
             try:
-                (repo_dir / "skills_active").symlink_to("../skills_active", target_is_directory=True)
+                (repo_dir / "skills_active").symlink_to(
+                    "../skills_active", target_is_directory=True
+                )
             except FileExistsError:
                 pass
 
