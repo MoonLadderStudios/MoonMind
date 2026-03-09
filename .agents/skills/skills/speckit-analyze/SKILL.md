@@ -21,7 +21,7 @@ Identify inconsistencies, duplications, ambiguities, and underspecified items ac
 
 ## Operating Constraints
 
-**STRICTLY READ-ONLY FOR SPEC ARTIFACTS**: Do **not** modify any source or spec files. You MUST use the `write_file` tool to save your structured analysis report to `speckit_analyze_report.md`. Offer an optional remediation plan (user must explicitly approve before any follow-up edits are performed manually).
+**STRICTLY READ-ONLY FOR SPEC ARTIFACTS**: Do **not** modify any source or spec files. You MUST use the `write_file` tool to save your structured analysis report to `speckit_analyze_report.md`. If writing fails, report the error to the user. Offer an optional remediation plan (user must explicitly approve before any follow-up edits are performed manually).
 
 **Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this analysis scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside this skill.
 
