@@ -19,7 +19,7 @@ tests/
 
 ## Commands
 
-- npm install -g @google/gemini-cli
+- npm install -g \@google/gemini-cli
 - gemini --version
 
 ## Code Style
