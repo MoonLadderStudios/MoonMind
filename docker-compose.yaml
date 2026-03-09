@@ -25,33 +25,6 @@ services:
     networks: [ local-network ]
     restart: unless-stopped
 
-  ui:
-    image: ghcr.io/open-webui/open-webui:main
-    volumes:
-      - open-webui:/app/backend/data
-    ports:
-      - 8080:8080
-    environment:
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:5000/v1}
-      - WEBUI_AUTH=${WEBUI_AUTH:-false}
-      # - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true} # Keep or remove based on final setup with OIDC
-      - ENABLE_OLLAMA_API=false
-      # OIDC specific variables for OpenWebUI
-      - ENABLE_OAUTH_SIGNUP=${WEBUI_AUTH:-false}
-      - OAUTH_PROVIDER_NAME=Keycloak # Can be changed by .env if needed
-      - OAUTH_CLIENT_ID=open-webui # As defined in realm-export.json
-      - OAUTH_CLIENT_SECRET= # Left blank for PKCE
-      - OAUTH_SCOPES=openid email profile
-      - OPENID_PROVIDER_URL=http://keycloak:8080/realms/moonmind/.well-known/openid-configuration # Internal URL for Keycloak
-      - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_AUTH:-false} # Important for API to get the token
-    env_file:
-      - .env
-    restart: unless-stopped
-    networks:
-      - local-network
-    depends_on:
-      - api
-
   api:
     build:
       context: .
@@ -92,7 +65,6 @@ services:
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
-      - temporal-network
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
@@ -124,8 +96,6 @@ services:
       local-network:
         aliases:
           - moonmind-api-db
-      temporal-network:
-        aliases:
           - temporal-db
     restart: unless-stopped
     healthcheck:
@@ -157,10 +127,9 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      temporal-network:
+      local-network:
         aliases:
           - temporal-internal
-      local-network:
     restart: unless-stopped
 
   minio:
@@ -178,7 +147,6 @@ services:
       - minio-data:/data
     networks:
       - local-network
-      - temporal-network
     restart: unless-stopped
 
   temporal-namespace-init:
@@ -198,7 +166,6 @@ services:
       temporal:
         condition: service_started
     networks:
-      - temporal-network
       - local-network
     restart: "no"
 
@@ -225,7 +192,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
+      - local-network
     restart: "no"
 
   temporal-admin-tools:
@@ -240,7 +207,6 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -290,7 +256,6 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -331,7 +296,6 @@ services:
       minio:
         condition: service_started
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -369,7 +333,6 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -406,7 +369,6 @@ services:
       agent-workspaces-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -443,7 +405,6 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -529,6 +490,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -604,6 +566,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -688,6 +651,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -774,6 +738,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -967,6 +932,4 @@ networks:
   local-network:
     external: true
   docker-proxy-network:
-    internal: true
-  temporal-network:
     internal: true

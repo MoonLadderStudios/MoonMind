@@ -8,9 +8,15 @@ from sqlalchemy import create_engine, text
 engine = create_engine(os.environ["DATABASE_URL"])
 
 with engine.connect() as connection:
-    version = connection.execute(
-        text("select version_num from alembic_version limit 1")
+    has_alembic_version = connection.execute(
+        text("select exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'alembic_version')")
     ).scalar()
+    if has_alembic_version:
+        version = connection.execute(
+            text("select version_num from alembic_version limit 1")
+        ).scalar()
+    else:
+        version = None
     has_projection_version = connection.execute(
         text(
             """
