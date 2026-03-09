@@ -26,7 +26,9 @@ async def test_manifest_ingest_workflow_returns_compiled_refs(
             return ("art_summary_1", "art_run_index_1")
         raise AssertionError(f"Unexpected activity type: {activity_type}")
 
-    monkeypatch.setattr(manifest_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        manifest_module.workflow, "execute_activity", fake_execute_activity
+    )
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "mm:manifest-1"})
     monkeypatch.setattr(manifest_module.workflow, "info", workflow_info)
 
@@ -69,7 +71,9 @@ async def test_manifest_ingest_workflow_accepts_dict_summary_result(
             return {"summary_ref": "art_summary_2"}
         raise AssertionError(f"Unexpected activity type: {activity_type}")
 
-    monkeypatch.setattr(manifest_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        manifest_module.workflow, "execute_activity", fake_execute_activity
+    )
     workflow_info = type("WorkflowInfo", (), {"workflow_id": "mm:manifest-2"})
     monkeypatch.setattr(manifest_module.workflow, "info", workflow_info)
 

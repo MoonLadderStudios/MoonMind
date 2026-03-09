@@ -17,13 +17,15 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
         lambda self: ("user", "owner-1"),
     )
 
-    _workflow_type, _parameters, input_ref, plan_ref = workflow._initialize_from_payload(
-        {
-            "workflowType": "MoonMind.Run",
-            "initialParameters": {"repo": "MoonLadderStudios/MoonMind"},
-            "inputArtifactRef": "art_input_1",
-            "planArtifactRef": "art_plan_1",
-        }
+    _workflow_type, _parameters, input_ref, plan_ref = (
+        workflow._initialize_from_payload(
+            {
+                "workflowType": "MoonMind.Run",
+                "initialParameters": {"repo": "MoonLadderStudios/MoonMind"},
+                "inputArtifactRef": "art_input_1",
+                "planArtifactRef": "art_plan_1",
+            }
+        )
     )
 
     assert input_ref == "art_input_1"
@@ -60,9 +62,7 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(
-        run_workflow_module.workflow, "upsert_memo", lambda _memo: None
-    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
 
     resolved = await workflow._run_planning_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
