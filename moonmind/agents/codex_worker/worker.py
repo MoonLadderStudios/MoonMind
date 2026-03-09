@@ -4296,6 +4296,7 @@ class CodexWorker:
                     "../skills_active", target_is_directory=True
                 )
             except FileExistsError:
+                # Symlink already exists; this is safe to ignore for idempotent setup.
                 pass
 
             context_payload = {
