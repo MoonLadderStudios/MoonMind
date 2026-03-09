@@ -8603,6 +8603,9 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     )
 
     assert command[:3] == ["gemini", "--prompt", "resolve the task"]
+    assert "--include-directories" in command
+    include_directories_index = command.index("--include-directories")
+    assert command[include_directories_index + 1] == str(tmp_path / "skills_active")
     assert "--allowed-tools" in command
     allowed_tools_index = command.index("--allowed-tools")
     assert command[allowed_tools_index + 1] == (
