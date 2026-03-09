@@ -339,6 +339,20 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     return text[-max_chars:]
 
 
+def _coerce_activity_request(
+    request: Mapping[str, Any] | None,
+    *,
+    activity_type: str,
+) -> dict[str, Any]:
+    if request is None:
+        return {}
+    if not isinstance(request, Mapping):
+        raise TemporalActivityRuntimeError(
+            f"{activity_type} payload must be a JSON object"
+        )
+    return dict(request)
+
+
 async def _maybe_call_heartbeat(
     callback: HeartbeatCallback | None,
     payload: Mapping[str, Any],
@@ -364,13 +378,32 @@ class TemporalPlanActivities:
 
     async def plan_generate(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        principal: str,
-        inputs_ref: ArtifactRef | str | None,
+        principal: str | None = None,
+        inputs_ref: ArtifactRef | str | None = None,
         parameters: Mapping[str, Any] | None = None,
         registry_snapshot_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> PlanGenerateActivityResult:
+        request_payload = _coerce_activity_request(
+            request, activity_type="plan.generate"
+        )
+        if request_payload:
+            if principal is None:
+                principal = request_payload.get("principal")
+            if inputs_ref is None:
+                inputs_ref = request_payload.get("inputs_ref")
+            if parameters is None:
+                parameters = request_payload.get("parameters")
+            if registry_snapshot_ref is None:
+                registry_snapshot_ref = request_payload.get("registry_snapshot_ref")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+
+        if not principal or not isinstance(principal, str):
+            raise TemporalActivityRuntimeError("plan.generate principal is required")
         if self._planner is None:
             raise TemporalActivityRuntimeError(
                 "plan.generate planner is not configured"
@@ -807,16 +840,42 @@ class TemporalSandboxActivities:
 
     async def sandbox_run_command(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        workspace_ref: str | Path,
-        cmd: str | Sequence[str],
+        workspace_ref: str | Path | None = None,
+        cmd: str | Sequence[str] | None = None,
         principal: str | None = None,
         env: Mapping[str, str] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
         timeout_seconds: float | None = None,
         heartbeat: HeartbeatCallback | None = None,
     ) -> SandboxCommandResult:
+        request_payload = _coerce_activity_request(
+            request, activity_type="sandbox.run_command"
+        )
+        if request_payload:
+            if workspace_ref is None:
+                workspace_ref = request_payload.get("workspace_ref")
+            if cmd is None:
+                cmd = request_payload.get("cmd") or request_payload.get("command")
+            if principal is None:
+                principal = request_payload.get("principal")
+            if env is None:
+                env = request_payload.get("env")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+            if timeout_seconds is None:
+                timeout_seconds = request_payload.get("timeout_seconds")
+
+        if workspace_ref is None:
+            sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+            sandbox_root.mkdir(parents=True, exist_ok=True)
+            workspace_ref = tempfile.mkdtemp(prefix="run-command-", dir=sandbox_root)
+
         cwd = self._resolve_workspace(workspace_ref, must_exist=True)
+        if cmd is None:
+            raise TemporalActivityRuntimeError("sandbox command must not be empty")
 
         if isinstance(cmd, str):
             command = tuple(shlex.split(cmd))
@@ -1036,14 +1095,33 @@ class TemporalJulesActivities:
 
     async def integration_jules_start(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        principal: str | None,
+        principal: str | None = None,
         parameters: Mapping[str, Any] | None = None,
         correlation_id: str | None = None,
         inputs_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> IntegrationStartResult:
+        request_payload = _coerce_activity_request(
+            request, activity_type="integration.jules.start"
+        )
+        if request_payload:
+            if principal is None:
+                principal = request_payload.get("principal")
+            if parameters is None:
+                parameters = request_payload.get("parameters")
+            if correlation_id is None:
+                correlation_id = request_payload.get("correlation_id")
+            if inputs_ref is None:
+                inputs_ref = request_payload.get("inputs_ref")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+            if idempotency_key is None:
+                idempotency_key = request_payload.get("idempotency_key")
+
         if idempotency_key is not None:
             existing = self._starts_by_idempotency.get(idempotency_key)
             if existing is not None:

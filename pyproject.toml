@@ -108,3 +108,9 @@ markers = [
 
 [tool.pre-commit]
 repos = []
+
+[dependency-groups]
+dev = [
+    "pytest-playwright (>=0.7.2,<0.8.0)",
+    "playwright (>=1.58.0,<2.0.0)"
+]

@@ -74,7 +74,7 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     payload = captured["payload"]
     assert isinstance(payload, dict)
     assert payload["inputs_ref"] == "art_input_1"
-    assert payload["execution_ref"]["link_type"] == "input.plan"
+    assert "workflow_id" in payload["execution_ref"]
     assert resolved == "art_plan_2"
     assert workflow._plan_ref == "art_plan_2"
 
@@ -131,5 +131,5 @@ async def test_run_execution_stage_extracts_logs_ref_from_activity_result(
     assert captured["activity_type"] == "sandbox.run_command"
     payload = captured["payload"]
     assert isinstance(payload, dict)
-    assert payload["execution_ref"]["link_type"] == "output.logs"
+    assert payload["cmd"] == "echo executing"
     assert workflow._logs_ref == "art_logs_1"

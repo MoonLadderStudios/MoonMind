@@ -1,11 +1,11 @@
-"""Temporal client adapter and helpers for runtime execution."""
+"""Temporal client helpers for manifest-ingest execution bootstrap."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -18,6 +18,9 @@ from moonmind.workflows.temporal.workers import (
     TemporalWorkerTopology,
     describe_configured_worker,
 )
+
+if TYPE_CHECKING:
+    from moonmind.workflows.temporal.service import TemporalExecutionService
 
 MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
 
@@ -211,7 +214,7 @@ def build_manifest_child_parameters(
 
 async def start_manifest_child_runs(
     *,
-    execution_service: TemporalExecutionCreatorProtocol,
+    execution_service: TemporalExecutionService,
     parent_execution: TemporalExecutionRecord,
     requested_by: RequestedByModel | Mapping[str, object],
     nodes: Sequence[ManifestNodeModel],

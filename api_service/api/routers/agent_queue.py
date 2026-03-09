@@ -2124,10 +2124,6 @@ async def revoke_worker_token(
     "/workers/tokens/capabilities",
     response_model=WorkerTokenModel,
 )
-@router.post(
-    "/workers/tokens/capabilities",
-    response_model=WorkerTokenModel,
-)
 async def sync_worker_token_capabilities(
     payload: WorkerRuntimeCapabilitiesRequest,
     auth: _WorkerRequestAuth = Depends(_require_worker_auth),
