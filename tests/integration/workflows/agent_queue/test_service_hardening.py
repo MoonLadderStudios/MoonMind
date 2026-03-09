@@ -369,7 +369,7 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
             recovered, cloned = await service.recover_job(
                 job_id=job.id,
                 actor_user_id=actor,
-                actor_is_operator=True,
+                actor_is_superuser=True,
                 mode="clone",
             )
 
@@ -410,7 +410,7 @@ async def test_recover_job_requires_owner_or_operator(tmp_path: Path) -> None:
             recovered, _ = await service.recover_job(
                 job_id=job.id,
                 actor_user_id=other_user,
-                actor_is_operator=True,
+                actor_is_superuser=True,
                 mode="cancel",
             )
 

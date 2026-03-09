@@ -1556,7 +1556,7 @@ async def recover_job(
         recovered, cloned = await service.recover_job(
             job_id=job_id,
             actor_user_id=getattr(user, "id", None),
-            actor_is_operator=bool(getattr(user, "is_superuser", False)),
+            actor_is_superuser=_has_operator_override(user),
             mode=payload.mode,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1599,7 +1599,7 @@ async def create_job_live_session(
 async def get_job_live_session(
     job_id: UUID,
     service: AgentQueueService = Depends(_get_service),
-    user: Optional[User] = Depends(get_current_user_optional()),
+    user: User = Depends(get_current_user()),
 ) -> TaskRunLiveSessionResponse:
     """Fetch live session state for one queue task run."""
 
@@ -1822,6 +1822,7 @@ async def list_job_attachments(
         attachments = await service.list_attachments_for_user(
             job_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             limit=limit,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1845,6 +1846,7 @@ async def download_job_attachment(
             job_id=job_id,
             attachment_id=attachment_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc

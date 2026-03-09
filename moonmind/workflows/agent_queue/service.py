@@ -1667,6 +1667,7 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         limit: int = 50,
     ) -> list[models.AgentJobArtifact]:
         """List attachment metadata for a job scoped to the requesting user."""
@@ -1676,6 +1677,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
         return artifacts
@@ -1701,12 +1703,14 @@ class AgentQueueService:
         job_id: UUID,
         attachment_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> ArtifactDownload:
         """Resolve an attachment download for an authorized user."""
 
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         download = await self._get_attachment_download(
             job_id=job_id, attachment_id=attachment_id
@@ -1840,14 +1844,11 @@ class AgentQueueService:
     ) -> models.TaskRunLiveSession | None:
         """Fetch current live session state for a task run."""
 
-        if actor_user_id is None and not actor_is_superuser:
-            await self._repository.require_job(task_run_id)
-        else:
-            await self._assert_task_run_user_access(
-                task_run_id=task_run_id,
-                actor_user_id=actor_user_id,
-                actor_is_superuser=actor_is_superuser,
-            )
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
         return await self._repository.get_live_session(task_run_id=task_run_id)
 
     async def create_live_session(
@@ -2216,17 +2217,17 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
-        actor_is_operator: bool = False,
+        actor_is_superuser: bool = False,
         mode: Literal["cancel", "clone"],
     ) -> tuple[models.AgentJob, models.AgentJob | None]:
         """Request cancellation and optionally clone a replacement job."""
 
         job = await self._repository.require_job_for_update(job_id)
-        if not actor_is_operator:
-            await self._assert_task_run_user_access(
-                task_run_id=job_id,
-                actor_user_id=actor_user_id,
-            )
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
         if job.status not in {
             models.AgentJobStatus.RUNNING,
             models.AgentJobStatus.QUEUED,
