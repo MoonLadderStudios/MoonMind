@@ -20,7 +20,7 @@ def main():
     try:
         response = requests.post(f"{API_BASE}/executions", json=payload, timeout=10)
         response.raise_for_status()
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         print(f"Failed to create execution: {e}")
         sys.exit(1)
 
@@ -33,8 +33,8 @@ def main():
     print(f"Created execution: {workflow_id}")
 
     # 2. Poll for worker execution and state progression until completion
-    max_retries = 60
-    sleep_seconds = 2
+    max_retries = int(os.getenv("E2E_MAX_RETRIES", "60"))
+    sleep_seconds = int(os.getenv("E2E_SLEEP_SECONDS", "2"))
     success = False
 
     for i in range(max_retries):
@@ -60,7 +60,7 @@ def main():
                 if temporal_status == "completed":
                     success = True
                 break
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             print(f"Error polling execution: {e}")
 
         time.sleep(sleep_seconds)
@@ -74,16 +74,15 @@ def main():
 
     # 3. Check artifacts
     try:
-        resp = requests.get(f"{API_BASE}/executions/{workflow_id}", timeout=5)
-        current_state = resp.json()
         artifacts = current_state.get("artifactRefs", [])
         print(f"Execution has {len(artifacts)} artifact(s) linked in the state.")
 
         # Verify UI Status aligns with Temporal workflow state
         if current_state.get("dashboardStatus") != "completed":
             print(
-                f"Warning: Dashboard status is {current_state.get('dashboardStatus')}, expected 'completed'"
+                f"Error: Dashboard status is {current_state.get('dashboardStatus')}, expected 'completed'"
             )
+            sys.exit(1)
         else:
             print("Dashboard status aligns with Temporal state.")
 
@@ -96,7 +95,7 @@ def main():
         print(
             f"Execution UI Actions available: {list(k for k, v in actions.items() if v is True)}"
         )
-    except Exception as e:
+    except requests.exceptions.RequestException as e:
         print(f"Error checking artifacts/status: {e}")
         sys.exit(1)
 
