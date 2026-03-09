@@ -8,11 +8,14 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+import asyncio
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
+from api_service.core.sync import sync_execution_projection
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -46,6 +49,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.client import fetch_workflow_execution
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
@@ -723,20 +727,9 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
-        import asyncio
-
-        from api_service.core.sync import sync_execution_projection
-        from moonmind.workflows.temporal.client import (
-            TemporalClientAdapter,
-            fetch_workflow_execution,
-        )
-
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             try:
-                global _shared_client_adapter
-                if "_shared_client_adapter" not in globals():
-                    _shared_client_adapter = TemporalClientAdapter()
-                client = await _shared_client_adapter.get_client()
+                client = await service._client_adapter.get_client()
 
                 async def fetch_and_sync(item):
                     try:
@@ -794,18 +787,9 @@ async def describe_execution(
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
-    from api_service.core.sync import sync_execution_projection
-    from moonmind.workflows.temporal.client import (
-        TemporalClientAdapter,
-        fetch_workflow_execution,
-    )
-
     try:
         if settings.temporal.temporal_authoritative_read_enabled:
-            global _shared_client_adapter
-            if "_shared_client_adapter" not in globals():
-                _shared_client_adapter = TemporalClientAdapter()
-            client = await _shared_client_adapter.get_client()
+            client = await service._client_adapter.get_client()
             desc = await fetch_workflow_execution(client, canonical_workflow_id)
             await sync_execution_projection(session, desc)
             await session.commit()
@@ -843,6 +827,15 @@ async def update_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> UpdateExecutionResponse:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Temporal dashboard actions are currently disabled.",
+            },
+        )
+
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -1034,6 +1027,15 @@ async def signal_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Temporal dashboard actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     try:
@@ -1074,14 +1076,32 @@ async def cancel_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Temporal dashboard actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
-    record = await service.cancel_execution(
-        workflow_id=workflow_id,
-        reason=request.reason,
-        graceful=request.graceful,
-    )
+    try:
+        record = await service.cancel_execution(
+            workflow_id=workflow_id,
+            reason=request.reason,
+            graceful=request.graceful,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "cancel_rejected",
+                "message": str(exc),
+            },
+        ) from exc
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(

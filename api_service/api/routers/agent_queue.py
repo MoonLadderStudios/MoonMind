@@ -1501,7 +1501,7 @@ async def cancel_job(
     job_id: UUID,
     payload: CancelJobRequest | None = Body(None),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> JobModel:
     """Request cancellation for a queued or running queue job."""
 
@@ -1510,6 +1510,7 @@ async def cancel_job(
         job = await service.request_cancel(
             job_id=job_id,
             requested_by_user_id=user_id,
+            actor_is_superuser=_has_operator_override(user),
             reason=(payload.reason if payload is not None else None),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1555,7 +1556,7 @@ async def recover_job(
         recovered, cloned = await service.recover_job(
             job_id=job_id,
             actor_user_id=getattr(user, "id", None),
-            actor_is_operator=bool(getattr(user, "is_superuser", False)),
+            actor_is_superuser=_has_operator_override(user),
             mode=payload.mode,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1574,7 +1575,7 @@ async def recover_job(
 async def create_job_live_session(
     job_id: UUID,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionResponse:
     """Idempotently create/enable live session state for one queue task run."""
 
@@ -1582,6 +1583,7 @@ async def create_job_live_session(
         live = await service.create_live_session(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1605,6 +1607,7 @@ async def get_job_live_session(
         live = await service.get_live_session(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1631,7 +1634,7 @@ async def grant_job_live_session_write(
         default_factory=GrantTaskRunLiveSessionWriteRequest
     ),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionWriteGrantResponse:
     """Return temporary RW attach details for one queue task run."""
 
@@ -1639,6 +1642,7 @@ async def grant_job_live_session_write(
         grant = await service.grant_live_session_write(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             ttl_minutes=payload.ttl_minutes,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1661,7 +1665,7 @@ async def revoke_job_live_session(
         default_factory=RevokeTaskRunLiveSessionRequest
     ),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionResponse:
     """Force revoke one queue task-run live session."""
 
@@ -1669,6 +1673,7 @@ async def revoke_job_live_session(
         live = await service.revoke_live_session(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             reason=payload.reason,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1683,7 +1688,7 @@ async def apply_job_control_action(
     job_id: UUID,
     payload: TaskRunControlRequest,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> JobModel:
     """Apply pause/resume/takeover controls to one queue task run."""
 
@@ -1691,6 +1696,7 @@ async def apply_job_control_action(
         job = await service.apply_control_action(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             action=payload.action,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1707,7 +1713,7 @@ async def append_job_operator_message(
     job_id: UUID,
     payload: TaskRunOperatorMessageRequest,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunControlEventModel:
     """Append one operator message to the queue task run control stream."""
 
@@ -1715,6 +1721,7 @@ async def append_job_operator_message(
         event = await service.append_operator_message(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             message=payload.message,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
