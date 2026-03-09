@@ -25,7 +25,7 @@ None
 **Metrics:**
 
 - Total Requirements: 7
-- Total Tasks: 14
+- Total Tasks: 12
 - Coverage %: 100%
 - Ambiguity Count: 0
 - Duplication Count: 0

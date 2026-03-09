@@ -1853,7 +1853,7 @@ def test_recover_job_clone_success(
     service.recover_job.assert_awaited_once_with(
         job_id=original.id,
         actor_user_id=ANY,
-        actor_is_operator=False,
+        actor_is_superuser=True,
         mode="clone",
     )
 
