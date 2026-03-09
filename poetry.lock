@@ -3042,14 +3042,14 @@ pytest-asyncio = ">=0.23.8"
 
 [[package]]
 name = "llama-index-embeddings-openai"
-version = "0.5.1"
+version = "0.5.2"
 description = "llama-index embeddings openai integration"
 optional = false
 python-versions = "<4.0,>=3.9"
 groups = ["main"]
 files = [
-    {file = "llama_index_embeddings_openai-0.5.1-py3-none-any.whl", hash = "sha256:a2fcda3398bbd987b5ce3f02367caee8e84a56b930fdf43cc1d059aa9fd20ca5"},
-    {file = "llama_index_embeddings_openai-0.5.1.tar.gz", hash = "sha256:1c89867a48b0d0daa3d2d44f5e76b394b2b2ef9935932daf921b9e77939ccda8"},
+    {file = "llama_index_embeddings_openai-0.5.2-py3-none-any.whl", hash = "sha256:37e7967de05b05f16c9b171091110bb1c6e5a0720198ea306d57cd3920cb81b7"},
+    {file = "llama_index_embeddings_openai-0.5.2.tar.gz", hash = "sha256:091bd0c3e9182748e8827de7d79713a219d5f5e0dc97d1bb7b271cf524520e4b"},
 ]
 
 [package.dependencies]
@@ -7089,4 +7089,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "75c7e8e1878dfd36b5ea090c0234822ca1a0cc50fa22357af2e3a8c9f78bdb2d"
+content-hash = "4fc45de3ca0c0a128b81c5d13b2ced571b6dccc4d951d9ea42a0f4cf133fd8fa"
