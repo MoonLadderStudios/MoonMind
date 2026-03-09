@@ -33,4 +33,6 @@ Node.js 20+ (for CLI runtime), Python 3.11 (existing `api_service`): Follow stan
 - 006-add-gemini-cli: Added Node.js 20+ (for CLI runtime), Python 3.11 (existing `api_service`) + Gemini CLI npm package (`@google` scope, `gemini-cli` name)
 
 <!-- MANUAL ADDITIONS START -->
+## Agent Guidelines
+- Please refer to `AGENTS.md` for common agent guidelines and tool usage directives.
 <!-- MANUAL ADDITIONS END -->
