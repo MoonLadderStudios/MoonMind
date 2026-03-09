@@ -194,65 +194,64 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 result_refs=[],
             )
 
-        first = await service.ingest_integration_callback(
-            integration_name="jules",
-            callback_correlation_key="cb-safe",
-            payload={
-                "event_type": "status_changed",
-                "provider_event_id": "evt-dup",
-                "normalized_status": "running",
-                "provider_status": "running",
-            },
-            payload_artifact_ref=None,
-        )
-        assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
-
-        duplicate = await service.ingest_integration_callback(
-            integration_name="jules",
-            callback_correlation_key="cb-safe",
-            payload={
-                "event_type": "status_changed",
-                "provider_event_id": "evt-dup",
-                "normalized_status": "running",
-                "provider_status": "running",
-            },
-            payload_artifact_ref=None,
-        )
-        assert "Ignored duplicate external event" in duplicate.memo["summary"]
-
-        terminal = await service.ingest_integration_callback(
-            integration_name="jules",
-            callback_correlation_key="cb-safe",
-            payload={
-                "event_type": "completed",
-                "provider_event_id": "evt-terminal",
-                "normalized_status": "succeeded",
-                "provider_status": "completed",
-            },
-            payload_artifact_ref=None,
-        )
-        assert terminal.integration_state["normalized_status"] == "succeeded"
-
-        reordered = await service.ingest_integration_callback(
-            integration_name="jules",
-            callback_correlation_key="cb-safe",
-            payload={
-                "event_type": "late-progress",
-                "provider_event_id": "evt-late",
-                "normalized_status": "running",
-                "provider_status": "running",
-            },
-            payload_artifact_ref=None,
-        )
-        assert reordered.integration_state["normalized_status"] == "succeeded"
-
-        with pytest.raises(TemporalExecutionNotFoundError):
-            await service.ingest_integration_callback(
+            first = await service.ingest_integration_callback(
                 integration_name="jules",
-                callback_correlation_key="missing-key",
-                payload={"event_type": "completed"},
+                callback_correlation_key="cb-safe",
+                payload={
+                    "event_type": "status_changed",
+                    "provider_event_id": "evt-dup",
+                    "normalized_status": "running",
+                    "provider_status": "running",
+                },
                 payload_artifact_ref=None,
             )
+            assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
+
+            duplicate = await service.ingest_integration_callback(
+                integration_name="jules",
+                callback_correlation_key="cb-safe",
+                payload={
+                    "event_type": "status_changed",
+                    "provider_event_id": "evt-dup",
+                    "normalized_status": "running",
+                    "provider_status": "running",
+                },
+                payload_artifact_ref=None,
+            )
+            assert "Ignored duplicate external event" in duplicate.memo["summary"]
+
+            terminal = await service.ingest_integration_callback(
+                integration_name="jules",
+                callback_correlation_key="cb-safe",
+                payload={
+                    "event_type": "completed",
+                    "provider_event_id": "evt-terminal",
+                    "normalized_status": "succeeded",
+                    "provider_status": "completed",
+                },
+                payload_artifact_ref=None,
+            )
+            assert terminal.integration_state["normalized_status"] == "succeeded"
+
+            reordered = await service.ingest_integration_callback(
+                integration_name="jules",
+                callback_correlation_key="cb-safe",
+                payload={
+                    "event_type": "late-progress",
+                    "provider_event_id": "evt-late",
+                    "normalized_status": "running",
+                    "provider_status": "running",
+                },
+                payload_artifact_ref=None,
+            )
+            assert reordered.integration_state["normalized_status"] == "succeeded"
+            with pytest.raises(TemporalExecutionNotFoundError):
+                await service.ingest_integration_callback(
+                    integration_name="jules",
+                    callback_correlation_key="missing-key",
+                    payload={"event_type": "completed"},
+                    payload_artifact_ref=None,
+                )
 
 
 async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
@@ -298,6 +297,7 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
                 result_refs=[],
                 completed_wait_cycles=0,
             )
+
             assert failed.memo["error_category"] == "integration_error"
             assert failed.integration_state["normalized_status"] == "failed"
 
@@ -306,5 +306,4 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
                 reason="operator stop",
                 graceful=True,
             )
-
             assert canceled.state is MoonMindWorkflowState.CANCELED
