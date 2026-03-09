@@ -9,7 +9,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.executions import _get_service, router
 import api_service.api.routers.executions as executions_module
 from api_service.auth_providers import get_current_user
 
@@ -30,9 +29,9 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> AsyncMoc
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, AsyncMock]]:
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(executions_module.router)
     service = AsyncMock()
-    app.dependency_overrides[_get_service] = lambda: service
+    app.dependency_overrides[executions_module._get_service] = lambda: service
     user = _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
