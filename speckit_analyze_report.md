@@ -8,17 +8,17 @@
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --------------- | --------- | -------- | ----- |
-| FR-001 | Yes | T004, T005, T011 | |
-| FR-002 | Yes | T006, T009 | |
-| FR-003 | Yes | T007, T010 | |
-| FR-004 | Yes | T008, T009 | |
-| FR-005 | Yes | T002, T003... | |
-| FR-006 | Yes | T013 | |
-| FR-007 | Yes | T014 | |
+| FR-001 | Yes | T003, T004, T005 | |
+| FR-002 | Yes | T002, T003, T005 | |
+| FR-003 | Yes | T006, T008 | |
+| FR-004 | Yes | T007, T008 | |
+| FR-005 | Yes | T007, T008 | |
+| FR-006 | Yes | T004, T009, T010, T011 | |
+| FR-007 | Yes | T009, T010, T011 | |
 
 **Metrics:**
 - Total Requirements: 7
-- Total Tasks: 14
+- Total Tasks: 12
 - Coverage %: 100%
 - Ambiguity Count: 0
 - Duplication Count: 0

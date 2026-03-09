@@ -121,9 +121,24 @@ curl -f http://localhost:5000/health
 {"status":"ok"}
 ```
 
-## 5. End-to-End Execution Creation
+## 5. End-to-End Execution Creation & Testing
 
-To prove that the stack is functioning correctly without manually executing commands inside a container, trigger a Temporal-backed task creation via the `/api/executions` endpoint.
+To prove that the stack is functioning correctly without manually executing commands inside a container, you can run the automated end-to-end test script. This script will create a Temporal-backed task, wait for the worker execution, check artifacts/UI status, and clean up.
+
+Run the test script from the repository root:
+
+```bash
+python scripts/test_temporal_e2e.py
+```
+
+**What the script does:**
+1. Verifies the API is healthy.
+2. Triggers a Temporal-backed task creation via the `/api/executions` endpoint.
+3. Polls the execution status to verify workers are picking up and processing the task.
+4. Checks that the task artifacts and UI source paths resolve correctly.
+5. Verifies rollback and clean state by cancelling the task (if still running) so subsequent runs don't stack up.
+
+Alternatively, to manually test task creation using `curl`:
 
 ```bash
 curl -X POST http://localhost:5000/api/executions \
@@ -159,3 +174,39 @@ If workers or the API are throwing connection timeout errors trying to reach Tem
 If a workflow fails immediately with an error relating to `boto3` or S3:
 - Ensure the `minio` service is running.
 - Verify that the `moonmind-temporal-artifacts` bucket exists. The API or worker lifecycle logic should create it upon startup if it is missing, but if not, you can manually create it via the MinIO console at `http://localhost:9001`.
+
+## 7. Environment Teardown and Rollback
+
+To stop the services and optionally reset the environment to a clean state:
+
+### 7.1. Stopping Services
+
+To stop all Temporal-related containers without losing data (preserves workflows and database state):
+
+```bash
+docker compose stop temporal temporal-db temporal-worker-workflow temporal-worker-artifacts temporal-worker-llm temporal-worker-sandbox temporal-worker-integrations
+```
+
+### 7.2. Full Teardown and Clean State
+
+If you need to completely wipe the environment to test from scratch, including removing all volumes (database, MinIO data, etc.), you can use the provided teardown script:
+
+```bash
+python scripts/teardown_temporal.py
+```
+
+Or manually using docker compose:
+
+```bash
+docker compose down -v
+```
+
+### 7.3. Rollback to Legacy Execution
+
+If you need to bypass Temporal and revert to the legacy local database state machine execution, you can disable the feature flags in your `.env` file or environment variables:
+
+```bash
+export USE_TEMPORAL=false
+```
+
+When Temporal is disabled, the local API will not attempt to connect to Temporal or submit workflows to its task queues, falling back to local DB processing.
