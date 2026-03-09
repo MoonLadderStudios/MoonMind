@@ -10098,6 +10098,7 @@ class CodexWorker:
                         ",".join(self._config.gemini_allowed_tools),
                     ]
                 )
+            command.extend(["--include-directories", "../skills_active"])
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
