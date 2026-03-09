@@ -6,7 +6,6 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -178,6 +177,3 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
             await engine.dispose()
 
     asyncio.run(_run())
-
-
-

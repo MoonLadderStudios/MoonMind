@@ -412,16 +412,18 @@ class ManifestsService:
             execution_ref=execution_ref,
         )
         execution.plan_ref = compile_result.plan_ref.artifact_id
-        
+
         plan_artifact, plan_payload = await self._artifact_service.read(
             artifact_id=compile_result.plan_ref.artifact_id,
             principal=principal,
             allow_restricted_raw=True,
         )
         import json
+
         from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
+
         plan = CompiledManifestPlanModel.model_validate(json.loads(plan_payload))
-        
+
         child_nodes = plan_nodes_to_runtime_nodes(
             plan.nodes,
             requested_by=execution.parameters["requestedBy"],

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
 from temporalio.exceptions import WorkflowAlreadyStartedError

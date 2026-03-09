@@ -76,6 +76,8 @@ async def _wait_for_condition(
         if asyncio.get_running_loop().time() >= deadline:
             raise AssertionError("Timed out waiting for test condition")
         await asyncio.sleep(poll_interval_seconds)
+
+
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
@@ -156,7 +158,6 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
                 )
-
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:

@@ -9,7 +9,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
@@ -413,6 +412,7 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
 
 
 from unittest.mock import AsyncMock
+
 
 @pytest.mark.asyncio
 async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):

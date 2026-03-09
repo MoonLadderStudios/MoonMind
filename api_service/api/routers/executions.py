@@ -8,14 +8,12 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-import asyncio
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
-from api_service.core.sync import sync_execution_projection
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -49,7 +47,6 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
-from moonmind.workflows.temporal.client import fetch_workflow_execution
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
