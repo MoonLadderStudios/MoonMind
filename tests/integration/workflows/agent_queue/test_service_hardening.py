@@ -1128,6 +1128,7 @@ async def test_ack_cancel_truncates_finish_reason(tmp_path: Path) -> None:
             await service.request_cancel(
                 job_id=job.id,
                 requested_by_user_id=uuid4(),
+                actor_is_superuser=True,
                 reason="operator",
             )
 
@@ -1163,6 +1164,7 @@ async def test_request_cancel_queued_job_adds_terminal_event(tmp_path: Path) -> 
             cancelled = await service.request_cancel(
                 job_id=job.id,
                 requested_by_user_id=uuid4(),
+                actor_is_superuser=True,
                 reason="operator request",
             )
             events = await service.list_events(job_id=job.id, limit=20)
@@ -1204,6 +1206,7 @@ async def test_running_cancellation_is_requested_then_acknowledged(
             running = await service.request_cancel(
                 job_id=job.id,
                 requested_by_user_id=uuid4(),
+                actor_is_superuser=True,
                 reason="stop",
             )
             running_status = running.status
