@@ -15,8 +15,8 @@ def wait_for_api():
             if resp.status_code == 200:
                 print("API is healthy.")
                 return True
-        except requests.exceptions.RequestException:
-            pass
+        except requests.exceptions.RequestException as exc:
+            print(f"Health check request failed: {exc}. Retrying...")
         time.sleep(2)
     return False
 
@@ -45,6 +45,7 @@ def main():
     # Poll until the status is no longer "initializing" or "queued"
     max_retries = 30
     status = ""
+    exec_data = {}
     for _ in range(max_retries):
         resp = requests.get(f"{API_URL}/api/executions/{workflow_id}")
         if resp.status_code == 200:
@@ -63,14 +64,18 @@ def main():
         time.sleep(2)
 
     print("\\n3. Checking Artifacts...")
-    # Assuming there's a way to get artifacts, e.g., via the execution endpoint or artifacts endpoint
-    resp = requests.get(f"{API_URL}/api/executions/moonmind/{workflow_id}/artifacts")
-    if resp.status_code == 200:
-        artifacts = resp.json().get("artifacts", [])
-        print(f"Found {len(artifacts)} artifacts.")
+    run_id = exec_data.get("runId")
+    if run_id:
+        namespace = os.getenv("TEMPORAL_NAMESPACE", "moonmind")
+        resp = requests.get(f"{API_URL}/api/executions/{namespace}/{workflow_id}/{run_id}/artifacts")
+        if resp.status_code == 200:
+            artifacts = resp.json().get("artifacts", [])
+            print(f"Found {len(artifacts)} artifacts.")
+        else:
+            print(f"Checking artifacts endpoint failed with status {resp.status_code}.")
+            sys.exit(1)
     else:
-        # fallback to checking if there's any artifact info in the execution
-        print("Checking artifacts endpoint failed or not supported yet, ignoring.")
+        print("Could not determine runId, skipping artifact check.")
 
     print("\\n4. Checking UI Status (via API)...")
     resp = requests.get(f"{API_URL}/api/tasks/{workflow_id}/source")
@@ -80,9 +85,8 @@ def main():
             f"Task source resolution: {source_data.get('sourceLabel')} -> {source_data.get('detailPath')}"
         )
     else:
-        print(
-            "Source resolution endpoint not found or workflow not available in dashboard yet."
-        )
+        print("Source resolution endpoint not found or workflow not available in dashboard yet.")
+        sys.exit(1)
 
     print("\\n5. Cleaning up (cancelling execution if still running)...")
     if status in ["initializing", "queued", "running"]:

@@ -35,7 +35,9 @@ async def main():
 
             workflows.append(MoonMindManifestIngestWorkflow)
         except ImportError:
-            pass
+            logger.info(
+                "Optional MoonMindManifestIngestWorkflow not available; skipping registration"
+            )
 
     bindings = build_worker_activity_bindings(fleet=topology.fleet)
     activities = [b.handler for b in bindings]
