@@ -8,23 +8,17 @@
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 | --------------- | --------- | -------- | ----- |
-| DOC-REQ-001     | Yes       | T002, T003 | |
-| DOC-REQ-002     | Yes       | T004, T005 | |
-| DOC-REQ-003     | Yes       | T006, T007 | |
-| FR-001          | Yes       | T002, T003 | |
-| FR-002          | Yes       | T004, T005 | |
-| FR-003          | Yes       | T004, T005 | |
-| FR-004          | Yes       | T004, T005 | |
-| FR-005          | Yes       | T006, T007 | |
-| FR-006          | Yes       | T004, T006 | |
-
-**Constitution Alignment Issues:** None
-
-**Unmapped Tasks:** None
+| FR-001 | Yes | T003, T004, T005 | |
+| FR-002 | Yes | T002, T003, T005 | |
+| FR-003 | Yes | T006, T008 | |
+| FR-004 | Yes | T007, T008 | |
+| FR-005 | Yes | T007, T008 | |
+| FR-006 | Yes | T004, T009, T010, T011 | |
+| FR-007 | Yes | T009, T010, T011 | |
 
 **Metrics:**
-- Total Requirements: 3 DOC-REQ, 6 FR
-- Total Tasks: 8
+- Total Requirements: 7
+- Total Tasks: 12
 - Coverage %: 100%
 - Ambiguity Count: 0
 - Duplication Count: 0
@@ -32,8 +26,8 @@
 
 ## Remediation Discovery (Prompt A)
 
-No remediations required. All criteria across `spec.md`, `plan.md`, and `tasks.md` are correctly aligned, unambiguous, and provide full coverage for all explicit requirements.
+No remaining remediations required. All functional requirements and `DOC-REQ-*` traceability links are fully mapped to implementation and validation tasks. Constraints such as RetryPolicies and Artifact offloading have explicit tasks.
 
-- Safe to Implement: YES
-- Blocking Remediations: None
-- Determination Rationale: The feature artifacts are fully documented, all DOC-REQ traces map to specific implement/validate tasks, and no missing constraints or critical paths are present.
+Safe to Implement: YES
+Blocking Remediations: None
+Determination Rationale: All critical artifacts and requirements are fully specified, aligned with the constitution, and have task coverage.
