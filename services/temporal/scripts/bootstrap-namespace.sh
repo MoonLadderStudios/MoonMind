@@ -140,4 +140,30 @@ else
 fi
 
 log "Namespace policy applied. Storage cap guardrail is ${TEMPORAL_RETENTION_MAX_STORAGE_GB} GB with retention ${EFFECTIVE_RETENTION_DAYS} day(s)."
+
+log "Registering custom search attributes..."
+if [ "$CLI_KIND" = "temporal" ]; then
+  run_temporal_cli operator search-attribute create \
+    --address "$TEMPORAL_ADDRESS" \
+    --namespace "$TEMPORAL_NAMESPACE" \
+    --name "mm_entry" --type "Keyword" \
+    --name "mm_owner_id" --type "Keyword" \
+    --name "mm_owner_type" --type "Keyword" \
+    --name "mm_state" --type "Keyword" \
+    --name "mm_updated_at" --type "Datetime" \
+    --name "mm_repo" --type "Keyword" \
+    --name "mm_integration" --type "Keyword" \
+    --name "mm_continue_as_new_cause" --type "Keyword" || true
+else
+  tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 admin cluster add-search-attributes \
+    --name mm_entry --type Keyword \
+    --name mm_owner_id --type Keyword \
+    --name mm_owner_type --type Keyword \
+    --name mm_state --type Keyword \
+    --name mm_updated_at --type Datetime \
+    --name mm_repo --type Keyword \
+    --name mm_integration --type Keyword \
+    --name mm_continue_as_new_cause --type Keyword || true
+fi
+
 log "Temporal foundation bootstrap complete."

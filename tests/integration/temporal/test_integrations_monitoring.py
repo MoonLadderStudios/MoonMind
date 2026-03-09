@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, MoonMindWorkflowState
+from moonmind.config import settings
 from moonmind.schemas.jules_models import normalize_jules_status
 from moonmind.workflows.temporal.service import (
     TemporalExecutionNotFoundError,
@@ -34,8 +35,9 @@ async def _db(tmp_path: Path):
 
 
 async def test_callback_first_completion_uses_single_terminal_path(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -69,6 +71,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 provider_summary={},
                 result_refs=[],
             )
+            assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
 
             completed = await service.ingest_integration_callback(
                 integration_name="jules",
@@ -82,7 +85,6 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 payload_artifact_ref="art_callback",
             )
 
-            assert configured.state is MoonMindWorkflowState.AWAITING_EXTERNAL
             assert completed.state is MoonMindWorkflowState.EXECUTING
             assert completed.awaiting_external is False
             assert completed.integration_state["normalized_status"] == "succeeded"
@@ -90,8 +92,9 @@ async def test_callback_first_completion_uses_single_terminal_path(
 
 
 async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(
@@ -159,8 +162,9 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
 
 
 async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)
@@ -201,6 +205,8 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 },
                 payload_artifact_ref=None,
             )
+            assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
+
             duplicate = await service.ingest_integration_callback(
                 integration_name="jules",
                 callback_correlation_key="cb-safe",
@@ -212,6 +218,8 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 },
                 payload_artifact_ref=None,
             )
+            assert "Ignored duplicate external event" in duplicate.memo["summary"]
+
             terminal = await service.ingest_integration_callback(
                 integration_name="jules",
                 callback_correlation_key="cb-safe",
@@ -223,6 +231,8 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 },
                 payload_artifact_ref=None,
             )
+            assert terminal.integration_state["normalized_status"] == "succeeded"
+
             reordered = await service.ingest_integration_callback(
                 integration_name="jules",
                 callback_correlation_key="cb-safe",
@@ -234,10 +244,6 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 },
                 payload_artifact_ref=None,
             )
-
-            assert first.integration_state["provider_event_ids_seen"] == ["evt-dup"]
-            assert "Ignored duplicate external event" in duplicate.memo["summary"]
-            assert terminal.integration_state["normalized_status"] == "succeeded"
             assert reordered.integration_state["normalized_status"] == "succeeded"
             with pytest.raises(TemporalExecutionNotFoundError):
                 await service.ingest_integration_callback(
@@ -249,8 +255,9 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
 
 
 async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", False)
     async with _db(tmp_path) as maker:
         async with maker() as session:
             service = TemporalExecutionService(session)
@@ -290,12 +297,14 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
                 result_refs=[],
                 completed_wait_cycles=0,
             )
+
+            assert failed.memo["error_category"] == "integration_error"
+            assert failed.integration_state["normalized_status"] == "failed"
+
             canceled = await service.cancel_execution(
                 workflow_id=created.workflow_id,
                 reason="operator stop",
                 graceful=True,
             )
 
-            assert failed.memo["error_category"] == "integration_error"
-            assert failed.integration_state["normalized_status"] == "failed"
             assert canceled.state is MoonMindWorkflowState.CANCELED

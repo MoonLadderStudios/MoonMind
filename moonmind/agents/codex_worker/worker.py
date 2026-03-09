@@ -1719,6 +1719,14 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
+    async def _put_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = await self._client.put(path, json=json)
+            response.raise_for_status()
+            return dict(response.json()) if response.content else {}
+        except httpx.HTTPError as exc:
+            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
+
     async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
         """Submit a task proposal to the MoonMind API."""
 
@@ -1731,7 +1739,7 @@ class QueueApiClient:
     ) -> None:
         """Publish worker runtime capabilities to queue metadata."""
 
-        await self._post_json(
+        await self._put_json(
             "/api/queue/workers/tokens/capabilities",
             json={"runtimeCapabilities": runtime_capabilities},
         )
@@ -4281,6 +4289,15 @@ class CodexWorker:
                 selected_skills=deduped_selected_skills,
                 env=auth_context.repo_command_env,
             )
+
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                (repo_dir / "skills_active").symlink_to(
+                    "../skills_active", target_is_directory=True
+                )
+            except FileExistsError:
+                # Symlink already exists; this is safe to ignore for idempotent setup.
+                pass
 
             context_payload = {
                 "repository": repository,
@@ -7910,16 +7927,6 @@ class CodexWorker:
         git_node = task.get("git")
         git = git_node if isinstance(git_node, Mapping) else {}
 
-        runtime_mode = (
-            str(
-                runtime.get("mode") or canonical_payload.get("targetRuntime") or "codex"
-            )
-            .strip()
-            .lower()
-            or "codex"
-        )
-        runtime_model = str(runtime.get("model") or "").strip() or None
-        runtime_effort = str(runtime.get("effort") or "").strip() or None
         starting_branch = str(git.get("startingBranch") or "").strip() or None
         publish_mode = "pr"
 
@@ -7929,14 +7936,13 @@ class CodexWorker:
             "maxAttempts": 3,
             "payload": {
                 "repository": str(canonical_payload.get("repository") or "").strip(),
-                "targetRuntime": runtime_mode,
                 "task": {
                     "instructions": _PROPOSAL_INSTRUCTIONS_PLACEHOLDER,
                     "skill": {"id": "auto", "args": {}},
                     "runtime": {
-                        "mode": runtime_mode,
-                        "model": runtime_model,
-                        "effort": runtime_effort,
+                        "mode": None,
+                        "model": None,
+                        "effort": None,
                     },
                     "git": {"startingBranch": starting_branch, "newBranch": None},
                     "publish": {
@@ -8254,6 +8260,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -8476,8 +8483,16 @@ class CodexWorker:
     ) -> tuple[str | None, tuple[str, ...]]:
         """Capture current diff hash + changed files for no-progress detection."""
 
+        await self._run_stage_command(
+            ["git", "add", "-A"],
+            cwd=prepared.repo_dir,
+            log_path=prepared.execute_log_path,
+            check=False,
+            env=prepared.repo_command_env,
+        )
+
         name_result = await self._run_stage_command(
-            ["git", "diff", "--name-only"],
+            ["git", "diff", "--name-only", "HEAD"],
             cwd=prepared.repo_dir,
             log_path=prepared.execute_log_path,
             check=False,
@@ -8493,7 +8508,7 @@ class CodexWorker:
             )
         )
         patch_result = await self._run_stage_command(
-            ["git", "diff"],
+            ["git", "diff", "HEAD"],
             cwd=prepared.repo_dir,
             log_path=prepared.execute_log_path,
             check=False,
@@ -9341,6 +9356,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -9351,8 +9367,14 @@ class CodexWorker:
                             log_path=step_log_path,
                             env=runtime_env,
                         )
+                    await self._run_stage_command(
+                        ["git", "add", "-A"],
+                        cwd=prepared.repo_dir,
+                        log_path=step_log_path,
+                        check=False,
+                    )
                     patch_result = await self._run_stage_command(
-                        ["git", "diff"],
+                        ["git", "diff", "HEAD"],
                         cwd=prepared.repo_dir,
                         log_path=step_log_path,
                         check=False,
@@ -9549,7 +9571,7 @@ class CodexWorker:
 
         patch_path = prepared.artifacts_dir / "changes.patch"
         patch_result = await self._run_stage_command(
-            ["git", "diff"],
+            ["git", "diff", "HEAD"],
             cwd=prepared.repo_dir,
             log_path=prepared.execute_log_path,
             check=False,
@@ -10075,9 +10097,12 @@ class CodexWorker:
         instruction: str,
         model: str | None,
         effort: str | None,
+        prepared: PreparedTaskWorkspace,
     ) -> list[str]:
         if runtime_mode == "gemini":
             command = [self._config.gemini_binary, "--prompt", instruction]
+            skills_active_path = prepared.job_root / "skills_active"
+            command.extend(["--include-directories", str(skills_active_path)])
             if self._config.gemini_allowed_tools:
                 # Gemini CLI excludes or prompts for these tools in non-interactive
                 # mode unless they are explicitly allowed.
@@ -10087,6 +10112,7 @@ class CodexWorker:
                         ",".join(self._config.gemini_allowed_tools),
                     ]
                 )
+            command.extend(["--include-directories", "skills_active"])
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
@@ -10094,7 +10120,7 @@ class CodexWorker:
 
         if model:
             command.extend(["--model", model])
-        if effort:
+        if effort and runtime_mode != "gemini":
             command.extend(["--effort", effort])
         return command
 
@@ -10688,7 +10714,7 @@ class CodexWorker:
     ) -> None:
         """Send lease renewals while a job is actively executing."""
 
-        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 5.0)
+        interval_seconds = min(max(1.0, self._config.lease_seconds / 3.0), 10.0)
         effective_pause_event = pause_event or asyncio.Event()
         while not stop_event.is_set():
             await asyncio.sleep(interval_seconds)
@@ -10776,6 +10802,7 @@ class CodexWorker:
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=str(cwd),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

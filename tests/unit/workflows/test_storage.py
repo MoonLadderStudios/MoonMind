@@ -9,7 +9,7 @@ from moonmind.workflows.speckit_celery.storage import ArtifactStorage
 class TestArtifactStorage(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
-        self.artifact_root = Path(self.temp_dir) / "artifacts"
+        self.artifact_root = (Path(self.temp_dir) / "artifacts").resolve()
         self.storage = ArtifactStorage(str(self.artifact_root))
 
     def tearDown(self):

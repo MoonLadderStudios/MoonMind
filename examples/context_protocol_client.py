@@ -11,6 +11,7 @@ import requests
 
 # Default to localhost, but allow override via environment variable
 API_BASE_URL = os.environ.get("MOONMIND_API_URL", "http://localhost:5000")
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
 
 
 def send_context_request(messages, model="gemini-pro"):
@@ -36,7 +37,12 @@ def send_context_request(messages, model="gemini-pro"):
 
     headers = {"Content-Type": "application/json"}
 
-    response = requests.post(url, json=payload, headers=headers)
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    )
 
     if response.status_code != 200:
         print(f"Error: {response.status_code}")

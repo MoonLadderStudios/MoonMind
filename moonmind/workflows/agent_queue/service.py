@@ -34,6 +34,11 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentQueueRepository,
     AgentWorkerTokenNotFoundError,
 )
+from moonmind.workflows.agent_queue.runtime_defaults import (
+    DEFAULT_REPOSITORY,
+    resolve_default_task_runtime,
+    resolve_runtime_defaults,
+)
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from moonmind.workflows.agent_queue.task_contract import (
     SUPPORTED_EXECUTION_RUNTIMES,
@@ -46,10 +51,6 @@ from moonmind.workflows.tasks import compile_task_payload_templates
 
 logger = logging.getLogger(__name__)
 _TELEMETRY_EVENT_FETCH_LIMIT = 100000
-_DEFAULT_TASK_RUNTIME = "codex"
-_DEFAULT_CODEX_MODEL = "gpt-5.3-codex"
-_DEFAULT_CODEX_EFFORT = "high"
-_DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ATTACHMENT_NAMESPACE = "inputs/"
 _ATTACHMENT_FILENAME_MAX_LENGTH = 120
@@ -365,17 +366,14 @@ class AgentQueueService:
         """Fill missing canonical task payload fields from configured defaults."""
 
         enriched = dict(payload)
-        default_runtime = (
-            self._clean_optional_str(settings.spec_workflow.default_task_runtime)
-            or _DEFAULT_TASK_RUNTIME
-        ).lower()
+        default_runtime = resolve_default_task_runtime(settings.spec_workflow)
         repository = self._clean_optional_str(
             enriched.get("repository") or enriched.get("repo")
         )
         if repository is None:
             repository = (
                 self._clean_optional_str(settings.spec_workflow.github_repository)
-                or _DEFAULT_REPOSITORY
+                or DEFAULT_REPOSITORY
             )
         self._validate_repository_reference(repository)
         enriched["repository"] = repository
@@ -403,17 +401,14 @@ class AgentQueueService:
             )
         enriched["targetRuntime"] = runtime_mode
 
-        if runtime_mode == "codex":
-            if self._clean_optional_str(runtime.get("model")) is None:
-                runtime["model"] = (
-                    self._clean_optional_str(settings.spec_workflow.codex_model)
-                    or _DEFAULT_CODEX_MODEL
-                )
-            if self._clean_optional_str(runtime.get("effort")) is None:
-                runtime["effort"] = (
-                    self._clean_optional_str(settings.spec_workflow.codex_effort)
-                    or _DEFAULT_CODEX_EFFORT
-                )
+        default_model, default_effort = resolve_runtime_defaults(
+            runtime_mode,
+            spec_workflow_settings=settings.spec_workflow,
+        )
+        if self._clean_optional_str(runtime.get("model")) is None and default_model:
+            runtime["model"] = default_model
+        if self._clean_optional_str(runtime.get("effort")) is None and default_effort:
+            runtime["effort"] = default_effort
 
         task["runtime"] = runtime
         enriched["task"] = task
@@ -427,10 +422,6 @@ class AgentQueueService:
         target_runtime = (
             str(normalized_payload.get("targetRuntime") or "").strip().lower()
         )
-        if target_runtime == "claude":
-            gate_state = settings.claude_runtime_gate
-            if not gate_state.enabled:
-                raise AgentQueueValidationError(gate_state.error_message)
         if target_runtime == "jules":
             gate_state = settings.jules_runtime_gate
             if not gate_state.enabled:
@@ -1463,9 +1454,16 @@ class AgentQueueService:
         *,
         job_id: UUID,
         requested_by_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         reason: str | None = None,
     ) -> models.AgentJob:
         """Request cancellation for one queue job."""
+
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=requested_by_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
 
         clean_reason = self._clean_optional_str_max(reason, max_length=256)
 
@@ -1669,6 +1667,7 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         limit: int = 50,
     ) -> list[models.AgentJobArtifact]:
         """List attachment metadata for a job scoped to the requesting user."""
@@ -1678,18 +1677,9 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
-        await self._repository.append_event(
-            job_id=job_id,
-            level=models.AgentJobEventLevel.INFO,
-            message="Attachments listed",
-            payload={
-                "actorUserId": str(actor_user_id) if actor_user_id else None,
-                "limit": limit,
-            },
-        )
-        await self._repository.commit()
         return artifacts
 
     async def list_attachments_for_worker(
@@ -1705,13 +1695,6 @@ class AgentQueueService:
             raise AgentQueueValidationError("limit must be between 1 and 500")
         await self._assert_job_worker_ownership(job_id=job_id, worker_id=worker_id)
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
-        await self._repository.append_event(
-            job_id=job_id,
-            level=models.AgentJobEventLevel.INFO,
-            message="Attachments listed",
-            payload={"workerId": worker_id, "limit": limit},
-        )
-        await self._repository.commit()
         return artifacts
 
     async def get_attachment_download_for_user(
@@ -1720,12 +1703,14 @@ class AgentQueueService:
         job_id: UUID,
         attachment_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> ArtifactDownload:
         """Resolve an attachment download for an authorized user."""
 
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         download = await self._get_attachment_download(
             job_id=job_id, attachment_id=attachment_id
@@ -1855,16 +1840,15 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None = None,
+        actor_is_superuser: bool = False,
     ) -> models.TaskRunLiveSession | None:
         """Fetch current live session state for a task run."""
 
-        if actor_user_id is None:
-            await self._repository.require_job(task_run_id)
-        else:
-            await self._assert_task_run_user_access(
-                task_run_id=task_run_id,
-                actor_user_id=actor_user_id,
-            )
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
         return await self._repository.get_live_session(task_run_id=task_run_id)
 
     async def create_live_session(
@@ -1872,12 +1856,14 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> models.TaskRunLiveSession:
         """Create or enable live session tracking for a task run."""
 
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         existing = await self._repository.get_live_session(task_run_id=task_run_id)
         if existing is not None and existing.status in {
@@ -2025,6 +2011,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         ttl_minutes: int | None = None,
     ) -> LiveSessionWriteGrant:
         """Grant temporary RW reveal for an active live session."""
@@ -2032,6 +2019,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
@@ -2092,6 +2080,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         reason: str | None = None,
     ) -> models.TaskRunLiveSession:
         """Revoke live session access and mark it terminally revoked."""
@@ -2099,6 +2088,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
@@ -2129,6 +2119,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         action: str,
     ) -> models.AgentJob:
         """Apply pause/resume/takeover controls to a task run."""
@@ -2141,6 +2132,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
 
         if normalized == "pause":
@@ -2184,6 +2176,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         message: str,
     ) -> models.TaskRunControlEvent:
         """Persist and broadcast an operator message for a running task run."""
@@ -2196,6 +2189,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
 
         event = await self._repository.append_control_event(
@@ -2223,17 +2217,17 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
-        actor_is_operator: bool = False,
+        actor_is_superuser: bool = False,
         mode: Literal["cancel", "clone"],
     ) -> tuple[models.AgentJob, models.AgentJob | None]:
         """Request cancellation and optionally clone a replacement job."""
 
         job = await self._repository.require_job_for_update(job_id)
-        if not actor_is_operator:
-            await self._assert_task_run_user_access(
-                task_run_id=job_id,
-                actor_user_id=actor_user_id,
-            )
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
         if job.status not in {
             models.AgentJobStatus.RUNNING,
             models.AgentJobStatus.QUEUED,
@@ -2756,12 +2750,15 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> models.AgentJob:
         """Require actor user ownership for live-session and control operations."""
 
+        job = await self._repository.require_job(task_run_id)
+        if actor_is_superuser:
+            return job
         if actor_user_id is None:
             raise AgentQueueJobAuthorizationError("authenticated user id is required")
-        job = await self._repository.require_job(task_run_id)
         if actor_user_id in {job.created_by_user_id, job.requested_by_user_id}:
             return job
         raise AgentQueueJobAuthorizationError(

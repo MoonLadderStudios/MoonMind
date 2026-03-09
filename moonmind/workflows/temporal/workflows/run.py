@@ -1,9 +1,17 @@
 from collections.abc import Mapping
 import asyncio
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
-from temporalio import workflow, exceptions
+from temporalio import exceptions, workflow
+from temporalio.common import RetryPolicy
+
+DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=5),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=1),
+    maximum_attempts=5,
+)
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.activity_catalog import (
@@ -11,6 +19,21 @@ with workflow.unsafe.imports_passed_through():
         LLM_TASK_QUEUE,
         SANDBOX_TASK_QUEUE,
     )
+
+
+class RunWorkflowInput(TypedDict, total=False):
+    """Input payload for the MoonMind.Run workflow."""
+
+    workflow_type: str
+    title: Optional[str]
+    initial_parameters: dict[str, Any]
+    input_artifact_ref: Optional[str]
+    plan_artifact_ref: Optional[str]
+
+
+class RunWorkflowOutput(TypedDict):
+    status: str
+    message: Optional[str]
 
 
 WORKFLOW_NAME = "MoonMind.Run"
@@ -39,6 +62,7 @@ class MoonMindRunWorkflow:
         self._integration: Optional[str] = None
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
+        self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
 
         # State tracking
@@ -61,7 +85,7 @@ class MoonMindRunWorkflow:
         self._max_steps = 100
 
     @workflow.run
-    async def run(self, input_payload: dict[str, Any]) -> dict[str, Any]:
+    async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
             input_payload
         )
@@ -70,8 +94,8 @@ class MoonMindRunWorkflow:
             extra={"workflow_type": workflow_type},
         )
 
-        self._set_state(STATE_INITIALIZING)
-        self._set_state(STATE_PLANNING)
+        self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
+        self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
 
         # Pause until unpaused
         await workflow.wait_condition(lambda: not self._paused)
@@ -91,10 +115,10 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        self._set_state(STATE_FINALIZING)
+        self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
         self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_SUCCEEDED)
+        self._set_state(STATE_SUCCEEDED, summary="Workflow completed successfully.")
 
         return {"status": "success", "message": "Workflow completed successfully"}
 
@@ -102,7 +126,7 @@ class MoonMindRunWorkflow:
         self, input_payload: dict[str, Any]
     ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
-            raise exceptions.ApplicationError("input_payload must be a dictionary")
+            raise self._validation_error("input_payload must be a dictionary")
 
         workflow_type = self._required_string(
             input_payload,
@@ -111,7 +135,7 @@ class MoonMindRunWorkflow:
             error_message="workflowType is required",
         )
         if workflow_type != WORKFLOW_NAME:
-            raise exceptions.ApplicationError(f"workflowType must be {WORKFLOW_NAME}")
+            raise self._validation_error(f"workflowType must be {WORKFLOW_NAME}")
 
         self._workflow_type = workflow_type
         self._entry = "run"
@@ -119,6 +143,7 @@ class MoonMindRunWorkflow:
             input_payload,
             "title",
         )
+        self._summary = workflow.memo().get("summary") or "Execution initialized."
         self._owner_type, self._owner_id = self._trusted_owner_metadata()
 
         parameters = self._mapping_value(
@@ -157,13 +182,11 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "inputs_ref": input_ref,
                 "parameters": parameters,
-                "execution_ref": {
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                },
+                "execution_ref": self._execution_ref("input.plan"),
             },
             start_to_close_timeout=timedelta(minutes=15),
             task_queue=LLM_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
         return (
             plan_result.get("plan_ref")
@@ -174,7 +197,7 @@ class MoonMindRunWorkflow:
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
-        self._set_state(STATE_EXECUTING)
+        self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
         await workflow.execute_activity(
@@ -183,9 +206,11 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "cmd": "echo executing",
                 "timeout_seconds": 300,
+                "execution_ref": self._execution_ref("output.logs"),
             },
             start_to_close_timeout=timedelta(minutes=10),
             task_queue=SANDBOX_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
         if self._integration:
@@ -200,7 +225,9 @@ class MoonMindRunWorkflow:
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
         self._awaiting_external = True
-        self._set_state(STATE_AWAITING_EXTERNAL)
+        self._set_state(
+            STATE_AWAITING_EXTERNAL, summary="Waiting for external integration."
+        )
 
         integration_parameters = dict(parameters)
         integration_parameters.setdefault(
@@ -214,7 +241,9 @@ class MoonMindRunWorkflow:
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
-            raise exceptions.ApplicationError("integration metadata must be an object when provided")
+            raise self._validation_error(
+                "integration metadata must be an object when provided"
+            )
         metadata.setdefault("repo", self._repo)
         metadata.setdefault("planRef", plan_ref)
         integration_parameters["metadata"] = metadata
@@ -224,14 +253,15 @@ class MoonMindRunWorkflow:
             {
                 "principal": self._principal(),
                 "parameters": integration_parameters,
+                "execution_ref": self._execution_ref("output.summary"),
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
+            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
         correlation_id = self._get_from_result(start_result, "correlation_id")
         self._correlation_id = correlation_id
-
         poll_interval_seconds = 5
         max_poll_interval_seconds = 300
 
@@ -241,20 +271,17 @@ class MoonMindRunWorkflow:
 
         while not self._resume_requested and not self._cancel_requested:
             self._wait_cycle_count += 1
-
-            # Wait for callback, user resume, cancel, or poll timer
             try:
                 await workflow.wait_condition(
                     lambda: self._resume_requested or self._cancel_requested,
-                    timeout=timedelta(seconds=poll_interval_seconds)
+                    timeout=timedelta(seconds=poll_interval_seconds),
                 )
             except asyncio.TimeoutError:
-                pass # Timeout occurred
+                pass
 
             if self._resume_requested or self._cancel_requested:
                 break
 
-            # If we didn't resume or cancel, it was a timeout, so we poll
             try:
                 poll_result = await workflow.execute_activity(
                     self._integration_activity_type("status"),
@@ -262,13 +289,14 @@ class MoonMindRunWorkflow:
                         "principal": self._principal(),
                         "correlation_id": correlation_id,
                         "parameters": integration_parameters,
+                        "execution_ref": self._execution_ref("output.summary"),
                     },
                     start_to_close_timeout=timedelta(minutes=5),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
                 )
 
                 status = self._get_from_result(poll_result, "normalized_status")
-
                 if status in ("succeeded", "failed", "canceled"):
                     self._resume_requested = True
                     if status == "failed":
@@ -278,8 +306,9 @@ class MoonMindRunWorkflow:
             except Exception as exc:
                 workflow.logger.warning(f"Integration polling failed: {exc}")
             finally:
-                # Backoff polling interval on success or failure
-                poll_interval_seconds = min(poll_interval_seconds * 2, max_poll_interval_seconds)
+                poll_interval_seconds = min(
+                    poll_interval_seconds * 2, max_poll_interval_seconds
+                )
 
         self._resume_requested = False
         self._awaiting_external = False
@@ -287,19 +316,34 @@ class MoonMindRunWorkflow:
         self._attention_required = False
         self._update_search_attributes()
 
-    def _set_state(self, state: str) -> None:
+    def _set_state(self, state: str, summary: Optional[str] = None) -> None:
         self._state = state
+        if summary:
+            self._summary = summary
         self._update_search_attributes()
+        self._update_memo()
 
     def _principal(self) -> str:
         if not self._owner_id:
-            raise exceptions.ApplicationError("Trusted owner metadata is required")
+            raise self._validation_error("Trusted owner metadata is required")
         return self._owner_id
 
     def _integration_activity_type(self, operation: str = "start") -> str:
         if not self._integration:
-            raise exceptions.ApplicationError("integration is required for integration activities")
+            raise self._validation_error(
+                "integration is required for integration activities"
+            )
         return f"integration.{self._integration}.{operation}"
+
+    def _execution_ref(self, link_type: str) -> dict[str, str]:
+        info = workflow.info()
+        namespace = (info.namespace or "").strip() or "default"
+        return {
+            "namespace": namespace,
+            "workflow_id": info.workflow_id,
+            "run_id": info.run_id,
+            "link_type": link_type,
+        }
 
     def _trusted_owner_metadata(self) -> tuple[str, str]:
         search_attributes = workflow.info().search_attributes
@@ -310,7 +354,7 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise exceptions.ApplicationError(
+            raise self._validation_error(
                 "Trusted owner metadata is required in Temporal search attributes"
             )
         return owner_type, owner_id
@@ -332,7 +376,7 @@ class MoonMindRunWorkflow:
     ) -> str:
         value = self._optional_string(payload, *keys)
         if value is None:
-            raise exceptions.ApplicationError(error_message)
+            raise self._validation_error(error_message)
         return value
 
     def _optional_string(self, payload: Mapping[str, Any], *keys: str) -> Optional[str]:
@@ -341,7 +385,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise exceptions.ApplicationError(f"{key} must be a string when provided")
+                raise self._validation_error(f"{key} must be a string when provided")
             normalized = value.strip()
             if normalized:
                 return normalized
@@ -353,7 +397,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, Mapping):
-                raise exceptions.ApplicationError(f"{key} must be an object when provided")
+                raise self._validation_error(f"{key} must be an object when provided")
             return self._json_mapping(value, path=key)
         return {}
 
@@ -361,7 +405,7 @@ class MoonMindRunWorkflow:
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
-                raise exceptions.ApplicationError(f"{path} keys must be strings")
+                raise self._validation_error(f"{path} keys must be strings")
             normalized[key] = self._json_value(item, path=f"{path}.{key}")
         return normalized
 
@@ -372,7 +416,7 @@ class MoonMindRunWorkflow:
             return self._json_mapping(value, path=path)
         if isinstance(value, list):
             return [self._json_value(item, path=f"{path}[]") for item in value]
-        raise exceptions.ApplicationError(f"{path} must contain only JSON-compatible values")
+        raise self._validation_error(f"{path} must contain only JSON-compatible values")
 
     def _string_from_mapping(
         self, payload: Mapping[str, Any], key: str
@@ -381,22 +425,24 @@ class MoonMindRunWorkflow:
         if value is None:
             return None
         if not isinstance(value, str):
-            raise exceptions.ApplicationError(f"{key} must be a string when provided")
+            raise self._validation_error(f"{key} must be a string when provided")
         normalized = value.strip()
         return normalized or None
+
+    def _validation_error(self, message: str) -> exceptions.ApplicationError:
+        return exceptions.ApplicationError(message, non_retryable=True)
 
     def _update_search_attributes(self) -> None:
         attributes: dict[str, Any] = {
             "mm_state": self._state,
+            "mm_entry": self._entry,
+            "mm_updated_at": workflow.now(),
         }
-        if self._entry is not None:
-            attributes["mm_entry"] = self._entry
 
         memo: dict[str, Any] = {
             "waiting_reason": self._waiting_reason,
             "attention_required": self._attention_required,
         }
-
         try:
             workflow.upsert_memo(memo)
         except Exception as exc:
@@ -414,8 +460,12 @@ class MoonMindRunWorkflow:
         if self._integration:
             attributes["mm_integration"] = self._integration
 
+        formatted_attributes = {
+            k: v if isinstance(v, list) else [v] for k, v in attributes.items()
+        }
+
         try:
-            workflow.upsert_search_attributes(attributes)
+            workflow.upsert_search_attributes(formatted_attributes)
         except Exception as exc:
             # During basic tests search attributes might not be registered
             workflow.logger.warning(
@@ -423,21 +473,32 @@ class MoonMindRunWorkflow:
                 extra={"error": str(exc)},
             )
 
+    def _update_memo(self) -> None:
+        try:
+            workflow.upsert_memo(
+                {
+                    "title": self._title or "Run",
+                    "summary": self._summary,
+                }
+            )
+        except Exception as exc:
+            workflow.logger.warning(
+                "Failed to upsert memo",
+                extra={"error": str(exc)},
+            )
+
     @workflow.signal
     def pause(self) -> None:
         self._paused = True
-        self._waiting_reason = "operator_paused"
+        self._waiting_reason = "Paused by user"
         self._update_search_attributes()
 
     @workflow.signal
     def resume(self) -> None:
         self._paused = False
         self._waiting_reason = None
-
-        # Only set resume_requested if we are actually waiting for an external integration
         if self._awaiting_external:
             self._resume_requested = True
-
         self._update_search_attributes()
 
     @workflow.signal
@@ -450,21 +511,40 @@ class MoonMindRunWorkflow:
     def cancel(self, reason: Optional[str] = None) -> None:
         self._cancel_requested = True
         self._close_status = CLOSE_STATUS_CANCELED
-        self._state = STATE_CANCELED
-        self._update_search_attributes()
+        summary = f"Canceled: {reason}" if reason else "Canceled."
+        self._set_state(STATE_CANCELED, summary=summary)
 
     @workflow.signal(name="ExternalEvent")
     def external_event(self, payload: dict[str, Any]) -> None:
-        if self._correlation_id is None or payload.get("correlation_id") != self._correlation_id:
-            workflow.logger.warning("ExternalEvent signal rejected: missing or mismatched correlation_id")
+        if (
+            self._correlation_id is None
+            or payload.get("correlation_id") != self._correlation_id
+        ):
+            workflow.logger.warning(
+                "ExternalEvent signal rejected: missing or mismatched correlation_id"
+            )
             return
 
         event_type = payload.get("event_type")
         normalized_status = payload.get("normalized_status")
 
-        if event_type == "completed" or normalized_status in ("succeeded", "failed", "canceled"):
+        if event_type == "completed" or normalized_status in (
+            "succeeded",
+            "failed",
+            "canceled",
+        ):
             if normalized_status == "failed":
-                safe_payload = {k: v for k, v in payload.items() if k in ("event_type", "normalized_status", "error_message", "correlation_id")}
+                safe_payload = {
+                    key: value
+                    for key, value in payload.items()
+                    if key
+                    in (
+                        "event_type",
+                        "normalized_status",
+                        "error_message",
+                        "correlation_id",
+                    )
+                }
                 workflow.logger.warning(f"Integration failed: {safe_payload}")
             elif normalized_status == "canceled":
                 self._cancel_requested = True

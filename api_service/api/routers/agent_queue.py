@@ -29,6 +29,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_service.api.routers.executions import _create_execution_from_task_request
+from api_service.api.routers.executions import _get_service as _get_temporal_service
 from api_service.api.schemas import QueueSystemMetadataModel
 from api_service.auth_providers import (
     get_auth_manager,
@@ -85,7 +87,10 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
-from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
+from moonmind.workflows.agent_queue.job_types import (
+    CANONICAL_TASK_JOB_TYPE,
+    MANIFEST_JOB_TYPE,
+)
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
@@ -111,6 +116,8 @@ from moonmind.workflows.agent_queue.service import (
     QueueSystemMetadata,
     WorkerAuthPolicy,
 )
+from moonmind.workflows.tasks.routing import get_routing_target_for_task
+from moonmind.workflows.temporal import TemporalExecutionService
 
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
@@ -746,9 +753,49 @@ async def create_job(
     request: Request,
     payload: CreateJobRequest,
     service: AgentQueueService = Depends(_get_service),
+    temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
     user: User = Depends(get_current_user()),
-) -> JobModel:
+) -> JobModel | dict[str, Any]:
     """Create a queued job for worker execution."""
+
+    target = get_routing_target_for_task(
+        is_manifest=(payload.type == MANIFEST_JOB_TYPE),
+        is_run=(payload.type == CANONICAL_TASK_JOB_TYPE),
+    )
+
+    if target == "temporal":
+        if payload.type == MANIFEST_JOB_TYPE:
+            from api_service.api.routers.executions import (
+                _create_execution_from_manifest_request,
+            )
+
+            execution = await _create_execution_from_manifest_request(
+                request=payload,
+                service=temporal_service,
+                user=user,
+            )
+        else:
+            execution = await _create_execution_from_task_request(
+                request=payload,
+                service=temporal_service,
+                user=user,
+            )
+
+        import uuid
+
+        # Mock JobModel shape for UI compatibility
+        return {
+            "id": uuid.uuid4(),
+            "status": "queued",
+            "type": payload.type,
+            "priority": payload.priority,
+            "attempt": 1,
+            "max_attempts": payload.max_attempts,
+            "created_at": execution.created_at,
+            "updated_at": execution.updated_at,
+            "started_at": execution.started_at,
+            "payload": payload.payload if isinstance(payload.payload, dict) else {},
+        }
 
     try:
         user_id = getattr(user, "id", None)
@@ -865,8 +912,25 @@ async def create_job_with_attachments(
     captions_json: str | None = Form(None, alias="captions"),
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
-) -> JobWithAttachmentsResponse:
+) -> JobWithAttachmentsResponse | dict[str, Any]:
     """Create a queued job that includes user-provided attachments."""
+    try:
+        parsed_payload = CreateJobRequest.model_validate_json(request_payload)
+        target = get_routing_target_for_task(
+            is_manifest=(parsed_payload.type == MANIFEST_JOB_TYPE),
+            is_run=(parsed_payload.type == CANONICAL_TASK_JOB_TYPE),
+        )
+    except ValidationError:
+        target = "queue"
+
+    if target == "temporal":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_routing_target",
+                "message": "Legacy attachment submission is not supported for Temporal-backed workflows.",
+            },
+        )
 
     if not files:
         raise HTTPException(
@@ -1329,13 +1393,19 @@ async def resolve_manifest_job_secrets(
             else None
         )
         if payload.include_profile:
+
+            resolution_results = []
             for ref in profile_refs:
-                env_key = ref["envKey"]
                 value = await auth_manager.get_secret(
                     "profile",
-                    key=env_key,
+                    key=ref["envKey"],
                     user=requester_user,
+                    allow_env_fallback=False,
                 )
+                resolution_results.append((ref, value))
+
+            for ref, value in resolution_results:
+                env_key = ref["envKey"]
                 if not value:
                     unresolved.append(env_key)
                     continue
@@ -1431,7 +1501,7 @@ async def cancel_job(
     job_id: UUID,
     payload: CancelJobRequest | None = Body(None),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> JobModel:
     """Request cancellation for a queued or running queue job."""
 
@@ -1440,6 +1510,7 @@ async def cancel_job(
         job = await service.request_cancel(
             job_id=job_id,
             requested_by_user_id=user_id,
+            actor_is_superuser=_has_operator_override(user),
             reason=(payload.reason if payload is not None else None),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1485,7 +1556,7 @@ async def recover_job(
         recovered, cloned = await service.recover_job(
             job_id=job_id,
             actor_user_id=getattr(user, "id", None),
-            actor_is_operator=bool(getattr(user, "is_superuser", False)),
+            actor_is_superuser=_has_operator_override(user),
             mode=payload.mode,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1504,7 +1575,7 @@ async def recover_job(
 async def create_job_live_session(
     job_id: UUID,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionResponse:
     """Idempotently create/enable live session state for one queue task run."""
 
@@ -1512,6 +1583,7 @@ async def create_job_live_session(
         live = await service.create_live_session(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1535,6 +1607,7 @@ async def get_job_live_session(
         live = await service.get_live_session(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1561,7 +1634,7 @@ async def grant_job_live_session_write(
         default_factory=GrantTaskRunLiveSessionWriteRequest
     ),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionWriteGrantResponse:
     """Return temporary RW attach details for one queue task run."""
 
@@ -1569,6 +1642,7 @@ async def grant_job_live_session_write(
         grant = await service.grant_live_session_write(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             ttl_minutes=payload.ttl_minutes,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1591,7 +1665,7 @@ async def revoke_job_live_session(
         default_factory=RevokeTaskRunLiveSessionRequest
     ),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionResponse:
     """Force revoke one queue task-run live session."""
 
@@ -1599,6 +1673,7 @@ async def revoke_job_live_session(
         live = await service.revoke_live_session(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             reason=payload.reason,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1613,7 +1688,7 @@ async def apply_job_control_action(
     job_id: UUID,
     payload: TaskRunControlRequest,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> JobModel:
     """Apply pause/resume/takeover controls to one queue task run."""
 
@@ -1621,6 +1696,7 @@ async def apply_job_control_action(
         job = await service.apply_control_action(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             action=payload.action,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1637,7 +1713,7 @@ async def append_job_operator_message(
     job_id: UUID,
     payload: TaskRunOperatorMessageRequest,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunControlEventModel:
     """Append one operator message to the queue task run control stream."""
 
@@ -1645,6 +1721,7 @@ async def append_job_operator_message(
         event = await service.append_operator_message(
             task_run_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             message=payload.message,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1745,6 +1822,7 @@ async def list_job_attachments(
         attachments = await service.list_attachments_for_user(
             job_id=job_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
             limit=limit,
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -1768,6 +1846,7 @@ async def download_job_attachment(
             job_id=job_id,
             attachment_id=attachment_id,
             actor_user_id=getattr(user, "id", None),
+            actor_is_superuser=_has_operator_override(user),
         )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         raise _to_http_exception(exc) from exc
@@ -1943,8 +2022,7 @@ async def stream_job_events(
                     else {"message": str(http_exc.detail)}
                 )
                 yield (
-                    "event: error\n"
-                    f"data: {json.dumps(detail, ensure_ascii=True)}\n\n"
+                    f"event: error\ndata: {json.dumps(detail, ensure_ascii=True)}\n\n"
                 )
                 break
 
@@ -2043,6 +2121,10 @@ async def revoke_worker_token(
 
 
 @router.put(
+    "/workers/tokens/capabilities",
+    response_model=WorkerTokenModel,
+)
+@router.post(
     "/workers/tokens/capabilities",
     response_model=WorkerTokenModel,
 )

@@ -369,7 +369,7 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
             recovered, cloned = await service.recover_job(
                 job_id=job.id,
                 actor_user_id=actor,
-                actor_is_operator=True,
+                actor_is_superuser=True,
                 mode="clone",
             )
 
@@ -410,7 +410,7 @@ async def test_recover_job_requires_owner_or_operator(tmp_path: Path) -> None:
             recovered, _ = await service.recover_job(
                 job_id=job.id,
                 actor_user_id=other_user,
-                actor_is_operator=True,
+                actor_is_superuser=True,
                 mode="cancel",
             )
 
@@ -619,6 +619,38 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
     assert job.payload["targetRuntime"] == "claude"
     assert job.payload["task"]["runtime"]["mode"] == "claude"
     assert job.payload["requiredCapabilities"] == ["claude", "git"]
+
+
+async def test_create_task_job_uses_default_model_for_configured_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing runtime model should resolve from the configured default runtime."""
+
+    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "gemini")
+    monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
+
+    async with queue_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            repo = AgentQueueRepository(session)
+            service = AgentQueueService(repo)
+            job = await service.create_job(
+                job_type="task",
+                payload={
+                    "repository": "Moon/Mind",
+                    "task": {
+                        "instructions": "Run task",
+                        "git": {"startingBranch": None, "newBranch": None},
+                        "publish": {"mode": "none"},
+                    },
+                },
+            )
+
+    assert job.payload["targetRuntime"] == "gemini"
+    assert job.payload["task"]["runtime"]["mode"] == "gemini"
+    assert job.payload["task"]["runtime"]["model"] == "gemini-2.5-pro"
+    assert job.payload["task"]["runtime"]["effort"] is None
+    assert job.payload["requiredCapabilities"] == ["gemini", "git"]
 
 
 async def test_create_task_job_rejects_claude_runtime_without_api_key(
@@ -1096,6 +1128,7 @@ async def test_ack_cancel_truncates_finish_reason(tmp_path: Path) -> None:
             await service.request_cancel(
                 job_id=job.id,
                 requested_by_user_id=uuid4(),
+                actor_is_superuser=True,
                 reason="operator",
             )
 
@@ -1131,6 +1164,7 @@ async def test_request_cancel_queued_job_adds_terminal_event(tmp_path: Path) -> 
             cancelled = await service.request_cancel(
                 job_id=job.id,
                 requested_by_user_id=uuid4(),
+                actor_is_superuser=True,
                 reason="operator request",
             )
             events = await service.list_events(job_id=job.id, limit=20)
@@ -1172,6 +1206,7 @@ async def test_running_cancellation_is_requested_then_acknowledged(
             running = await service.request_cancel(
                 job_id=job.id,
                 requested_by_user_id=uuid4(),
+                actor_is_superuser=True,
                 reason="stop",
             )
             running_status = running.status

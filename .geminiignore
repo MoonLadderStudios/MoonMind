@@ -1,0 +1,3 @@
+# Allow Gemini CLI to access the hidden .agents/skills directory
+!.agents/
+!.agents/skills/

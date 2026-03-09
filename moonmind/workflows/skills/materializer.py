@@ -43,6 +43,11 @@ class SkillMaterializationError(RuntimeError):
         self.code = code
 
 
+def _make_writable(func, path, _exc_info) -> None:
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 _SKILL_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _DOWNLOAD_TIMEOUT_SECONDS = 30
 _PUBLIC_ADDRESS_REJECTION_PROPERTIES = (
@@ -561,7 +566,7 @@ def _clear_directory(path: Path) -> None:
         if child.is_symlink() or child.is_file():
             child.unlink(missing_ok=True)
         elif child.is_dir():
-            shutil.rmtree(child)
+            shutil.rmtree(child, onerror=_make_writable)
 
 
 def _ensure_signature(entry: ResolvedSkill, *, verify_signatures: bool) -> None:
@@ -597,11 +602,11 @@ def _materialize_cache_entry(
             staging_dir = skill_hash_root / f".{skill_name}.tmp-{uuid.uuid4().hex}"
             try:
                 shutil.copytree(skill_dir, staging_dir)
-                _mark_read_only(staging_dir)
                 os.replace(staging_dir, skill_cache_dir)
+                _mark_read_only(skill_cache_dir)
             except FileExistsError:
                 # Concurrent run already materialized the same digest.
-                shutil.rmtree(staging_dir, ignore_errors=True)
+                shutil.rmtree(staging_dir, onerror=_make_writable)
         if not (skill_cache_dir / "SKILL.md").is_file():
             raise SkillMaterializationError(
                 "cache_entry_incomplete",

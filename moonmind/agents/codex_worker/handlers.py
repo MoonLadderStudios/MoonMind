@@ -481,8 +481,17 @@ class CodexExecHandler:
                 completion_scope=completion_scope,
             )
 
+            await self._run_command(
+                [self._git_binary, "add", "-A"],
+                cwd=repo_dir,
+                log_path=log_path,
+                check=False,
+                cancel_event=cancel_event,
+                output_chunk_callback=output_chunk_callback,
+            )
+
             diff_result = await self._run_command(
-                [self._git_binary, "diff"],
+                [self._git_binary, "diff", "HEAD"],
                 cwd=repo_dir,
                 log_path=log_path,
                 check=False,
@@ -1110,6 +1119,7 @@ class CodexExecHandler:
                 *command,
                 cwd=str(cwd),
                 env=dict(env) if env is not None else None,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

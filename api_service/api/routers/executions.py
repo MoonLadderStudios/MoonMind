@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+import asyncio
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
+from api_service.core.sync import sync_execution_projection
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -43,6 +49,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.client import fetch_workflow_execution
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
@@ -527,6 +534,61 @@ async def _create_execution_from_task_request(
     return _serialize_execution(record)
 
 
+async def _create_execution_from_manifest_request(
+    *,
+    request: CreateJobRequest,
+    service: TemporalExecutionService,
+    user: User,
+) -> ExecutionModel:
+    if str(request.type).strip().lower() != "manifest":
+        raise _invalid_task_request(
+            "Only manifest-shaped submit requests can be mapped to Temporal manifest executions."
+        )
+
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    manifest_payload = (
+        payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
+    )
+    if not manifest_payload:
+        raise _invalid_task_request(
+            "Manifest-shaped Temporal submit requests require payload.manifest."
+        )
+
+    name = str(manifest_payload.get("name", "inline")).strip()
+    action = str(manifest_payload.get("action", "run")).strip()
+    options = manifest_payload.get("options", {})
+    idempotency_key = str(payload.get("idempotencyKey") or "").strip() or None
+
+    try:
+        record = await service.create_execution(
+            workflow_type="MoonMind.ManifestIngest",
+            owner_id=user.id,
+            title=f"Manifest: {name}",
+            summary=f"Manifest execution for {name} ({action})",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "manifestName": name,
+                "action": action,
+                "options": options,
+                "systemPayload": {"manifest": manifest_payload},
+            },
+            idempotency_key=idempotency_key,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_execution_request",
+                "message": str(exc),
+            },
+        ) from exc
+
+    return _serialize_execution(record)
+
+
 async def _get_owned_execution(
     *,
     service: TemporalExecutionService,
@@ -626,6 +688,7 @@ async def list_executions(
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionListResponse:
     if _is_execution_admin(user):
         effective_owner_type = owner_type
@@ -663,6 +726,32 @@ async def list_executions(
             page_size=page_size,
             next_page_token=next_page_token,
         )
+
+        if settings.temporal.temporal_authoritative_read_enabled and result.items:
+            try:
+                client = await service._client_adapter.get_client()
+
+                async def fetch_and_sync(item):
+                    try:
+                        desc = await fetch_workflow_execution(client, item.workflow_id)
+                        return await sync_execution_projection(session, desc)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to sync execution %s from Temporal: %s",
+                            item.workflow_id,
+                            exc,
+                        )
+                        return item
+
+                tasks = [fetch_and_sync(item) for item in result.items]
+                updated_items = await asyncio.gather(*tasks)
+                await session.commit()
+                result.items = updated_items
+            except Exception as exc:
+                logger.warning(
+                    "Failed to sync executions from Temporal: %s", exc, exc_info=True
+                )
+
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -694,8 +783,24 @@ async def describe_execution(
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+
+    try:
+        if settings.temporal.temporal_authoritative_read_enabled:
+            client = await service._client_adapter.get_client()
+            desc = await fetch_workflow_execution(client, canonical_workflow_id)
+            await sync_execution_projection(session, desc)
+            await session.commit()
+    except Exception as exc:
+        logger.warning(
+            "Failed to sync execution %s from Temporal: %s",
+            canonical_workflow_id,
+            exc,
+            exc_info=True,
+        )
+
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -956,11 +1061,20 @@ async def cancel_execution(
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
-    record = await service.cancel_execution(
-        workflow_id=workflow_id,
-        reason=request.reason,
-        graceful=request.graceful,
-    )
+    try:
+        record = await service.cancel_execution(
+            workflow_id=workflow_id,
+            reason=request.reason,
+            graceful=request.graceful,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "cancel_rejected",
+                "message": str(exc),
+            },
+        ) from exc
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(
