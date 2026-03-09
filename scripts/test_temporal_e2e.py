@@ -1,9 +1,11 @@
 import os
-import time
-import requests
 import sys
+import time
+
+import requests
 
 API_URL = os.getenv("API_URL", "http://localhost:5000")
+
 
 def wait_for_api():
     print(f"Waiting for API at {API_URL}/health ...")
@@ -18,6 +20,7 @@ def wait_for_api():
         time.sleep(2)
     return False
 
+
 def main():
     if not wait_for_api():
         print("Error: API did not become healthy in time.")
@@ -27,15 +30,13 @@ def main():
     payload = {
         "workflowType": "MoonMind.Run",
         "title": "E2E Temporal Migration Test",
-        "initialParameters": {
-            "entry": "E2E test execution"
-        }
+        "initialParameters": {"entry": "E2E test execution"},
     }
     resp = requests.post(f"{API_URL}/api/executions", json=payload)
     if resp.status_code != 201:
         print(f"Error creating task: {resp.status_code} {resp.text}")
         sys.exit(1)
-    
+
     data = resp.json()
     workflow_id = data.get("workflowId") or data.get("id")
     print(f"Created workflow: {workflow_id}")
@@ -48,7 +49,9 @@ def main():
         resp = requests.get(f"{API_URL}/api/executions/{workflow_id}")
         if resp.status_code == 200:
             exec_data = resp.json()
-            status = exec_data.get("temporalStatus") or exec_data.get("status", "unknown")
+            status = exec_data.get("temporalStatus") or exec_data.get(
+                "status", "unknown"
+            )
             print(f"Current status: {status}")
             if status not in ["initializing", "queued", "running", "unknown"]:
                 break
@@ -73,9 +76,13 @@ def main():
     resp = requests.get(f"{API_URL}/api/tasks/{workflow_id}/source")
     if resp.status_code == 200:
         source_data = resp.json()
-        print(f"Task source resolution: {source_data.get('sourceLabel')} -> {source_data.get('detailPath')}")
+        print(
+            f"Task source resolution: {source_data.get('sourceLabel')} -> {source_data.get('detailPath')}"
+        )
     else:
-        print("Source resolution endpoint not found or workflow not available in dashboard yet.")
+        print(
+            "Source resolution endpoint not found or workflow not available in dashboard yet."
+        )
 
     print("\\n5. Cleaning up (cancelling execution if still running)...")
     if status in ["initializing", "queued", "running"]:
@@ -86,6 +93,7 @@ def main():
             print(f"Failed to cancel: {cancel_resp.status_code}")
 
     print("\\nE2E Test Completed.")
+
 
 if __name__ == "__main__":
     main()

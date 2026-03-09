@@ -6,29 +6,33 @@ from temporalio.worker import Worker
 
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.workers import (
-    describe_configured_worker,
-    build_worker_activity_bindings,
     WORKFLOW_FLEET,
+    build_worker_activity_bindings,
+    describe_configured_worker,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
 
 async def main():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
     topology = describe_configured_worker()
-    
+
     client = await Client.connect(
         settings.temporal.address,
         namespace=settings.temporal.namespace,
     )
-    
+
     workflows = []
     if topology.fleet == WORKFLOW_FLEET:
         workflows.append(MoonMindRunWorkflow)
         # Import ManifestIngest workflow if it exists
         try:
-            from moonmind.workflows.temporal.workflows.manifest_ingest import MoonMindManifestIngestWorkflow
+            from moonmind.workflows.temporal.workflows.manifest_ingest import (
+                MoonMindManifestIngestWorkflow,
+            )
+
             workflows.append(MoonMindManifestIngestWorkflow)
         except ImportError:
             pass
@@ -43,9 +47,12 @@ async def main():
         activities=activities,
         max_concurrent_activities=topology.concurrency_limit or 100,
     )
-    
-    logger.info(f"Starting Temporal worker for fleet '{topology.fleet}' on queue '{topology.task_queues[0]}'")
+
+    logger.info(
+        f"Starting Temporal worker for fleet '{topology.fleet}' on queue '{topology.task_queues[0]}'"
+    )
     await worker.run()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
