@@ -38,7 +38,7 @@ jobs:
           # Ensure image name is lowercase as per Docker recommendations
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: . # Setting context to root, Dockerfile path will be relative to this
           file: ./api_service/Dockerfile
