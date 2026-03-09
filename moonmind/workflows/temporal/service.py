@@ -20,6 +20,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
+from moonmind.workflows.temporal.client import fetch_workflow_execution
+
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCanonicalRecord,
@@ -436,14 +438,7 @@ class TemporalExecutionService:
         if record is None:
             if settings.temporal.temporal_authoritative_read_enabled:
                 try:
-                    from moonmind.workflows.temporal.client import (
-                        fetch_workflow_execution,
-                        get_temporal_client,
-                    )
-
-                    temporal_client = await get_temporal_client(
-                        settings.temporal.address, settings.temporal.namespace
-                    )
+                    temporal_client = await self._client_adapter.get_client()
                     desc = await fetch_workflow_execution(
                         temporal_client,
                         canonical_workflow_id,

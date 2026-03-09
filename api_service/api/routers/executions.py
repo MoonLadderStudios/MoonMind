@@ -12,6 +12,10 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, st
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import asyncio
+from api_service.core.sync import sync_execution_projection
+from moonmind.workflows.temporal.client import fetch_workflow_execution
+
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
@@ -723,20 +727,9 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
-        import asyncio
-
-        from api_service.core.sync import sync_execution_projection
-        from moonmind.workflows.temporal.client import (
-            TemporalClientAdapter,
-            fetch_workflow_execution,
-        )
-
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             try:
-                global _shared_client_adapter
-                if "_shared_client_adapter" not in globals():
-                    _shared_client_adapter = TemporalClientAdapter()
-                client = await _shared_client_adapter.get_client()
+                client = await service._client_adapter.get_client()
 
                 async def fetch_and_sync(item):
                     try:
@@ -794,18 +787,9 @@ async def describe_execution(
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
-    from api_service.core.sync import sync_execution_projection
-    from moonmind.workflows.temporal.client import (
-        TemporalClientAdapter,
-        fetch_workflow_execution,
-    )
-
     try:
         if settings.temporal.temporal_authoritative_read_enabled:
-            global _shared_client_adapter
-            if "_shared_client_adapter" not in globals():
-                _shared_client_adapter = TemporalClientAdapter()
-            client = await _shared_client_adapter.get_client()
+            client = await service._client_adapter.get_client()
             desc = await fetch_workflow_execution(client, canonical_workflow_id)
             await sync_execution_projection(session, desc)
             await session.commit()
