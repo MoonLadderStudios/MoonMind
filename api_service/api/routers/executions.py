@@ -854,29 +854,27 @@ async def describe_execution(
 
     from api_service.core.sync import fetch_and_sync_execution
 
-    try:
-        if (
-            settings.temporal.temporal_authoritative_read_enabled
-            or source == "temporal"
-        ):
+    if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
+        try:
             client = temporal_client
             await fetch_and_sync_execution(session, canonical_workflow_id, client)
             await session.commit()
-    except RPCError as exc:
-        if source == "temporal":
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "temporal_unavailable",
-                    "message": "Temporal service unavailable.",
-                },
-            ) from exc
-        logger.warning(
-            "Failed to sync execution %s from Temporal: %s",
-            canonical_workflow_id,
-            exc,
-            exc_info=True,
-        )
+        except RPCError as exc:
+            if source == "temporal":
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "temporal_unavailable",
+                        "message": "Temporal service unavailable.",
+                    },
+                ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync execution %s from Temporal: %s",
+                canonical_workflow_id,
+                exc,
+                exc_info=True,
+            )
 
     record = await _get_owned_execution(
         service=service,

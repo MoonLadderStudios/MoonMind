@@ -186,12 +186,8 @@ class TaskCompatibilityService:
             from moonmind.config.settings import settings
 
             if settings.temporal.temporal_authoritative_read_enabled:
-                import logging
-
-                from api_service.core.sync import fetch_and_sync_execution
                 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-                logger = logging.getLogger(__name__)
                 global _shared_client_adapter
                 if "_shared_client_adapter" not in globals():
                     _shared_client_adapter = TemporalClientAdapter()
