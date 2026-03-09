@@ -8251,6 +8251,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -9346,6 +9347,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -10086,9 +10088,12 @@ class CodexWorker:
         instruction: str,
         model: str | None,
         effort: str | None,
+        prepared: PreparedTaskWorkspace,
     ) -> list[str]:
         if runtime_mode == "gemini":
             command = [self._config.gemini_binary, "--prompt", instruction]
+            skills_active_path = prepared.job_root / "skills_active"
+            command.extend(["--include-directories", str(skills_active_path)])
             if self._config.gemini_allowed_tools:
                 # Gemini CLI excludes or prompts for these tools in non-interactive
                 # mode unless they are explicitly allowed.

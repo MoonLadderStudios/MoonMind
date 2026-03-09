@@ -8589,11 +8589,16 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
+    from unittest.mock import Mock
+    prepared_mock = Mock()
+    prepared_mock.job_root = tmp_path
+    
     command = worker._build_non_codex_runtime_command(
         runtime_mode="gemini",
         instruction="resolve the task",
         model="gemini-2.5-pro",
         effort="high",
+        prepared=prepared_mock,
     )
 
     assert command[:3] == ["gemini", "--prompt", "resolve the task"]
