@@ -605,6 +605,7 @@ def _materialize_cache_entry(
                 def make_writable(func, path, exc_info):
                     os.chmod(path, stat.S_IWRITE)
                     func(path)
+
                 shutil.rmtree(staging_dir, onerror=make_writable)
         if not (skill_cache_dir / "SKILL.md").is_file():
             raise SkillMaterializationError(
