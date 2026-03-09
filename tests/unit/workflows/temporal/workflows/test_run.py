@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 from typing import Any, Dict
 
@@ -27,6 +26,7 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
+INTEGRATION_STATUS_CALLS: list[Dict[str, Any]] = []
 
 WORKFLOW_LINK_TYPES = {
     "plan": "input.plan",
@@ -96,19 +96,6 @@ async def _register_test_search_attributes(
     )
 
 
-async def _wait_for_condition(
-    predicate,
-    *,
-    timeout_seconds: float = 5.0,
-    poll_interval_seconds: float = 0.05,
-) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while not predicate():
-        if asyncio.get_running_loop().time() >= deadline:
-            raise AssertionError("Timed out waiting for test condition")
-        await asyncio.sleep(poll_interval_seconds)
-
-
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
@@ -124,9 +111,15 @@ async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
 @activity.defn(name="integration.jules.start")
 async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_START_CALLS.append(args)
-    if hasattr(mock_integration_start, "event") and mock_integration_start.event:
-        mock_integration_start.event.set()
     return {"correlation_id": "corr-123"}
+
+
+@activity.defn(name="integration.jules.status")
+async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    INTEGRATION_STATUS_CALLS.append(args)
+    if len(INTEGRATION_STATUS_CALLS) <= 1:
+        return {"normalized_status": "running"}
+    return {"normalized_status": "succeeded"}
 
 
 class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
@@ -134,6 +127,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
         PLAN_GENERATE_CALLS.clear()
         SANDBOX_COMMAND_CALLS.clear()
         INTEGRATION_START_CALLS.clear()
+        INTEGRATION_STATUS_CALLS.clear()
 
     async def test_moonmind_run_workflow(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -149,7 +143,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
             ), Worker(
                 env.client,
                 task_queue=INTEGRATIONS_TASK_QUEUE,
-                activities=[mock_integration_start],
+                activities=[mock_integration_start, mock_integration_status],
             ), Worker(
                 env.client,
                 task_queue="test-task-queue",
@@ -175,12 +169,6 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     search_attributes=_trusted_search_attributes(),
                 )
                 workflow_namespace = env.client.namespace
-
-                # Resume only after the integration activity has started; early resume
-                # signals are intentionally ignored before the workflow enters the
-                # awaiting_external state.
-                await _wait_for_condition(lambda: bool(INTEGRATION_START_CALLS))
-                await handle.signal(MoonMindRunWorkflow.resume)
 
                 result = await handle.result()
                 self.assertEqual(result["status"], "success")
@@ -214,6 +202,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     run_id=run_id,
                     kind="integration",
                 )
+                self.assertGreater(len(INTEGRATION_STATUS_CALLS), 0)
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
