@@ -277,6 +277,7 @@ class MoonMindRunWorkflow:
                     timeout=timedelta(seconds=poll_interval_seconds),
                 )
             except asyncio.TimeoutError:
+                # No external signal arrived in this interval; proceed to status polling.
                 pass
 
             if self._resume_requested or self._cancel_requested:
