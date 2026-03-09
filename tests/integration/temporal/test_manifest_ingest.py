@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -357,6 +358,7 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 principal="user-1",
                 manifest_ref=completed.artifact_id,
             )
+            assert "dataSources" in manifest_text
             compile_result = await manifest_activities.manifest_compile(
                 principal="user-1",
                 manifest_ref=completed.artifact_id,
@@ -366,22 +368,6 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
             )
 
-            # Since nodes are no longer returned in ManifestCompileActivityResult,
-            # we need to compile the plan directly here just for the test to get nodes.
-            # In real workflow, nodes are not needed to be returned as large payloads.
-            plan = compile_manifest_plan(
-                manifest_ref=completed.artifact_id,
-                manifest_payload=manifest_text,
-                action="run",
-                options={"dryRun": True},
-                requested_by={"type": "user", "id": "user-1"},
-                execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
-            )
-
-            runtime_nodes = plan_nodes_to_runtime_nodes(
-                plan.nodes,
-                requested_by={"type": "user", "id": "user-1"},
-            )
             (
                 summary_ref,
                 run_index_ref,
@@ -392,14 +378,26 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 phase="executing",
                 manifest_ref=completed.artifact_id,
                 plan_ref=compile_result.plan_ref.artifact_id,
-                nodes=[node.model_dump(by_alias=True) for node in runtime_nodes],
             )
+            _summary_artifact, summary_payload = await artifact_service.read(
+                artifact_id=summary_ref.artifact_id,
+                principal="user-1",
+                allow_restricted_raw=True,
+            )
+            _index_artifact, run_index_payload = await artifact_service.read(
+                artifact_id=run_index_ref.artifact_id,
+                principal="user-1",
+                allow_restricted_raw=True,
+            )
+            summary_data = json.loads(summary_payload.decode("utf-8"))
+            run_index_data = json.loads(run_index_payload.decode("utf-8"))
 
             assert compile_result.plan_ref.artifact_id.startswith("art_")
             assert compile_result.manifest_digest.startswith("sha256:")
-            assert runtime_nodes[0].node_id.startswith("node-")
             assert summary_ref.artifact_id.startswith("art_")
             assert run_index_ref.artifact_id.startswith("art_")
+            assert summary_data["counts"]["ready"] == 1
+            assert len(run_index_data["items"]) == 1
 
 
 @pytest.mark.asyncio

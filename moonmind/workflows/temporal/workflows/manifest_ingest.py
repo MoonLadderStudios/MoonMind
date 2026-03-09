@@ -86,7 +86,6 @@ class MoonMindManifestIngestWorkflow:
                 "phase": "compiled",
                 "manifest_ref": self._manifest_ref,
                 "plan_ref": self._plan_ref,
-                "nodes": [],
             },
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=WORKFLOW_TASK_QUEUE,
