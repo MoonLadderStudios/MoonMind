@@ -4290,6 +4290,12 @@ class CodexWorker:
                 env=auth_context.repo_command_env,
             )
 
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                (repo_dir / "skills_active").symlink_to("../skills_active", target_is_directory=True)
+            except FileExistsError:
+                pass
+
             context_payload = {
                 "repository": repository,
                 "runtime": canonical_payload.get("targetRuntime"),
@@ -10098,7 +10104,7 @@ class CodexWorker:
                         ",".join(self._config.gemini_allowed_tools),
                     ]
                 )
-            command.extend(["--include-directories", "../skills_active"])
+            command.extend(["--include-directories", "skills_active"])
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:
