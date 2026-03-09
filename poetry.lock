@@ -3091,14 +3091,14 @@ pydantic = ">=2.11.5"
 
 [[package]]
 name = "llama-index-llms-anthropic"
-version = "0.10.8"
+version = "0.10.10"
 description = "llama-index llms anthropic integration"
 optional = false
 python-versions = "<4.0,>=3.9"
 groups = ["main"]
 files = [
-    {file = "llama_index_llms_anthropic-0.10.8-py3-none-any.whl", hash = "sha256:2538cdfe051a28a5611037c1eef204cd1e8ead46bd7c669ad92f12238397e706"},
-    {file = "llama_index_llms_anthropic-0.10.8.tar.gz", hash = "sha256:6b758626e5e2d4d0a0aa1a39d983c265ed98fa28d87c1a1c000b3942e65e956c"},
+    {file = "llama_index_llms_anthropic-0.10.10-py3-none-any.whl", hash = "sha256:2f629c72092c624d9c04e1bc52608fcae05693bd9139ba8845ef40f8d36be616"},
+    {file = "llama_index_llms_anthropic-0.10.10.tar.gz", hash = "sha256:c756200b3a5f9d457aa61723254314b50c878f56c8e22460ad82661f49def897"},
 ]
 
 [package.dependencies]
@@ -7089,4 +7089,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "75c7e8e1878dfd36b5ea090c0234822ca1a0cc50fa22357af2e3a8c9f78bdb2d"
+content-hash = "398421c27440ce0267535e406d5f045d8994edcac07563d80469e288d04020bc"
