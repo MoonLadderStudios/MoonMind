@@ -306,4 +306,5 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
                 reason="operator stop",
                 graceful=True,
             )
+
             assert canceled.state is MoonMindWorkflowState.CANCELED

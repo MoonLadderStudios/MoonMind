@@ -13,6 +13,12 @@
   `docker run --rm -v agent_workspaces:/work/agent_jobs -it -v /tmp:/host_tmp alpine sh -lc 'ls /work/agent_jobs/<job_id> | head'`.
 - In the repository code/docs path, durable workflow artifacts for workflow automation are typically written to `var/artifacts/<scope>/<run_id>` (for example `var/artifacts/spec_workflows/<run_id>`).
 
+## Tool Execution Guardrails
+- **Strict Verification of Tool Results**: Never hallucinate success or fabricate data when a tool execution fails. If a tool (e.g., `read_file`, `run_shell_command`) returns an error such as 'File not found', you must correctly identify the failure and take appropriate remediating action instead of silently bypassing it.
+
+## Tool Usage
+- **Heredocs in `run_shell_command`**: Explicitly forbid the use of bare heredocs (e.g. `<< 'EOF' > file.md`) in `run_shell_command`. You MUST use `cat << 'EOF' > file.md` or the `write_file` tool to prevent Bash parsing errors and subsequent artifact gaps.
+
 ## Security Guardrails
 - Never post or commit raw credentials (tokens, API keys, passwords, private keys, cookies, auth headers, session IDs).
 - Never paste full `docker compose` output, `.env` files, or environment/config dumps into PR comments. Summarize and redact.

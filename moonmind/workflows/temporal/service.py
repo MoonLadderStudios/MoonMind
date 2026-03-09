@@ -41,6 +41,7 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
 )
+from moonmind.workflows.temporal.client import fetch_workflow_execution
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -444,14 +445,7 @@ class TemporalExecutionService:
         if record is None:
             if settings.temporal.temporal_authoritative_read_enabled:
                 try:
-                    from moonmind.workflows.temporal.client import (
-                        fetch_workflow_execution,
-                        get_temporal_client,
-                    )
-
-                    temporal_client = await get_temporal_client(
-                        settings.temporal.address, settings.temporal.namespace
-                    )
+                    temporal_client = await self._client_adapter.get_client()
                     desc = await fetch_workflow_execution(
                         temporal_client,
                         canonical_workflow_id,
