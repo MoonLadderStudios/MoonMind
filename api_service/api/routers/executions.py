@@ -8,13 +8,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+from functools import lru_cache
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
-from temporalio.service import RPCError
 from temporalio.client import Client
-from moonmind.workflows.temporal.client import TemporalClientAdapter
-from functools import lru_cache
+from temporalio.service import RPCError
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
@@ -50,6 +50,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
@@ -730,6 +731,7 @@ async def list_executions(
     if source == "temporal":
         try:
             from api_service.core.sync import map_temporal_state_to_projection
+
             client = temporal_client
 
             def escape_val(v: str) -> str:
@@ -743,7 +745,9 @@ async def list_executions(
             if entry:
                 query_parts.append(f'mm_entry="{escape_val(entry)}"')
             if effective_owner_type:
-                query_parts.append(f'mm_owner_type="{escape_val(effective_owner_type)}"')
+                query_parts.append(
+                    f'mm_owner_type="{escape_val(effective_owner_type)}"'
+                )
             if effective_owner:
                 query_parts.append(f'mm_owner_id="{escape_val(effective_owner)}"')
             if repo:
@@ -801,15 +805,16 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
-        import asyncio
 
-        from api_service.core.sync import fetch_and_sync_execution
 
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             from api_service.core.sync import sync_temporal_executions_safely
+
             try:
                 client = temporal_client
-                result.items = await sync_temporal_executions_safely(session, result.items, client)
+                result.items = await sync_temporal_executions_safely(
+                    session, result.items, client
+                )
             except Exception as exc:
                 logger.warning(
                     "Failed to sync executions from Temporal: %s", exc, exc_info=True
