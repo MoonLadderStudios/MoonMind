@@ -5,8 +5,9 @@
 - **Feature Path:** `docs/Temporal/TemporalMigrationPlan.md` (Task 5.14)
 
 ## Files edited
-- `moonmind/workflows/temporal/workflows/task_5_14_workflow.py`
-- `tests/unit/workflows/temporal/test_task_5_14.py`
+* `moonmind/workflows/temporal/workflows/task_5_14_workflow.py`
+* `moonmind/workflows/temporal/activities/task_5_14.py`
+* `tests/unit/workflows/temporal/test_task_5_14.py`
 
 ## Test status
 - **PASSED.** 1 unit test passed successfully for `Task514Workflow` (`pytest tests/unit/workflows/temporal/test_task_5_14.py`).
@@ -18,7 +19,7 @@
 - **PASSED.** All workflow constraints and development checks have been satisfied.
 
 ## Scope validation outcomes (tasks + diff)
-- **PASSED.** The diff is strictly scoped to `task_5_14_workflow.py` and `test_task_5_14.py`, directly fulfilling the requirements of section 5.14. No unrelated refactoring or out-of-scope changes were introduced.
+- **PASSED.** The diff is strictly scoped to `task_5_14_workflow.py`, `task_5_14.py`, and `test_task_5_14.py`, directly fulfilling the requirements of section 5.14. No unrelated refactoring or out-of-scope changes were introduced.
 
 ## DOC-REQ coverage status
 - **PASSED.** The implementation aligns with the documented requirements.

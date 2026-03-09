@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.activities.task_5_14 import task_5_14_activity
 from moonmind.workflows.temporal.workflows.task_5_14_workflow import Task514Workflow
@@ -17,6 +17,7 @@ async def test_task_5_14_workflow():
             task_queue="task-5-14-queue",
             workflows=[Task514Workflow],
             activities=[task_5_14_activity],
+            workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             result = await env.client.execute_workflow(
                 Task514Workflow.run,

@@ -8,5 +8,5 @@
 
 ### Task514Activity
 - **Description**: The side-effect for task 5.14.
-- **Input**: None required.
+- **Input**: `input_str: str` is required.
 - **Output**: Success confirmation.
