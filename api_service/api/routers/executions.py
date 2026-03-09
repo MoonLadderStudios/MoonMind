@@ -805,8 +805,6 @@ async def list_executions(
             next_page_token=next_page_token,
         )
 
-
-
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             from api_service.core.sync import sync_temporal_executions_safely
 
