@@ -33,4 +33,6 @@ Node.js 20+ (for CLI runtime), Python 3.11 (existing service): Follow standard c
 - 006-add-gemini-cli: Added Node.js 20+ (for CLI runtime), Python 3.11 (existing service) + Gemini CLI npm package (`@google` scope, `gemini-cli` name)
 
 <!-- MANUAL ADDITIONS START -->
+## Agent Guidelines
+- **Heredocs in `run_shell_command`**: Explicitly forbid the use of bare heredocs (e.g. `<< 'EOF' > file.md`) in `run_shell_command`. You MUST use `cat << 'EOF' > file.md` or the `write_file` tool to prevent Bash parsing errors and subsequent artifact gaps.
 <!-- MANUAL ADDITIONS END -->
