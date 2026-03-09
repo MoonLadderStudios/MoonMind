@@ -1454,9 +1454,16 @@ class AgentQueueService:
         *,
         job_id: UUID,
         requested_by_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         reason: str | None = None,
     ) -> models.AgentJob:
         """Request cancellation for one queue job."""
+
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=requested_by_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
 
         clean_reason = self._clean_optional_str_max(reason, max_length=256)
 
@@ -1660,6 +1667,7 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         limit: int = 50,
     ) -> list[models.AgentJobArtifact]:
         """List attachment metadata for a job scoped to the requesting user."""
@@ -1669,6 +1677,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         artifacts = await self._list_input_artifacts(job_id=job_id, limit=limit)
         return artifacts
@@ -1694,12 +1703,14 @@ class AgentQueueService:
         job_id: UUID,
         attachment_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> ArtifactDownload:
         """Resolve an attachment download for an authorized user."""
 
         await self._assert_task_run_user_access(
             task_run_id=job_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         download = await self._get_attachment_download(
             job_id=job_id, attachment_id=attachment_id
@@ -1829,16 +1840,15 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None = None,
+        actor_is_superuser: bool = False,
     ) -> models.TaskRunLiveSession | None:
         """Fetch current live session state for a task run."""
 
-        if actor_user_id is None:
-            await self._repository.require_job(task_run_id)
-        else:
-            await self._assert_task_run_user_access(
-                task_run_id=task_run_id,
-                actor_user_id=actor_user_id,
-            )
+        await self._assert_task_run_user_access(
+            task_run_id=task_run_id,
+            actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
         return await self._repository.get_live_session(task_run_id=task_run_id)
 
     async def create_live_session(
@@ -1846,12 +1856,14 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> models.TaskRunLiveSession:
         """Create or enable live session tracking for a task run."""
 
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         existing = await self._repository.get_live_session(task_run_id=task_run_id)
         if existing is not None and existing.status in {
@@ -1999,6 +2011,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         ttl_minutes: int | None = None,
     ) -> LiveSessionWriteGrant:
         """Grant temporary RW reveal for an active live session."""
@@ -2006,6 +2019,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
@@ -2066,6 +2080,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         reason: str | None = None,
     ) -> models.TaskRunLiveSession:
         """Revoke live session access and mark it terminally revoked."""
@@ -2073,6 +2088,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
         live = await self._repository.get_live_session(task_run_id=task_run_id)
         if live is None:
@@ -2103,6 +2119,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         action: str,
     ) -> models.AgentJob:
         """Apply pause/resume/takeover controls to a task run."""
@@ -2115,6 +2132,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
 
         if normalized == "pause":
@@ -2158,6 +2176,7 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
         message: str,
     ) -> models.TaskRunControlEvent:
         """Persist and broadcast an operator message for a running task run."""
@@ -2170,6 +2189,7 @@ class AgentQueueService:
         await self._assert_task_run_user_access(
             task_run_id=task_run_id,
             actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
         )
 
         event = await self._repository.append_control_event(
@@ -2197,17 +2217,17 @@ class AgentQueueService:
         *,
         job_id: UUID,
         actor_user_id: UUID | None,
-        actor_is_operator: bool = False,
+        actor_is_superuser: bool = False,
         mode: Literal["cancel", "clone"],
     ) -> tuple[models.AgentJob, models.AgentJob | None]:
         """Request cancellation and optionally clone a replacement job."""
 
         job = await self._repository.require_job_for_update(job_id)
-        if not actor_is_operator:
-            await self._assert_task_run_user_access(
-                task_run_id=job_id,
-                actor_user_id=actor_user_id,
-            )
+        await self._assert_task_run_user_access(
+            task_run_id=job_id,
+            actor_user_id=actor_user_id,
+            actor_is_superuser=actor_is_superuser,
+        )
         if job.status not in {
             models.AgentJobStatus.RUNNING,
             models.AgentJobStatus.QUEUED,
@@ -2730,12 +2750,15 @@ class AgentQueueService:
         *,
         task_run_id: UUID,
         actor_user_id: UUID | None,
+        actor_is_superuser: bool = False,
     ) -> models.AgentJob:
         """Require actor user ownership for live-session and control operations."""
 
+        job = await self._repository.require_job(task_run_id)
+        if actor_is_superuser:
+            return job
         if actor_user_id is None:
             raise AgentQueueJobAuthorizationError("authenticated user id is required")
-        job = await self._repository.require_job(task_run_id)
         if actor_user_id in {job.created_by_user_id, job.requested_by_user_id}:
             return job
         raise AgentQueueJobAuthorizationError(
