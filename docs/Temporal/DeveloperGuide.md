@@ -140,6 +140,22 @@ curl -X POST http://localhost:5000/api/executions \
 **Expected Result:**
 You should receive a JSON response containing the newly created execution details, including a valid `workflowId`. You can verify that this execution shows up in the Temporal UI (if enabled) at `http://localhost:8088`.
 
+### 5.1. Automated End-to-End Test
+
+To automatically verify that the Temporal integration is working (workers are polling, UI statuses map correctly, and executions can be successfully cancelled), you can run the provided end-to-end Python script. This also verifies rollback by completely cleaning up the test state.
+
+Ensure you have your environment running via `docker compose up` and run:
+
+```bash
+poetry run python scripts/temporal_e2e_test.py
+```
+
+This script will:
+1. Create a `MoonMind.Run` task.
+2. Poll the API until a worker picks up the task (state advances past `initializing`).
+3. Verify that the UI `dashboardStatus` and capability `actions` fields correctly reflect the running state.
+4. Clean up the test state by cancelling the execution.
+
 ## 6. Troubleshooting Guidance
 
 ### Workers remain idle / stuck
