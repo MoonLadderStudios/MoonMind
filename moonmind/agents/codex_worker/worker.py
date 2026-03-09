@@ -1719,14 +1719,6 @@ class QueueApiClient:
         except httpx.HTTPError as exc:
             raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
 
-    async def _put_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
-        try:
-            response = await self._client.put(path, json=json)
-            response.raise_for_status()
-            return dict(response.json()) if response.content else {}
-        except httpx.HTTPError as exc:
-            raise QueueClientError(f"queue API request failed: {path}: {exc}") from exc
-
     async def create_task_proposal(self, *, proposal: dict[str, Any]) -> dict[str, Any]:
         """Submit a task proposal to the MoonMind API."""
 
@@ -1739,7 +1731,7 @@ class QueueApiClient:
     ) -> None:
         """Publish worker runtime capabilities to queue metadata."""
 
-        await self._put_json(
+        await self._post_json(
             "/api/queue/workers/tokens/capabilities",
             json={"runtimeCapabilities": runtime_capabilities},
         )
@@ -4289,6 +4281,15 @@ class CodexWorker:
                 selected_skills=deduped_selected_skills,
                 env=auth_context.repo_command_env,
             )
+
+            repo_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                (repo_dir / "skills_active").symlink_to(
+                    "../skills_active", target_is_directory=True
+                )
+            except FileExistsError:
+                # Symlink already exists; this is safe to ignore for idempotent setup.
+                pass
 
             context_payload = {
                 "repository": repository,
@@ -8251,6 +8252,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -9346,6 +9348,7 @@ class CodexWorker:
                             instruction=instruction,
                             model=runtime_model,
                             effort=runtime_effort,
+                            prepared=prepared,
                         )
                         runtime_env = self._build_non_codex_runtime_env(
                             runtime_mode=runtime_mode
@@ -10086,9 +10089,12 @@ class CodexWorker:
         instruction: str,
         model: str | None,
         effort: str | None,
+        prepared: PreparedTaskWorkspace,
     ) -> list[str]:
         if runtime_mode == "gemini":
             command = [self._config.gemini_binary, "--prompt", instruction]
+            skills_active_path = prepared.job_root / "skills_active"
+            command.extend(["--include-directories", str(skills_active_path)])
             if self._config.gemini_allowed_tools:
                 # Gemini CLI excludes or prompts for these tools in non-interactive
                 # mode unless they are explicitly allowed.
@@ -10098,6 +10104,7 @@ class CodexWorker:
                         ",".join(self._config.gemini_allowed_tools),
                     ]
                 )
+            command.extend(["--include-directories", "skills_active"])
         elif runtime_mode == "claude":
             command = [self._config.claude_binary, "--print", instruction]
         else:

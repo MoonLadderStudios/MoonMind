@@ -11,6 +11,7 @@ from moonmind.config.settings import (
     OllamaSettings,
     OpenAISettings,
     SpecWorkflowSettings,
+    TemporalDashboardSettings,
 )
 
 
@@ -142,6 +143,24 @@ class TestOIDCSettings:
 
         monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
         monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
+
+
+class TestTemporalDashboardSettings:
+    def test_default_values(self):
+        settings = TemporalDashboardSettings(_env_file=None)
+        assert settings.actions_enabled is True
+        assert settings.submit_enabled is True
+
+    def test_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", "false")
+        monkeypatch.setenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", "false")
+
+        settings = TemporalDashboardSettings(_env_file=None)
+        assert settings.actions_enabled is False
+        assert settings.submit_enabled is False
+
+        monkeypatch.delenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", raising=False)
+        monkeypatch.delenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", raising=False)
 
 
 class TestFeatureFlagsSettings:

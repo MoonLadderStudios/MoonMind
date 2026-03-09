@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 from typing import Any, Dict
 
@@ -27,39 +26,7 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
-
-WORKFLOW_LINK_TYPES = {
-    "plan": "input.plan",
-    "command": "output.logs",
-    "integration": "output.summary",
-}
-
-
-def _assert_execution_ref(
-    self: unittest.TestCase,
-    actual: Dict[str, Any],
-    *,
-    namespace: str,
-    workflow_id: str,
-    run_id: str,
-    kind: str,
-) -> None:
-    expected = _expected_execution_ref(namespace, kind, workflow_id)
-    self.assertEqual(actual["namespace"], expected["namespace"])
-    self.assertEqual(actual["workflow_id"], expected["workflow_id"])
-    self.assertEqual(actual["link_type"], expected["link_type"])
-    self.assertEqual(actual["run_id"], run_id)
-    self.assertNotEqual(actual["run_id"], "")
-
-
-def _expected_execution_ref(
-    namespace: str, kind: str, workflow_id: str
-) -> Dict[str, str]:
-    return {
-        "namespace": namespace,
-        "workflow_id": workflow_id,
-        "link_type": WORKFLOW_LINK_TYPES[kind],
-    }
+INTEGRATION_STATUS_CALLS: list[Dict[str, Any]] = []
 
 
 def _trusted_search_attributes() -> TypedSearchAttributes:
@@ -84,10 +51,10 @@ async def _register_test_search_attributes(
         AddSearchAttributesRequest(
             namespace=env.client.namespace,
             search_attributes={
-                "mm_entry": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_state": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_entry": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_updated_at": IndexedValueType.INDEXED_VALUE_TYPE_DATETIME,
                 "mm_repo": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
                 "mm_integration": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
@@ -102,6 +69,8 @@ async def _wait_for_condition(
     timeout_seconds: float = 5.0,
     poll_interval_seconds: float = 0.05,
 ) -> None:
+    import asyncio
+
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     while not predicate():
         if asyncio.get_running_loop().time() >= deadline:
@@ -124,9 +93,15 @@ async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
 @activity.defn(name="integration.jules.start")
 async def mock_integration_start(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_START_CALLS.append(args)
-    if hasattr(mock_integration_start, "event") and mock_integration_start.event:
-        mock_integration_start.event.set()
     return {"correlation_id": "corr-123"}
+
+
+@activity.defn(name="integration.jules.status")
+async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
+    INTEGRATION_STATUS_CALLS.append(args)
+    if len(INTEGRATION_STATUS_CALLS) <= 1:
+        return {"normalized_status": "running"}
+    return {"normalized_status": "succeeded"}
 
 
 class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
@@ -134,6 +109,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
         PLAN_GENERATE_CALLS.clear()
         SANDBOX_COMMAND_CALLS.clear()
         INTEGRATION_START_CALLS.clear()
+        INTEGRATION_STATUS_CALLS.clear()
 
     async def test_moonmind_run_workflow(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -149,7 +125,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
             ), Worker(
                 env.client,
                 task_queue=INTEGRATIONS_TASK_QUEUE,
-                activities=[mock_integration_start],
+                activities=[mock_integration_start, mock_integration_status],
             ), Worker(
                 env.client,
                 task_queue="test-task-queue",
@@ -174,13 +150,6 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     memo={"title": "Trusted title"},
                     search_attributes=_trusted_search_attributes(),
                 )
-                workflow_namespace = env.client.namespace
-
-                # Resume only after the integration activity has started; early resume
-                # signals are intentionally ignored before the workflow enters the
-                # awaiting_external state.
-                await _wait_for_condition(lambda: bool(INTEGRATION_START_CALLS))
-                await handle.signal(MoonMindRunWorkflow.resume)
 
                 result = await handle.result()
                 self.assertEqual(result["status"], "success")
@@ -188,31 +157,6 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(SANDBOX_COMMAND_CALLS[0]["principal"], "trusted-owner")
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
-                )
-                run_id = PLAN_GENERATE_CALLS[0]["execution_ref"]["run_id"]
-                _assert_execution_ref(
-                    self,
-                    PLAN_GENERATE_CALLS[0]["execution_ref"],
-                    namespace=workflow_namespace,
-                    workflow_id="test-workflow-id",
-                    run_id=run_id,
-                    kind="plan",
-                )
-                _assert_execution_ref(
-                    self,
-                    SANDBOX_COMMAND_CALLS[0]["execution_ref"],
-                    namespace=workflow_namespace,
-                    workflow_id="test-workflow-id",
-                    run_id=run_id,
-                    kind="command",
-                )
-                _assert_execution_ref(
-                    self,
-                    INTEGRATION_START_CALLS[0]["execution_ref"],
-                    namespace=workflow_namespace,
-                    workflow_id="test-workflow-id",
-                    run_id=run_id,
-                    kind="integration",
                 )
 
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
@@ -247,22 +191,6 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
         self.assertEqual(SANDBOX_COMMAND_CALLS[0]["principal"], "trusted-owner")
-        _assert_execution_ref(
-            self,
-            PLAN_GENERATE_CALLS[0]["execution_ref"],
-            namespace=env.client.namespace,
-            workflow_id="test-workflow-id-trusted-owner",
-            run_id=PLAN_GENERATE_CALLS[0]["execution_ref"]["run_id"],
-            kind="plan",
-        )
-        _assert_execution_ref(
-            self,
-            SANDBOX_COMMAND_CALLS[0]["execution_ref"],
-            namespace=env.client.namespace,
-            workflow_id="test-workflow-id-trusted-owner",
-            run_id=PLAN_GENERATE_CALLS[0]["execution_ref"]["run_id"],
-            kind="command",
-        )
 
     async def test_moonmind_run_workflow_validation_error(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:

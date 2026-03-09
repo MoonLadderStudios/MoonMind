@@ -202,10 +202,6 @@ class TemporalSettings(BaseSettings):
         env="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
         ge=1,
     )
-    temporal_authoritative_read_enabled: bool = Field(
-        False,
-        env="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
-    )
 
     model_config = SettingsConfigDict(
         env_prefix="",
@@ -230,57 +226,92 @@ class TemporalSettings(BaseSettings):
 class TemporalDashboardSettings(BaseSettings):
     """Task-dashboard Temporal source contract and rollout flags."""
 
-    enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_ENABLED")
-    list_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_LIST_ENABLED")
-    detail_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_DETAIL_ENABLED")
-    actions_enabled: bool = Field(True, env="TEMPORAL_DASHBOARD_ACTIONS_ENABLED")
-    submit_enabled: bool = Field(False, env="TEMPORAL_DASHBOARD_SUBMIT_ENABLED")
+    enabled: bool = Field(
+        True,
+        env="TEMPORAL_DASHBOARD_ENABLED",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ENABLED"),
+    )
+    list_enabled: bool = Field(
+        True,
+        env="TEMPORAL_DASHBOARD_LIST_ENABLED",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENABLED"),
+    )
+    detail_enabled: bool = Field(
+        True,
+        env="TEMPORAL_DASHBOARD_DETAIL_ENABLED",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DETAIL_ENABLED"),
+    )
+    actions_enabled: bool = Field(
+        True,
+        env="TEMPORAL_DASHBOARD_ACTIONS_ENABLED",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ACTIONS_ENABLED"),
+    )
+    submit_enabled: bool = Field(
+        True,
+        env="TEMPORAL_DASHBOARD_SUBMIT_ENABLED",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SUBMIT_ENABLED"),
+    )
     debug_fields_enabled: bool = Field(
-        False, env="TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED"
+        False,
+        env="TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED"),
     )
     list_endpoint: str = Field(
         "/api/executions",
         env="TEMPORAL_DASHBOARD_LIST_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENDPOINT"),
     )
     create_endpoint: str = Field(
         "/api/executions",
         env="TEMPORAL_DASHBOARD_CREATE_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_CREATE_ENDPOINT"),
     )
     detail_endpoint: str = Field(
         "/api/executions/{workflowId}",
         env="TEMPORAL_DASHBOARD_DETAIL_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DETAIL_ENDPOINT"),
     )
     update_endpoint: str = Field(
         "/api/executions/{workflowId}/update",
         env="TEMPORAL_DASHBOARD_UPDATE_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_UPDATE_ENDPOINT"),
     )
     signal_endpoint: str = Field(
         "/api/executions/{workflowId}/signal",
         env="TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT"),
     )
     cancel_endpoint: str = Field(
         "/api/executions/{workflowId}/cancel",
         env="TEMPORAL_DASHBOARD_CANCEL_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_CANCEL_ENDPOINT"),
     )
     artifacts_endpoint: str = Field(
         "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
         env="TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT"),
     )
     artifact_create_endpoint: str = Field(
         "/api/artifacts",
         env="TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT"),
     )
     artifact_metadata_endpoint: str = Field(
         "/api/artifacts/{artifactId}",
         env="TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT"),
     )
     artifact_presign_download_endpoint: str = Field(
         "/api/artifacts/{artifactId}/presign-download",
         env="TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT",
+        validation_alias=AliasChoices(
+            "TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT"
+        ),
     )
     artifact_download_endpoint: str = Field(
         "/api/artifacts/{artifactId}/download",
         env="TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT",
+        validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT"),
     )
 
     model_config = SettingsConfigDict(
@@ -427,7 +458,7 @@ class SpecWorkflowSettings(BaseSettings):
         gt=0,
     )
     agent_job_attachment_enabled: bool = Field(
-        True,
+        False,
         env="AGENT_JOB_ATTACHMENT_ENABLED",
         description="Toggle for allowing input image attachments during queue job creation.",
     )
@@ -1376,14 +1407,14 @@ class AppSpecWorkflowSettings(SpecWorkflowSettings):
 class SecuritySettings(BaseSettings):
     """Security settings"""
 
-    JWT_SECRET_KEY: Optional[str] = Field(None, env="JWT_SECRET_KEY")
-    ENCRYPTION_MASTER_KEY: Optional[str] = Field(None, env="ENCRYPTION_MASTER_KEY")
+    JWT_SECRET_KEY: Optional[str] = Field(
+        "test_jwt_secret_key", env="JWT_SECRET_KEY"
+    )  # Made Optional and added default
+    ENCRYPTION_MASTER_KEY: Optional[str] = Field(
+        "test_encryption_master_key", env="ENCRYPTION_MASTER_KEY"
+    )  # Made Optional and added default
 
-    model_config = SettingsConfigDict(
-        env_prefix="",
-        env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-    )
+    model_config = SettingsConfigDict(env_prefix="")
 
 
 class GoogleSettings(BaseSettings):

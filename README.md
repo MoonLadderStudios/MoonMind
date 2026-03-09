@@ -94,12 +94,36 @@ MoonMind now includes a self-hosted Temporal foundation in `docker-compose.yaml`
 - `temporal-db` (PostgreSQL persistence + SQL visibility backend)
 - `temporal` (Temporal server via `temporalio/auto-setup`)
 - `temporal-namespace-init` (idempotent bootstrap for namespace and retention policy)
+- **Temporal Workers** (`temporal-worker-workflow`, `temporal-worker-artifacts`, `temporal-worker-llm`, `temporal-worker-sandbox`, `temporal-worker-integrations`) auto-start and begin polling.
 
-Bring up the Temporal foundation:
+To bring up the entire Temporal foundation including all worker fleets:
 
 ```bash
-docker compose up -d temporal-db temporal temporal-namespace-init
+docker compose up -d
 ```
+
+Or to run just the Temporal-related services if you prefer:
+
+```bash
+docker compose up -d temporal-db temporal temporal-namespace-init temporal-worker-workflow temporal-worker-artifacts temporal-worker-llm temporal-worker-sandbox temporal-worker-integrations
+```
+
+#### Running the End-to-End Test
+
+To validate your local Temporal setup, you can run the automated end-to-end test script. This will submit a task, wait for the worker execution to complete, and verify the artifacts and UI status:
+
+```bash
+python scripts/temporal_e2e_test.py
+```
+
+#### Cleaning Temporal State
+
+If you need to reset the Temporal state between test runs, you can use the provided cleanup script:
+
+```bash
+./scripts/temporal_clean_state.sh
+```
+This script will stop Temporal services, remove the database volume, and restart the environment from a blank slate.
 
 Optional operator services:
 

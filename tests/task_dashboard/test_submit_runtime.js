@@ -183,6 +183,13 @@ const helpers = loadSubmitRuntimeHelpers();
     { temporalSubmitEnabled: true, isEditMode: true },
   );
   assert.strictEqual(editTarget.mode, "worker");
+  const attachmentTarget = helpers.determineSubmitDestination(
+    "codex",
+    endpoints,
+    { temporalSubmitEnabled: true, preferQueueSubmit: true },
+  );
+  assert.strictEqual(attachmentTarget.mode, "worker");
+  assert.strictEqual(attachmentTarget.endpoint, "/api/queue/jobs");
 })();
 
 (function testTemporalSubmitHelpersKeepPickerWorkerOnly() {

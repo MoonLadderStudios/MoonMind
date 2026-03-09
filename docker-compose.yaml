@@ -1,14 +1,5 @@
 services:
-  keycloak-db:
-    profiles: ["keycloak"]
-    image: postgres:${POSTGRES_VERSION:-17}
-    environment:
-      POSTGRES_USER: keycloak
-      POSTGRES_PASSWORD: ${KC_DB_PW:-keycloak}
-      POSTGRES_DB: keycloak
-    volumes: [ keycloak-data:/var/lib/postgresql/data ]
-    networks: [ local-network ]
-    restart: unless-stopped
+
 
   keycloak:
     profiles: ["keycloak"]
@@ -19,7 +10,7 @@ services:
       --hostname-url=http://keycloak:8080
       --import-realm
       --db=postgres
-      --db-url=jdbc:postgresql://keycloak-db:5432/keycloak
+      --db-url=jdbc:postgresql://postgres:5432/keycloak
       --db-username=keycloak
       --db-password=${KC_DB_PW:-keycloak}
     environment:
@@ -29,36 +20,10 @@ services:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     ports: [ "8085:8080" ]        # host→container
     depends_on:
-      - keycloak-db
+      postgres:
+        condition: service_healthy
     networks: [ local-network ]
     restart: unless-stopped
-
-  ui:
-    image: ghcr.io/open-webui/open-webui:main
-    volumes:
-      - open-webui:/app/backend/data
-    ports:
-      - 8080:8080
-    environment:
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://api:5000/v1}
-      - WEBUI_AUTH=${WEBUI_AUTH:-false}
-      # - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_FORWARD_AUTH_HEADER:-true} # Keep or remove based on final setup with OIDC
-      - ENABLE_OLLAMA_API=false
-      # OIDC specific variables for OpenWebUI
-      - ENABLE_OAUTH_SIGNUP=${WEBUI_AUTH:-false}
-      - OAUTH_PROVIDER_NAME=Keycloak # Can be changed by .env if needed
-      - OAUTH_CLIENT_ID=open-webui # As defined in realm-export.json
-      - OAUTH_CLIENT_SECRET= # Left blank for PKCE
-      - OAUTH_SCOPES=openid email profile
-      - OPENID_PROVIDER_URL=http://keycloak:8080/realms/moonmind/.well-known/openid-configuration # Internal URL for Keycloak
-      - WEBUI_FORWARD_AUTH_HEADER=${WEBUI_AUTH:-false} # Important for API to get the token
-    env_file:
-      - .env
-    restart: unless-stopped
-    networks:
-      - local-network
-    depends_on:
-      - api
 
   api:
     build:
@@ -100,62 +65,53 @@ services:
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
-      - temporal-network
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
     depends_on:
       init-db:
         condition: service_completed_successfully
-      api-db:
-        condition: service_started
+      postgres:
+        condition: service_healthy
       minio:
         condition: service_started
 
-  api-db:
+  postgres:
     image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-moonmind}
+      TEMPORAL_POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
+      TEMPORAL_POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      TEMPORAL_POSTGRES_DB: ${TEMPORAL_POSTGRES_DB:-temporal}
+      TEMPORAL_VISIBILITY_DB: ${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
+      KC_DB_PW: ${KC_DB_PW:-keycloak}
     volumes:
-      - api-db-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
+      - ./init_db_scripts:/docker-entrypoint-initdb.d
     expose:
       - "5432"
     networks:
       local-network:
         aliases:
-          # local-network is external/shared; use a unique DB hostname to avoid cross-stack DNS collisions.
           - moonmind-api-db
+          - temporal-db
     restart: unless-stopped
-
-  temporal-db:
-    image: postgres:${TEMPORAL_POSTGRES_VERSION:-17}
-    environment:
-      POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
-      POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
-      POSTGRES_DB: ${TEMPORAL_POSTGRES_DB:-temporal}
-    volumes:
-      - temporal-db-data:/var/lib/postgresql/data
-    expose:
-      - "5432"
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U ${TEMPORAL_POSTGRES_USER:-temporal} -d ${TEMPORAL_POSTGRES_DB:-temporal}
+        - pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-moonmind}
       interval: 10s
       timeout: 5s
-      retries: 10
-    networks:
-      - temporal-network
-    restart: unless-stopped
+      retries: 5
 
   temporal:
     image: temporalio/auto-setup:${TEMPORAL_VERSION:-1.29.1}
     environment:
       - DB=postgres12
       - DB_PORT=5432
-      - POSTGRES_SEEDS=temporal-db
+      - POSTGRES_SEEDS=postgres
       - POSTGRES_USER=${TEMPORAL_POSTGRES_USER:-temporal}
       - POSTGRES_PWD=${TEMPORAL_POSTGRES_PASSWORD:-temporal}
       - DBNAME=${TEMPORAL_POSTGRES_DB:-temporal}
@@ -168,13 +124,12 @@ services:
     volumes:
       - ./services/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro
     depends_on:
-      temporal-db:
+      postgres:
         condition: service_healthy
     networks:
-      temporal-network:
+      local-network:
         aliases:
           - temporal-internal
-      local-network:
     restart: unless-stopped
 
   minio:
@@ -192,7 +147,6 @@ services:
       - minio-data:/data
     networks:
       - local-network
-      - temporal-network
     restart: unless-stopped
 
   temporal-namespace-init:
@@ -212,7 +166,6 @@ services:
       temporal:
         condition: service_started
     networks:
-      - temporal-network
       - local-network
     restart: "no"
 
@@ -220,7 +173,7 @@ services:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
     profiles: ["temporal-tools"]
     environment:
-      - TEMPORAL_POSTGRES_HOST=temporal-db
+      - TEMPORAL_POSTGRES_HOST=postgres
       - TEMPORAL_POSTGRES_PORT=5432
       - TEMPORAL_POSTGRES_USER=${TEMPORAL_POSTGRES_USER:-temporal}
       - TEMPORAL_POSTGRES_PASSWORD=${TEMPORAL_POSTGRES_PASSWORD:-temporal}
@@ -239,7 +192,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
+      - local-network
     restart: "no"
 
   temporal-admin-tools:
@@ -254,7 +207,6 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -271,193 +223,6 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
-    restart: unless-stopped
-
-  temporal-worker-workflow:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    environment:
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
-      - TEMPORAL_WORKER_FLEET=workflow
-      - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
-      - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-    env_file:
-      - .env
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./services:/app/services:ro
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
-    networks:
-      - temporal-network
-      - local-network
-    restart: unless-stopped
-
-  temporal-worker-artifacts:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    environment:
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
-      - TEMPORAL_WORKER_FLEET=artifacts
-      - TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE=${TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE:-mm.activity.artifacts}
-      - TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY=${TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY:-8}
-      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
-      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://minio:9000}
-      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
-      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
-      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-    env_file:
-      - .env
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./services:/app/services:ro
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
-      minio:
-        condition: service_started
-    networks:
-      - temporal-network
-      - local-network
-    restart: unless-stopped
-
-  temporal-worker-llm:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    environment:
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
-      - TEMPORAL_WORKER_FLEET=llm
-      - TEMPORAL_ACTIVITY_LLM_TASK_QUEUE=${TEMPORAL_ACTIVITY_LLM_TASK_QUEUE:-mm.activity.llm}
-      - TEMPORAL_LLM_WORKER_CONCURRENCY=${TEMPORAL_LLM_WORKER_CONCURRENCY:-4}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-    env_file:
-      - .env
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./services:/app/services:ro
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
-    networks:
-      - temporal-network
-      - local-network
-    restart: unless-stopped
-
-  temporal-worker-sandbox:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    environment:
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
-      - TEMPORAL_WORKER_FLEET=sandbox
-      - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
-      - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-    env_file:
-      - .env
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./services:/app/services:ro
-      - agent_workspaces:/work/agent_jobs
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
-      agent-workspaces-init:
-        condition: service_completed_successfully
-    networks:
-      - temporal-network
-      - local-network
-    restart: unless-stopped
-
-  temporal-worker-integrations:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    environment:
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - PYTHONUNBUFFERED=1
-      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
-      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
-      - TEMPORAL_WORKER_FLEET=integrations
-      - TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE=${TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE:-mm.activity.integrations}
-      - TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY=${TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY:-4}
-      - JULES_ENABLED=${JULES_ENABLED:-false}
-      - JULES_API_URL=${JULES_API_URL:-}
-      - JULES_API_KEY=${JULES_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
-    env_file:
-      - .env
-    volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./services:/app/services:ro
-    entrypoint:
-      - /bin/sh
-      - /app/services/temporal/scripts/start-worker.sh
-    depends_on:
-      temporal:
-        condition: service_started
-      temporal-namespace-init:
-        condition: service_completed_successfully
-    networks:
-      - temporal-network
       - local-network
     restart: unless-stopped
 
@@ -495,8 +260,10 @@ services:
       - local-network
     restart: "no"
     depends_on:
-      - api-db
-      - qdrant
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
 
   agent-workspaces-init:
     image: alpine:3.20
@@ -541,13 +308,14 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_CONFIG_HOME:-/home/app/.codex}
-      - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
+      - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - MOONMIND_WORKER_ID=${MOONMIND_WORKER_ID:-codex-worker-1}
       - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
@@ -616,6 +384,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -700,6 +469,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -786,6 +556,7 @@ services:
     env_file:
       - .env
     environment:
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONUNBUFFERED=1
@@ -959,12 +730,9 @@ services:
     init: true
 
 volumes:
-  open-webui:
   qdrant-storage:
-  api-db-data:
-  temporal-db-data:
+  postgres-data:
   minio-data:
-  keycloak-data:
   speckit_workspaces:
   agent_workspaces:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
@@ -981,6 +749,4 @@ networks:
   local-network:
     external: true
   docker-proxy-network:
-    internal: true
-  temporal-network:
     internal: true

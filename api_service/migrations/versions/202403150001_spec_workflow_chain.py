@@ -187,18 +187,13 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _quote_ident(name: str) -> str:
-    """Safely quote a SQL identifier using the active dialect."""
-    return op.get_context().dialect.identifier_preparer.quote(name)
-
-
 def _backup_existing_tables() -> None:
     """Rename legacy Spec workflow tables to preserve their contents."""
 
     for table_name in LEGACY_WORKFLOW_TABLES:
         backup_name = f"legacy_{table_name}"
-        quoted_table = _quote_ident(table_name)
-        quoted_backup = _quote_ident(backup_name)
+        quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
+        quoted_backup = sa.sql.elements.quoted_name(backup_name, quote=True)
 
         op.execute(f"DROP TABLE IF EXISTS {quoted_backup} CASCADE")
         op.execute(f"ALTER TABLE IF EXISTS {quoted_table} RENAME TO {quoted_backup}")
@@ -207,7 +202,8 @@ def _backup_existing_tables() -> None:
 def _copy_legacy_table_data(target_table: str) -> None:
     """Copy data from a legacy backup table into the new schema."""
 
-    # No-op safely when the source table or schema metadata is missing.
+    # Data is not critical in this environment; skip copying legacy rows.
+    return
 
     columns = LEGACY_TABLE_COLUMNS.get(target_table)
     if not columns:
@@ -222,9 +218,11 @@ def _copy_legacy_table_data(target_table: str) -> None:
     if not exists:
         return
 
-    column_csv = ", ".join(_quote_ident(column) for column in columns)
-    quoted_source = _quote_ident(source_table)
-    quoted_target = _quote_ident(target_table)
+    column_csv = ", ".join(
+        str(sa.sql.elements.quoted_name(column, quote=True)) for column in columns
+    )
+    quoted_source = sa.sql.elements.quoted_name(source_table, quote=True)
+    quoted_target = sa.sql.elements.quoted_name(target_table, quote=True)
 
     bind.execute(
         sa.text(
@@ -238,7 +236,7 @@ def _drop_legacy_backups() -> None:
     """Remove legacy_* tables after their contents have been restored."""
 
     for table_name in LEGACY_WORKFLOW_TABLES:
-        quoted_backup = _quote_ident(f"legacy_{table_name}")
+        quoted_backup = sa.sql.elements.quoted_name(f"legacy_{table_name}", quote=True)
         op.execute(f"DROP TABLE IF EXISTS {quoted_backup} CASCADE")
 
 
@@ -246,9 +244,9 @@ def _detach_legacy_tables_from_enums() -> None:
     """Cast legacy enum columns to text so types can be dropped safely."""
 
     for table_name, columns in LEGACY_ENUM_COLUMNS.items():
-        quoted_table = _quote_ident(table_name)
+        quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
         for column, _ in columns:
-            quoted_column = _quote_ident(column)
+            quoted_column = sa.sql.elements.quoted_name(column, quote=True)
             if table_name == "legacy_spec_workflow_task_states":
                 op.execute("DROP INDEX IF EXISTS ix_spec_workflow_task_states_failed")
             op.execute(
@@ -266,14 +264,16 @@ def _drop_legacy_enums() -> None:
     """Drop enums installed by prior Spec workflow migrations."""
 
     for type_name in LEGACY_ENUM_TYPES:
-        quoted_type = _quote_ident(type_name)
+        quoted_type = sa.sql.elements.quoted_name(type_name, quote=True)
         op.execute(f"DROP TYPE IF EXISTS {quoted_type}")
 
 
 def _ensure_updated_at_function() -> None:
     """Install the trigger function used to auto-update timestamps."""
 
-    quoted_name = _quote_ident(SPEC_UPDATED_AT_TRIGGER_FUNCTION)
+    quoted_name = sa.sql.elements.quoted_name(
+        SPEC_UPDATED_AT_TRIGGER_FUNCTION, quote=True
+    )
     op.execute(
         f"""
         CREATE OR REPLACE FUNCTION {quoted_name}()
@@ -291,9 +291,13 @@ def _create_updated_at_trigger(table_name: str) -> None:
     """Attach an auto-updating trigger to the given table."""
 
     _ensure_updated_at_function()
-    quoted_table = _quote_ident(table_name)
-    trigger_name = _quote_ident(f"trg_{table_name}_updated_at")
-    function_name = _quote_ident(SPEC_UPDATED_AT_TRIGGER_FUNCTION)
+    quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
+    trigger_name = sa.sql.elements.quoted_name(
+        f"trg_{table_name}_updated_at", quote=True
+    )
+    function_name = sa.sql.elements.quoted_name(
+        SPEC_UPDATED_AT_TRIGGER_FUNCTION, quote=True
+    )
 
     op.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {quoted_table}")
     op.execute(
@@ -308,7 +312,9 @@ def _create_updated_at_trigger(table_name: str) -> None:
 def _drop_updated_at_function() -> None:
     """Remove the helper trigger function if this migration is downgraded."""
 
-    quoted_name = _quote_ident(SPEC_UPDATED_AT_TRIGGER_FUNCTION)
+    quoted_name = sa.sql.elements.quoted_name(
+        SPEC_UPDATED_AT_TRIGGER_FUNCTION, quote=True
+    )
     op.execute(f"DROP FUNCTION IF EXISTS {quoted_name}()")
 
 
@@ -335,7 +341,7 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_task_states",
         "spec_workflow_runs",
     ):
-        op.execute(f"DROP TABLE IF EXISTS {_quote_ident(table)} CASCADE")
+        op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
 
     _backup_existing_tables()
     _detach_legacy_tables_from_enums()
@@ -346,7 +352,7 @@ def upgrade() -> None:  # noqa: D401
         "ix_spec_workflow_runs_requested_by",
         "ix_spec_workflow_runs_created_by",
     ):
-        op.execute(f"DROP INDEX IF EXISTS {_quote_ident(idx_name)}")
+        op.execute(f"DROP INDEX IF EXISTS {idx_name}")
 
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
     _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)

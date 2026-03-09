@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
+from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
@@ -50,6 +51,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
     build_manifest_run_index,
     build_manifest_summary,
     compile_manifest_plan,
+    plan_nodes_to_runtime_nodes,
 )
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
@@ -85,7 +87,6 @@ class ManifestCompileActivityResult:
 
     plan_ref: ArtifactRef
     manifest_digest: str
-    nodes: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +339,20 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     return text[-max_chars:]
 
 
+def _coerce_activity_request(
+    request: Mapping[str, Any] | None,
+    *,
+    activity_type: str,
+) -> dict[str, Any]:
+    if request is None:
+        return {}
+    if not isinstance(request, Mapping):
+        raise TemporalActivityRuntimeError(
+            f"{activity_type} payload must be a JSON object"
+        )
+    return dict(request)
+
+
 async def _maybe_call_heartbeat(
     callback: HeartbeatCallback | None,
     payload: Mapping[str, Any],
@@ -363,13 +378,32 @@ class TemporalPlanActivities:
 
     async def plan_generate(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        principal: str,
-        inputs_ref: ArtifactRef | str | None,
+        principal: str | None = None,
+        inputs_ref: ArtifactRef | str | None = None,
         parameters: Mapping[str, Any] | None = None,
         registry_snapshot_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> PlanGenerateActivityResult:
+        request_payload = _coerce_activity_request(
+            request, activity_type="plan.generate"
+        )
+        if request_payload:
+            if principal is None:
+                principal = request_payload.get("principal")
+            if inputs_ref is None:
+                inputs_ref = request_payload.get("inputs_ref")
+            if parameters is None:
+                parameters = request_payload.get("parameters")
+            if registry_snapshot_ref is None:
+                registry_snapshot_ref = request_payload.get("registry_snapshot_ref")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+
+        if not principal or not isinstance(principal, str):
+            raise TemporalActivityRuntimeError("plan.generate principal is required")
         if self._planner is None:
             raise TemporalActivityRuntimeError(
                 "plan.generate planner is not configured"
@@ -567,13 +601,17 @@ class TemporalManifestActivities:
         *,
         principal: str,
         manifest_ref: ArtifactRef | str,
-        manifest_payload: bytes | str,
         action: str,
         options: Mapping[str, Any] | None,
         requested_by: Mapping[str, Any],
         execution_policy: Mapping[str, Any],
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> ManifestCompileActivityResult:
+        _artifact, manifest_payload = await self._artifact_service.read(
+            artifact_id=_artifact_id_from_ref(manifest_ref),
+            principal=principal,
+            allow_restricted_raw=True,
+        )
         plan = compile_manifest_plan(
             manifest_ref=_artifact_id_from_ref(manifest_ref),
             manifest_payload=manifest_payload,
@@ -596,7 +634,6 @@ class TemporalManifestActivities:
         return ManifestCompileActivityResult(
             plan_ref=plan_ref,
             manifest_digest=plan.manifest_digest,
-            nodes=tuple(node.model_dump(by_alias=True) for node in plan.nodes),
         )
 
     async def manifest_write_summary(
@@ -608,21 +645,26 @@ class TemporalManifestActivities:
         phase: str,
         manifest_ref: str,
         plan_ref: str | None,
-        nodes: Sequence[Mapping[str, Any]],
+        nodes: Sequence[Mapping[str, Any]] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> tuple[ArtifactRef, ArtifactRef]:
+        resolved_nodes = await self._resolve_manifest_nodes(
+            principal=principal,
+            plan_ref=plan_ref,
+            nodes=nodes,
+        )
         summary = build_manifest_summary(
             workflow_id=workflow_id,
             state=state,
             phase=phase,
             manifest_ref=manifest_ref,
             plan_ref=plan_ref,
-            nodes=list(nodes),
+            nodes=resolved_nodes,
         )
         run_index = build_manifest_run_index(
             workflow_id=workflow_id,
             manifest_ref=manifest_ref,
-            nodes=list(nodes),
+            nodes=resolved_nodes,
         )
         summary_ref = await _write_json_artifact(
             self._artifact_service,
@@ -647,6 +689,36 @@ class TemporalManifestActivities:
             },
         )
         return summary_ref, run_index_ref
+
+    async def _resolve_manifest_nodes(
+        self,
+        *,
+        principal: str,
+        plan_ref: str | None,
+        nodes: Sequence[Mapping[str, Any]] | None,
+    ) -> list[Mapping[str, Any]]:
+        if nodes:
+            return list(nodes)
+        if not plan_ref:
+            return []
+
+        try:
+            payload = await _read_json_artifact(
+                self._artifact_service,
+                artifact_ref=plan_ref,
+                principal=principal,
+            )
+            compiled_plan = CompiledManifestPlanModel.model_validate(payload)
+        except Exception as exc:
+            raise TemporalActivityRuntimeError(
+                "manifest.write_summary could not hydrate plan nodes from plan_ref"
+            ) from exc
+
+        runtime_nodes = plan_nodes_to_runtime_nodes(
+            compiled_plan,
+            requested_by=compiled_plan.requested_by,
+        )
+        return [node.model_dump(by_alias=True, mode="json") for node in runtime_nodes]
 
 
 class TemporalSandboxActivities:
@@ -768,16 +840,42 @@ class TemporalSandboxActivities:
 
     async def sandbox_run_command(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        workspace_ref: str | Path,
-        cmd: str | Sequence[str],
+        workspace_ref: str | Path | None = None,
+        cmd: str | Sequence[str] | None = None,
         principal: str | None = None,
         env: Mapping[str, str] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
         timeout_seconds: float | None = None,
         heartbeat: HeartbeatCallback | None = None,
     ) -> SandboxCommandResult:
+        request_payload = _coerce_activity_request(
+            request, activity_type="sandbox.run_command"
+        )
+        if request_payload:
+            if workspace_ref is None:
+                workspace_ref = request_payload.get("workspace_ref")
+            if cmd is None:
+                cmd = request_payload.get("cmd") or request_payload.get("command")
+            if principal is None:
+                principal = request_payload.get("principal")
+            if env is None:
+                env = request_payload.get("env")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+            if timeout_seconds is None:
+                timeout_seconds = request_payload.get("timeout_seconds")
+
+        if workspace_ref is None:
+            sandbox_root = (self._workspace_root / "temporal_sandbox").resolve()
+            sandbox_root.mkdir(parents=True, exist_ok=True)
+            workspace_ref = tempfile.mkdtemp(prefix="run-command-", dir=sandbox_root)
+
         cwd = self._resolve_workspace(workspace_ref, must_exist=True)
+        if cmd is None:
+            raise TemporalActivityRuntimeError("sandbox command must not be empty")
 
         if isinstance(cmd, str):
             command = tuple(shlex.split(cmd))
@@ -796,6 +894,7 @@ class TemporalSandboxActivities:
             env=merged_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         started = time.monotonic()
         stdout_buffer = bytearray()
@@ -996,14 +1095,33 @@ class TemporalJulesActivities:
 
     async def integration_jules_start(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        principal: str | None,
+        principal: str | None = None,
         parameters: Mapping[str, Any] | None = None,
         correlation_id: str | None = None,
         inputs_ref: ArtifactRef | str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> IntegrationStartResult:
+        request_payload = _coerce_activity_request(
+            request, activity_type="integration.jules.start"
+        )
+        if request_payload:
+            if principal is None:
+                principal = request_payload.get("principal")
+            if parameters is None:
+                parameters = request_payload.get("parameters")
+            if correlation_id is None:
+                correlation_id = request_payload.get("correlation_id")
+            if inputs_ref is None:
+                inputs_ref = request_payload.get("inputs_ref")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+            if idempotency_key is None:
+                idempotency_key = request_payload.get("idempotency_key")
+
         if idempotency_key is not None:
             existing = self._starts_by_idempotency.get(idempotency_key)
             if existing is not None:
