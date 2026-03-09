@@ -597,8 +597,8 @@ def _materialize_cache_entry(
             staging_dir = skill_hash_root / f".{skill_name}.tmp-{uuid.uuid4().hex}"
             try:
                 shutil.copytree(skill_dir, staging_dir)
-                _mark_read_only(staging_dir)
                 os.replace(staging_dir, skill_cache_dir)
+                _mark_read_only(skill_cache_dir)
             except FileExistsError:
                 # Concurrent run already materialized the same digest.
                 shutil.rmtree(staging_dir, ignore_errors=True)
