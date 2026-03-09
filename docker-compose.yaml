@@ -108,8 +108,13 @@ services:
     image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-moonmind}
+      TEMPORAL_POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
+      TEMPORAL_POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
+      TEMPORAL_POSTGRES_DB: ${TEMPORAL_POSTGRES_DB:-temporal}
+      TEMPORAL_VISIBILITY_DB: ${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
+      KC_DB_PW: ${KC_DB_PW:-keycloak}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./init_db_scripts:/docker-entrypoint-initdb.d

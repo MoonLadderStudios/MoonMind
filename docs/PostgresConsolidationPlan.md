@@ -69,21 +69,25 @@ volumes:
 ### 2. Database Initialization Script
 Create an initialization SQL script that will run automatically when the new `postgres` container is created. The official image executes `*.sql` files located in `/docker-entrypoint-initdb.d/`.
 
-Create `./init_db_scripts/01-create-dbs.sql`:
-```sql
--- Create temporal databases and role
-CREATE USER temporal WITH ENCRYPTED PASSWORD 'temporal';
-CREATE DATABASE temporal;
-CREATE DATABASE temporal_visibility;
-GRANT ALL PRIVILEGES ON DATABASE temporal TO temporal;
-GRANT ALL PRIVILEGES ON DATABASE temporal_visibility TO temporal;
+Create `./init_db_scripts/01-create-dbs.sh`:
+```sh
+#!/bin/bash
+set -e
 
--- Create keycloak database and role
-CREATE USER keycloak WITH ENCRYPTED PASSWORD 'keycloak';
-CREATE DATABASE keycloak;
-GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+    -- Create temporal databases and role
+    CREATE USER ${TEMPORAL_POSTGRES_USER:-temporal} WITH ENCRYPTED PASSWORD '${TEMPORAL_POSTGRES_PASSWORD:-temporal}';
+    CREATE DATABASE ${TEMPORAL_POSTGRES_DB:-temporal};
+    CREATE DATABASE ${TEMPORAL_VISIBILITY_DB:-temporal_visibility};
+    GRANT ALL PRIVILEGES ON DATABASE ${TEMPORAL_POSTGRES_DB:-temporal} TO ${TEMPORAL_POSTGRES_USER:-temporal};
+    GRANT ALL PRIVILEGES ON DATABASE ${TEMPORAL_VISIBILITY_DB:-temporal_visibility} TO ${TEMPORAL_POSTGRES_USER:-temporal};
+
+    -- Create keycloak database and role
+    CREATE USER keycloak WITH ENCRYPTED PASSWORD '${KC_DB_PW:-keycloak}';
+    CREATE DATABASE keycloak;
+    GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
+EOSQL
 ```
-*(Alternatively, you can dynamically read from environment variables via a `.sh` script in the same init folder, but standardizing the SQL is often easier for dedicated setups.)*
 
 ### 3. Update Dependent Services
 
