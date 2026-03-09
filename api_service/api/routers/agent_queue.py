@@ -1814,7 +1814,7 @@ async def list_job_attachments(
     *,
     limit: int = Query(50, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user_optional()),
 ) -> ArtifactListResponse:
     """List attachment metadata for a queue job (user auth)."""
 
@@ -1837,7 +1837,7 @@ async def download_job_attachment(
     job_id: UUID,
     attachment_id: UUID,
     service: AgentQueueService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User = Depends(get_current_user_optional()),
 ) -> FileResponse:
     """Download attachment binary for a queue job (user auth)."""
 
