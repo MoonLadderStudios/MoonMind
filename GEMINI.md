@@ -34,5 +34,5 @@ Node.js 20+ (for CLI runtime), Python 3.11 (existing `api_service`): Follow stan
 
 <!-- MANUAL ADDITIONS START -->
 ## Agent Guidelines
-- Please refer to `AGENTS.md` for common agent guidelines and tool usage directives.
+- Please refer to `AGENTS.md` for common agent guidelines, tool usage directives, and tool execution guardrails.
 <!-- MANUAL ADDITIONS END -->
