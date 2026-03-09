@@ -188,11 +188,8 @@ class TaskCompatibilityService:
             if settings.temporal.temporal_authoritative_read_enabled:
                 import logging
 
-                from api_service.core.sync import sync_execution_projection
-                from moonmind.workflows.temporal.client import (
-                    TemporalClientAdapter,
-                    fetch_workflow_execution,
-                )
+                from api_service.core.sync import fetch_and_sync_execution
+                from moonmind.workflows.temporal.client import TemporalClientAdapter
 
                 logger = logging.getLogger(__name__)
                 try:
@@ -200,8 +197,7 @@ class TaskCompatibilityService:
                     if "_shared_client_adapter" not in globals():
                         _shared_client_adapter = TemporalClientAdapter()
                     client = await _shared_client_adapter.get_client()
-                    desc = await fetch_workflow_execution(client, record.workflow_id)
-                    record = await sync_execution_projection(self._session, desc)
+                    record = await fetch_and_sync_execution(self._session, record.workflow_id, client)
                     await self._session.commit()
                 except Exception as exc:
                     logger.warning(
@@ -402,11 +398,8 @@ class TaskCompatibilityService:
             import asyncio
             import logging
 
-            from api_service.core.sync import sync_execution_projection
-            from moonmind.workflows.temporal.client import (
-                TemporalClientAdapter,
-                fetch_workflow_execution,
-            )
+            from api_service.core.sync import fetch_and_sync_execution
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
 
             logger = logging.getLogger(__name__)
             try:
@@ -417,8 +410,7 @@ class TaskCompatibilityService:
 
                 async def fetch_and_sync(item):
                     try:
-                        desc = await fetch_workflow_execution(client, item.workflow_id)
-                        return await sync_execution_projection(self._session, desc)
+                        return await fetch_and_sync_execution(self._session, item.workflow_id, client)
                     except Exception as exc:
                         logger.warning(
                             "Failed to sync execution %s from Temporal: %s",

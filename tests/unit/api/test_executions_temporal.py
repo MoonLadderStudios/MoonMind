@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.executions import _get_service, router
+import api_service.api.routers.executions as executions_module
 from api_service.auth_providers import get_current_user
 
 
@@ -46,12 +47,10 @@ async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
 ) -> None:
     test_client, service, user = client
 
-    import api_service.api.routers.executions as exec_module
-
-    exec_module._shared_client_adapter = None
+    executions_module.get_temporal_client_adapter.cache_clear()
 
     with patch(
-        "moonmind.workflows.temporal.client.TemporalClientAdapter"
+        "api_service.api.routers.executions.TemporalClientAdapter"
     ) as mock_adapter_cls:
         mock_adapter = mock_adapter_cls.return_value
         mock_client = AsyncMock()
@@ -100,9 +99,7 @@ async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
 async def test_describe_execution_source_temporal_syncs_projection(client) -> None:
     test_client, service, user = client
 
-    import api_service.api.routers.executions as exec_module
-
-    exec_module._shared_client_adapter = None
+    executions_module.get_temporal_client_adapter.cache_clear()
 
     # We patch fetch_workflow_execution and sync_execution_projection
     with (
@@ -111,7 +108,7 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
         ) as mock_fetch,
         patch("api_service.core.sync.sync_execution_projection") as mock_sync,
         patch(
-            "moonmind.workflows.temporal.client.TemporalClientAdapter"
+            "api_service.api.routers.executions.TemporalClientAdapter"
         ) as mock_adapter_cls,
     ):
 
@@ -196,19 +193,18 @@ async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
 async def test_temporal_unavailability_returns_503(client) -> None:
     test_client, service, user = client
 
-    import api_service.api.routers.executions as exec_module
-
-    exec_module._shared_client_adapter = None
+    executions_module.get_temporal_client_adapter.cache_clear()
 
     with patch(
-        "moonmind.workflows.temporal.client.TemporalClientAdapter"
+        "api_service.api.routers.executions.TemporalClientAdapter"
     ) as mock_adapter_cls:
         mock_adapter = mock_adapter_cls.return_value
         mock_client = AsyncMock()
         mock_adapter.get_client = AsyncMock(return_value=mock_client)
 
         async def mock_list_workflows(query):
-            raise Exception("Connection failed")
+            from temporalio.service import RPCError, RPCStatusCode
+            raise RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
             yield  # Ensure it's treated as an async generator
 
         mock_client.list_workflows = mock_list_workflows

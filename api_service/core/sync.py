@@ -111,7 +111,7 @@ def map_temporal_state_to_projection(
             try:
                 state_value = MoonMindWorkflowState(str(mm_state))
             except ValueError:
-                pass
+                logger.warning("Invalid value for mm_state search attribute: '%s'", mm_state)
 
     artifact_refs = memo.get("artifact_refs", [])
     if not isinstance(artifact_refs, list):
@@ -189,3 +189,15 @@ async def sync_execution_projection(
         )
 
     return projection
+
+
+async def fetch_and_sync_execution(
+    session: AsyncSession,
+    workflow_id: str,
+    client: Any,
+) -> TemporalExecutionRecord:
+    """Fetch execution from Temporal and sync to local projection database."""
+    from moonmind.workflows.temporal.client import fetch_workflow_execution
+    
+    desc = await fetch_workflow_execution(client, workflow_id)
+    return await sync_execution_projection(session, desc)

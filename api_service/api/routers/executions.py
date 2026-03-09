@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.service import RPCError
+from temporalio.client import Client
+from moonmind.workflows.temporal.client import TemporalClientAdapter
+from functools import lru_cache
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
@@ -70,6 +74,17 @@ def _enum_value(value: object | None) -> str | None:
     if value is None:
         return None
     return getattr(value, "value", value)
+
+
+@lru_cache(maxsize=1)
+def get_temporal_client_adapter() -> TemporalClientAdapter:
+    return TemporalClientAdapter()
+
+
+async def get_temporal_client(
+    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+) -> Client:
+    return await adapter.get_client()
 
 
 def _is_execution_admin(user: User | None) -> bool:
@@ -686,8 +701,8 @@ async def list_executions(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
+    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
-    global _shared_client_adapter
     if _is_execution_admin(user):
         effective_owner_type = owner_type
         effective_owner = owner_id
@@ -715,30 +730,26 @@ async def list_executions(
     if source == "temporal":
         try:
             from api_service.core.sync import map_temporal_state_to_projection
-            from moonmind.workflows.temporal.client import TemporalClientAdapter
+            client = temporal_client
 
-            if (
-                "_shared_client_adapter" not in globals()
-                or _shared_client_adapter is None
-            ):
-                _shared_client_adapter = TemporalClientAdapter()
-            client = await _shared_client_adapter.get_client()
+            def escape_val(v: str) -> str:
+                return v.replace('"', '\\"')
 
             query_parts = []
             if workflow_type:
-                query_parts.append(f'WorkflowType="{workflow_type}"')
+                query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
             if state:
-                query_parts.append(f'mm_state="{state}"')
+                query_parts.append(f'mm_state="{escape_val(state)}"')
             if entry:
-                query_parts.append(f'mm_entry="{entry}"')
+                query_parts.append(f'mm_entry="{escape_val(entry)}"')
             if effective_owner_type:
-                query_parts.append(f'mm_owner_type="{effective_owner_type}"')
+                query_parts.append(f'mm_owner_type="{escape_val(effective_owner_type)}"')
             if effective_owner:
-                query_parts.append(f'mm_owner_id="{effective_owner}"')
+                query_parts.append(f'mm_owner_id="{escape_val(effective_owner)}"')
             if repo:
-                query_parts.append(f'mm_repo="{repo}"')
+                query_parts.append(f'mm_repo="{escape_val(repo)}"')
             if integration:
-                query_parts.append(f'mm_integration="{integration}"')
+                query_parts.append(f'mm_integration="{escape_val(integration)}"')
 
             query_str = " AND ".join(query_parts) if query_parts else ""
 
@@ -765,7 +776,7 @@ async def list_executions(
                 degraded_count=False,
                 refreshed_at=datetime.now(UTC),
             )
-        except Exception as exc:
+        except RPCError as exc:
             logger.warning(
                 "Failed to list Temporal executions directly: %s", exc, exc_info=True
             )
@@ -792,22 +803,15 @@ async def list_executions(
 
         import asyncio
 
-        from api_service.core.sync import sync_execution_projection
-        from moonmind.workflows.temporal.client import (
-            TemporalClientAdapter,
-            fetch_workflow_execution,
-        )
+        from api_service.core.sync import fetch_and_sync_execution
 
         if settings.temporal.temporal_authoritative_read_enabled and result.items:
             try:
-                if "_shared_client_adapter" not in globals():
-                    _shared_client_adapter = TemporalClientAdapter()
-                client = await _shared_client_adapter.get_client()
+                client = temporal_client
 
                 async def fetch_and_sync(item):
                     try:
-                        desc = await fetch_workflow_execution(client, item.workflow_id)
-                        return await sync_execution_projection(session, desc)
+                        return await fetch_and_sync_execution(session, item.workflow_id, client)
                     except Exception as exc:
                         logger.warning(
                             "Failed to sync execution %s from Temporal: %s",
@@ -858,31 +862,21 @@ async def describe_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
+    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
-    from api_service.core.sync import sync_execution_projection
-    from moonmind.workflows.temporal.client import (
-        TemporalClientAdapter,
-        fetch_workflow_execution,
-    )
+    from api_service.core.sync import fetch_and_sync_execution
 
     try:
         if (
             settings.temporal.temporal_authoritative_read_enabled
             or source == "temporal"
         ):
-            global _shared_client_adapter
-            if (
-                "_shared_client_adapter" not in globals()
-                or _shared_client_adapter is None
-            ):
-                _shared_client_adapter = TemporalClientAdapter()
-            client = await _shared_client_adapter.get_client()
-            desc = await fetch_workflow_execution(client, canonical_workflow_id)
-            await sync_execution_projection(session, desc)
+            client = temporal_client
+            await fetch_and_sync_execution(session, canonical_workflow_id, client)
             await session.commit()
-    except Exception as exc:
+    except RPCError as exc:
         if source == "temporal":
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
