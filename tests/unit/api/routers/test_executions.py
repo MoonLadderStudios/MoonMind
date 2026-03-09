@@ -285,6 +285,40 @@ def test_create_execution_surfaces_domain_validation_errors(
     assert response.json()["detail"]["code"] == "invalid_execution_request"
 
 
+def test_create_execution_routes_directly_to_temporal(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    record = _build_execution_record()
+    record.memo["title"] = "Test direct temporal"
+    service.create_execution.return_value = record
+
+    response = test_client.post(
+        "/api/executions",
+        json={"workflowType": "MoonMind.Run", "title": "Test direct temporal"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["title"] == "Test direct temporal"
+    service.create_execution.assert_awaited_once()
+
+
+def test_create_execution_enforces_idempotency(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={"workflowType": "MoonMind.Run", "idempotencyKey": "idem-123"},
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["idempotency_key"] == "idem-123"
+
+
 def test_list_executions_rejects_non_admin_cross_owner_queries(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -599,3 +633,34 @@ def test_describe_execution_disables_actions_when_feature_flag_off(
     assert body["actions"]["canPause"] is False
     assert body["actions"]["disabledReasons"]["pause"] == "actions_disabled"
     assert body["debugFields"] is None
+
+
+def test_action_endpoints_reject_requests_when_actions_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", False)
+
+    with TestClient(app) as test_client:
+        # Test update endpoint
+        update_response = test_client.post(
+            "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
+        )
+        assert update_response.status_code == 403
+        assert update_response.json()["detail"]["code"] == "actions_disabled"
+
+        # Test signal endpoint
+        signal_response = test_client.post(
+            "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
+        )
+        assert signal_response.status_code == 403
+        assert signal_response.json()["detail"]["code"] == "actions_disabled"
+
+        # Test cancel endpoint
+        cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
+        assert cancel_response.status_code == 403
+        assert cancel_response.json()["detail"]["code"] == "actions_disabled"

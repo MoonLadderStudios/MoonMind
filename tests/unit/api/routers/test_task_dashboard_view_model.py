@@ -182,7 +182,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["listEnabled"] is True
     assert temporal_dashboard["detailEnabled"] is True
     assert temporal_dashboard["actionsEnabled"] is True
-    assert temporal_dashboard["submitEnabled"] is False
+    assert temporal_dashboard["submitEnabled"] is True
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
     assert config["system"]["defaultQueue"]

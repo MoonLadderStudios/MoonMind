@@ -212,8 +212,9 @@ def _build_control_event(task_run_id):
 
 
 @pytest.fixture
-def client() -> Iterator[tuple[TestClient, AsyncMock]]:
+def client(monkeypatch) -> Iterator[tuple[TestClient, AsyncMock]]:
     """Provide a TestClient with queue service dependency overridden."""
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", False)
 
     app = FastAPI()
     app.include_router(router)
