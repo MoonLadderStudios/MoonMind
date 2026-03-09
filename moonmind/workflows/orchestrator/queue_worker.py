@@ -717,6 +717,7 @@ class OrchestratorQueueWorker:
             *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             env=execution_env,
         )
         stdout_bytes, stderr_bytes = await process.communicate()

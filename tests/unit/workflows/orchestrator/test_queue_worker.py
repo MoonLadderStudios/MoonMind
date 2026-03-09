@@ -416,6 +416,7 @@ def test_execute_task_runtime_step_uses_env_for_step_payload(monkeypatch) -> Non
     async def fake_create_subprocess_exec(*command: object, **kwargs: object):
         captured["command"] = list(command)
         captured["env"] = dict(kwargs.get("env") or {})
+        captured["stdin"] = kwargs.get("stdin")
         del command
 
         class FakeProcess:
@@ -477,3 +478,4 @@ def test_execute_task_runtime_step_uses_env_for_step_payload(monkeypatch) -> Non
     assert context["attempt"] == 4
     assert "idx2" in str(captured["artifact_path"])
     assert "att4" in str(captured["artifact_path"])
+    assert captured["stdin"] == queue_worker.asyncio.subprocess.DEVNULL

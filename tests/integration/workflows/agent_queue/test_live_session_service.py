@@ -93,7 +93,9 @@ async def test_create_live_session_is_idempotent_when_already_ready(
                 tmate_socket_path="/tmp/moonmind/tmate/test.sock",
                 expires_at=datetime.now(UTC) + timedelta(minutes=30),
             )
-            before = await service.get_live_session(task_run_id=job.id)
+            before = await service.get_live_session(
+                task_run_id=job.id, actor_user_id=job.requested_by_user_id
+            )
             repeat = await service.create_live_session(
                 task_run_id=job.id,
                 actor_user_id=job.requested_by_user_id,

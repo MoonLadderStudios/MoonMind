@@ -54,15 +54,12 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
         "execute_activity",
         fake_execute_activity,
     )
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "info",
-        lambda: type(
-            "WorkflowInfo",
-            (),
-            {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
-        )(),
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(
         run_workflow_module.workflow, "upsert_memo", lambda _memo: None
     )
@@ -119,15 +116,12 @@ async def test_run_execution_stage_extracts_logs_ref_from_activity_result(
         "now",
         lambda: datetime.now(timezone.utc),
     )
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "info",
-        lambda: type(
-            "WorkflowInfo",
-            (),
-            {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
-        )(),
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},

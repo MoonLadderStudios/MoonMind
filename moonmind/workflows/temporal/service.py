@@ -41,6 +41,7 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
 )
+from moonmind.workflows.temporal.client import fetch_workflow_execution
 from moonmind.workflows.temporal.manifest_ingest import (
     MANIFEST_UPDATE_NAMES,
     ManifestIngestValidationError,
@@ -430,20 +431,21 @@ class TemporalExecutionService:
         include_orphaned: bool = False,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
+
+        try:
+            await self._client_adapter.describe_workflow(canonical_workflow_id)
+        except Exception as exc:
+            logger.debug(
+                "Temporal describe failed for %s: %s", canonical_workflow_id, exc
+            )
+
         record = await self._load_source_execution(
             canonical_workflow_id,
         )
         if record is None:
             if settings.temporal.temporal_authoritative_read_enabled:
                 try:
-                    from moonmind.workflows.temporal.client import (
-                        fetch_workflow_execution,
-                        get_temporal_client,
-                    )
-
-                    temporal_client = await get_temporal_client(
-                        settings.temporal.address, settings.temporal.namespace
-                    )
+                    temporal_client = await self._client_adapter.get_client()
                     desc = await fetch_workflow_execution(
                         temporal_client,
                         canonical_workflow_id,
@@ -502,6 +504,29 @@ class TemporalExecutionService:
             )
 
         record = await self._require_source_execution(workflow_id)
+
+        try:
+            update_arg = {
+                "input_artifact_ref": input_artifact_ref,
+                "plan_artifact_ref": plan_artifact_ref,
+                "parameters_patch": parameters_patch,
+                "title": title,
+                "new_manifest_artifact_ref": new_manifest_artifact_ref,
+                "mode": mode,
+                "max_concurrency": max_concurrency,
+                "node_ids": node_ids,
+                "idempotency_key": idempotency_key,
+            }
+            # Remove None values
+            update_arg = {k: v for k, v in update_arg.items() if v is not None}
+            await self._client_adapter.update_workflow(
+                record.workflow_id, update_name, update_arg
+            )
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                f"Temporal update failed: {exc}"
+            ) from exc
+
         if (
             update_name in MANIFEST_UPDATE_NAMES
             and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
@@ -618,10 +643,18 @@ class TemporalExecutionService:
             )
         record = await self._require_source_execution(workflow_id)
 
-        if record.state in TERMINAL_STATES:
-            raise TemporalExecutionValidationError(
-                "Workflow is in a terminal state and no longer accepts signals."
+        try:
+            signal_arg = {
+                "payload": payload,
+                "payload_artifact_ref": payload_artifact_ref,
+            }
+            await self._client_adapter.signal_workflow(
+                record.workflow_id, signal_name, signal_arg
             )
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                f"Temporal signal failed: {exc}"
+            ) from exc
 
         signal_payload = dict(payload or {})
         if signal_name == "ExternalEvent":
@@ -956,6 +989,13 @@ class TemporalExecutionService:
         graceful: bool,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_source_execution(workflow_id)
+
+        try:
+            await self._client_adapter.cancel_workflow(record.workflow_id)
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                f"Temporal cancel failed: {exc}"
+            ) from exc
 
         if record.state in TERMINAL_STATES:
             return await self._sync_projection_best_effort(record)
