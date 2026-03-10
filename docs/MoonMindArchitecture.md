@@ -6,13 +6,12 @@ MoonMind is a self-hostable AI “hub” that combines:
 * A FastAPI-based API service that brokers model calls and exposes a **Model Context Protocol** endpoint (`/context`)
 * A **task/agent queue** where runtime-specific workers (Codex/Gemini/Claude) claim and execute jobs
 * A **RAG + memory** subsystem built around **LlamaIndex** and **Qdrant**
-* An optional **Celery + RabbitMQ** orchestration stack for asynchronous/background workflows and “spec workflow” style automation
-* A **self-hosted Temporal foundation** that is being adopted for durable workflow execution and scheduling
+* A **self-hosted Temporal foundation** for durable workflow execution and scheduling
 * Optional local model backends (Ollama, vLLM) and OpenHands integration
 
 This overview is written from the project’s compose files, architecture docs, and dependency manifests. ([GitHub][1])
 
-MoonMind is currently in a **hybrid architecture** phase: the task queue, orchestrator, and Celery paths remain active, while Temporal is being introduced as the long-term durable workflow substrate.
+
 
 ---
 
@@ -24,21 +23,15 @@ flowchart LR
   UI -->|OpenAI API base| API[MoonMind API (FastAPI)]
   API --> PG[(Postgres)]
   API --> QD[(Qdrant)]
-  API -->|/api/queue jobs| W1[Codex worker]
-  API -->|/api/queue jobs| W2[Gemini worker]
-  API -->|/api/queue jobs| W3[Claude worker]
   API -->|workflow control| TMP[Temporal]
+  TMP -->|task queues| W1[Codex worker]
+  TMP -->|task queues| W2[Gemini worker]
+  TMP -->|task queues| W3[Claude worker]
   W1 -->|docker API (restricted)| DP[docker-socket-proxy]
   W2 -->|docker API (restricted)| DP
   W3 -->|docker API (restricted)| DP
 
   OH[OpenHands] -->|MCP /context| API
-
-  subgraph Optional: Celery Orchestration Stack
-    RMQ[(RabbitMQ)]
-    CW[Celery workers] --> RMQ
-    ORC[mm-orchestrator] --> RMQ
-  end
 
   subgraph Temporal Foundation
     TDB[(Temporal Postgres)]
@@ -48,10 +41,9 @@ flowchart LR
 
 Key points:
 
-* **FastAPI API container** is the system’s “control plane”: it stores durable state in Postgres, indexes/retrieves vectors via Qdrant, exposes the queue API used by workers, and exposes the MCP `/context` endpoint used by OpenHands and similar agents. ([GitHub][2])
-* **Workers** are “execution plane”: they claim jobs, hydrate inputs/attachments, run a staged lifecycle, and publish results. ([GitHub][2])
-* **Celery stack** is optional but provides an additional async orchestration layer that can fan out spec/workflow tasks through RabbitMQ queues. ([GitHub][1])
-* **Temporal foundation** is present as the durable workflow target for migrated flows; it currently coexists with the queue/orchestrator runtime rather than replacing it wholesale. ([GitHub][1])
+* **FastAPI API container** is the system’s “control plane”: it starts Temporal workflows, indexes/retrieves vectors via Qdrant, and exposes the MCP `/context` endpoint used by OpenHands and similar agents. ([GitHub][2])
+* **Workers** are “execution plane”: Temporal workers run deterministic orchestration workflows and execute side-effecting activities under capability boundaries. ([GitHub][2])
+* **Temporal foundation** is the primary durable engine for workflow executions, task scheduling, and background job fan-out. ([GitHub][1])
 
 ---
 
@@ -60,7 +52,6 @@ Key points:
 MoonMind uses multiple compose files for different operational modes:
 
 * `docker-compose.yaml`: primary runtime stack (UI + API + DB + Qdrant + workers + Temporal foundation + optional auth/model backends) ([GitHub][3])
-* `docker-compose.job.yaml`: Celery/RabbitMQ orchestration stack (background workers + sharded Codex queues + mm-orchestrator) ([GitHub][4])
 * `docker-compose.downloader.yaml`: one-off downloader (e.g., pulling Qwen artifacts into `model_data`) ([GitHub][5])
 * `docker-compose.test.yaml`: test harness containers (pytest + smoke checks) ([GitHub][6])
 
@@ -71,7 +62,7 @@ The table below focuses on **what each container does** in the running system.
 | Service                 | What it is                                                                        | Purpose in MoonMind                                                                | Notes / why it exists                                                                                                                                                                   |
 | ----------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ui`                    | `ghcr.io/open-webui/open-webui:main`                                              | User-facing chat UI                                                                | Open-WebUI is configured to treat MoonMind as an OpenAI-compatible “API base” (typical Open-WebUI pattern). Persistent state stored in `open-webui` volume. ([GitHub][3])               |
-| `api`                   | `ghcr.io/moonladderstudios/moonmind:latest` (built from `api_service/Dockerfile`) | Main API: chat/model routing, queue/job APIs, RAG retrieval, `/context` MCP server | Runs the API entrypoint script from the image. It is explicitly configured to expose MCP `/context` and route to providers based on requested model. ([GitHub][7])                      |
+| `api`                   | `ghcr.io/moonladderstudios/moonmind:latest` (built from `api_service/Dockerfile`) | Main API: chat/model routing, Temporal workflow APIs, RAG retrieval, `/context` MCP | Runs the API entrypoint script from the image. It is explicitly configured to expose MCP `/context` and route to providers based on requested model. ([GitHub][7])                      |
 | `api-db`                | Postgres                                                                          | Durable application state                                                          | Stores job/run state (queue jobs, workflow runs), user/auth state, etc. The “durable execution state” part of the system. ([GitHub][1])                                                 |
 | `qdrant`                | `qdrant/qdrant`                                                                   | Vector store for embeddings / retrieval                                            | Primary vector DB backing LlamaIndex retrieval for chat and `/context`. ([GitHub][1])                                                                                                   |
 | `init-db`               | MoonMind image                                                                    | One-shot initializer                                                               | Bootstraps/initializes the DB + Qdrant index (ingestion bootstrap) then exits. Useful for first-run setup and repeatable environment bring-up. ([GitHub][3])                            |
@@ -79,12 +70,12 @@ The table below focuses on **what each container does** in the running system.
 | `codex-auth-init`       | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the persistent volume used to store Codex/CLI auth material so worker containers can reuse tokens across restarts. ([GitHub][3])                                            |
 | `gemini-auth-init`      | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the Gemini CLI auth volume (OAuth/token material) for the Gemini runtime worker(s). ([GitHub][3])                                                                           |
 | `claude-auth-init`      | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the Claude auth volume for Claude runtime worker(s). ([GitHub][3])                                                                                                          |
-| `codex-worker`          | MoonMind image                                                                    | Runtime worker (Codex)                                                             | Claims jobs from the queue system and executes tasks using the Codex runtime & tooling installed in the image. ([GitHub][2])                                                            |
-| `gemini-worker`         | MoonMind image                                                                    | Runtime worker (Gemini)                                                            | Same worker pattern, but configured for Gemini runtime; uses a persistent Gemini auth volume and queue routing/capabilities for Gemini execution. ([GitHub][2])                         |
-| `claude-worker`         | MoonMind image                                                                    | Runtime worker (Claude)                                                            | Optional runtime-specific worker for Claude; typically enabled via a compose profile. ([GitHub][2])                                                                                     |
-| `orchestrator`          | MoonMind image                                                                    | “Orchestrator worker” consuming orchestrator jobs                                  | Runs a worker module intended for orchestrator-type jobs (`orchestrator_run`), rather than end-user “task” jobs. ([GitHub][3])                                                          |
+| `codex-worker`          | MoonMind image                                                                    | Runtime worker (Codex)                                                             | Runs Temporal activities using the Codex runtime & tooling installed in the image. ([GitHub][2])                                                                                        |
+| `gemini-worker`         | MoonMind image                                                                    | Runtime worker (Gemini)                                                            | Same worker pattern, configured for Gemini runtime; uses a persistent Gemini auth volume and Temporal task queue routing/capabilities for Gemini execution. ([GitHub][2])               |
+| `claude-worker`         | MoonMind image                                                                    | Runtime worker (Claude)                                                            | Optional Temporal activity worker for Claude; typically enabled via a compose profile. ([GitHub][2])                                                                                    |
+| `orchestrator`          | MoonMind image                                                                    | “Orchestrator worker”                                                              | Runs a Temporal worker intended for orchestration sequences involving codebase patching, compose restarts, and verifications. ([GitHub][3])                                               |
 | `scheduler`             | MoonMind image                                                                    | Recurring schedule dispatcher                                                      | Polls Postgres for due recurring tasks and enqueues/dispatches them; implemented as the `moonmind-scheduler` CLI entrypoint. ([GitHub][8])                                              |
-| `temporal-db`           | Postgres                                                                          | Temporal persistence + SQL visibility backend                                      | Stores Temporal workflow state/history metadata and advanced visibility data for migrated flows. ([GitHub][3])                                                                          |
+| `temporal-db`           | Postgres                                                                          | Temporal persistence + SQL visibility backend                                      | Stores Temporal workflow state/history metadata and advanced visibility data for all managed flows. ([GitHub][3])                                                                       |
 | `temporal`              | `temporalio/auto-setup`                                                           | Temporal server                                                                    | Provides workflow orchestration, timers, retries, schedules, and visibility for Temporal-managed executions. ([GitHub][3])                                                              |
 | `temporal-namespace-init` | MoonMind/bootstrap helper                                                       | Namespace bootstrap                                                                | Applies MoonMind namespace and retention defaults idempotently during environment bring-up. ([GitHub][3])                                                                               |
 | `docker-proxy`          | `tecnativa/docker-socket-proxy`                                                   | Restricted Docker API for workers                                                  | Provides “docker-outside-of-docker” access while limiting which Docker endpoints are reachable (safer than exposing raw `/var/run/docker.sock` directly to every worker). ([GitHub][3]) |
@@ -97,27 +88,7 @@ The table below focuses on **what each container does** in the running system.
 **Why there are “init” containers:**
 MoonMind explicitly separates **persistent volume/bootstrap concerns** (permissions, OAuth token volume existence) from the long-running workers. This reduces first-run friction and makes “docker compose up” far more reliable across clean environments. ([GitHub][3])
 
----
 
-### `docker-compose.job.yaml` — Celery/RabbitMQ orchestration stack
-
-This compose file stands up a classic Celery architecture with a broker plus worker fleet (including sharded queues) and an orchestrator container.
-
-| Service              | What it is                     | Purpose in MoonMind                    | Notes / why it exists                                                                                                                                                          |
-| -------------------- | ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rabbitmq`           | `rabbitmq:3.13-management`     | Celery broker                          | Enables Celery queueing and routing; exposes AMQP and the management UI. ([GitHub][4])                                                                                         |
-| `celery-worker`      | MoonMind image                 | Default Celery worker                  | Runs `celery -A celery_worker.speckit_worker worker ...` and listens on a configurable queue. ([GitHub][4])                                                                    |
-| `celery-codex-0/1/2` | MoonMind image                 | Sharded Celery workers                 | Three explicit queue shards (`codex-0`, `codex-1`, `codex-2`) for parallelism/throughput and routing control. Each shard can have its own auth volume. ([GitHub][4])           |
-| `orchestrator`       | `moonmind/orchestrator:latest` | “mm-orchestrator” control-plane worker | Designed to run orchestration jobs: analyze failures, patch repo, build/restart compose services, verify/rollback. Can be driven by Celery jobs (or equivalent). ([GitHub][9]) |
-| `docker-proxy`       | docker-socket-proxy            | Restricted Docker API access           | Used to let orchestrator/workers safely call the Docker daemon without handing over the raw socket broadly. ([GitHub][4])                                                      |
-| `job`                | MoonMind build context         | Utility/development job container      | A general-purpose container meant to be overridden to run job scripts against the repo in a controlled environment. ([GitHub][4])                                              |
-
-**When you use this stack:**
-When you want **asynchronous orchestration** (fan-out/fan-in, task chains, retries, queue routing) over RabbitMQ, rather than only the API-managed task queue. The project’s memory architecture explicitly calls out “Background jobs: Celery + RabbitMQ” as a baseline primitive. ([GitHub][1])
-
-This remains an active runtime path today, but it is also one of the primary candidates for gradual replacement by Temporal-backed workflows where parity is achieved.
-
----
 
 ### `docker-compose.downloader.yaml` — Model downloader
 
@@ -139,19 +110,17 @@ This remains an active runtime path today, but it is also one of the primary can
 
 ## Task execution model
 
-MoonMind implements an API-driven **Task Queue System** for “agent jobs”:
+MoonMind implements a durable execution model using **Temporal Workflows** and **Activities**:
 
-* Jobs can include **attachments**, with explicit separation between user-provided inputs (`inputs/`) and worker-generated artifacts; attempts to upload outputs that masquerade as inputs are rejected. ([GitHub][2])
-* Workers claim jobs under explicit **eligibility rules** (type allowed, repo allowed, capabilities satisfied) and use a lease/heartbeat model. ([GitHub][2])
-* Each job runs through a staged lifecycle: `prepare → execute → publish` (with publish optional). ([GitHub][2])
+*   **Workflow Executions** are the durable orchestration primitive coordinating complex flows like data ingestion or spec fulfillment.
+*   **Activities** execute all side-effects (e.g., LLM calls, shell commands, and filesystem ops) within specialized capability boundaries.
+*   Activities communicate via **ArtifactRef** values, securely reading external artifacts and writing outputs without storing large payloads in the workflow history.
 
 This design gives you:
 
-* Horizontal scaling by adding worker replicas
-* Runtime specialization (a Gemini worker can advertise `["gemini","git","gh"]` while a “universal” worker can advertise multiple runtimes) ([GitHub][2])
-* Better operational controls (stale lease detection, cancellation/cloning patterns) ([GitHub][2])
-
-This is still the current production execution model for major parts of MoonMind. Temporal adoption should be understood as a migration of durable orchestration responsibilities, not as evidence that this queue layer has already been removed.
+*   Horizontal scaling of specialized activity workers by extending task queues (e.g. `mm.activity.llm` or `mm.activity.sandbox`)
+*   Runtime specialization (a Gemini worker handles specific Temporal tasks advertising Gemini capabilities)
+*   Better operational controls via Temporal Visibility for lists/queries, and Temporal Schedules for recurring workflows.
 
 ---
 
@@ -166,7 +135,7 @@ The “current state” called out in the memory doc includes:
 * **Document retrieval (RAG)**: **LlamaIndex + Qdrant** powering chat and `/context` ([GitHub][1])
 * **Durable execution state**: Postgres tables for workflows/runs/jobs ([GitHub][1])
 * **Durable artifacts**: filesystem artifact roots (logs, patches, outputs) ([GitHub][1])
-* **Background jobs**: Celery + RabbitMQ for async orchestration ([GitHub][1])
+* **Background jobs**: Temporal Workflows for async orchestration ([GitHub][1])
 
 ### “Context pack” concept
 
@@ -236,14 +205,13 @@ MoonMind’s dependency set (Poetry) is a strong signal of its architectural cho
 
 ### Task execution & orchestration
 
-* **Celery**: async job execution engine with retries, routing, and concurrency. In MoonMind it’s explicitly positioned as the “background jobs” layer and is wired up with RabbitMQ in `docker-compose.job.yaml`. ([GitHub][1])
-* **RabbitMQ** (container): broker that enables queue-based distribution, queue sharding, and operational introspection (management UI). ([GitHub][4])
+* **Temporalio (Python SDK)**: durable execution framework powering workflows and activities in MoonMind. It replaces older queue systems by offering first-class primitives for retries, signal-based event handling, and scheduled tasks. ([GitHub][1])
 
-Why Celery is valuable here (practically):
+Why Temporal is valuable here (practically):
 
 * Separates **slow/long-running** or **batch** workflows (indexing, spec workflows, orchestration plans) from the latency-sensitive API surface
-* Enables horizontal scaling by queue type (e.g., Codex shards)
-* Provides robust retry semantics for flaky external dependencies (LLMs, GitHub, Jira, Confluence, etc.)
+* Guarantees code-level determinism and resilient retries for flaky external dependencies (LLMs, GitHub, Jira, Confluence, etc.)
+* Enforces separation between deterministic orchestration code and side-effecting activity workers
 
 ### Retrieval, indexing, and “memory”
 
@@ -295,8 +263,7 @@ Why this matters:
 
 ### Scaling strategy
 
-* **Scale workers horizontally** by runtime type (Codex vs Gemini vs Claude) according to demand; worker eligibility is enforced by capability/routing policy. ([GitHub][2])
-* For Celery workloads, scale by **queue shard** (e.g., `celery-codex-0/1/2`) to isolate hotspots and reduce tail latency. ([GitHub][4])
+* **Scale workers horizontally** by capability boundary (e.g., `mm.activity.llm`, `mm.activity.sandbox`) according to demand; task queues naturally distribute load to eligible workers. ([GitHub][2])
 
 ### Security posture highlights
 
