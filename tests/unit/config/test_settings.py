@@ -762,6 +762,7 @@ class TestSpecWorkflowSettings:
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("speckit",)
 
+
 class TestAppSettingsRuntimeValidation:
     def test_app_settings_rejects_claude_default_without_api_key(
         self, app_settings_defaults, monkeypatch
