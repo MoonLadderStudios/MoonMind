@@ -13,12 +13,9 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 
-with workflow.unsafe.imports_passed_through():
-    from moonmind.workflows.temporal.activity_catalog import (
-        INTEGRATIONS_TASK_QUEUE,
-        LLM_TASK_QUEUE,
-        SANDBOX_TASK_QUEUE,
-    )
+INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
+LLM_TASK_QUEUE = "mm.activity.llm"
+SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 
 
 class RunWorkflowInput(TypedDict, total=False):
@@ -195,8 +192,10 @@ class MoonMindRunWorkflow:
                 "inputs_ref": input_ref,
                 "parameters": parameters,
                 "execution_ref": {
+                    "namespace": workflow.info().namespace,
                     "workflow_id": workflow.info().workflow_id,
                     "run_id": workflow.info().run_id,
+                    "link_type": "plan",
                 },
             },
             start_to_close_timeout=timedelta(minutes=15),
@@ -319,9 +318,10 @@ class MoonMindRunWorkflow:
                         "correlation_id": correlation_id,
                         "parameters": integration_parameters,
                         "execution_ref": {
+                            "namespace": workflow.info().namespace,
                             "workflow_id": workflow.info().workflow_id,
                             "run_id": workflow.info().run_id,
-                            "kind": "output.summary",
+                            "link_type": "output.summary",
                         },
                     },
                     start_to_close_timeout=timedelta(minutes=5),

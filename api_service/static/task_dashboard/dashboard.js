@@ -27,9 +27,9 @@
   function requiresResumeConfirmation(snapshot) {
     return Boolean(
       snapshot &&
-        snapshot.metrics &&
-        Object.prototype.hasOwnProperty.call(snapshot.metrics, "isDrained") &&
-        !snapshot.metrics.isDrained,
+      snapshot.metrics &&
+      Object.prototype.hasOwnProperty.call(snapshot.metrics, "isDrained") &&
+      !snapshot.metrics.isDrained,
     );
   }
 
@@ -147,7 +147,7 @@
   const runtimeCapabilitiesEndpoint =
     String(
       queueSourceConfig.runtimeCapabilities ||
-        "/api/queue/workers/runtime-capabilities",
+      "/api/queue/workers/runtime-capabilities",
     );
   const runtimeCapabilitiesCacheTtlMs = 5 * 60 * 1000;
   const runtimeCapabilitiesCache = {
@@ -174,8 +174,8 @@
       : {};
   const temporalDashboardFeature =
     featuresConfig.temporalDashboard &&
-    typeof featuresConfig.temporalDashboard === "object" &&
-    !Array.isArray(featuresConfig.temporalDashboard)
+      typeof featuresConfig.temporalDashboard === "object" &&
+      !Array.isArray(featuresConfig.temporalDashboard)
       ? featuresConfig.temporalDashboard
       : {};
   const temporalDashboardEnabled = Boolean(temporalDashboardFeature.enabled);
@@ -193,7 +193,7 @@
   const systemConfig = config.system || {};
   const temporalCompatibilityConfig =
     systemConfig.temporalCompatibility &&
-    typeof systemConfig.temporalCompatibility === "object"
+      typeof systemConfig.temporalCompatibility === "object"
       ? systemConfig.temporalCompatibility
       : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
@@ -205,7 +205,7 @@
   );
   const supportedWorkerRuntimes =
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
-    systemConfig.supportedWorkerRuntimes.length > 0
+      systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
       : ["codex", "gemini", "claude", "jules", "universal"];
 
@@ -232,7 +232,7 @@
 
   const configuredTaskRuntimes =
     Array.isArray(systemConfig.supportedTaskRuntimes) &&
-    systemConfig.supportedTaskRuntimes.length > 0
+      systemConfig.supportedTaskRuntimes.length > 0
       ? normalizeTaskRuntimeList(systemConfig.supportedTaskRuntimes)
       : [];
   const inferredTaskRuntimes = normalizeTaskRuntimeList(
@@ -258,14 +258,14 @@
       : supportedTaskRuntimes[0] || "codex");
   const configuredModelDefaults =
     systemConfig.defaultTaskModelByRuntime &&
-    typeof systemConfig.defaultTaskModelByRuntime === "object" &&
-    !Array.isArray(systemConfig.defaultTaskModelByRuntime)
+      typeof systemConfig.defaultTaskModelByRuntime === "object" &&
+      !Array.isArray(systemConfig.defaultTaskModelByRuntime)
       ? systemConfig.defaultTaskModelByRuntime
       : {};
   const configuredEffortDefaults =
     systemConfig.defaultTaskEffortByRuntime &&
-    typeof systemConfig.defaultTaskEffortByRuntime === "object" &&
-    !Array.isArray(systemConfig.defaultTaskEffortByRuntime)
+      typeof systemConfig.defaultTaskEffortByRuntime === "object" &&
+      !Array.isArray(systemConfig.defaultTaskEffortByRuntime)
       ? systemConfig.defaultTaskEffortByRuntime
       : {};
   function resolveRuntimeDefault(defaultsByRuntime, runtime) {
@@ -352,15 +352,15 @@
     );
     const refresh =
       payload &&
-      typeof payload === "object" &&
-      payload[refreshField] &&
-      typeof payload[refreshField] === "object"
+        typeof payload === "object" &&
+        payload[refreshField] &&
+        typeof payload[refreshField] === "object"
         ? payload[refreshField]
         : null;
     return {
       stale: Boolean(
         (payload && typeof payload === "object" && payload[staleField]) ||
-          (refresh && refresh.listStale),
+        (refresh && refresh.listStale),
       ),
       refetchSuggested: Boolean(refresh && refresh.refetchSuggested),
       refreshedAt:
@@ -416,9 +416,8 @@
         if (!label) {
           return "";
         }
-        return `<option value="${escapeHtml(runtimeValue)}" ${
-          runtimeValue === selected ? "selected" : ""
-        }>${escapeHtml(label)}</option>`;
+        return `<option value="${escapeHtml(runtimeValue)}" ${runtimeValue === selected ? "selected" : ""
+          }>${escapeHtml(label)}</option>`;
       })
       .join("");
   };
@@ -497,8 +496,8 @@
     : true;
   const attachmentPolicyConfig =
     systemConfig.attachmentPolicy &&
-    typeof systemConfig.attachmentPolicy === "object" &&
-    !Array.isArray(systemConfig.attachmentPolicy)
+      typeof systemConfig.attachmentPolicy === "object" &&
+      !Array.isArray(systemConfig.attachmentPolicy)
       ? systemConfig.attachmentPolicy
       : {};
   const parseAttachmentPolicyInt = (rawValue, fallback) => {
@@ -543,16 +542,16 @@
   const ownerRepoPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const taskTemplateCatalogConfig =
     systemConfig.taskTemplateCatalog &&
-    typeof systemConfig.taskTemplateCatalog === "object" &&
-    !Array.isArray(systemConfig.taskTemplateCatalog)
+      typeof systemConfig.taskTemplateCatalog === "object" &&
+      !Array.isArray(systemConfig.taskTemplateCatalog)
       ? systemConfig.taskTemplateCatalog
       : {};
   const taskTemplateCatalogEnabled = Boolean(taskTemplateCatalogConfig.enabled);
   const taskTemplateSaveEnabled = Boolean(taskTemplateCatalogConfig.templateSaveEnabled);
   const workerPauseConfig =
     systemConfig.workerPause &&
-    typeof systemConfig.workerPause === "object" &&
-    !Array.isArray(systemConfig.workerPause)
+      typeof systemConfig.workerPause === "object" &&
+      !Array.isArray(systemConfig.workerPause)
       ? systemConfig.workerPause
       : null;
   const workerPauseTransport = createWorkerPauseTransport(workerPauseConfig);
@@ -655,7 +654,7 @@
   function onAutoRefreshChange(listener) {
     if (typeof listener !== "function") {
       console.warn("onAutoRefreshChange requires a function listener");
-      return () => {};
+      return () => { };
     }
     autoRefreshChangeListeners.add(listener);
     return () => {
@@ -678,14 +677,12 @@
     return `
       <div class="toolbar-controls">
         <label class="queue-inline-toggle toolbar-live-toggle">
-          <input type="checkbox" data-auto-refresh-toggle ${
-            isAutoRefreshActive() ? "checked" : ""
-          } aria-pressed="${isAutoRefreshActive() ? "true" : "false"}" />
+          <input type="checkbox" data-auto-refresh-toggle ${isAutoRefreshActive() ? "checked" : ""
+      } aria-pressed="${isAutoRefreshActive() ? "true" : "false"}" />
           Live updates
         </label>
-        <span class="small" data-auto-refresh-status>${
-          isAutoRefreshActive() ? "" : "Updates paused to keep selections stable."
-        }</span>
+        <span class="small" data-auto-refresh-status>${isAutoRefreshActive() ? "" : "Updates paused to keep selections stable."
+      }</span>
       </div>
     `;
   }
@@ -1031,12 +1028,12 @@
   function activateNav(pathname) {
     const activePath =
       pathname === "/tasks/queue/new" ||
-      pathname === "/tasks/create" ||
-      pathname === "/tasks/orchestrator/new"
+        pathname === "/tasks/create" ||
+        pathname === "/tasks/orchestrator/new"
         ? "/tasks/create"
         : pathname === "/tasks/queue" || pathname === "/tasks/list"
           ? "/tasks/list"
-        : pathname;
+          : pathname;
     const links = document.querySelectorAll("a[data-nav]");
     links.forEach((link) => {
       const href = link.getAttribute("href") || "";
@@ -1496,11 +1493,11 @@
         : "";
     const firstStepSkillNode =
       firstStep &&
-      typeof firstStep === "object" &&
-      !Array.isArray(firstStep) &&
-      firstStep.skill &&
-      typeof firstStep.skill === "object" &&
-      !Array.isArray(firstStep.skill)
+        typeof firstStep === "object" &&
+        !Array.isArray(firstStep) &&
+        firstStep.skill &&
+        typeof firstStep.skill === "object" &&
+        !Array.isArray(firstStep.skill)
         ? firstStep.skill
         : {};
     const firstStepSkillId = String(firstStepSkillNode.id || "").trim();
@@ -1566,25 +1563,25 @@
 
     const appliedTemplateState = Array.isArray(task.appliedStepTemplates)
       ? task.appliedStepTemplates
-          .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
-          .map((entry) => ({
-            slug: String(entry.slug || "").trim(),
-            version: String(entry.version || "").trim(),
-            inputs:
-              entry.inputs && typeof entry.inputs === "object" && !Array.isArray(entry.inputs)
-                ? entry.inputs
-                : {},
-            stepIds: Array.isArray(entry.stepIds)
-              ? entry.stepIds
-                  .map((stepId) => String(stepId || "").trim())
-                  .filter(Boolean)
-              : [],
-            appliedAt: String(entry.appliedAt || "").trim() || new Date().toISOString(),
-            capabilities: Array.isArray(entry.capabilities)
-              ? normalizeRuntimeOptions(entry.capabilities)
-              : [],
-          }))
-          .filter((entry) => entry.slug && entry.version)
+        .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+        .map((entry) => ({
+          slug: String(entry.slug || "").trim(),
+          version: String(entry.version || "").trim(),
+          inputs:
+            entry.inputs && typeof entry.inputs === "object" && !Array.isArray(entry.inputs)
+              ? entry.inputs
+              : {},
+          stepIds: Array.isArray(entry.stepIds)
+            ? entry.stepIds
+              .map((stepId) => String(stepId || "").trim())
+              .filter(Boolean)
+            : [],
+          appliedAt: String(entry.appliedAt || "").trim() || new Date().toISOString(),
+          capabilities: Array.isArray(entry.capabilities)
+            ? normalizeRuntimeOptions(entry.capabilities)
+            : [],
+        }))
+        .filter((entry) => entry.slug && entry.version)
       : [];
 
     const draftPublishMode = Object.prototype.hasOwnProperty.call(
@@ -1883,11 +1880,10 @@
       <div class="toolbar">
         <div>
           <h2 class="page-title">${escapeHtml(title)}</h2>
-          ${
-            normalizedSubtitle
-              ? `<p class="page-meta">${escapeHtml(normalizedSubtitle)}</p>`
-              : ""
-          }
+          ${normalizedSubtitle
+        ? `<p class="page-meta">${escapeHtml(normalizedSubtitle)}</p>`
+        : ""
+      }
         </div>
         ${showAutoRefreshControls ? renderAutoRefreshControls() : ""}
       </div>
@@ -1932,8 +1928,8 @@
           <td><a href="${linkTarget}">${idLabel}</a></td>
           ${primaryCells}
           <td>${statusBadge(row.source, row.rawStatus)} <span class="small">${escapeHtml(
-            rawStatus,
-          )}</span></td>
+          rawStatus,
+        )}</span></td>
           <td>${titleLabel}</td>
           ${timelineCells}
         </tr>
@@ -2143,8 +2139,8 @@
         const originLink =
           originSource === "queue" && pick(origin, "id")
             ? `<a href="${escapeHtml(
-                buildUnifiedTaskDetailRoute(pick(origin, "id"), "queue"),
-              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+              buildUnifiedTaskDetailRoute(pick(origin, "id"), "queue"),
+            )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
             : escapeHtml(originSource);
         const repo = pick(row, "repository") || pick(preview, "repository") || "-";
         const instructions = pick(preview, "instructions") || "";
@@ -2159,8 +2155,8 @@
         return `
           <tr data-proposal-id="${escapeHtml(String(id || ""))}">
             <td><a href="/tasks/proposals/${encodeURIComponent(
-              String(id || ""),
-            )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
+          String(id || ""),
+        )}">${escapeHtml(String(id || "").slice(0, 8) || "-")}</a></td>
             <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
             <td>${escapeHtml(repo)}</td>
             <td>${escapeHtml(pick(row, "category") || "-")}</td>
@@ -2178,27 +2174,26 @@
                   data-action="promote"
                   data-proposal-action="promote"
                   data-proposal-id="${escapeHtml(
-                  String(id || ""),
-                )}">Promote</button>
+          String(id || ""),
+        )}">Promote</button>
                 <button
                   type="button"
                   class="danger proposal-action queue-action queue-action-danger"
                   data-action="dismiss"
                   data-proposal-action="dismiss"
                   data-proposal-id="${escapeHtml(
-                  String(id || ""),
-                )}">Dismiss</button>
+          String(id || ""),
+        )}">Dismiss</button>
               </div>
             </td>
           </tr>
-          ${
-            instructions
-              ? `<tr><td colspan="12"><span class="small">${escapeHtml(
-                  instructions,
-                )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
-                  dedupHash || "-",
-                )}</code></span></td></tr>`
-              : ""
+          ${instructions
+            ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+              instructions,
+            )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
+              dedupHash || "-",
+            )}</code></span></td></tr>`
+            : ""
           }
         `;
       })
@@ -2216,16 +2211,15 @@
         const originLink =
           originSource === "queue" && pick(origin, "id")
             ? `<a href="/tasks/queue/${encodeURIComponent(
-                String(pick(origin, "id") || ""),
-              )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+              String(pick(origin, "id") || ""),
+            )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
             : escapeHtml(originSource);
         const repo = pick(row, "repository") || pick(preview, "repository") || "-";
         const instructions = pick(preview, "instructions") || "";
         const instructionText = String(instructions || "").trim();
         const instructionPreview = instructionText
-          ? `${escapeHtml(instructionText.slice(0, 140))}${
-              instructionText.length > 140 ? "..." : ""
-            }`
+          ? `${escapeHtml(instructionText.slice(0, 140))}${instructionText.length > 140 ? "..." : ""
+          }`
           : "-";
         const tags = (pick(row, "tags") || []).join(", ");
         const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
@@ -2247,15 +2241,15 @@
             <div class="queue-card-header">
               <div>
                 <a href="/tasks/proposals/${encodedRowId}" class="queue-card-title">${escapeHtml(
-                  titleWithId,
-                )}</a>
+          titleWithId,
+        )}</a>
                 <p class="queue-card-meta">${escapeHtml(repo)}</p>
               </div>
               <div class="queue-card-status">
                 ${statusBadge("proposals", pick(row, "status"))}
                 <span class="queue-card-status-raw small">${escapeHtml(
-                  String(pick(row, "status") || "-").trim(),
-                )}</span>
+          String(pick(row, "status") || "-").trim(),
+        )}</span>
               </div>
             </div>
             <dl class="queue-card-fields">
@@ -2349,8 +2343,8 @@
           </table>
         </div>
         <ul class="queue-card-list" data-layout="card" role="list">${renderProposalCards(
-          filteredRows,
-        )}</ul>
+      filteredRows,
+    )}</ul>
       </div>
     `;
   }
@@ -2364,8 +2358,8 @@
       statusFilter === "dismissed" || statusFilter === "promoted" || statusFilter === "open";
     const jumpLink = shouldLinkToStatus
       ? `<a href="/tasks/proposals?status=${encodeURIComponent(
-          statusFilter,
-        )}" class="small">View ${escapeHtml(statusFilter)} proposals</a>`
+        statusFilter,
+      )}" class="small">View ${escapeHtml(statusFilter)} proposals</a>`
       : "";
     const content = message
       ? `<div class="notice ok">${escapeHtml(message)}${jumpLink ? `<br/>${jumpLink}` : ""}</div>`
@@ -2503,12 +2497,7 @@
 
   const shouldUseTemporalSubmit = (runtimeMode, options = {}) => {
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
-    return (
-      Boolean(options.temporalSubmitEnabled) &&
-      !Boolean(options.preferQueueSubmit) &&
-      !Boolean(options.isEditMode) &&
-      normalizedMode !== ORCHESTRATOR_RUNTIME
-    );
+    return normalizedMode !== ORCHESTRATOR_RUNTIME;
   };
 
   const determineSubmitDestination = (runtimeMode, endpoints = {}, options = {}) => {
@@ -2672,8 +2661,8 @@
       pick(createResponse, "artifact_ref", "artifactRef") || {};
     const artifactId = String(
       pick(artifactRef, "artifact_id", "artifactId")
-        || pick(createResponse, "artifact_id", "artifactId")
-        || "",
+      || pick(createResponse, "artifact_id", "artifactId")
+      || "",
     ).trim();
     if (!artifactId) {
       throw new Error("artifact create response missing artifact id");
@@ -2789,9 +2778,9 @@
     }
     const style =
       node.style &&
-      typeof node.style === "object" &&
-      typeof node.style.setProperty === "function" &&
-      typeof node.style.removeProperty === "function"
+        typeof node.style === "object" &&
+        typeof node.style.setProperty === "function" &&
+        typeof node.style.removeProperty === "function"
         ? node.style
         : null;
     if (isVisible) {
@@ -3088,29 +3077,29 @@
       uploadTemporalArtifactContent,
     };
     window.__queueLayoutTest = {
-        queueFieldDefinitions,
-        renderQueueFieldValue,
-        renderQueueTable,
-        renderQueueCards,
+      queueFieldDefinitions,
+      renderQueueFieldValue,
+      renderQueueTable,
+      renderQueueCards,
       renderQueueLayouts,
       renderActivePageContent,
       renderRowsTable,
       filterProposalsByTag,
       renderProposalTable,
       renderProposalCards,
-        renderProposalLayouts,
-        renderProposalActionFeedback,
-        toQueueRows,
-        toTemporalRows,
-        parseQueuePaginationFromSearch,
-        applyQueuePaginationToSearch,
-        resetQueuePaginationState,
-      };
+      renderProposalLayouts,
+      renderProposalActionFeedback,
+      toQueueRows,
+      toTemporalRows,
+      parseQueuePaginationFromSearch,
+      applyQueuePaginationToSearch,
+      resetQueuePaginationState,
+    };
     window.__temporalRunHistoryTest = {
       resolveTemporalDetailContext,
       resolveManifestIngestContext,
     };
-    }
+  }
 
   async function apiPromoteProposal(proposalId, overrides = {}) {
     const endpointTemplate =
@@ -3265,8 +3254,8 @@
       const updatedAt = pick(item, "updatedAt") || pick(item, "startedAt");
       const ownerType = String(
         pick(item, "ownerType", "OwnerType") ||
-          pick(searchAttributes, "mm_owner_type", "ownerType") ||
-          "user",
+        pick(searchAttributes, "mm_owner_type", "ownerType") ||
+        "user",
       ).trim().toLowerCase() || "user";
       return {
         source: "temporal",
@@ -3279,9 +3268,9 @@
         workflowType: pick(item, "workflowType") || "",
         entry: String(
           pick(item, "entry", "Entry") ||
-            pick(searchAttributes, "mm_entry", "entry") ||
-            pick(memo, "entry") ||
-            "",
+          pick(searchAttributes, "mm_entry", "entry") ||
+          pick(memo, "entry") ||
+          "",
         ).trim(),
         ownerType,
         ownerId: String(
@@ -3289,13 +3278,13 @@
         ).trim(),
         repository: String(
           pick(item, "repository", "Repository") ||
-            pick(searchAttributes, "mm_repository", "mm_repo", "repository") ||
-            "",
+          pick(searchAttributes, "mm_repository", "mm_repo", "repository") ||
+          "",
         ).trim(),
         integration: String(
           pick(item, "integration", "Integration") ||
-            pick(searchAttributes, "mm_integration", "integration") ||
-            "",
+          pick(searchAttributes, "mm_integration", "integration") ||
+          "",
         ).trim(),
         queueName: "-",
         runtimeMode: null,
@@ -3324,20 +3313,20 @@
       const leftTime =
         Date.parse(
           left.sortTimestamp ||
-            left.updatedAt ||
-            left.startedAt ||
-            left.createdAt ||
-            left.finishedAt ||
-            0,
+          left.updatedAt ||
+          left.startedAt ||
+          left.createdAt ||
+          left.finishedAt ||
+          0,
         ) || 0;
       const rightTime =
         Date.parse(
           right.sortTimestamp ||
-            right.updatedAt ||
-            right.startedAt ||
-            right.createdAt ||
-            right.finishedAt ||
-            0,
+          right.updatedAt ||
+          right.startedAt ||
+          right.createdAt ||
+          right.finishedAt ||
+          0,
         ) || 0;
       if (rightTime !== leftTime) {
         return rightTime - leftTime;
@@ -3638,23 +3627,20 @@
       ]
         .map(
           ([value, label]) =>
-            `<option value="${escapeHtml(value)}" ${
-              filterState.source === value ? "selected" : ""
+            `<option value="${escapeHtml(value)}" ${filterState.source === value ? "selected" : ""
             }>${escapeHtml(label)}</option>`,
         )
         .join("");
       const pageSizeOptions = QUEUE_PAGE_SIZE_OPTIONS.map(
         (value) =>
-          `<option value="${escapeHtml(value)}" ${
-            paginationState.limit === value ? "selected" : ""
+          `<option value="${escapeHtml(value)}" ${paginationState.limit === value ? "selected" : ""
           }>${escapeHtml(value)}</option>`,
       ).join("");
       if (filterState.source === "temporal") {
         const workflowTypeOptions = ["MoonMind.Run", "MoonMind.ManifestIngest"]
           .map(
             (value) =>
-              `<option value="${escapeHtml(value)}" ${
-                filterState.workflowType === value ? "selected" : ""
+              `<option value="${escapeHtml(value)}" ${filterState.workflowType === value ? "selected" : ""
               }>${escapeHtml(value)}</option>`,
           )
           .join("");
@@ -3670,16 +3656,14 @@
         ]
           .map(
             (value) =>
-              `<option value="${escapeHtml(value)}" ${
-                filterState.temporalState === value ? "selected" : ""
+              `<option value="${escapeHtml(value)}" ${filterState.temporalState === value ? "selected" : ""
               }>${escapeHtml(value)}</option>`,
           )
           .join("");
         const entryOptions = ["run", "manifest"]
           .map(
             (value) =>
-              `<option value="${escapeHtml(value)}" ${
-                filterState.entry === value ? "selected" : ""
+              `<option value="${escapeHtml(value)}" ${filterState.entry === value ? "selected" : ""
               }>${escapeHtml(value)}</option>`,
           )
           .join("");
@@ -3730,16 +3714,14 @@
       ]
         .map(
           ([value, label]) =>
-            `<option value="${escapeHtml(value)}" ${
-              filterState.stageStatus === value ? "selected" : ""
+            `<option value="${escapeHtml(value)}" ${filterState.stageStatus === value ? "selected" : ""
             }>${escapeHtml(label)}</option>`,
         )
         .join("");
       const publishOptions = ["none", "branch", "pr"]
         .map(
           (mode) =>
-            `<option value="${escapeHtml(mode)}" ${
-              filterState.publishMode === mode ? "selected" : ""
+            `<option value="${escapeHtml(mode)}" ${filterState.publishMode === mode ? "selected" : ""
             }>${escapeHtml(mode)}</option>`,
         )
         .join("");
@@ -3760,8 +3742,8 @@
             </label>
             <label>Skill
               <input name="skill" placeholder="auto, speckit-orchestrate, ..." value="${escapeHtml(
-                filterState.skill,
-              )}" />
+        filterState.skill,
+      )}" />
             </label>
           </div>
           <div class="grid-2">
@@ -3795,26 +3777,23 @@
         : "0";
       const temporalCountText =
         filterState.source === "temporal" && typeof currentTemporalCount === "number"
-          ? ` Exact count: ${currentTemporalCount}${
-              currentTemporalCountMode ? ` (${currentTemporalCountMode})` : ""
-            }.`
+          ? ` Exact count: ${currentTemporalCount}${currentTemporalCountMode ? ` (${currentTemporalCountMode})` : ""
+          }.`
           : "";
       return `
         <div class="actions">
           <div class="small">
             Page ${escapeHtml(page)} · Showing ${escapeHtml(
-              showingRange,
-            )} · ${escapeHtml(filteredRows.length)} of ${escapeHtml(rows.length)} tasks in this page.${escapeHtml(
-              temporalCountText,
-            )}
+        showingRange,
+      )} · ${escapeHtml(filteredRows.length)} of ${escapeHtml(rows.length)} tasks in this page.${escapeHtml(
+        temporalCountText,
+      )}
           </div>
           <div>
-            <button type="button" class="secondary" data-queue-page-prev ${
-              paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
-            }>Previous</button>
-            <button type="button" class="secondary" data-queue-page-next ${
-              paginationState.hasMore ? "" : "disabled"
-            }>Next</button>
+            <button type="button" class="secondary" data-queue-page-prev ${paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
+        }>Previous</button>
+            <button type="button" class="secondary" data-queue-page-next ${paginationState.hasMore ? "" : "disabled"
+        }>Next</button>
           </div>
         </div>
       `;
@@ -3834,11 +3813,11 @@
           <div class="card"><strong>Total Jobs (Window):</strong> ${escapeHtml(totalJobs)}</div>
           <div class="card"><strong>Task Jobs:</strong> ${escapeHtml(Number(volumes.task || 0))}</div>
           <div class="card"><strong>Publish Success Rate:</strong> ${escapeHtml(
-            (publishedRate * 100).toFixed(1),
-          )}%</div>
+        (publishedRate * 100).toFixed(1),
+      )}%</div>
           <div class="card"><strong>Publish Failure Rate:</strong> ${escapeHtml(
-            (failedRate * 100).toFixed(1),
-          )}%</div>
+        (failedRate * 100).toFixed(1),
+      )}%</div>
         </div>
       `;
     }
@@ -4072,8 +4051,8 @@
           : null;
         currentTemporalCount =
           payload
-          && typeof payload === "object"
-          && typeof payload.count === "number"
+            && typeof payload === "object"
+            && typeof payload.count === "number"
             ? payload.count
             : null;
         currentTemporalCountMode =
@@ -4545,11 +4524,11 @@
         <label>Runtime
           <select name="targetTaskRuntime">
             ${supportedTaskRuntimes
-              .map(
-                (runtime) =>
-                  `<option value="${escapeHtml(runtime)}"${runtime === defaultTaskRuntime ? " selected" : ""}>${escapeHtml(runtime)}</option>`,
-              )
-              .join("")}
+          .map(
+            (runtime) =>
+              `<option value="${escapeHtml(runtime)}"${runtime === defaultTaskRuntime ? " selected" : ""}>${escapeHtml(runtime)}</option>`,
+          )
+          .join("")}
           </select>
         </label>
       `;
@@ -4814,11 +4793,11 @@
       : submitDraftController.loadWorker();
     const selectedWorkerRuntime = isEditMode
       ? normalizeTaskRuntimeInput(presetRuntime ?? sanitizedWorkerDraft.runtime) ||
-        defaultTaskRuntime
+      defaultTaskRuntime
       : resolveSubmitRuntime(
-          presetRuntime ?? sanitizedWorkerDraft.runtime,
-          defaultTaskRuntime,
-        );
+        presetRuntime ?? sanitizedWorkerDraft.runtime,
+        defaultTaskRuntime,
+      );
     let activeWorkerRuntime = selectedWorkerRuntime;
     const queueDraftModel = String(
       sanitizedWorkerDraft.model || defaultTaskModel,
@@ -4862,8 +4841,8 @@
     const fallbackOrchestratorDraft = submitDraftController.loadOrchestrator();
     const queueDraftTargetService = String(
       sanitizedWorkerDraft.targetService ||
-        fallbackOrchestratorDraft.targetService ||
-        "orchestrator",
+      fallbackOrchestratorDraft.targetService ||
+      "orchestrator",
     ).trim();
     const queueDraftOrchestratorPriority = normalizeOrchestratorPriority(
       sanitizedWorkerDraft.orchestratorPriority || fallbackOrchestratorDraft.priority || "normal",
@@ -4887,10 +4866,10 @@
           </label>
           <p class="small" id="queue-attachments-message">
             Up to ${escapeHtml(String(attachmentPolicy.maxCount))} files, ${escapeHtml(
-              String(attachmentPolicy.maxBytes),
-            )} bytes each, ${escapeHtml(
-              String(attachmentPolicy.totalBytes),
-            )} bytes total.
+          String(attachmentPolicy.maxBytes),
+        )} bytes each, ${escapeHtml(
+          String(attachmentPolicy.totalBytes),
+        )} bytes total.
           </p>
           <ul class="list" id="queue-attachments-list"></ul>
         </section>
@@ -4920,16 +4899,15 @@
           </label>
           <label>Feature Request / Initial Instructions
             <textarea id="queue-template-feature-request" placeholder="Describe the feature request this preset should execute.">${escapeHtml(
-              queueDraftTemplateFeatureRequest,
-            )}</textarea>
+        queueDraftTemplateFeatureRequest,
+      )}</textarea>
           </label>
           <div class="actions">
             <button type="button" id="queue-template-apply">Apply</button>
-            ${
-              taskTemplateSaveEnabled
-                ? '<button type="button" id="queue-template-save-current">Save Current Steps as Preset</button>'
-                : ""
-            }
+            ${taskTemplateSaveEnabled
+        ? '<button type="button" id="queue-template-save-current">Save Current Steps as Preset</button>'
+        : ""
+      }
           </div>
           <p class="small" id="queue-template-message"></p>
         </div>
@@ -4953,13 +4931,13 @@
         <div class="grid-2" data-runtime-visibility="orchestrator">
           <label>Target Service (Orchestrator)
             <input name="targetService" value="${escapeHtml(
-              queueDraftTargetService || "orchestrator",
-            )}" placeholder="orchestrator" />
+        queueDraftTargetService || "orchestrator",
+      )}" placeholder="orchestrator" />
           </label>
           <label>Approval Token (Orchestrator, optional)
             <input name="approvalToken" value="${escapeHtml(
-              queueDraftApprovalToken,
-            )}" placeholder="optional" />
+        queueDraftApprovalToken,
+      )}" placeholder="optional" />
           </label>
         </div>
         <label data-runtime-visibility="orchestrator">Orchestrator Priority
@@ -5000,13 +4978,13 @@
         <div class="grid-2">
           <label>Starting Branch (optional)
             <input name="startingBranch" value="${escapeHtml(
-              queueDraftStartingBranch,
-            )}" placeholder="repo default branch" />
+        queueDraftStartingBranch,
+      )}" placeholder="repo default branch" />
           </label>
           <label>Target Branch (optional)
             <input name="newBranch" value="${escapeHtml(
-              queueDraftNewBranch,
-            )}" placeholder="auto-generated unless starting branch is non-default" />
+        queueDraftNewBranch,
+      )}" placeholder="auto-generated unless starting branch is non-default" />
           </label>
         </div>
         <label>Publish Mode
@@ -5026,18 +5004,16 @@
           </label>
         </div>
         <label class="checkbox">
-          <input type="checkbox" name="proposeTasks" ${
-            queueDraftProposeTasks ? "checked" : ""
-          } />
+          <input type="checkbox" name="proposeTasks" ${queueDraftProposeTasks ? "checked" : ""
+      } />
           Propose Tasks
         </label>
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
-          ${
-            isEditMode
-              ? `<a href="${escapeHtml(editDetailRoute)}"><button type="button" class="secondary">Cancel</button></a>`
-              : ""
-          }
+          ${isEditMode
+        ? `<a href="${escapeHtml(editDetailRoute)}"><button type="button" class="secondary">Cancel</button></a>`
+        : ""
+      }
           <button type="submit" class="queue-submit-primary">
             ${escapeHtml(primarySubmitLabel)}
           </button>
@@ -5177,10 +5153,10 @@
         runtime: runtime || activeWorkerRuntime,
         ...(isEditMode
           ? {
-              editJobId,
-              expectedUpdatedAt: editExpectedUpdatedAt,
-              affinityKey: queueDraftAffinityKey,
-            }
+            editJobId,
+            expectedUpdatedAt: editExpectedUpdatedAt,
+            affinityKey: queueDraftAffinityKey,
+          }
           : {}),
         instruction: String(stepState[0]?.instructions || "").trim(),
         repository: String(formData.get("repository") || "").trim(),
@@ -5494,28 +5470,28 @@
               </div>
               <label>${instructionsLabel}
                 <textarea class="queue-step-instructions" data-step-field="instructions" data-step-index="${index}" placeholder="${escapeHtml(
-                  instructionsPlaceholder,
-                )}">${escapeHtml(
-                  step.instructions,
-                )}</textarea>
+            instructionsPlaceholder,
+          )}">${escapeHtml(
+            step.instructions,
+          )}</textarea>
               </label>
               <div class="grid-2">
                 <label>${skillLabel}
                   <input data-step-field="skillId" data-step-index="${index}" value="${escapeHtml(
-                    step.skillId,
-                  )}" placeholder="${escapeHtml(skillPlaceholder)}" list="queue-skill-options" />
+            step.skillId,
+          )}" placeholder="${escapeHtml(skillPlaceholder)}" list="queue-skill-options" />
                   <span class="small">${defaultHint}</span>
                 </label>
                 <label>Skill Required Capabilities (optional CSV)
                   <input data-step-field="skillRequiredCapabilities" data-step-index="${index}" value="${escapeHtml(
-                    step.skillRequiredCapabilities,
-                  )}" placeholder="docker,qdrant,unity" />
+            step.skillRequiredCapabilities,
+          )}" placeholder="docker,qdrant,unity" />
                 </label>
               </div>
               <label class="${skillArgsLabelClasses.join(" ")}" data-skill-args-index="${index}">Skill Args (optional JSON object)
                 <textarea class="queue-step-skill-args" data-step-field="skillArgs" data-step-index="${index}" placeholder='{"notes":"optional context"}'>${escapeHtml(
-                  step.skillArgs,
-                )}</textarea>
+            step.skillArgs,
+          )}</textarea>
               </label>
             </section>
           `;
@@ -6027,9 +6003,9 @@
             slug: String(appliedTemplate.slug || selected.slug),
             version: String(
               appliedTemplate.version ||
-                detail?.version ||
-                selected.latestVersion ||
-                "1.0.0",
+              detail?.version ||
+              selected.latestVersion ||
+              "1.0.0",
             ),
             inputs:
               appliedTemplate.inputs && typeof appliedTemplate.inputs === "object"
@@ -6470,14 +6446,14 @@
         hasTemplateBoundStep;
       const normalizedStepEntries = includeExplicitSteps
         ? [
-            {
-              sourceIndex: 0,
-              payload: {
-                instructions,
-              },
+          {
+            sourceIndex: 0,
+            payload: {
+              instructions,
             },
-            ...additionalSteps,
-          ]
+          },
+          ...additionalSteps,
+        ]
         : [];
       const templateIdToSequential = new Map();
       const normalizedSteps = normalizedStepEntries.map((entry, index) => {
@@ -6621,11 +6597,11 @@
           const temporalRequestBody = cloneTemporalSubmitRequest(requestBody);
           const currentTaskPayload =
             temporalRequestBody.payload &&
-            typeof temporalRequestBody.payload === "object" &&
-            !Array.isArray(temporalRequestBody.payload) &&
-            temporalRequestBody.payload.task &&
-            typeof temporalRequestBody.payload.task === "object" &&
-            !Array.isArray(temporalRequestBody.payload.task)
+              typeof temporalRequestBody.payload === "object" &&
+              !Array.isArray(temporalRequestBody.payload) &&
+              temporalRequestBody.payload.task &&
+              typeof temporalRequestBody.payload.task === "object" &&
+              !Array.isArray(temporalRequestBody.payload.task)
               ? temporalRequestBody.payload.task
               : null;
           if (!currentTaskPayload) {
@@ -6689,28 +6665,28 @@
 
         const created = hasAttachments
           ? await fetchJson(
-              queueSourceConfig.createWithAttachments || "/api/queue/jobs/with-attachments",
-              (() => {
-                const requestForm = new FormData();
-                requestForm.append("request", JSON.stringify(requestBody));
-                attachmentValidation.files.forEach((file) => {
-                  requestForm.append("files", file, file.name || "attachment");
-                });
-                return {
-                  method: "POST",
-                  body: requestForm,
-                };
-              })(),
-            )
+            queueSourceConfig.createWithAttachments || "/api/queue/jobs/with-attachments",
+            (() => {
+              const requestForm = new FormData();
+              requestForm.append("request", JSON.stringify(requestBody));
+              attachmentValidation.files.forEach((file) => {
+                requestForm.append("files", file, file.name || "attachment");
+              });
+              return {
+                method: "POST",
+                body: requestForm,
+              };
+            })(),
+          )
           : await fetchJson(queueSourceConfig.create || "/api/queue/jobs", {
-              method: "POST",
-              body: JSON.stringify(requestBody),
-            });
+            method: "POST",
+            body: JSON.stringify(requestBody),
+          });
         const createdJobNode = pick(created, "job");
         const createdJobId =
           createdJobNode &&
-          typeof createdJobNode === "object" &&
-          !Array.isArray(createdJobNode)
+            typeof createdJobNode === "object" &&
+            !Array.isArray(createdJobNode)
             ? String(pick(createdJobNode, "id") || "").trim()
             : String(pick(created, "id") || "").trim();
         if (!createdJobId) {
@@ -6749,8 +6725,8 @@
         if (isEditMode && status === 422) {
           const debugSuffix =
             queueDetail &&
-            String(queueDetail.code || "").toLowerCase() === "invalid_queue_payload" &&
-            queueDebugMessage
+              String(queueDetail.code || "").toLowerCase() === "invalid_queue_payload" &&
+              queueDebugMessage
               ? ` (details: ${queueDebugMessage})`
               : "";
           message.textContent =
@@ -6760,8 +6736,8 @@
         const baseMessage = String(error?.message || "request failed");
         const debugSuffix =
           queueDetail &&
-          String(queueDetail.code || "").toLowerCase() === "invalid_queue_payload" &&
-          queueDebugMessage
+            String(queueDetail.code || "").toLowerCase() === "invalid_queue_payload" &&
+            queueDebugMessage
             ? ` (details: ${queueDebugMessage})`
             : "";
         message.textContent = isEditMode
@@ -6877,13 +6853,13 @@
         </label>
         <label>Instruction
           <textarea name="instruction" placeholder="Describe what should be changed and verified.">${escapeHtml(
-            String(sanitizedOrchestratorDraft.instruction || "").trim(),
-          )}</textarea>
+        String(sanitizedOrchestratorDraft.instruction || "").trim(),
+      )}</textarea>
         </label>
         <label>Target Service
           <input name="targetService" required value="${escapeHtml(
-            String(sanitizedOrchestratorDraft.targetService || "orchestrator").trim(),
-          )}" placeholder="orchestrator" />
+        String(sanitizedOrchestratorDraft.targetService || "orchestrator").trim(),
+      )}" placeholder="orchestrator" />
         </label>
         <div class="grid-2">
           <label>Priority
@@ -6909,8 +6885,8 @@
         </label>
         <label>Skill Args (optional JSON object)
           <textarea name="skillArgs" placeholder='{"notes":"optional context"}'>${escapeHtml(
-            String(sanitizedOrchestratorDraft.skillArgs || "").trim(),
-          )}</textarea>
+        String(sanitizedOrchestratorDraft.skillArgs || "").trim(),
+      )}</textarea>
         </label>
         <div class="actions">
           <button type="submit" class="queue-submit-primary">Create Orchestrator Task</button>
@@ -6960,9 +6936,8 @@
         const normalizedRuntime = validateSubmitRuntime(selectedRuntime);
         if (!normalizedRuntime) {
           message.className = "notice error";
-          message.textContent = `Unsupported runtime selected: ${
-            selectedRuntime || "(empty)"
-          }.`;
+          message.textContent = `Unsupported runtime selected: ${selectedRuntime || "(empty)"
+            }.`;
           runtimeSelect.value = ORCHESTRATOR_RUNTIME;
           return;
         }
@@ -7002,8 +6977,8 @@
         const created = await fetchJson(
           orchestratorSourceConfig.create || "/orchestrator/tasks",
           {
-          method: "POST",
-          body: JSON.stringify(body),
+            method: "POST",
+            body: JSON.stringify(body),
           },
         );
         window.location.href = buildUnifiedTaskDetailRoute(
@@ -7237,9 +7212,9 @@
       }
       const canLoadOlder = Boolean(
         state.oldest &&
-          state.oldestEventId &&
-          state.hasOlderEvents &&
-          !state.loadingOlderEvents,
+        state.oldestEventId &&
+        state.hasOlderEvents &&
+        !state.loadingOlderEvents,
       );
       button.disabled = !canLoadOlder;
       if (state.loadingOlderEvents) {
@@ -7313,7 +7288,7 @@
           const attachmentId = pick(attachment, "id");
           const downloadUrl = endpoint(
             queueSourceConfig.attachmentDownload ||
-              "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
+            "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
             {
               id: jobId,
               attachmentId,
@@ -7323,8 +7298,8 @@
           const isImage = contentType.startsWith("image/");
           const previewHtml = isImage
             ? `<img src="${escapeHtml(downloadUrl)}" alt="${escapeHtml(
-                pick(attachment, "name") || "attachment",
-              )}" style="max-width:96px;max-height:64px;border-radius:6px;" loading="lazy" />`
+              pick(attachment, "name") || "attachment",
+            )}" style="max-width:96px;max-height:64px;border-radius:6px;" loading="lazy" />`
             : "-";
           return `
             <tr>
@@ -7363,13 +7338,11 @@
       const editRoute = canEdit
         ? `/tasks/queue/new?editJobId=${encodeURIComponent(editJobId)}`
         : "";
-      cancelActionsNode.innerHTML = `<div class="actions">${
-        canEdit
-          ? `<a href="${escapeHtml(editRoute)}"><button type="button" class="secondary">Edit</button></a>`
-          : ""
-      }<button type="button" id="queue-cancel-button" ${
-        cancelButtonDisabled ? "disabled" : ""
-      }>${escapeHtml(cancelButtonLabel)}</button></div>`;
+      cancelActionsNode.innerHTML = `<div class="actions">${canEdit
+        ? `<a href="${escapeHtml(editRoute)}"><button type="button" class="secondary">Edit</button></a>`
+        : ""
+        }<button type="button" id="queue-cancel-button" ${cancelButtonDisabled ? "disabled" : ""
+        }>${escapeHtml(cancelButtonLabel)}</button></div>`;
 
       const payload = pick(job, "payload") || {};
       const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
@@ -7379,15 +7352,15 @@
       const finishSummaryNode = pick(job, "finishSummary");
       const finishSummary =
         finishSummaryNode &&
-        typeof finishSummaryNode === "object" &&
-        !Array.isArray(finishSummaryNode)
+          typeof finishSummaryNode === "object" &&
+          !Array.isArray(finishSummaryNode)
           ? finishSummaryNode
           : {};
       const finishOutcomeNode = pick(finishSummary, "finishOutcome");
       const finishOutcome =
         finishOutcomeNode &&
-        typeof finishOutcomeNode === "object" &&
-        !Array.isArray(finishOutcomeNode)
+          typeof finishOutcomeNode === "object" &&
+          !Array.isArray(finishOutcomeNode)
           ? finishOutcomeNode
           : {};
       const finishOutcomeCode =
@@ -7399,8 +7372,8 @@
       const publishSummaryNode = pick(finishSummary, "publish");
       const publishSummary =
         publishSummaryNode &&
-        typeof publishSummaryNode === "object" &&
-        !Array.isArray(publishSummaryNode)
+          typeof publishSummaryNode === "object" &&
+          !Array.isArray(publishSummaryNode)
           ? publishSummaryNode
           : {};
       const publishStatus = String(pick(publishSummary, "status") || "-");
@@ -7410,8 +7383,8 @@
       const proposalsSummaryNode = pick(finishSummary, "proposals");
       const proposalsSummary =
         proposalsSummaryNode &&
-        typeof proposalsSummaryNode === "object" &&
-        !Array.isArray(proposalsSummaryNode)
+          typeof proposalsSummaryNode === "object" &&
+          !Array.isArray(proposalsSummaryNode)
           ? proposalsSummaryNode
           : {};
       const proposalsSubmitted = Number(pick(proposalsSummary, "submittedCount") || 0);
@@ -7421,8 +7394,8 @@
       )}`;
       summaryNode.innerHTML = `
         <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
-          pick(job, "queueName") || defaultQueueName,
-        )}</span></p>
+        pick(job, "queueName") || defaultQueueName,
+      )}</span></p>
         <div class="grid-2">
           <div class="card"><strong>Status:</strong> ${statusBadge("queue", pick(job, "status"))}</div>
           <div class="card"><strong>Type:</strong> ${escapeHtml(pick(job, "type") || "")}</div>
@@ -7433,19 +7406,19 @@
           <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
           <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
           <div class="card"><strong>Cancel Requested:</strong> ${formatTimestamp(
-            pick(job, "cancelRequestedAt"),
-          )}</div>
+        pick(job, "cancelRequestedAt"),
+      )}</div>
           <div class="card"><strong>Cancel Reason:</strong> ${escapeHtml(
-            pick(job, "cancelReason") || "-",
-          )}</div>
+        pick(job, "cancelReason") || "-",
+      )}</div>
           <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
-            pick(job, "leaseExpiresAt"),
-          )}</div>
+        pick(job, "leaseExpiresAt"),
+      )}</div>
           <div class="card"><strong>Outcome:</strong> ${finishOutcomeBadge(
-            finishOutcomeCode,
-          )}<br/><span class="small">${escapeHtml(
-            `${finishOutcomeStage}: ${finishOutcomeReason}`,
-          )}</span></div>
+        finishOutcomeCode,
+      )}<br/><span class="small">${escapeHtml(
+        `${finishOutcomeStage}: ${finishOutcomeReason}`,
+      )}</span></div>
         </div>
         <section>
           <h3>Finish Summary</h3>
@@ -7453,19 +7426,18 @@
             <div class="card"><strong>Publish Status:</strong> ${escapeHtml(publishStatus)}</div>
             <div class="card"><strong>Publish Reason:</strong> ${escapeHtml(publishReason)}</div>
             <div class="card"><strong>Working Branch:</strong> ${escapeHtml(publishBranch)}</div>
-            <div class="card"><strong>Pull Request:</strong> ${
-              publishPrUrl
-                ? `<a href="${escapeHtml(publishPrUrl)}" target="_blank" rel="noreferrer">${escapeHtml(
-                    publishPrUrl,
-                  )}</a>`
-                : "-"
-            }</div>
+            <div class="card"><strong>Pull Request:</strong> ${publishPrUrl
+          ? `<a href="${escapeHtml(publishPrUrl)}" target="_blank" rel="noreferrer">${escapeHtml(
+            publishPrUrl,
+          )}</a>`
+          : "-"
+        }</div>
             <div class="card"><strong>Proposals:</strong> ${escapeHtml(
-              `${proposalsSubmitted} submitted / ${proposalsGenerated} generated`,
-            )}</div>
+          `${proposalsSubmitted} submitted / ${proposalsGenerated} generated`,
+        )}</div>
             <div class="card"><strong>Proposal Link:</strong> <a href="${escapeHtml(
-              proposalsLink,
-            )}">View run proposals</a></div>
+          proposalsLink,
+        )}">View run proposals</a></div>
           </div>
         </section>
       `;
@@ -7488,8 +7460,8 @@
           : {};
       const liveControl =
         jobPayload &&
-        typeof pick(jobPayload, "liveControl") === "object" &&
-        !Array.isArray(pick(jobPayload, "liveControl"))
+          typeof pick(jobPayload, "liveControl") === "object" &&
+          !Array.isArray(pick(jobPayload, "liveControl"))
           ? pick(jobPayload, "liveControl")
           : {};
       const pauseActive = Boolean(pick(liveControl, "paused"));
@@ -7508,83 +7480,73 @@
 
       node.innerHTML = `
         <h3>Live Session</h3>
-        ${
-          state.liveSessionError
-            ? `<div class="notice error">${escapeHtml(state.liveSessionError)}</div>`
-            : ""
+        ${state.liveSessionError
+          ? `<div class="notice error">${escapeHtml(state.liveSessionError)}</div>`
+          : ""
         }
-        ${
-          state.liveActionNotice
-            ? `<div class="notice ${state.liveActionNoticeIsError ? "error" : ""}">${escapeHtml(
-                state.liveActionNotice,
-              )}</div>`
-            : ""
+        ${state.liveActionNotice
+          ? `<div class="notice ${state.liveActionNoticeIsError ? "error" : ""}">${escapeHtml(
+            state.liveActionNotice,
+          )}</div>`
+          : ""
         }
         <div class="grid-2">
           <div class="card"><strong>Status:</strong> ${escapeHtml(liveSessionStatus)}</div>
           <div class="card"><strong>Provider:</strong> ${escapeHtml(
-            String(pick(liveSession || {}, "provider") || "tmate"),
-          )}</div>
+          String(pick(liveSession || {}, "provider") || "tmate"),
+        )}</div>
           <div class="card"><strong>Ready:</strong> ${formatTimestamp(
-            pick(liveSession || {}, "readyAt"),
-          )}</div>
+          pick(liveSession || {}, "readyAt"),
+        )}</div>
           <div class="card"><strong>Expires:</strong> ${formatTimestamp(
-            pick(liveSession || {}, "expiresAt"),
-          )}</div>
+          pick(liveSession || {}, "expiresAt"),
+        )}</div>
           <div class="card"><strong>RO Attach:</strong> ${escapeHtml(
-            String(pick(liveSession || {}, "attachRo") || "-"),
-          )}</div>
+          String(pick(liveSession || {}, "attachRo") || "-"),
+        )}</div>
           <div class="card"><strong>RW Granted Until:</strong> ${formatTimestamp(
-            state.liveSessionRwGrantedUntil || pick(liveSession || {}, "rwGrantedUntil"),
-          )}</div>
+          state.liveSessionRwGrantedUntil || pick(liveSession || {}, "rwGrantedUntil"),
+        )}</div>
         </div>
-        ${
-          showGrantDetails
-            ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
-                state.liveSessionRwAttach,
-              )}</span>${
-                liveSessionRwWebUrl
-                  ? ` | Web: <a href="${escapeHtml(liveSessionRwWebUrl)}" target="_blank" rel="noreferrer">open</a>`
-                  : ""
-              }</p>`
+        ${showGrantDetails
+          ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
+            state.liveSessionRwAttach,
+          )}</span>${liveSessionRwWebUrl
+            ? ` | Web: <a href="${escapeHtml(liveSessionRwWebUrl)}" target="_blank" rel="noreferrer">open</a>`
             : ""
+          }</p>`
+          : ""
         }
         <div class="actions">
-          <button type="button" id="queue-live-enable" ${
-            state.pendingLiveControlAction === "enable"
+          <button type="button" id="queue-live-enable" ${state.pendingLiveControlAction === "enable"
+          ? "disabled"
+          : liveSessionActionsDisabled
+            ? "disabled"
+            : liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
               ? "disabled"
-              : liveSessionActionsDisabled
-                ? "disabled"
-                : liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
-                  ? "disabled"
-                  : ""
-          }>Enable Live Session</button>
-          <button type="button" id="queue-live-grant" ${
-            state.pendingLiveControlAction === "grant"
-              ? "disabled"
-              : liveSessionReady && !liveSessionActionsDisabled
-                ? ""
-                : "disabled"
-          }>Grant Write (15m)</button>
-          <button type="button" id="queue-live-revoke" ${
-            state.pendingLiveControlAction === "revoke"
-              ? "disabled"
-              : liveSessionCreated && !liveSessionActionsDisabled
-                ? ""
-                : "disabled"
-          }>Revoke Session</button>
-          <button type="button" id="queue-live-pause" ${
-            state.pendingLiveControlAction === "pause" ? "disabled" : ""
-          }>${pauseActive ? "Resume" : "Pause"}</button>
-          <button type="button" id="queue-live-takeover" ${
-            state.pendingLiveControlAction === "takeover" ? "disabled" : ""
-          }>Takeover</button>
+              : ""
+        }>Enable Live Session</button>
+          <button type="button" id="queue-live-grant" ${state.pendingLiveControlAction === "grant"
+          ? "disabled"
+          : liveSessionReady && !liveSessionActionsDisabled
+            ? ""
+            : "disabled"
+        }>Grant Write (15m)</button>
+          <button type="button" id="queue-live-revoke" ${state.pendingLiveControlAction === "revoke"
+          ? "disabled"
+          : liveSessionCreated && !liveSessionActionsDisabled
+            ? ""
+            : "disabled"
+        }>Revoke Session</button>
+          <button type="button" id="queue-live-pause" ${state.pendingLiveControlAction === "pause" ? "disabled" : ""
+        }>${pauseActive ? "Resume" : "Pause"}</button>
+          <button type="button" id="queue-live-takeover" ${state.pendingLiveControlAction === "takeover" ? "disabled" : ""
+        }>Takeover</button>
         </div>
         <div class="actions">
           <input id="queue-operator-message" placeholder="Send operator message..." />
-          <button type="button" id="queue-operator-send" ${
-            state.pendingLiveControlAction === "operator-message" ? "disabled" : ""
-          }>Send</button>
+          <button type="button" id="queue-operator-send" ${state.pendingLiveControlAction === "operator-message" ? "disabled" : ""
+        }>Send</button>
         </div>
       `;
     };
@@ -7620,8 +7582,8 @@
               <td>${escapeHtml(deriveStageFromEvent(event))}</td>
               <td>${escapeHtml(pick(event, "level") || "info")}</td>
               <td class="queue-event-message" title="${escapeHtml(titleText)}">${escapeHtml(
-                truncated,
-              )}</td>
+            truncated,
+          )}</td>
             </tr>
           `;
         })
@@ -7870,7 +7832,7 @@
       try {
         const payload = await fetchJson(
           endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
-            query,
+          query,
         );
         state.events = [];
         state.eventIds.clear();
@@ -7902,7 +7864,7 @@
       try {
         const payload = await fetchJson(
           endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
-            query,
+          query,
         );
         appendIncomingEvents(payload?.items || []);
       } catch (error) {
@@ -7925,7 +7887,7 @@
       try {
         const payload = await fetchJson(
           endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
-            query,
+          query,
         );
         const older = Array.isArray(payload?.items) ? payload.items : [];
         const added = prependOlderEvents(older);
@@ -8123,7 +8085,7 @@
             const grant = await fetchJson(
               endpoint(
                 queueSourceConfig.liveSessionGrantWrite ||
-                  "/api/queue/jobs/{id}/live-session/grant-write",
+                "/api/queue/jobs/{id}/live-session/grant-write",
                 { id: jobId },
               ),
               {
@@ -8151,7 +8113,7 @@
             await fetchJson(
               endpoint(
                 queueSourceConfig.liveSessionRevoke ||
-                  "/api/queue/jobs/{id}/live-session/revoke",
+                "/api/queue/jobs/{id}/live-session/revoke",
                 { id: jobId },
               ),
               {
@@ -8232,7 +8194,7 @@
             await fetchJson(
               endpoint(
                 queueSourceConfig.operatorMessages ||
-                  "/api/queue/jobs/{id}/operator-messages",
+                "/api/queue/jobs/{id}/operator-messages",
                 { id: jobId },
               ),
               {
@@ -8549,8 +8511,8 @@
     const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
     const configuredActions = Array.isArray(pick(execution, "availableActions"))
       ? pick(execution, "availableActions")
-          .map((value) => String(value || "").trim().toLowerCase())
-          .filter(Boolean)
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
       : [];
     let actions = TEMPORAL_ACTION_MATRIX[rawState] || [];
     if (configuredActions.length > 0) {
@@ -8917,10 +8879,10 @@
     const artifactsEndpoint =
       namespace && temporalRunId
         ? endpoint(artifactsEndpointTemplate, {
-            namespace,
-            workflowId,
-            temporalRunId,
-          })
+          namespace,
+          workflowId,
+          temporalRunId,
+        })
         : "";
     return {
       namespace,
@@ -8957,11 +8919,11 @@
         const action = readableArtifactId
           && (previewArtifactId || defaultReadArtifactId || rawAccessAllowed)
           ? `<a href="${escapeHtml(
-              endpoint(
-                temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download",
-                { artifactId: readableArtifactId },
-              ),
-            )}">${escapeHtml(actionLabel)}</a>`
+            endpoint(
+              temporalSourceConfig.artifactDownload || "/api/artifacts/{artifactId}/download",
+              { artifactId: readableArtifactId },
+            ),
+          )}">${escapeHtml(actionLabel)}</a>`
           : "<span class='small'>Restricted</span>";
         return `
           <tr>
@@ -9030,15 +8992,15 @@
     const latestRunId = String(pick(execution, "temporalRunId", "runId") || "").trim();
     const artifacts = latestRunId
       ? await fetchJson(
-          endpoint(
-            temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
-            {
-              namespace: pick(execution, "namespace") || "moonmind",
-              workflowId: latestWorkflowId,
-              temporalRunId: latestRunId,
-            },
-          ),
-        ).catch(() => ({ artifacts: [] }))
+        endpoint(
+          temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+          {
+            namespace: pick(execution, "namespace") || "moonmind",
+            workflowId: latestWorkflowId,
+            temporalRunId: latestRunId,
+          },
+        ),
+      ).catch(() => ({ artifacts: [] }))
       : { artifacts: [] };
     return { execution, latestWorkflowId, latestRunId, artifacts };
   }
@@ -9091,15 +9053,13 @@
         <h3>Summary</h3>
         <p>${escapeHtml(deriveTemporalSummary(execution) || "-")}</p>
       </section>
-      ${
-        waitingReason
-          ? `<section><h3>Waiting Reason</h3><p>${escapeHtml(waitingReason)}</p></section>`
-          : ""
+      ${waitingReason
+        ? `<section><h3>Waiting Reason</h3><p>${escapeHtml(waitingReason)}</p></section>`
+        : ""
       }
-      ${
-        attentionRequired
-          ? "<section><h3>Attention Required</h3><p>This task is waiting for external input before it can continue.</p></section>"
-          : ""
+      ${attentionRequired
+        ? "<section><h3>Attention Required</h3><p>This task is waiting for external input before it can continue.</p></section>"
+        : ""
       }
       ${renderTemporalActionButtons(execution)}
       <section>
@@ -9113,10 +9073,9 @@
         <h3>Artifacts</h3>
         <table>
           <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody>${
-            renderTemporalArtifactRows(artifacts?.artifacts || []) ||
-            "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
-          }</tbody>
+          <tbody>${renderTemporalArtifactRows(artifacts?.artifacts || []) ||
+      "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
+      }</tbody>
         </table>
       </section>
       ${debugFields}
@@ -9405,18 +9364,18 @@
           `
             <div class="grid-2">
               <div class="card"><strong>Status:</strong> ${statusBadge(
-                "orchestrator",
-                pick(run, "status"),
-              )}</div>
+            "orchestrator",
+            pick(run, "status"),
+          )}</div>
               <div class="card"><strong>Service:</strong> ${escapeHtml(
-                pick(run, "targetService") || "-",
-              )}</div>
+            pick(run, "targetService") || "-",
+          )}</div>
               <div class="card"><strong>Priority:</strong> ${escapeHtml(
-                pick(run, "priority") || "-",
-              )}</div>
+            pick(run, "priority") || "-",
+          )}</div>
               <div class="card"><strong>Started:</strong> ${formatTimestamp(
-                pick(run, "startedAt"),
-              )}</div>
+            pick(run, "startedAt"),
+          )}</div>
             </div>
             <div class="stack">
               <section>
@@ -9430,10 +9389,9 @@
                 <h3>Artifacts</h3>
                 <table>
                   <thead><tr><th>Name/Path</th><th>Size</th><th>Type</th><th>Reference</th></tr></thead>
-                  <tbody>${
-                    renderArtifactsRows(artifactsPayload?.artifacts || []) ||
-                    "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
-                  }</tbody>
+                  <tbody>${renderArtifactsRows(artifactsPayload?.artifacts || []) ||
+          "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
+          }</tbody>
                 </table>
               </section>
             </div>
@@ -9518,8 +9476,7 @@
       ]
         .map(
           ([value, label]) =>
-            `<option value="${escapeHtml(value)}" ${
-              state.status === value ? "selected" : ""
+            `<option value="${escapeHtml(value)}" ${state.status === value ? "selected" : ""
             }>${escapeHtml(label)}</option>`,
         )
         .join("");
@@ -9531,31 +9488,31 @@
             </label>
             <label>Repository
               <input name="repository" placeholder="owner/repo" value="${escapeHtml(
-                state.repository,
-              )}" />
+        state.repository,
+      )}" />
             </label>
           </div>
           <label>Category
             <input name="category" placeholder="security, tests, ..." value="${escapeHtml(
-              state.category,
-            )}" />
+        state.category,
+      )}" />
           </label>
           <div class="grid-2">
             <label>Origin Source
               <input name="originSource" placeholder="queue" value="${escapeHtml(
-                state.originSource,
-              )}" />
+        state.originSource,
+      )}" />
             </label>
             <label>Origin ID
               <input name="originId" placeholder="job UUID" value="${escapeHtml(
-                state.originId,
-              )}" />
+        state.originId,
+      )}" />
             </label>
           </div>
           <label>Signal Tag
             <input name="tag" placeholder="loop_detected" value="${escapeHtml(
-              state.tag,
-            )}" />
+        state.tag,
+      )}" />
           </label>
         </form>
       `;
@@ -9740,8 +9697,8 @@
       const originLink =
         originSource === "queue" && pick(origin, "id")
           ? `<a href="/tasks/queue/${escapeHtml(
-              String(pick(origin, "id") || ""),
-            )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
+            String(pick(origin, "id") || ""),
+          )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
           : escapeHtml(originSource);
       const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
       const priorityOverride = pick(row, "priorityOverrideReason") || "";
@@ -9755,21 +9712,20 @@
       const similar = pick(row, "similar") || [];
       const similarMarkup = similar.length
         ? `<ul class="stack">${similar
-            .map(
-              (item) =>
-                `<li><a href="/tasks/proposals/${encodeURIComponent(
-                  String(pick(item, "id") || ""),
-                )}">${escapeHtml(pick(item, "title") || "(untitled)")}</a> &middot; ${escapeHtml(
-                  pick(item, "repository") || "-",
-                )} &middot; ${formatTimestamp(pick(item, "createdAt"))}</li>`,
-            )
-            .join("")}</ul>`
+          .map(
+            (item) =>
+              `<li><a href="/tasks/proposals/${encodeURIComponent(
+                String(pick(item, "id") || ""),
+              )}">${escapeHtml(pick(item, "title") || "(untitled)")}</a> &middot; ${escapeHtml(
+                pick(item, "repository") || "-",
+              )} &middot; ${formatTimestamp(pick(item, "createdAt"))}</li>`,
+          )
+          .join("")}</ul>`
         : "<p class='small'>No similar proposals.</p>";
       const priorityOptions = ["low", "normal", "high", "urgent"]
         .map(
           (value) =>
-            `<option value="${escapeHtml(value)}" ${
-              value.toUpperCase() === priority ? "selected" : ""
+            `<option value="${escapeHtml(value)}" ${value.toUpperCase() === priority ? "selected" : ""
             }>${escapeHtml(value.toUpperCase())}</option>`,
         )
         .join("");
@@ -9783,36 +9739,35 @@
           ${detailNoticeMarkup}
           <div class="grid-2">
             <div class="card"><strong>Status:</strong> ${statusBadge(
-              "proposals",
-              pick(row, "status"),
-            )}</div>
+          "proposals",
+          pick(row, "status"),
+        )}</div>
             <div class="card"><strong>Repository:</strong> ${escapeHtml(
-              pick(row, "repository") || pick(preview, "repository") || "-",
-            )}</div>
+          pick(row, "repository") || pick(preview, "repository") || "-",
+        )}</div>
             <div class="card"><strong>Runtime:</strong> ${escapeHtml(
-              pick(preview, "runtimeMode") || "-",
-            )}</div>
+          pick(preview, "runtimeMode") || "-",
+        )}</div>
             <div class="card"><strong>Publish Mode:</strong> ${escapeHtml(
-              pick(preview, "publishMode") || "-",
-            )}</div>
+          pick(preview, "publishMode") || "-",
+        )}</div>
             <div class="card"><strong>Category:</strong> ${escapeHtml(
-              pick(row, "category") || "-",
-            )}</div>
+          pick(row, "category") || "-",
+        )}</div>
             <div class="card"><strong>Origin:</strong> ${originLink}</div>
-            <div class="card"><strong>Priority:</strong> ${escapeHtml(priority)}${
-              priorityOverride
-                ? `<br/><span class="tiny">Override: ${escapeHtml(priorityOverride)}</span>`
-                : ""
-            }</div>
+            <div class="card"><strong>Priority:</strong> ${escapeHtml(priority)}${priorityOverride
+          ? `<br/><span class="tiny">Override: ${escapeHtml(priorityOverride)}</span>`
+          : ""
+        }</div>
             <div class="card"><strong>Dedup Hash:</strong> <code>${escapeHtml(
-              dedupHash,
-            )}</code></div>
+          dedupHash,
+        )}</code></div>
             <div class="card"><strong>Trigger Repo:</strong> ${escapeHtml(
-              triggerRepo,
-            )}</div>
+          triggerRepo,
+        )}</div>
             <div class="card"><strong>Trigger Job ID:</strong> ${escapeHtml(
-              triggerJobId,
-            )}</div>
+          triggerJobId,
+        )}</div>
           </div>
           <section>
             <h3>Summary</h3>
@@ -10041,23 +9996,23 @@
       return `
         <div class="system-settings-metrics">
           ${entries
-            .map((entry) => {
-              const value =
-                entry.key === "isDrained"
-                  ? metrics.isDrained
-                    ? "Yes"
-                    : "No"
-                  : numberFormatter.format(
-                      typeof metrics[entry.key] === "number" ? metrics[entry.key] : 0,
-                    );
-              return `
+          .map((entry) => {
+            const value =
+              entry.key === "isDrained"
+                ? metrics.isDrained
+                  ? "Yes"
+                  : "No"
+                : numberFormatter.format(
+                  typeof metrics[entry.key] === "number" ? metrics[entry.key] : 0,
+                );
+            return `
                 <div class="system-settings-metric">
                   <span class="label">${escapeHtml(entry.label)}</span>
                   <span class="value">${escapeHtml(value)}</span>
                 </div>
               `;
-            })
-            .join("")}
+          })
+          .join("")}
         </div>
       `;
     }
@@ -10069,25 +10024,25 @@
       return `
         <ul>
           ${events
-            .map((event) => {
-              const actionLabel =
-                String(event?.action || "")
-                  .trim()
-                  .toUpperCase() || "-";
-              const modeLabel = event?.mode
-                ? ` | ${String(event.mode).toUpperCase()}`
-                : "";
-              const reason = event?.reason ? escapeHtml(event.reason) : "(no reason)";
-              const timestamp = formatTimestamp(event?.createdAt);
-              return `
+          .map((event) => {
+            const actionLabel =
+              String(event?.action || "")
+                .trim()
+                .toUpperCase() || "-";
+            const modeLabel = event?.mode
+              ? ` | ${String(event.mode).toUpperCase()}`
+              : "";
+            const reason = event?.reason ? escapeHtml(event.reason) : "(no reason)";
+            const timestamp = formatTimestamp(event?.createdAt);
+            return `
                 <li>
                   <strong>${escapeHtml(actionLabel)}${escapeHtml(modeLabel)}</strong>
                   <span>${reason}</span>
                   <time datetime="${escapeHtml(event?.createdAt || "")}">${escapeHtml(timestamp)}</time>
                 </li>
               `;
-            })
-            .join("")}
+          })
+          .join("")}
         </ul>
       `;
     }
@@ -10181,10 +10136,10 @@
                 <p class="page-meta">${escapeHtml(description.reason)}</p>
                 <p class="small">
                   Mode: ${escapeHtml((system.mode || description.state).toString())} | Version: ${escapeHtml(
-            (system.version ?? "-").toString(),
-          )} | Updated: ${escapeHtml(
-            system.updatedAt ? formatTimestamp(system.updatedAt) : "-",
-          )}
+          (system.version ?? "-").toString(),
+        )} | Updated: ${escapeHtml(
+          system.updatedAt ? formatTimestamp(system.updatedAt) : "-",
+        )}
                 </p>
               </div>
               ${buildMetricsMarkup(metrics)}
@@ -10360,23 +10315,31 @@
     const scheduleDetailMatch = normalizedRoute.match(/^\/tasks\/schedules\/([^/]+)$/);
 
     if (normalizedRoute === "/tasks") {
-      await renderActivePage();
+      window.history.replaceState({}, "", "/tasks/list?source=temporal");
+      await renderQueueListPage();
       return;
     }
     if (normalizedRoute === "/tasks/list") {
+      const qs = new URLSearchParams(window.location.search || "");
+      if (!qs.has("source")) {
+        window.history.replaceState({}, "", "/tasks/list?source=temporal");
+      }
       await renderQueueListPage();
       return;
     }
     if (normalizedRoute === "/tasks/queue") {
-      window.location.replace("/tasks/list?source=queue");
+      window.history.replaceState({}, "", "/tasks/list?source=temporal");
+      await renderQueueListPage();
       return;
     }
     if (normalizedRoute === "/tasks/orchestrator") {
-      window.location.replace("/tasks/list?filterRuntime=orchestrator");
+      window.history.replaceState({}, "", "/tasks/list?source=temporal");
+      await renderQueueListPage();
       return;
     }
     if (normalizedRoute === "/tasks/temporal") {
-      window.location.replace("/tasks/list?source=temporal");
+      window.history.replaceState({}, "", "/tasks/list?source=temporal");
+      await renderQueueListPage();
       return;
     }
     if (normalizedRoute === "/tasks/manifests") {

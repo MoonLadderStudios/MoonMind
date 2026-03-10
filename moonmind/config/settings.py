@@ -126,25 +126,25 @@ class CelerySettings(BaseSettings):
 class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
 
-    address: str = Field("temporal:7233", env="TEMPORAL_ADDRESS")
-    namespace: str = Field("moonmind", env="TEMPORAL_NAMESPACE")
-    worker_fleet: str = Field("workflow", env="TEMPORAL_WORKER_FLEET")
-    workflow_task_queue: str = Field("mm.workflow", env="TEMPORAL_WORKFLOW_TASK_QUEUE")
+    address: str = Field("temporal:7233", validation_alias="TEMPORAL_ADDRESS")
+    namespace: str = Field("moonmind", validation_alias="TEMPORAL_NAMESPACE")
+    worker_fleet: str = Field("workflow", validation_alias="TEMPORAL_WORKER_FLEET")
+    workflow_task_queue: str = Field("mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE")
     activity_artifacts_task_queue: str = Field(
         "mm.activity.artifacts",
-        env="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
+        validation_alias="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
     )
     activity_llm_task_queue: str = Field(
         "mm.activity.llm",
-        env="TEMPORAL_ACTIVITY_LLM_TASK_QUEUE",
+        validation_alias="TEMPORAL_ACTIVITY_LLM_TASK_QUEUE",
     )
     activity_sandbox_task_queue: str = Field(
         "mm.activity.sandbox",
-        env="TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE",
+        validation_alias="TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE",
     )
     activity_integrations_task_queue: str = Field(
         "mm.activity.integrations",
-        env="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
+        validation_alias="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
     )
     temporal_authoritative_read_enabled: bool = Field(
         False,
@@ -152,58 +152,58 @@ class TemporalSettings(BaseSettings):
     )
     workflow_worker_concurrency: int | None = Field(
         8,
-        env="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
+        validation_alias="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
         ge=1,
     )
     artifacts_worker_concurrency: int | None = Field(
         8,
-        env="TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY",
+        validation_alias="TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY",
         ge=1,
     )
     llm_worker_concurrency: int | None = Field(
         4,
-        env="TEMPORAL_LLM_WORKER_CONCURRENCY",
+        validation_alias="TEMPORAL_LLM_WORKER_CONCURRENCY",
         ge=1,
     )
     sandbox_worker_concurrency: int | None = Field(
         2,
-        env="TEMPORAL_SANDBOX_WORKER_CONCURRENCY",
+        validation_alias="TEMPORAL_SANDBOX_WORKER_CONCURRENCY",
         ge=1,
     )
     integrations_worker_concurrency: int | None = Field(
         4,
-        env="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
+        validation_alias="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
         ge=1,
     )
     integration_poll_initial_seconds: int = Field(
         5,
-        env="TEMPORAL_INTEGRATION_POLL_INITIAL_SECONDS",
+        validation_alias="TEMPORAL_INTEGRATION_POLL_INITIAL_SECONDS",
         ge=1,
     )
     integration_poll_max_seconds: int = Field(
         300,
-        env="TEMPORAL_INTEGRATION_POLL_MAX_SECONDS",
+        validation_alias="TEMPORAL_INTEGRATION_POLL_MAX_SECONDS",
         ge=1,
     )
     integration_poll_jitter_ratio: float = Field(
         0.2,
-        env="TEMPORAL_INTEGRATION_POLL_JITTER_RATIO",
+        validation_alias="TEMPORAL_INTEGRATION_POLL_JITTER_RATIO",
         ge=0.0,
         le=1.0,
     )
     run_continue_as_new_step_threshold: int = Field(
         500,
-        env="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
+        validation_alias="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
         ge=1,
     )
     run_continue_as_new_wait_cycle_threshold: int = Field(
         200,
-        env="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
+        validation_alias="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
         ge=1,
     )
     manifest_continue_as_new_phase_threshold: int = Field(
         5,
-        env="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
+        validation_alias="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
         ge=1,
     )
 
