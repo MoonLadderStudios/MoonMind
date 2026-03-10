@@ -8,10 +8,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+from functools import lru_cache
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+from temporalio.client import Client
+from temporalio.service import RPCError
 
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
@@ -47,6 +50,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionValidationError,
     build_manifest_status_snapshot,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
@@ -71,6 +75,17 @@ def _enum_value(value: object | None) -> str | None:
     if value is None:
         return None
     return getattr(value, "value", value)
+
+
+@lru_cache(maxsize=1)
+def get_temporal_client_adapter() -> TemporalClientAdapter:
+    return TemporalClientAdapter()
+
+
+async def get_temporal_client(
+    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
+) -> Client:
+    return await adapter.get_client()
 
 
 def _is_execution_admin(user: User | None) -> bool:
@@ -683,9 +698,11 @@ async def list_executions(
     integration: Optional[str] = Query(None, alias="integration"),
     page_size: int = Query(50, alias="pageSize", ge=1, le=200),
     next_page_token: Optional[str] = Query(None, alias="nextPageToken"),
+    source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
+    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
     if _is_execution_admin(user):
         effective_owner_type = owner_type
@@ -711,6 +728,70 @@ async def list_executions(
         effective_owner = _owner_id(user)
         effective_owner_type = "user" if normalized_owner_type == "user" else None
 
+    if source == "temporal":
+        try:
+            from api_service.core.sync import map_temporal_state_to_projection
+
+            client = temporal_client
+
+            def escape_val(v: str) -> str:
+                return v.replace('"', '\\"')
+
+            query_parts = []
+            if workflow_type:
+                query_parts.append(f'WorkflowType="{escape_val(workflow_type)}"')
+            if state:
+                query_parts.append(f'mm_state="{escape_val(state)}"')
+            if entry:
+                query_parts.append(f'mm_entry="{escape_val(entry)}"')
+            if effective_owner_type:
+                query_parts.append(
+                    f'mm_owner_type="{escape_val(effective_owner_type)}"'
+                )
+            if effective_owner:
+                query_parts.append(f'mm_owner_id="{escape_val(effective_owner)}"')
+            if repo:
+                query_parts.append(f'mm_repo="{escape_val(repo)}"')
+            if integration:
+                query_parts.append(f'mm_integration="{escape_val(integration)}"')
+
+            query_str = " AND ".join(query_parts) if query_parts else ""
+
+            items = []
+            async for wf in client.list_workflows(query=query_str):
+                payload = map_temporal_state_to_projection(wf)
+                # We need a record-like object for serialization
+                from types import SimpleNamespace
+
+                record_obj = SimpleNamespace(**payload)
+                if not hasattr(record_obj, "updated_at"):
+                    record_obj.updated_at = datetime.now(UTC)
+                items.append(
+                    _serialize_execution(record_obj, include_artifact_refs=False)
+                )
+                if len(items) >= page_size:
+                    break
+
+            return ExecutionListResponse(
+                items=items,
+                next_page_token=None,
+                count=len(items),
+                count_mode="exact",
+                degraded_count=False,
+                refreshed_at=datetime.now(UTC),
+            )
+        except RPCError as exc:
+            logger.warning(
+                "Failed to list Temporal executions directly: %s", exc, exc_info=True
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "temporal_unavailable",
+                    "message": "Temporal service unavailable.",
+                },
+            ) from exc
+
     try:
         result = await service.list_executions(
             workflow_type=workflow_type,
@@ -723,6 +804,19 @@ async def list_executions(
             page_size=page_size,
             next_page_token=next_page_token,
         )
+
+        if settings.temporal.temporal_authoritative_read_enabled and result.items:
+            from api_service.core.sync import sync_temporal_executions_safely
+
+            try:
+                client = temporal_client
+                result.items = await sync_temporal_executions_safely(
+                    session, result.items, client
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to sync executions from Temporal: %s", exc, exc_info=True
+                )
 
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -753,11 +847,37 @@ async def list_executions(
 async def describe_execution(
     workflow_id: str,
     response: Response,
+    source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
+    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+
+    from api_service.core.sync import fetch_and_sync_execution
+
+    if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
+        try:
+            client = temporal_client
+            await fetch_and_sync_execution(session, canonical_workflow_id, client)
+            await session.commit()
+        except RPCError as exc:
+            if source == "temporal":
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "temporal_unavailable",
+                        "message": "Temporal service unavailable.",
+                    },
+                ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync execution %s from Temporal: %s",
+                canonical_workflow_id,
+                exc,
+                exc_info=True,
+            )
 
     record = await _get_owned_execution(
         service=service,
@@ -785,15 +905,6 @@ async def update_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> UpdateExecutionResponse:
-    if not settings.temporal_dashboard.actions_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "actions_disabled",
-                "message": "Temporal dashboard actions are currently disabled.",
-            },
-        )
-
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -985,15 +1096,6 @@ async def signal_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
-    if not settings.temporal_dashboard.actions_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "actions_disabled",
-                "message": "Temporal dashboard actions are currently disabled.",
-            },
-        )
-
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     try:
@@ -1034,32 +1136,14 @@ async def cancel_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
-    if not settings.temporal_dashboard.actions_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "actions_disabled",
-                "message": "Temporal dashboard actions are currently disabled.",
-            },
-        )
-
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
-    try:
-        record = await service.cancel_execution(
-            workflow_id=workflow_id,
-            reason=request.reason,
-            graceful=request.graceful,
-        )
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "cancel_rejected",
-                "message": str(exc),
-            },
-        ) from exc
+    record = await service.cancel_execution(
+        workflow_id=workflow_id,
+        reason=request.reason,
+        graceful=request.graceful,
+    )
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:
         _mark_execution_alias_usage(

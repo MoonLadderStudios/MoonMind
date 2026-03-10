@@ -72,10 +72,10 @@
       "path": "moonmind/workflows/tasks/compatibility.py",
       "commit_id": "178cf4310bd5ce5db988ea8007b73ddd576b88f0",
       "in_reply_to_id": null,
-      "line": 206,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -102,9 +102,9 @@
       "updated_at": "2026-03-08T23:01:28Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/645#discussion_r2902564414",
       "path": "api_service/api/routers/executions.py",
-      "commit_id": "178cf4310bd5ce5db988ea8007b73ddd576b88f0",
+      "commit_id": "15ffcccee695b385da8d0075848e7918646f5743",
       "in_reply_to_id": null,
-      "line": 875,
+      "line": 861,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -182,7 +182,7 @@
       "updated_at": "2026-03-08T23:03:46Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/645#discussion_r2902567091",
       "path": "api_service/core/sync.py",
-      "commit_id": "178cf4310bd5ce5db988ea8007b73ddd576b88f0",
+      "commit_id": "15ffcccee695b385da8d0075848e7918646f5743",
       "in_reply_to_id": null,
       "line": 113,
       "side": "RIGHT",
@@ -198,7 +198,7 @@
       "updated_at": "2026-03-09T20:52:52Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/645#discussion_r2907876242",
       "path": "tests/unit/api/test_executions_temporal.py",
-      "commit_id": "178cf4310bd5ce5db988ea8007b73ddd576b88f0",
+      "commit_id": "15ffcccee695b385da8d0075848e7918646f5743",
       "in_reply_to_id": null,
       "line": 12,
       "side": "RIGHT",

@@ -1,16 +1,11 @@
-# Step 12: Remediation Application (Prompt B) Report
+# Step 12 Remediation Application Report
+
+## Remediations Completed/Skipped
+- **Completed**: Mapped `FR-001` through `FR-005` to implementation and validation tasks in `tasks.md` to ensure deterministic traceability with `spec.md`. The `DOC-REQ-*` traceability mappings already existed and matched `spec.md`, fulfilling the requirement to ensure traceability mappings.
+- **Skipped**: No CRITICAL/HIGH remediations from `speckit_analyze_report.md` required action, as the `step-11-report.md` properly designated the previous findings (extra requirements FR-006, FR-007, and tasks T013, T014) as hallucinated by the analysis prompt. These were ignored according to the determination rationale in step 11.
 
 ## Files Changed
-- `speckit_analyze_report.md`
-
-## Remediations Completed
-- **Finding 1 (LOW)**: The speckit analyze report listed requirements (FR-006, FR-007) and task IDs (T010-T014) that were supposedly missing or inaccurate. 
-  - *Action*: Updated `speckit_analyze_report.md` to accurately reflect the current state of `spec.md` and `tasks.md`. Mapped FR-006 to T004, T009, T010, T011 and FR-007 to T009, T010, T011. Updated total task count to 12.
-- **Runtime Mode Check**: Verified that production runtime code tasks (e.g., T002, T003 for `docker-compose.yaml` worker fleets) and their corresponding validation tasks (e.g., T005) exist.
-- **DOC-REQ Traceability**: Ensured all `DOC-REQ-*` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-003) exist and have full implementation and validation coverage mapped accurately in `tasks.md` and the updated analysis report.
-
-## Remediations Skipped
-- None.
+- `specs/task/20260308/b8f26474-multi/tasks.md`: Added explicit `FR-*` traceability mappings to `T002`, `T003`, `T004`, `T005`, `T006`, `T007`, and `T008` to strictly match the requirements defined in `spec.md`. 
 
 ## Residual Risks
-- None identified. All constraints, traceability mappings, and validation coverages are consistently applied across the specification, plan, and task documents.
+- None. The artifacts (`spec.md`, `plan.md`, `tasks.md`) are perfectly deterministic and feature full coverage of production runtime code tasks and automated validation tasks. The feature is completely scoped, consistent, and ready for implementation.

@@ -182,6 +182,24 @@ class TaskCompatibilityService:
             )
             if record is None:
                 raise RuntimeError(f"Temporal execution {task_id} disappeared.")
+
+            from moonmind.config.settings import settings
+
+            if settings.temporal.temporal_authoritative_read_enabled:
+                from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+                global _shared_client_adapter
+                if "_shared_client_adapter" not in globals():
+                    _shared_client_adapter = TemporalClientAdapter()
+                client = await _shared_client_adapter.get_client()
+                from api_service.core.sync import sync_single_temporal_execution_safely
+
+                synced_record = await sync_single_temporal_execution_safely(
+                    self._session, record.workflow_id, client
+                )
+                if synced_record:
+                    record = synced_record
+
             return self._build_temporal_detail(record, user)
         if resolved.source == "queue":
             job = await self._session.get(
@@ -366,6 +384,30 @@ class TaskCompatibilityService:
         ).limit(limit)
         records = list((await self._session.execute(stmt)).scalars().all())
         total_count = int((await self._session.execute(count_stmt)).scalar_one())
+
+        from moonmind.config.settings import settings
+
+        if settings.temporal.temporal_authoritative_read_enabled and records:
+            import logging
+
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+            logger = logging.getLogger(__name__)
+            global _shared_client_adapter
+            if "_shared_client_adapter" not in globals():
+                _shared_client_adapter = TemporalClientAdapter()
+            client = await _shared_client_adapter.get_client()
+            from api_service.core.sync import sync_temporal_executions_safely
+
+            try:
+                records = await sync_temporal_executions_safely(
+                    self._session, records, client
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to sync executions from Temporal: %s", exc, exc_info=True
+                )
+
         normalized: list[TaskCompatibilityRow] = []
         for record in records:
             row = self._build_temporal_row(record)

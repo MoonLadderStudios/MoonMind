@@ -103,9 +103,25 @@ def map_temporal_state_to_projection(
     except Exception:
         logger.exception("Failed to decode Temporal search attributes for %s", desc.id)
 
+    if desc.status == WorkflowExecutionStatus.RUNNING:
+        mm_state = search_attributes.get("mm_state")
+        if isinstance(mm_state, list) and mm_state:
+            mm_state = mm_state[0]
+        if mm_state:
+            try:
+                state_value = MoonMindWorkflowState(str(mm_state))
+            except ValueError:
+                logger.warning(
+                    "Invalid value for mm_state search attribute: '%s'", mm_state
+                )
+
     artifact_refs = memo.get("artifact_refs", [])
     if not isinstance(artifact_refs, list):
         artifact_refs = []
+
+    waiting_reason = memo.get("waiting_reason")
+    if not waiting_reason and state_value == MoonMindWorkflowState.AWAITING_EXTERNAL:
+        waiting_reason = "external_completion"
 
     return {
         "workflow_id": desc.id,
@@ -127,8 +143,8 @@ def map_temporal_state_to_projection(
         "integration_state": memo.get("integration_state"),
         "pending_parameters_patch": memo.get("pending_parameters_patch"),
         "paused": bool(memo.get("paused", False)),
-        "awaiting_external": bool(memo.get("awaiting_external", False)),
-        "waiting_reason": memo.get("waiting_reason"),
+        "awaiting_external": state_value == MoonMindWorkflowState.AWAITING_EXTERNAL,
+        "waiting_reason": waiting_reason,
         "attention_required": bool(memo.get("attention_required", False)),
         "step_count": int(memo.get("step_count", 0) or 0),
         "wait_cycle_count": int(memo.get("wait_cycle_count", 0) or 0),
@@ -175,3 +191,58 @@ async def sync_execution_projection(
         )
 
     return projection
+
+
+async def fetch_and_sync_execution(
+    session: AsyncSession,
+    workflow_id: str,
+    client: Any,
+) -> TemporalExecutionRecord:
+    """Fetch execution from Temporal and sync to local projection database."""
+    from moonmind.workflows.temporal.client import fetch_workflow_execution
+
+    desc = await fetch_workflow_execution(client, workflow_id)
+    return await sync_execution_projection(session, desc)
+
+
+async def sync_temporal_executions_safely(
+    session: AsyncSession,
+    items: list[Any],
+    client: Any,
+) -> list[Any]:
+    import asyncio
+
+    async def fetch_and_sync(item):
+        try:
+            return await fetch_and_sync_execution(session, item.workflow_id, client)
+        except Exception as exc:
+            logger.warning(
+                "Failed to sync execution %s from Temporal: %s",
+                item.workflow_id,
+                exc,
+            )
+            return item
+
+    tasks = [fetch_and_sync(item) for item in items]
+    updated_items = list(await asyncio.gather(*tasks))
+    await session.commit()
+    return updated_items
+
+
+async def sync_single_temporal_execution_safely(
+    session: AsyncSession,
+    workflow_id: str,
+    client: Any,
+) -> Any:
+    try:
+        record = await fetch_and_sync_execution(session, workflow_id, client)
+        await session.commit()
+        return record
+    except Exception as exc:
+        logger.warning(
+            "Failed to sync execution %s from Temporal: %s",
+            workflow_id,
+            exc,
+            exc_info=True,
+        )
+        return None
