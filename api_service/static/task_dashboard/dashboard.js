@@ -155,7 +155,7 @@
     expiresAtMs: 0,
     inFlight: null,
   };
-  const DASHBOARD_DETAIL_SEGMENT_PATTERN = /^(?:mm:)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+  const DASHBOARD_DETAIL_SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
   const manifestsSourceConfig =
     sourceConfig.manifests && typeof sourceConfig.manifests === "object"
       ? sourceConfig.manifests
@@ -1111,24 +1111,31 @@
     return `/tasks/${safeId}${sourceParam}`;
   }
 
+  function resolveTemporalWorkflowTitle(workflowType, memo) {
+    const explicitTitle = String(pick(memo, "title") || "").trim();
+    if (explicitTitle) {
+      return explicitTitle;
+    }
+    if (workflowType === "MoonMind.ManifestIngest") {
+      return "Manifest Ingest";
+    }
+    if (workflowType === "MoonMind.Run") {
+      return "Run Task";
+    }
+    const fallback = String(workflowType || "").trim();
+    return fallback || "Temporal Execution";
+  }
 
   function temporalWaitingReason(execution) {
-    const waitingReason = String(pick(execution, "waitingReason") || "").trim();
-    if (waitingReason) {
-      return waitingReason;
+    const explicit = String(pick(execution, "waitingReason") || "").trim();
+    if (explicit) {
+      return explicit;
     }
-
-    const state = String(pick(execution, "state") || "").trim().toLowerCase();
-    if (state !== "awaiting_external") {
+    const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
+    if (rawState !== "awaiting_external") {
       return "";
     }
-
     const memo = pick(execution, "memo") || {};
-    const memoWaitingReason = String(pick(memo, "waitingReason") || "").trim();
-    if (memoWaitingReason) {
-      return memoWaitingReason;
-    }
-
     return String(pick(memo, "summary") || "").trim();
   }
 
@@ -3081,7 +3088,7 @@
       resolveTemporalArtifactsRequest,
       resolveTemporalDetailModel,
       resolveTemporalRunId,
-      deriveTemporalTitle,
+      resolveTemporalWorkflowTitle,
       temporalWaitingReason,
       toTemporalRows,
       uploadTemporalArtifactContent,
@@ -3259,14 +3266,12 @@
     return (Array.isArray(items) ? items : []).map((item) => {
       const memo = pick(item, "memo") || {};
       const searchAttributes = pick(item, "searchAttributes") || {};
-      const workflowId = String(pick(item, "workflowId", "taskId") || "").trim();
-      const rawState = String(pick(item, "rawState", "state") || "initializing").trim().toLowerCase();
-      const updatedAt = pick(item, "updatedAt") || pick(item, "startedAt");
-      const ownerType = String(
-        pick(item, "ownerType", "OwnerType") ||
-          pick(searchAttributes, "mm_owner_type", "ownerType") ||
-          "user",
-      ).trim().toLowerCase() || "user";
+      const workflowId = String(pick(item, "workflowId") || "").trim();
+      const rawState = String(pick(item, "state") || "initializing").trim();
+      const updatedAt =
+        pick(searchAttributes, "mm_updated_at") ||
+        pick(item, "updatedAt") ||
+        pick(item, "startedAt");
       return {
         source: "temporal",
         sourceLabel: "Temporal",
@@ -3276,26 +3281,11 @@
         temporalRunId: pick(item, "temporalRunId", "runId") || "",
         namespace: pick(item, "namespace") || "",
         workflowType: pick(item, "workflowType") || "",
-        entry: String(
-          pick(item, "entry", "Entry") ||
-            pick(searchAttributes, "mm_entry", "entry") ||
-            pick(memo, "entry") ||
-            "",
-        ).trim(),
-        ownerType,
-        ownerId: String(
-          pick(item, "ownerId", "OwnerId") || pick(searchAttributes, "mm_owner_id", "ownerId") || "",
-        ).trim(),
-        repository: String(
-          pick(item, "repository", "Repository") ||
-            pick(searchAttributes, "mm_repository", "mm_repo", "repository") ||
-            "",
-        ).trim(),
-        integration: String(
-          pick(item, "integration", "Integration") ||
-            pick(searchAttributes, "mm_integration", "integration") ||
-            "",
-        ).trim(),
+        entry: pick(searchAttributes, "mm_entry") || "",
+        ownerType: pick(searchAttributes, "mm_owner_type") || "user",
+        ownerId: pick(searchAttributes, "mm_owner_id") || "",
+        repository: pick(searchAttributes, "mm_repo") || "",
+        integration: pick(searchAttributes, "mm_integration") || "",
         queueName: "-",
         runtimeMode: null,
         skillId: null,
@@ -3303,16 +3293,16 @@
         rawState,
         temporalStatus: pick(item, "temporalStatus") || "",
         closeStatus: pick(item, "closeStatus") || "",
-        summary: String(pick(item, "summary") || "").trim(),
+        summary: String(pick(memo, "summary") || "").trim(),
         waitingReason: temporalWaitingReason(item),
-        attentionRequired: Boolean(pick(item, "attentionRequired")),
-        title: String(pick(item, "title") || "Temporal execution").trim(),
-        createdAt: pick(item, "createdAt") || pick(item, "startedAt"),
+        attentionRequired: rawState.toLowerCase() === "awaiting_external",
+        title: resolveTemporalWorkflowTitle(pick(item, "workflowType"), memo),
+        createdAt: pick(item, "startedAt"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "closedAt"),
         updatedAt,
         closedAt: pick(item, "closedAt"),
-        sortTimestamp: updatedAt || pick(item, "closedAt"),
+        sortTimestamp: updatedAt || pick(item, "startedAt") || pick(item, "closedAt"),
         link: buildUnifiedTaskDetailRoute(workflowId, "temporal"),
       };
     });
@@ -8419,20 +8409,30 @@
   }
 
   function deriveTemporalTitle(execution) {
-    return String(
-      pick(execution, "title") ||
+    return (
+      pick(pick(execution, "memo"), "title") ||
+      formatTemporalWorkflowType(pick(execution, "workflowType")) ||
       pick(execution, "workflowId") ||
       "Temporal execution"
-    ).trim();
+    );
   }
 
   function deriveTemporalSummary(execution) {
-    return String(pick(execution, "summary") || "").trim();
+    return (
+      pick(pick(execution, "memo"), "summary") ||
+      `Execution is ${String(pick(execution, "state") || "running").replaceAll("_", " ")}.`
+    );
   }
 
   function resolveTemporalWaitingContext(execution) {
-    const waitingReason = temporalWaitingReason(execution);
-    const attentionRequired = Boolean(pick(execution, "attentionRequired"));
+    const waitingReason =
+      pick(execution, "waitingReason") ||
+      pick(pick(execution, "memo"), "waitingReason") ||
+      pick(pick(execution, "searchAttributes"), "mm_waiting_reason");
+    const attentionRequired = Boolean(
+      pick(execution, "attentionRequired") ||
+      pick(pick(execution, "memo"), "attentionRequired"),
+    );
     if (!waitingReason && !attentionRequired) {
       return "";
     }
@@ -8496,9 +8496,16 @@
 
   function resolveTemporalDetailModel(execution, workflowId, options = {}) {
     const artifactsRequest = resolveTemporalArtifactsRequest(execution, workflowId);
-    const rawState = String(pick(execution, "rawState", "state") || "initializing").trim().toLowerCase();
+    const rawState = String(
+      pick(execution, "state") || pick(execution, "temporalStatus") || "",
+    )
+      .trim()
+      .toLowerCase();
     return {
-      attentionRequired: Boolean(pick(execution, "attentionRequired")),
+      attentionRequired: Boolean(
+        pick(execution, "attentionRequired") ||
+        pick(pick(execution, "memo"), "attentionRequired"),
+      ),
       closeStatus: pick(execution, "closeStatus") || "-",
       debugFieldsEnabled: Object.prototype.hasOwnProperty.call(
         options,
@@ -8988,7 +8995,7 @@
       pick(execution, "actions") && typeof pick(execution, "actions") === "object"
         ? pick(execution, "actions")
         : null;
-    const rawState = String(pick(execution, "rawState", "state") || "").trim().toLowerCase();
+    const rawState = String(pick(execution, "state") || "").trim().toLowerCase();
     const terminal = ["succeeded", "failed", "canceled"].includes(rawState);
     const buttons = [];
     if (
@@ -9072,6 +9079,7 @@
       latestWorkflowId,
       latestRunId,
       artifacts,
+      memo,
       waitingReason,
       detailTitle,
       attentionRequired,
@@ -9081,7 +9089,7 @@
     return `
       ${noticeHtml}
       <div class="grid-2">
-        <div class="card"><strong>Status:</strong> ${statusBadge("temporal", pick(execution, "status", "state"))}</div>
+        <div class="card"><strong>Status:</strong> ${statusBadge("temporal", pick(execution, "state"))}</div>
         <div class="card"><strong>Source:</strong> Temporal</div>
         <div class="card"><strong>Title:</strong> ${escapeHtml(detailTitle)}</div>
         <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(pick(execution, "workflowType") || "-"))}</div>
@@ -9093,7 +9101,7 @@
       </div>
       <section>
         <h3>Summary</h3>
-        <p>${escapeHtml(deriveTemporalSummary(execution) || "-")}</p>
+        <p>${escapeHtml(String(pick(memo, "summary") || "-"))}</p>
       </section>
       ${
         waitingReason
@@ -9147,7 +9155,7 @@
       if (normalizedAction === "set-title") {
         const nextTitle = window.prompt(
           "Task title",
-          deriveTemporalTitle(execution),
+          resolveTemporalWorkflowTitle(pick(execution, "workflowType"), pick(execution, "memo") || {}),
         );
         if (nextTitle === null) {
           return;
@@ -9282,8 +9290,14 @@
           await fetchTemporalDetailData(workflowId);
         const memo = pick(execution, "memo") || {};
         const waitingReason = temporalWaitingReason(execution);
-        const detailTitle = deriveTemporalTitle(execution);
-        const attentionRequired = Boolean(pick(execution, "attentionRequired"));
+        const detailTitle = resolveTemporalWorkflowTitle(
+          pick(execution, "workflowType"),
+          memo,
+        );
+        const attentionRequired = Boolean(
+          pick(execution, "attentionRequired")
+            || String(pick(execution, "state") || "").trim().toLowerCase() === "awaiting_external",
+        );
         const debugFields = renderTemporalDebugSection(execution, latestWorkflowId);
         const noticeHtml = detailNotice
           ? `<div class="notice ${escapeHtml(detailNoticeLevel)}">${escapeHtml(detailNotice)}</div>`
@@ -9296,6 +9310,7 @@
             latestWorkflowId,
             latestRunId,
             artifacts,
+            memo,
             waitingReason,
             detailTitle,
             attentionRequired,

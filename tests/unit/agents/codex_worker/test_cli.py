@@ -12,13 +12,6 @@ from moonmind.agents.codex_worker import cli
 from moonmind.agents.codex_worker.utils import CliVerificationError
 
 
-@pytest.fixture(autouse=True)
-def _disable_rag_preflight_checks(monkeypatch) -> None:
-    """Prevent preflight tests from performing slow external RAG readiness checks."""
-
-    monkeypatch.setattr(cli, "ensure_rag_ready", lambda _settings: None)
-
-
 def test_run_preflight_missing_codex_raises(monkeypatch) -> None:
     """Preflight should fail when codex binary is unavailable."""
 

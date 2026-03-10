@@ -97,7 +97,9 @@ def status_maps() -> dict[str, dict[str, str]]:
 
 
 def _build_supported_task_runtimes() -> list[str]:
-    supported: list[str] = ["codex", "gemini", "claude"]
+    supported: list[str] = ["codex", "gemini"]
+    if settings.claude_runtime_gate.enabled:
+        supported.append("claude")
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported

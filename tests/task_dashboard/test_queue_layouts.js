@@ -222,7 +222,6 @@ function createProposalRow(overrides = {}) {
       startedAt: "2026-03-06T10:00:00Z",
       updatedAt: "2026-03-06T11:00:00Z",
       closedAt: null,
-      attentionRequired: true,
     },
   ]);
 

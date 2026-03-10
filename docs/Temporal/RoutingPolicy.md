@@ -6,7 +6,7 @@ This document defines how backend routing is handled across the `queue`, `orches
 ## Task Classes & Feature Flags
 - Workflows are primarily routed through `TemporalExecutionService`.
 - Tasks and identifiers specify their destination based on explicit backend flags.
-- **Queue/Orchestrator** vs **Temporal**: Temporal should be selected by routing rules based on `TEMPORAL_DASHBOARD_SUBMIT_ENABLED` and associated feature flags.
+- **Queue/Orchestrator** vs **Temporal**: Temporal should be selected by routing rules based on `TEMPORAL_DASHBOARD_ENABLED` and associated feature flags.
 
 ## Runtime Picker Exclusion
 Consistent with `TemporalDashboardIntegration.md`, the `temporal` source is kept **out** of the worker runtime picker. It is treated as a backend substrate layer, not a user-facing choice.

@@ -211,7 +211,7 @@ function runBootstrapScript(scriptSource, { storedPreference, systemPrefersDark 
 (function testAccentHierarchyRules() {
   const css = fs.readFileSync(DASHBOARD_CSS, "utf8");
 
-  const buttonRule = css.match(/(?:^|\}|,)\s*button\s*\{([^}]*width:\s*(?:-moz-)?fit-content;[^}]*)\}/);
+  const buttonRule = css.match(/button\s*\{([\s\S]*?width:\s*fit-content;[\s\S]*?)\}/);
   assert(buttonRule, "Missing primary button visual rule");
   assert(
     buttonRule[1].includes("--mm-accent"),

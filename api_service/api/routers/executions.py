@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from api_service.services.execution_translation import create_execution_from_task_request
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
@@ -527,61 +528,6 @@ async def _create_execution_from_task_request(
     return _serialize_execution(record)
 
 
-async def _create_execution_from_manifest_request(
-    *,
-    request: CreateJobRequest,
-    service: TemporalExecutionService,
-    user: User,
-) -> ExecutionModel:
-    if str(request.type).strip().lower() != "manifest":
-        raise _invalid_task_request(
-            "Only manifest-shaped submit requests can be mapped to Temporal manifest executions."
-        )
-
-    payload = request.payload if isinstance(request.payload, dict) else {}
-    manifest_payload = (
-        payload.get("manifest") if isinstance(payload.get("manifest"), dict) else {}
-    )
-    if not manifest_payload:
-        raise _invalid_task_request(
-            "Manifest-shaped Temporal submit requests require payload.manifest."
-        )
-
-    name = str(manifest_payload.get("name", "inline")).strip()
-    action = str(manifest_payload.get("action", "run")).strip()
-    options = manifest_payload.get("options", {})
-    idempotency_key = str(payload.get("idempotencyKey") or "").strip() or None
-
-    try:
-        record = await service.create_execution(
-            workflow_type="MoonMind.ManifestIngest",
-            owner_id=user.id,
-            title=f"Manifest: {name}",
-            summary=f"Manifest execution for {name} ({action})",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters={
-                "manifestName": name,
-                "action": action,
-                "options": options,
-                "systemPayload": {"manifest": manifest_payload},
-            },
-            idempotency_key=idempotency_key,
-        )
-    except TemporalExecutionValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "invalid_execution_request",
-                "message": str(exc),
-            },
-        ) from exc
-
-    return _serialize_execution(record)
-
-
 async def _get_owned_execution(
     *,
     service: TemporalExecutionService,
@@ -628,11 +574,14 @@ async def create_execution(
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)
-            return await _create_execution_from_task_request(
+            record = await create_execution_from_task_request(
+
                 request=request,
                 service=service,
                 user=user,
             )
+            return _serialize_execution(record)
+            return _serialize_execution(record)
 
         request = CreateExecutionRequest.model_validate(payload)
         record = await service.create_execution(

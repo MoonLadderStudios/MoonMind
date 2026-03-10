@@ -29,8 +29,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.api.routers.executions import _create_execution_from_task_request
-from api_service.api.routers.executions import _get_service as _get_temporal_service
 from api_service.api.schemas import QueueSystemMetadataModel
 from api_service.auth_providers import (
     get_auth_manager,
@@ -40,6 +38,12 @@ from api_service.auth_providers import (
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
+from moonmind.workflows.tasks.routing import get_routing_target_for_task
+from moonmind.workflows.temporal import TemporalExecutionService
+from api_service.services.execution_translation import create_execution_from_task_request
+from api_service.api.routers.executions import _serialize_execution
+from moonmind.workflows.agent_queue.job_types import CANONICAL_TASK_JOB_TYPE, MANIFEST_JOB_TYPE
+
 from moonmind.schemas.agent_queue_models import (
     AppendJobEventRequest,
     ArtifactListResponse,
@@ -87,10 +91,7 @@ from moonmind.schemas.agent_queue_models import (
 )
 from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue import models
-from moonmind.workflows.agent_queue.job_types import (
-    CANONICAL_TASK_JOB_TYPE,
-    MANIFEST_JOB_TYPE,
-)
+from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.repositories import (
     AgentArtifactJobMismatchError,
@@ -116,8 +117,6 @@ from moonmind.workflows.agent_queue.service import (
     QueueSystemMetadata,
     WorkerAuthPolicy,
 )
-from moonmind.workflows.tasks.routing import get_routing_target_for_task
-from moonmind.workflows.temporal import TemporalExecutionService
 
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
@@ -177,6 +176,34 @@ async def _get_service(
     repository: AgentQueueRepository = Depends(_get_repository),
 ) -> AgentQueueService:
     return AgentQueueService(repository)
+
+
+async def _get_temporal_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> TemporalExecutionService | None:
+    try:
+        from moonmind.workflows.temporal import TemporalExecutionService
+        return TemporalExecutionService(
+            session,
+            namespace=settings.temporal.namespace,
+            integration_task_queue=settings.temporal.activity_integrations_task_queue,
+            integration_poll_initial_seconds=(
+                settings.temporal.integration_poll_initial_seconds
+            ),
+            integration_poll_max_seconds=settings.temporal.integration_poll_max_seconds,
+            integration_poll_jitter_ratio=settings.temporal.integration_poll_jitter_ratio,
+            run_continue_as_new_step_threshold=(
+                settings.temporal.run_continue_as_new_step_threshold
+            ),
+            run_continue_as_new_wait_cycle_threshold=(
+                settings.temporal.run_continue_as_new_wait_cycle_threshold
+            ),
+            manifest_continue_as_new_phase_threshold=(
+                settings.temporal.manifest_continue_as_new_phase_threshold
+            ),
+        )
+    except ImportError:
+        return None
 
 
 def _require_queue_operator(user: User) -> None:
@@ -753,7 +780,7 @@ async def create_job(
     request: Request,
     payload: CreateJobRequest,
     service: AgentQueueService = Depends(_get_service),
-    temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
+    temporal_service: TemporalExecutionService | None = Depends(_get_temporal_service),
     user: User = Depends(get_current_user()),
 ) -> JobModel | dict[str, Any]:
     """Create a queued job for worker execution."""
@@ -763,38 +790,20 @@ async def create_job(
         is_run=(payload.type == CANONICAL_TASK_JOB_TYPE),
     )
 
-    if target == "temporal":
-        if payload.type == MANIFEST_JOB_TYPE:
-            from api_service.api.routers.executions import (
-                _create_execution_from_manifest_request,
-            )
-
-            execution = await _create_execution_from_manifest_request(
-                request=payload,
-                service=temporal_service,
-                user=user,
-            )
-        else:
-            execution = await _create_execution_from_task_request(
-                request=payload,
-                service=temporal_service,
-                user=user,
-            )
-
-        import uuid
-
+    if target == "temporal" and temporal_service is not None:
+        execution = await create_execution_from_task_request(
+            request=payload,
+            service=temporal_service,
+            user=user,
+        )
         # Mock JobModel shape for UI compatibility
         return {
-            "id": uuid.uuid4(),
+            "id": execution.workflow_id,
             "status": "queued",
             "type": payload.type,
-            "priority": payload.priority,
-            "attempt": 1,
-            "max_attempts": payload.max_attempts,
-            "created_at": execution.created_at,
-            "updated_at": execution.updated_at,
-            "started_at": execution.started_at,
-            "payload": payload.payload if isinstance(payload.payload, dict) else {},
+            "created_at": execution.start_time or execution.created_at,
+            "updated_at": execution.update_time or execution.created_at,
+            "payload": execution.initial_parameters or {},
         }
 
     try:
@@ -920,7 +929,22 @@ async def create_job_with_attachments(
             is_manifest=(parsed_payload.type == MANIFEST_JOB_TYPE),
             is_run=(parsed_payload.type == CANONICAL_TASK_JOB_TYPE),
         )
-    except ValidationError:
+    except ValidationError as exc:
+        logger.warning(
+            "Invalid attachment queue payload for path=%s request_id=%s: %s",
+            request.url.path,
+            request.headers.get("x-request-id")
+            or request.headers.get("x-correlation-id"),
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_queue_payload",
+                "message": "Queue request payload is invalid.",
+            },
+        ) from exc
+    except Exception:
         target = "queue"
 
     if target == "temporal":
@@ -929,7 +953,7 @@ async def create_job_with_attachments(
             detail={
                 "code": "invalid_routing_target",
                 "message": "Legacy attachment submission is not supported for Temporal-backed workflows.",
-            },
+            }
         )
 
     if not files:
@@ -1393,19 +1417,13 @@ async def resolve_manifest_job_secrets(
             else None
         )
         if payload.include_profile:
-
-            resolution_results = []
             for ref in profile_refs:
+                env_key = ref["envKey"]
                 value = await auth_manager.get_secret(
                     "profile",
-                    key=ref["envKey"],
+                    key=env_key,
                     user=requester_user,
-                    allow_env_fallback=False,
                 )
-                resolution_results.append((ref, value))
-
-            for ref, value in resolution_results:
-                env_key = ref["envKey"]
                 if not value:
                     unresolved.append(env_key)
                     continue
@@ -2013,7 +2031,8 @@ async def stream_job_events(
                     else {"message": str(http_exc.detail)}
                 )
                 yield (
-                    f"event: error\ndata: {json.dumps(detail, ensure_ascii=True)}\n\n"
+                    "event: error\n"
+                    f"data: {json.dumps(detail, ensure_ascii=True)}\n\n"
                 )
                 break
 
@@ -2112,10 +2131,6 @@ async def revoke_worker_token(
 
 
 @router.put(
-    "/workers/tokens/capabilities",
-    response_model=WorkerTokenModel,
-)
-@router.post(
     "/workers/tokens/capabilities",
     response_model=WorkerTokenModel,
 )

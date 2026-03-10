@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from moonmind.config.settings import settings
 import yaml
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -19,7 +20,6 @@ from api_service.services.manifests_service import (
     ManifestRegistryNotFoundError,
     ManifestsService,
 )
-from moonmind.config.settings import settings
 from moonmind.workflows.agent_queue import models as queue_models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.temporal import (
@@ -28,24 +28,8 @@ from moonmind.workflows.temporal import (
     TemporalArtifactService,
     TemporalExecutionService,
 )
-from moonmind.workflows.temporal.client import (
-    TemporalClientAdapter,
-    WorkflowStartResult,
-)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
-
-
-@pytest.fixture(autouse=True)
-def _mock_temporal_client_adapter(monkeypatch):
-    async def _mock_start_workflow(self, *args, **kwargs):
-        workflow_id = kwargs.get("workflow_id") or "mm:dummy"
-        return WorkflowStartResult(
-            workflow_id=str(workflow_id),
-            run_id=str(uuid4()),
-        )
-
-    monkeypatch.setattr(TemporalClientAdapter, "start_workflow", _mock_start_workflow)
 
 
 def _tests_root() -> Path:

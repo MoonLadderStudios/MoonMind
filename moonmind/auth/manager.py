@@ -14,13 +14,7 @@ class AuthProviderManager:
         self.env_provider = env_provider
 
     async def get_secret(
-        self,
-        provider: str,
-        *,
-        key: str,
-        user: User | None = None,
-        allow_env_fallback: bool = True,
-        **kwargs,
+        self, provider: str, *, key: str, user: User | None = None, **kwargs
     ) -> str | None:
         provider = provider.lower()
         if provider == "profile":
@@ -31,8 +25,6 @@ class AuthProviderManager:
                 secret = None
             if secret:
                 return secret
-            if not allow_env_fallback:
-                return None
             try:
                 return await self.env_provider.get_secret(key=key)
             except Exception as exc:  # pragma: no cover - provider failure

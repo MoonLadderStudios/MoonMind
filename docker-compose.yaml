@@ -162,7 +162,6 @@ services:
       - VISIBILITY_DBNAME=${TEMPORAL_VISIBILITY_DB:-temporal_visibility}
       - NUM_HISTORY_SHARDS=${TEMPORAL_NUM_HISTORY_SHARDS:-1}
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml
-      - BIND_ON_IP=0.0.0.0
     expose:
       - "7233"
     volumes:
@@ -288,7 +287,7 @@ services:
       - TEMPORAL_WORKER_FLEET=workflow
       - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
       - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-sleep infinity}
     env_file:
       - .env
     volumes:
@@ -327,7 +326,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-sleep infinity}
     env_file:
       - .env
     volumes:
@@ -367,7 +366,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-sleep infinity}
     env_file:
       - .env
     volumes:
@@ -401,7 +400,7 @@ services:
       - TEMPORAL_WORKER_FLEET=sandbox
       - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
       - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-sleep infinity}
     env_file:
       - .env
     volumes:
@@ -441,7 +440,7 @@ services:
       - JULES_ENABLED=${JULES_ENABLED:-false}
       - JULES_API_URL=${JULES_API_URL:-}
       - JULES_API_KEY=${JULES_API_KEY:-}
-      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-sleep infinity}
     env_file:
       - .env
     volumes:
@@ -547,7 +546,7 @@ services:
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_HOME:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_CONFIG_HOME:-/home/app/.codex}
-      - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
+      - CODEX_CONFIG_PATH=${CODEX_CONFIG_PATH:-/home/app/.codex/config.toml}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - MOONMIND_WORKER_ID=${MOONMIND_WORKER_ID:-codex-worker-1}
       - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}

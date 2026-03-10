@@ -53,8 +53,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
-    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "codex")
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
@@ -181,7 +179,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["enabled"] is True
     assert temporal_dashboard["listEnabled"] is True
     assert temporal_dashboard["detailEnabled"] is True
-    assert temporal_dashboard["actionsEnabled"] is True
+    assert temporal_dashboard["actionsEnabled"] is False
     assert temporal_dashboard["submitEnabled"] is False
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
@@ -195,7 +193,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["taskSourceResolver"] == "/api/tasks/{taskId}/source"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini", "claude"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -278,8 +276,6 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
     monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
-    monkeypatch.delenv("MOONMIND_WORKER_RUNTIME", raising=False)
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "codex")
 
     config = build_runtime_config("/tasks")
 
@@ -355,6 +351,5 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
     assert config["system"]["supportedTaskRuntimes"] == [
         "codex",
         "gemini",
-        "claude",
         "jules",
     ]

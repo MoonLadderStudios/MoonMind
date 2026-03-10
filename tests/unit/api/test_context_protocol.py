@@ -2,29 +2,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+# client = TestClient(app) # Removed global client
 from llama_index.core.embeddings import BaseEmbedding  # For spec (corrected path)
 from qdrant_client.http.models import (  # For mocking, if needed for detailed get_collection mock
     Distance,
 )
 
-# client = TestClient(app) # Removed global client
-from api_service import main as api_service_main
 from api_service.main import app
-
-
-@pytest.fixture(autouse=True)
-def _fast_context_protocol_app(monkeypatch) -> None:
-    """Keep startup path fast by disabling networked startup prerequisites."""
-
-    monkeypatch.setenv("RAG_ENABLED", "false")
-    monkeypatch.setattr(api_service_main.settings.oidc, "AUTH_PROVIDER", "disabled")
-
-    def _skip_vector_store(app_state, *_args, **_kwargs) -> None:
-        app_state.vector_store = None
-
-    monkeypatch.setattr(
-        api_service_main, "_initialize_vector_store", _skip_vector_store
-    )
 
 
 @pytest.fixture

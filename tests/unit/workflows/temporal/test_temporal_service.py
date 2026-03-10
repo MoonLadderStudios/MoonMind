@@ -9,28 +9,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-
-@pytest.fixture(autouse=True)
-def mock_temporal_client_adapter(monkeypatch):
-    import uuid
-    from dataclasses import dataclass
-
-    from moonmind.workflows.temporal.client import TemporalClientAdapter
-
-    @dataclass(frozen=True, slots=True)
-    class DummyWorkflowStartResult:
-        workflow_id: str
-        run_id: str
-
-    async def mock_start_workflow(self, *args, **kwargs):
-        workflow_id = kwargs.get("workflow_id") or "mm:dummy"
-        return DummyWorkflowStartResult(
-            workflow_id=workflow_id, run_id=str(uuid.uuid4())
-        )
-
-    monkeypatch.setattr(TemporalClientAdapter, "start_workflow", mock_start_workflow)
-
-
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
@@ -265,10 +243,7 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
         await conn.run_sync(Base.metadata.create_all)
 
     try:
-        async with (
-            session_factory() as winner_session,
-            session_factory() as loser_session,
-        ):
+        async with session_factory() as winner_session, session_factory() as loser_session:
             winner_service = TemporalExecutionService(winner_session)
             loser_service = TemporalExecutionService(loser_session)
             owner_id = uuid4()
