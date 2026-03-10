@@ -214,4 +214,5 @@ async def test_temporal_unavailability_returns_503(client) -> None:
         assert response.status_code == 503
         assert response.json()["detail"]["code"] == "temporal_unavailable"
 
+
 # Trigger CI
