@@ -759,7 +759,7 @@ async def list_executions(
 
             items = []
             async for wf in client.list_workflows(query=query_str):
-                payload = map_temporal_state_to_projection(wf)
+                payload = await map_temporal_state_to_projection(wf)
                 # We need a record-like object for serialization
                 from types import SimpleNamespace
 

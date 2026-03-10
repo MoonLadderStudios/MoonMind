@@ -10,6 +10,7 @@ from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionSta
 
 from api_service.db.models import (
     MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionOwnerType,
     TemporalExecutionProjectionSourceMode,
@@ -30,11 +31,28 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def map_temporal_state_to_projection(
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert non-JSON-serializable objects (e.g. datetime) to JSON-safe types."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(item) for item in obj]
+    return obj
+
+
+async def map_temporal_state_to_projection(
     desc: WorkflowExecutionDescription,
 ) -> dict[str, Any]:
     """Map Temporal workflow execution description to projection payload."""
-    memo = dict(desc.memo) if desc.memo else {}
+    # desc.memo() is an async coroutine in the Temporal SDK and must be awaited
+    try:
+        raw_memo = await desc.memo()
+        memo = dict(raw_memo) if raw_memo else {}
+    except Exception:
+        logger.exception("Failed to decode Temporal memo for %s", desc.id)
+        memo = {}
 
     status_map = {
         WorkflowExecutionStatus.COMPLETED: (
@@ -123,6 +141,7 @@ def map_temporal_state_to_projection(
     if not waiting_reason and state_value == MoonMindWorkflowState.AWAITING_EXTERNAL:
         waiting_reason = "external_completion"
 
+    sanitized_memo = _sanitize_for_json(dict(memo))
     return {
         "workflow_id": desc.id,
         "run_id": desc.run_id,
@@ -133,15 +152,15 @@ def map_temporal_state_to_projection(
         "state": state_value,
         "close_status": close_status,
         "entry": entry,
-        "search_attributes": search_attributes,
-        "memo": dict(memo),
+        "search_attributes": _sanitize_for_json(search_attributes),
+        "memo": sanitized_memo,
         "artifact_refs": artifact_refs,
         "input_ref": memo.get("input_ref"),
         "plan_ref": memo.get("plan_ref"),
         "manifest_ref": memo.get("manifest_ref"),
-        "parameters": memo.get("parameters", {}),
-        "integration_state": memo.get("integration_state"),
-        "pending_parameters_patch": memo.get("pending_parameters_patch"),
+        "parameters": _sanitize_for_json(memo.get("parameters", {}) or {}),
+        "integration_state": _sanitize_for_json(memo.get("integration_state")),
+        "pending_parameters_patch": _sanitize_for_json(memo.get("pending_parameters_patch")),
         "paused": bool(memo.get("paused", False)),
         "awaiting_external": state_value == MoonMindWorkflowState.AWAITING_EXTERNAL,
         "waiting_reason": waiting_reason,
@@ -151,7 +170,7 @@ def map_temporal_state_to_projection(
         "rerun_count": int(memo.get("rerun_count", 0) or 0),
         "create_idempotency_key": memo.get("create_idempotency_key"),
         "last_update_idempotency_key": memo.get("last_update_idempotency_key"),
-        "last_update_response": memo.get("last_update_response"),
+        "last_update_response": _sanitize_for_json(memo.get("last_update_response")),
         "started_at": desc.start_time,
         "updated_at": _utc_now(),
         "closed_at": desc.close_time,
@@ -163,7 +182,7 @@ async def sync_execution_projection(
     desc: WorkflowExecutionDescription,
 ) -> TemporalExecutionRecord:
     """Upsert the Temporal workflow state to the local projection database."""
-    payload = map_temporal_state_to_projection(desc)
+    payload = await map_temporal_state_to_projection(desc)
 
     projection = await session.get(TemporalExecutionRecord, desc.id)
     previous_version = int(projection.projection_version or 0) if projection else 0
@@ -188,6 +207,24 @@ async def sync_execution_projection(
         projection.sync_error = None
         projection.source_mode = (
             TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+        )
+
+    # Also sync the canonical record (temporal_execution_sources) so that
+    # service.describe_execution doesn't read stale state and overwrite the projection
+    # with it. Only update state/close_status if they differ from what Temporal reports.
+    state_value: MoonMindWorkflowState = payload.get("state") or MoonMindWorkflowState.INITIALIZING
+    close_status_value: TemporalExecutionCloseStatus | None = payload.get("close_status")
+    canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
+    if canonical is not None and canonical.state != state_value:
+        canonical.state = state_value
+        canonical.close_status = close_status_value
+        if payload.get("closed_at") and canonical.closed_at is None:
+            canonical.closed_at = payload["closed_at"]
+        logger.info(
+            "Synced canonical record %s: state=%s close_status=%s",
+            desc.id,
+            state_value,
+            close_status_value,
         )
 
     return projection
