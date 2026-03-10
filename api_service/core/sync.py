@@ -160,7 +160,9 @@ async def map_temporal_state_to_projection(
         "manifest_ref": memo.get("manifest_ref"),
         "parameters": _sanitize_for_json(memo.get("parameters", {}) or {}),
         "integration_state": _sanitize_for_json(memo.get("integration_state")),
-        "pending_parameters_patch": _sanitize_for_json(memo.get("pending_parameters_patch")),
+        "pending_parameters_patch": _sanitize_for_json(
+            memo.get("pending_parameters_patch")
+        ),
         "paused": bool(memo.get("paused", False)),
         "awaiting_external": state_value == MoonMindWorkflowState.AWAITING_EXTERNAL,
         "waiting_reason": waiting_reason,
@@ -212,8 +214,12 @@ async def sync_execution_projection(
     # Also sync the canonical record (temporal_execution_sources) so that
     # service.describe_execution doesn't read stale state and overwrite the projection
     # with it. Only update state/close_status if they differ from what Temporal reports.
-    state_value: MoonMindWorkflowState = payload.get("state") or MoonMindWorkflowState.INITIALIZING
-    close_status_value: TemporalExecutionCloseStatus | None = payload.get("close_status")
+    state_value: MoonMindWorkflowState = (
+        payload.get("state") or MoonMindWorkflowState.INITIALIZING
+    )
+    close_status_value: TemporalExecutionCloseStatus | None = payload.get(
+        "close_status"
+    )
     canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
     if canonical is not None and canonical.state != state_value:
         canonical.state = state_value
