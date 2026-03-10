@@ -345,7 +345,9 @@ class TemporalExecutionService:
                 await self._session.commit()
                 await self._session.refresh(record)
         except Exception as exc:
-            logger.exception("Failed to start Temporal workflow for execution %s", record.workflow_id)
+            logger.exception(
+                "Failed to start Temporal workflow for execution %s", record.workflow_id
+            )
 
         return await self._sync_projection_best_effort(record)
 

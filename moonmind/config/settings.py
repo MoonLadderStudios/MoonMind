@@ -129,7 +129,9 @@ class TemporalSettings(BaseSettings):
     address: str = Field("temporal:7233", validation_alias="TEMPORAL_ADDRESS")
     namespace: str = Field("moonmind", validation_alias="TEMPORAL_NAMESPACE")
     worker_fleet: str = Field("workflow", validation_alias="TEMPORAL_WORKER_FLEET")
-    workflow_task_queue: str = Field("mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE")
+    workflow_task_queue: str = Field(
+        "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
+    )
     activity_artifacts_task_queue: str = Field(
         "mm.activity.artifacts",
         validation_alias="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",

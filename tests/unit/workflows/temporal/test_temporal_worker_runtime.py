@@ -133,6 +133,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
     mock_artifact_activities_cls.assert_called_once_with(mock_service_cls.return_value)
     from unittest.mock import ANY
+
     mock_plan_activities_cls.assert_called_once_with(
         artifact_service=mock_service_cls.return_value,
         planner=ANY,
