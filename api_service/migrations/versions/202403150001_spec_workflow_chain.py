@@ -503,10 +503,6 @@ def upgrade() -> None:  # noqa: D401
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
             nullable=True,
         ),
-        sa.Column(
-            postgresql.ENUM(name="orchestratortaskstate", create_type=False),
-            nullable=True,
-        ),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column(
             "artifact_refs",
@@ -1029,9 +1025,6 @@ def downgrade() -> None:  # noqa: D401
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
             nullable=True,
         ),
-    )
-    op.add_column(
-        "spec_workflow_task_states",
     )
     op.add_column(
         "spec_workflow_task_states",

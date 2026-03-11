@@ -29,7 +29,6 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunDetailModel,
     OrchestratorRunListResponse,
 )
-from moonmind.workflows.speckit_celery import models as workflow_models
 
 
 def _override_current_user_dependencies() -> None:
@@ -111,8 +110,6 @@ async def test_orchestrator_visibility_contract(tmp_path) -> None:
             attempt=1,
             plan_step=OrchestratorPlanStep.VERIFY,
             plan_step_status=OrchestratorPlanStepStatus.SUCCEEDED,
-            celery_state=OrchestratorTaskState.SUCCESS,
-            celery_task_id="verify-1",
             message="Verify completed",
             artifact_paths=[str(artifact.id)],
             started_at=now,
