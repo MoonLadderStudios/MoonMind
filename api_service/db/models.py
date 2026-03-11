@@ -43,8 +43,10 @@ from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
 from api_service.db.enums import (
+    CodexAuthVolumeStatus,
     CodexCredentialStatus,
     CodexPreflightStatus,
+    CodexWorkerShardStatus,
     GitHubCredentialStatus,
     OrchestratorApprovalRequirement,
     OrchestratorPlanOrigin,
@@ -55,6 +57,10 @@ from api_service.db.enums import (
     OrchestratorRunStatus,
     OrchestratorTaskState,
     OrchestratorTaskStepStatus,
+    SpecAutomationArtifactType,
+    SpecAutomationPhase,
+    SpecAutomationRunStatus,
+    SpecAutomationTaskStatus,
     SpecWorkflowRunPhase,
     SpecWorkflowRunStatus,
     SpecWorkflowTaskName,
@@ -410,9 +416,17 @@ __all__ = [
     "SpecWorkflowTaskState",
     "SpecWorkflowTaskStatus",
     "SpecWorkflowTaskName",
+    "SpecAutomationRunStatus",
+    "SpecAutomationPhase",
+    "SpecAutomationTaskStatus",
+    "SpecAutomationArtifactType",
     "WorkflowArtifact",
     "WorkflowArtifactType",
     "WorkflowCredentialAudit",
+    "CodexAuthVolume",
+    "CodexWorkerShard",
+    "CodexAuthVolumeStatus",
+    "CodexWorkerShardStatus",
     "CodexCredentialStatus",
     "GitHubCredentialStatus",
     "CodexPreflightStatus",
@@ -1779,6 +1793,109 @@ class TemporalArtifactPin(Base):
     )
 
 
+class CodexAuthVolume(Base):
+    """Codex auth volume metadata used for shard routing and preflight checks."""
+
+    __tablename__ = "codex_auth_volumes"
+    __table_args__ = (
+        UniqueConstraint(
+            "worker_affinity", name="uq_codex_auth_volumes_worker_affinity"
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    worker_affinity: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[CodexAuthVolumeStatus] = mapped_column(
+        Enum(
+            CodexAuthVolumeStatus,
+            name="codexauthvolumestatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=CodexAuthVolumeStatus.NEEDS_AUTH,
+        server_default=CodexAuthVolumeStatus.NEEDS_AUTH.value,
+    )
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
+        "CodexWorkerShard",
+        back_populates="volume",
+        uselist=False,
+        foreign_keys=lambda: [CodexWorkerShard.volume_name],
+    )
+    workflow_runs: Mapped[list["SpecWorkflowRun"]] = relationship(
+        "SpecWorkflowRun",
+        back_populates="codex_auth_volume",
+        foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
+    )
+
+
+class CodexWorkerShard(Base):
+    """Queue shard routing metadata for Codex workers."""
+
+    __tablename__ = "codex_worker_shards"
+    __table_args__ = (
+        UniqueConstraint("volume_name", name="uq_codex_worker_shards_volume_name"),
+    )
+
+    queue_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    volume_name: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("codex_auth_volumes.name", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[CodexWorkerShardStatus] = mapped_column(
+        Enum(
+            CodexWorkerShardStatus,
+            name="codexworkershardstatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=CodexWorkerShardStatus.ACTIVE,
+        server_default=CodexWorkerShardStatus.ACTIVE.value,
+    )
+    hash_modulo: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default=text("3")
+    )
+    worker_hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    volume: Mapped[CodexAuthVolume] = relationship(
+        "CodexAuthVolume",
+        back_populates="shard",
+        foreign_keys=lambda: [CodexWorkerShard.volume_name],
+    )
+    workflow_runs: Mapped[list["SpecWorkflowRun"]] = relationship(
+        "SpecWorkflowRun",
+        back_populates="codex_shard",
+        foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
+    )
+
+
 class SpecWorkflowRun(Base):
     """Top-level record per Spec workflow execution."""
 
@@ -2091,7 +2208,6 @@ def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
     import_module("moonmind.workflows.agent_queue.models")
-    import_module("moonmind.workflows.speckit_celery.models")
 
 
 _register_workflow_model_dependencies()

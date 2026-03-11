@@ -1,17 +1,12 @@
-"""SQLAlchemy models for Spec Kit Celery workflow persistence.
-
-This module has been restored to provide backward-compatible imports for
-code that was not updated when speckit_celery was refactored.  The enums
-are now defined in api_service.db.enums; ORM models that were originally
-here are recreated below for database persistence.
-"""
+"""Compatibility exports for Spec Kit workflow ORM models and enums."""
 
 from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from sqlalchemy import (
@@ -46,16 +41,32 @@ from api_service.db.enums import (
     SpecWorkflowTaskStatus,
     WorkflowArtifactType,
 )
-from api_service.db.models import (
-    Base,
-    SpecWorkflowRun,
-    SpecWorkflowTaskName,
-    SpecWorkflowTaskState,
-    WorkflowArtifact,
-    WorkflowCredentialAudit,
-)
+from api_service.db.models import Base
 
 _MUTABLE_JSON = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
+_DB_MODELS_MODULE = "api_service.db.models"
+_DB_MODEL_EXPORTS = frozenset(
+    {
+        "CodexAuthVolume",
+        "CodexWorkerShard",
+        "SpecWorkflowRun",
+        "SpecWorkflowTaskName",
+        "SpecWorkflowTaskState",
+        "WorkflowArtifact",
+        "WorkflowCredentialAudit",
+    }
+)
+
+if TYPE_CHECKING:
+    from api_service.db.models import (
+        CodexAuthVolume,
+        CodexWorkerShard,
+        SpecWorkflowRun,
+        SpecWorkflowTaskName,
+        SpecWorkflowTaskState,
+        WorkflowArtifact,
+        WorkflowCredentialAudit,
+    )
 
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
@@ -68,8 +79,8 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
 class CredentialAuditResult:
     """Represents the outcome of a credential validation attempt."""
 
-    codex_status: "CodexCredentialStatus"
-    github_status: "GitHubCredentialStatus"
+    codex_status: CodexCredentialStatus
+    github_status: GitHubCredentialStatus
     notes: Optional[str] = None
 
     def is_valid(self) -> bool:
@@ -79,104 +90,6 @@ class CredentialAuditResult:
             self.codex_status is CodexCredentialStatus.VALID
             and self.github_status is GitHubCredentialStatus.VALID
         )
-
-
-class CodexAuthVolume(Base):
-    """Persistent Codex authentication volume mapped to a worker shard."""
-
-    __tablename__ = "codex_auth_volumes"
-    __table_args__ = (
-        UniqueConstraint(
-            "worker_affinity", name="uq_codex_auth_volumes_worker_affinity"
-        ),
-    )
-
-    name: Mapped[str] = mapped_column(String(64), primary_key=True)
-    worker_affinity: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[CodexAuthVolumeStatus] = mapped_column(
-        Enum(
-            CodexAuthVolumeStatus,
-            name="codexauthvolumestatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=CodexAuthVolumeStatus.NEEDS_AUTH,
-    )
-    last_verified_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True)
-    )
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-        server_onupdate=text("CURRENT_TIMESTAMP"),
-    )
-
-    shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
-        "CodexWorkerShard", back_populates="volume", uselist=False
-    )
-    runs: Mapped[list[SpecWorkflowRun]] = relationship(
-        SpecWorkflowRun,
-        back_populates="codex_auth_volume",
-        primaryjoin="CodexAuthVolume.name == SpecWorkflowRun.codex_volume",
-    )
-
-
-class CodexWorkerShard(Base):
-    """Worker dedicated to Codex tasks and its routing metadata."""
-
-    __tablename__ = "codex_worker_shards"
-    __table_args__ = (
-        UniqueConstraint("volume_name", name="uq_codex_worker_shards_volume_name"),
-    )
-
-    queue_name: Mapped[str] = mapped_column(String(64), primary_key=True)
-    volume_name: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey("codex_auth_volumes.name", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    status: Mapped[CodexWorkerShardStatus] = mapped_column(
-        Enum(
-            CodexWorkerShardStatus,
-            name="codexworkershardstatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=CodexWorkerShardStatus.ACTIVE,
-    )
-    hash_modulo: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
-    worker_hostname: Mapped[Optional[str]] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("CURRENT_TIMESTAMP"),
-        server_onupdate=text("CURRENT_TIMESTAMP"),
-    )
-
-    volume: Mapped[CodexAuthVolume] = relationship(
-        CodexAuthVolume, back_populates="shard", foreign_keys=[volume_name]
-    )
-    runs: Mapped[list[SpecWorkflowRun]] = relationship(
-        SpecWorkflowRun,
-        back_populates="codex_shard",
-        primaryjoin="CodexWorkerShard.queue_name == SpecWorkflowRun.codex_queue",
-    )
 
 
 class SpecAutomationRun(Base):
@@ -475,30 +388,37 @@ class SpecAutomationAgentConfiguration(Base):
     )
 
 
+def __getattr__(name: str) -> Any:
+    if name in _DB_MODEL_EXPORTS:
+        db_models = import_module(_DB_MODELS_MODULE)
+        return getattr(db_models, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
-    "SpecWorkflowRun",
-    "SpecWorkflowRunStatus",
-    "SpecWorkflowRunPhase",
-    "SpecWorkflowTaskState",
-    "SpecWorkflowTaskStatus",
-    "SpecWorkflowTaskName",
-    "WorkflowCredentialAudit",
-    "CodexCredentialStatus",
-    "CodexPreflightStatus",
-    "GitHubCredentialStatus",
-    "WorkflowArtifact",
-    "WorkflowArtifactType",
-    "CredentialAuditResult",
     "CodexAuthVolume",
     "CodexAuthVolumeStatus",
+    "CodexCredentialStatus",
+    "CodexPreflightStatus",
     "CodexWorkerShard",
     "CodexWorkerShardStatus",
-    "SpecAutomationRun",
-    "SpecAutomationRunStatus",
-    "SpecAutomationPhase",
-    "SpecAutomationTaskState",
-    "SpecAutomationTaskStatus",
+    "CredentialAuditResult",
+    "GitHubCredentialStatus",
+    "SpecAutomationAgentConfiguration",
     "SpecAutomationArtifact",
     "SpecAutomationArtifactType",
-    "SpecAutomationAgentConfiguration",
+    "SpecAutomationPhase",
+    "SpecAutomationRun",
+    "SpecAutomationRunStatus",
+    "SpecAutomationTaskState",
+    "SpecAutomationTaskStatus",
+    "SpecWorkflowRun",
+    "SpecWorkflowRunPhase",
+    "SpecWorkflowRunStatus",
+    "SpecWorkflowTaskName",
+    "SpecWorkflowTaskState",
+    "SpecWorkflowTaskStatus",
+    "WorkflowArtifact",
+    "WorkflowArtifactType",
+    "WorkflowCredentialAudit",
 ]

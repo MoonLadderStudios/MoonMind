@@ -6,6 +6,8 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Tuple
 
+from kombu import Queue
+
 from moonmind.config.settings import settings
 
 CODEX_QUEUE_PREFIX = "codex-"
@@ -51,11 +53,11 @@ class CodexShardRouter:
 
     @property
     def default_exchange(self) -> str:
-        return "default"
+        return settings.celery.default_exchange
 
     @property
     def default_queue(self) -> str:
-        return settings.spec_workflow.codex_queue or "speckit"
+        return settings.celery.default_queue
 
     def queue_name(self, shard_index: int) -> str:
         if self.codex_queue:
@@ -90,17 +92,14 @@ class CodexShardRouter:
             return self.codex_queue
         return self.queue_name(self.shard_for_key(affinity_key))
 
-    def build_queues(self, *, include_default: bool = False) -> tuple:
-        """Build kombu Queue objects.  Requires kombu to be installed."""
-        from kombu import Queue  # type: ignore[import-untyped]  # noqa: PLC0415
-
+    def build_queues(self, *, include_default: bool = False) -> Tuple[Queue, ...]:
         queues: list[Queue] = []
         if include_default:
             queues.append(
                 Queue(
                     self.default_queue,
                     exchange=self.default_exchange,
-                    routing_key=self.default_queue,
+                    routing_key=settings.celery.default_routing_key,
                     durable=True,
                 )
             )
@@ -170,10 +169,9 @@ def build_task_router(
             queue_name = router.queue_for_key(str(affinity))
             return {"queue": queue_name, "routing_key": queue_name}
 
-        default_q = settings.spec_workflow.codex_queue or "speckit"
         return {
-            "queue": default_q,
-            "routing_key": default_q,
+            "queue": settings.celery.default_queue,
+            "routing_key": settings.celery.default_routing_key,
         }
 
     return (_route_task,)
