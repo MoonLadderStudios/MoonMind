@@ -4,7 +4,7 @@ This document outlines the steps to drop all remaining references to the old sch
 
 ## 1. Remove `moonmind-scheduler` Entrypoint
 - Remove `moonmind-scheduler` script entry from `pyproject.toml`.
-- Remove `scheduler` service from `docker-compose.yaml` (and any other compose files like `docker-compose.test.yaml`).
+- Remove `scheduler` service from `docker-compose.yaml`.
 
 ## 2. Remove Old Scheduler Code
 - Delete `moonmind/workflows/recurring_tasks/scheduler.py` (which contains `RecurringTaskScheduler` and the `main()` function for the `moonmind-scheduler` CLI).
