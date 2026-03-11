@@ -1,1 +1,0 @@
-../../.agents/skills/skills/fix-proposal/SKILL.md

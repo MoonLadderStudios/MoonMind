@@ -17,24 +17,21 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
         lambda self: ("user", "owner-1"),
     )
 
-    _workflow_type, _parameters, input_ref, plan_ref, registry_snapshot_ref = (
+    _workflow_type, _parameters, input_ref, plan_ref = (
         workflow._initialize_from_payload(
             {
                 "workflowType": "MoonMind.Run",
                 "initialParameters": {"repo": "MoonLadderStudios/MoonMind"},
                 "inputArtifactRef": "art_input_1",
                 "planArtifactRef": "art_plan_1",
-                "registrySnapshotRef": "art_reg_1",
             }
         )
     )
 
     assert input_ref == "art_input_1"
     assert plan_ref == "art_plan_1"
-    assert registry_snapshot_ref == "art_reg_1"
     assert workflow._input_ref == "art_input_1"
     assert workflow._plan_ref == "art_plan_1"
-    assert workflow._registry_snapshot_ref == "art_reg_1"
 
 
 @pytest.mark.asyncio
@@ -52,7 +49,7 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     ) -> dict[str, str]:
         captured["activity_type"] = activity_type
         captured["payload"] = payload
-        return {"plan_ref": "art_plan_2", "registry_snapshot_ref": "art_reg_2"}
+        return {"plan_ref": "art_plan_2"}
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -67,13 +64,10 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
 
-    resolved_plan_ref, resolved_registry_snapshot_ref = (
-        await workflow._run_planning_stage(
-            parameters={"repo": "MoonLadderStudios/MoonMind"},
-            input_ref="art_input_1",
-            plan_ref=None,
-            registry_snapshot_ref=None,
-        )
+    resolved = await workflow._run_planning_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        input_ref="art_input_1",
+        plan_ref=None,
     )
 
     assert captured["activity_type"] == "plan.generate"
@@ -81,10 +75,8 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     assert isinstance(payload, dict)
     assert payload["inputs_ref"] == "art_input_1"
     assert "workflow_id" in payload["execution_ref"]
-    assert resolved_plan_ref == "art_plan_2"
-    assert resolved_registry_snapshot_ref == "art_reg_2"
+    assert resolved == "art_plan_2"
     assert workflow._plan_ref == "art_plan_2"
-    assert workflow._registry_snapshot_ref == "art_reg_2"
 
 
 @pytest.mark.asyncio
@@ -134,12 +126,10 @@ async def test_run_execution_stage_extracts_logs_ref_from_activity_result(
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
         plan_ref="art_plan_1",
-        registry_snapshot_ref="art_reg_1",
     )
 
     assert captured["activity_type"] == "sandbox.run_command"
     payload = captured["payload"]
     assert isinstance(payload, dict)
     assert payload["cmd"] == "echo executing"
-    assert payload["registry_snapshot_ref"] == "art_reg_1"
     assert workflow._logs_ref == "art_logs_1"

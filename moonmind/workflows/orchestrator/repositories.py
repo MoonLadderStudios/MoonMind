@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from api_service.db import models as db_models
 from moonmind.schemas.workflow_models import OrchestratorTaskStepInputModel
+from moonmind.workflows.speckit_celery import models as workflow_models
 
 _TASK_STEP_FIELD_UNSET = object()
 
@@ -29,11 +30,11 @@ def _to_enum(value: Any, enum_cls):
 
 
 _PLAN_STATUS_TO_WORKFLOW_STATUS = {
-    db_models.OrchestratorPlanStepStatus.PENDING: db_models.SpecWorkflowTaskStatus.QUEUED,
-    db_models.OrchestratorPlanStepStatus.IN_PROGRESS: db_models.SpecWorkflowTaskStatus.RUNNING,
-    db_models.OrchestratorPlanStepStatus.SUCCEEDED: db_models.SpecWorkflowTaskStatus.SUCCEEDED,
-    db_models.OrchestratorPlanStepStatus.FAILED: db_models.SpecWorkflowTaskStatus.FAILED,
-    db_models.OrchestratorPlanStepStatus.SKIPPED: db_models.SpecWorkflowTaskStatus.SKIPPED,
+    db_models.OrchestratorPlanStepStatus.PENDING: workflow_models.SpecWorkflowTaskStatus.QUEUED,
+    db_models.OrchestratorPlanStepStatus.IN_PROGRESS: workflow_models.SpecWorkflowTaskStatus.RUNNING,
+    db_models.OrchestratorPlanStepStatus.SUCCEEDED: workflow_models.SpecWorkflowTaskStatus.SUCCEEDED,
+    db_models.OrchestratorPlanStepStatus.FAILED: workflow_models.SpecWorkflowTaskStatus.FAILED,
+    db_models.OrchestratorPlanStepStatus.SKIPPED: workflow_models.SpecWorkflowTaskStatus.SKIPPED,
 }
 
 
@@ -319,18 +320,18 @@ class OrchestratorRepository:
         self,
         run: db_models.OrchestratorRun,
         steps: Iterable[Mapping[str, Any] | str | db_models.OrchestratorPlanStep],
-    ) -> list[db_models.SpecWorkflowTaskState]:
+    ) -> list[workflow_models.SpecWorkflowTaskState]:
         """Seed task state rows for each plan step with ``pending`` status."""
 
-        created: list[db_models.SpecWorkflowTaskState] = []
+        created: list[workflow_models.SpecWorkflowTaskState] = []
         for step in steps:
             plan_step = self._coerce_plan_step(step)
-            task_state = db_models.SpecWorkflowTaskState(
+            task_state = workflow_models.SpecWorkflowTaskState(
                 id=uuid4(),
                 workflow_run_id=None,
                 orchestrator_run_id=run.id,
                 task_name=plan_step.value,
-                status=db_models.SpecWorkflowTaskStatus.QUEUED,
+                status=workflow_models.SpecWorkflowTaskStatus.QUEUED,
                 attempt=1,
                 plan_step=plan_step,
                 plan_step_status=db_models.OrchestratorPlanStepStatus.PENDING,
@@ -358,7 +359,7 @@ class OrchestratorRepository:
         payload: Optional[Mapping[str, Any]] = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
-    ) -> db_models.SpecWorkflowTaskState:
+    ) -> workflow_models.SpecWorkflowTaskState:
         """Create or update a plan step execution record."""
 
         step_enum = self._coerce_plan_step(plan_step)
@@ -369,7 +370,7 @@ class OrchestratorRepository:
             "workflow_run_id": None,
             "orchestrator_run_id": run_id,
             "task_name": step_enum.value,
-            "status": db_models.SpecWorkflowTaskStatus.QUEUED,
+            "status": workflow_models.SpecWorkflowTaskStatus.QUEUED,
             "attempt": attempt,
             "plan_step": step_enum,
         }
@@ -410,11 +411,13 @@ class OrchestratorRepository:
             insert_values["finished_at"] = finished_at
             update_values["finished_at"] = finished_at
 
-        insert_stmt = pg_insert(db_models.SpecWorkflowTaskState).values(insert_values)
+        insert_stmt = pg_insert(workflow_models.SpecWorkflowTaskState).values(
+            insert_values
+        )
         conflict_cols = (
-            db_models.SpecWorkflowTaskState.orchestrator_run_id,
-            db_models.SpecWorkflowTaskState.plan_step,
-            db_models.SpecWorkflowTaskState.attempt,
+            workflow_models.SpecWorkflowTaskState.orchestrator_run_id,
+            workflow_models.SpecWorkflowTaskState.plan_step,
+            workflow_models.SpecWorkflowTaskState.attempt,
         )
         if update_values:
             insert_stmt = insert_stmt.on_conflict_do_update(
@@ -430,10 +433,10 @@ class OrchestratorRepository:
         await self._session.flush()
 
         state_result = await self._session.execute(
-            select(db_models.SpecWorkflowTaskState).where(
-                db_models.SpecWorkflowTaskState.orchestrator_run_id == run_id,
-                db_models.SpecWorkflowTaskState.plan_step == step_enum,
-                db_models.SpecWorkflowTaskState.attempt == attempt,
+            select(workflow_models.SpecWorkflowTaskState).where(
+                workflow_models.SpecWorkflowTaskState.orchestrator_run_id == run_id,
+                workflow_models.SpecWorkflowTaskState.plan_step == step_enum,
+                workflow_models.SpecWorkflowTaskState.attempt == attempt,
             )
         )
         return state_result.scalar_one()
@@ -445,10 +448,10 @@ class OrchestratorRepository:
         steps: Iterable[db_models.OrchestratorPlanStep],
         bump_attempt: bool = False,
         reason: Optional[str] = None,
-    ) -> list[db_models.SpecWorkflowTaskState]:
+    ) -> list[workflow_models.SpecWorkflowTaskState]:
         """Reset the stored state for ``steps`` to allow retries."""
 
-        updated: list[db_models.SpecWorkflowTaskState] = []
+        updated: list[workflow_models.SpecWorkflowTaskState] = []
         targets = {step for step in steps}
         for state in run.task_states or []:
             if state.plan_step in targets:

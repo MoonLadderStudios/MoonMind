@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from moonmind.config.settings import TemporalSettings, settings
-from moonmind.workflows.skills.tool_plan_contracts import SkillPolicies, ToolDefinition
+from moonmind.workflows.skills.skill_plan_contracts import (
+    SkillDefinition,
+    SkillPolicies,
+)
 
 WORKFLOW_FLEET = "workflow"
 ARTIFACTS_FLEET = "artifacts"
@@ -192,9 +195,9 @@ class TemporalActivityCatalog:
             heartbeat_required=entry.heartbeat_required,
         )
 
-    def resolve_skill(self, definition: ToolDefinition) -> TemporalActivityRoute:
+    def resolve_skill(self, definition: SkillDefinition) -> TemporalActivityRoute:
         activity_type = definition.executor.activity_type
-        if activity_type != "mm.tool.execute":
+        if activity_type != "mm.skill.execute":
             route = self.resolve_activity(activity_type)
         else:
             fleet, capability_class = _skill_route_family(
@@ -385,7 +388,7 @@ def build_default_activity_catalog(
             ),
         ),
         TemporalActivityDefinition(
-            activity_type="mm.tool.execute",
+            activity_type="mm.skill.execute",
             family="skill",
             capability_class="by_capability",
             task_queue=cfg.activity_llm_task_queue,
@@ -482,7 +485,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == ARTIFACTS_FLEET
                 )
-                + ["mm.tool.execute"]
+                + ["mm.skill.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -507,7 +510,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == SANDBOX_FLEET
                 )
-                + ["mm.tool.execute"]
+                + ["mm.skill.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -522,7 +525,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == INTEGRATIONS_FLEET
                 )
-                + ["mm.tool.execute"]
+                + ["mm.skill.execute"]
             ),
         ),
     )

@@ -12,8 +12,8 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
 from moonmind.schemas.jules_models import JulesTaskResponse
-from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
-from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.skills.skill_plan_contracts import SkillResult
 from moonmind.workflows.temporal import (
     ARTIFACTS_FLEET,
     INTEGRATIONS_FLEET,
@@ -77,7 +77,7 @@ def _registry_payload() -> dict[str, object]:
                 "inputs": {"schema": {"type": "object", "properties": {}}},
                 "outputs": {"schema": {"type": "object", "properties": {}}},
                 "executor": {
-                    "activity_type": "mm.tool.execute",
+                    "activity_type": "mm.skill.execute",
                     "selector": {"mode": "by_capability"},
                 },
                 "requirements": {"capabilities": ["sandbox"]},
@@ -126,11 +126,11 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
             catalog = build_default_activity_catalog()
-            dispatcher = ToolActivityDispatcher()
+            dispatcher = SkillActivityDispatcher()
             dispatcher.register_skill(
                 skill_name="repo.run_tests",
                 version="1.0.0",
-                handler=lambda inputs, _context: ToolResult(
+                handler=lambda inputs, _context: SkillResult(
                     status="SUCCEEDED",
                     outputs={"repo_ref": inputs["repo_ref"]},
                 ),
@@ -255,7 +255,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 == "mm.activity.sandbox"
             )
             assert (
-                sandbox_bindings["mm.tool.execute"].task_queue == "mm.activity.sandbox"
+                sandbox_bindings["mm.skill.execute"].task_queue == "mm.activity.sandbox"
             )
             assert sandbox_result.exit_code == 0
 
@@ -290,7 +290,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 == "mm.activity.integrations"
             )
             assert (
-                integration_bindings["mm.tool.execute"].task_queue
+                integration_bindings["mm.skill.execute"].task_queue
                 == "mm.activity.integrations"
             )
             assert started.external_id == "task-001"

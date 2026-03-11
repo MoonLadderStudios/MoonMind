@@ -9,7 +9,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
-from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
+from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalJulesActivities,
     TemporalPlanActivities,
@@ -70,45 +70,40 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 "edges": [],
             }
 
-        dispatcher = ToolActivityDispatcher()
+        dispatcher = SkillActivityDispatcher()
 
         sandbox_activities = TemporalSandboxActivities(
             artifact_service=artifact_service
         )
 
-        from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+        from moonmind.workflows.skills.skill_plan_contracts import SkillResult
 
         async def _auto_skill_handler(inputs, context):
-            runtime_info = inputs.get("runtime", {})
-            target_runtime = runtime_info.get(
+            target_runtime = inputs.get("runtime", {}).get(
                 "mode", inputs.get("targetRuntime", "codex")
             )
-            model = runtime_info.get("model", inputs.get("model", ""))
-            effort = runtime_info.get("effort", inputs.get("effort", ""))
+            model = inputs.get("runtime", {}).get("model", inputs.get("model", ""))
+            effort = inputs.get("runtime", {}).get("effort", inputs.get("effort", ""))
             instructions = inputs.get("instructions", "")
+            repo = inputs.get("repo", "moonladder/moonmind")
             branch = inputs.get("branch", "main")
 
-            context_safe = context or {}
-            principal = context_safe.get("principal", "system")
-            workflow_id = context_safe.get("workflow_id", "unknown")
-            node_id = context_safe.get("node_id", "unknown")
+            principal = context.get("principal", "system") if context else "system"
 
-            # 1. Checkout the repository directly using the sandbox python methods.
-            # repo_ref must be a local directory under workspace_root; GitHub URLs
-            # are not supported by _resolve_checkout_source.
-            from pathlib import Path
+            workflow_id = (
+                context.get("workflow_id", "unknown") if context else "unknown"
+            )
+            node_id = context.get("node_id", "unknown") if context else "unknown"
 
-            from moonmind.config.settings import settings as _settings
-
-            local_repo_ref = Path(_settings.spec_workflow.workspace_root)
+            # 1. Checkout the repository directly using the sandbox python methods
             try:
                 workspace_path = await sandbox_activities.sandbox_checkout_repo(
-                    repo_ref=str(local_repo_ref),
+                    repo_ref=f"https://github.com/{repo}.git",
                     idempotency_key=f"auto-{workflow_id}-{node_id}",
                     checkout_revision=branch,
                 )
             except Exception as e:
-                return ToolResult(
+                return SkillResult(
                     status="FAILED",
                     outputs={"error": str(e)},
                     progress={
@@ -131,7 +126,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     timeout_seconds=900,
                 )
             except Exception as e:
-                return ToolResult(
+                return SkillResult(
                     status="FAILED",
                     outputs={"error": str(e)},
                     progress={
@@ -144,12 +139,15 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 "stdout_tail": sandbox_result.stdout_tail,
                 "stderr_tail": sandbox_result.stderr_tail,
             }
-            if sandbox_result.diagnostics_ref:
-                outputs["diagnostics_ref"] = sandbox_result.diagnostics_ref
 
-            return ToolResult(
+            output_artifacts = []
+            if sandbox_result.diagnostics_ref:
+                output_artifacts.append(sandbox_result.diagnostics_ref)
+
+            return SkillResult(
                 status="SUCCEEDED" if sandbox_result.exit_code == 0 else "FAILED",
                 outputs=outputs,
+                output_artifacts=tuple(output_artifacts),
                 progress={
                     "details": f"Executed generic LLM handler via {target_runtime}"
                 },

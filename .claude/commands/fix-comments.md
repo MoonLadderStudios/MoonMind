@@ -1,1 +1,0 @@
-../../.agents/skills/fix-comments/SKILL.md

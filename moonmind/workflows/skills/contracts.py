@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .tool_plan_contracts import (
+from .skill_plan_contracts import (
     ARTIFACT_REF_PREFIX,
     REGISTRY_DIGEST_PREFIX,
     SUPPORTED_FAILURE_MODES,
@@ -17,17 +17,17 @@ from .tool_plan_contracts import (
     PlanMetadata,
     PlanPolicy,
     PlanRegistrySnapshot,
+    SkillDefinition,
+    SkillExecutorBinding,
+    SkillFailure,
+    SkillInvocation,
     SkillPolicies,
     SkillPolicyRetries,
     SkillPolicyTimeouts,
-    Step,
-    ToolDefinition,
-    ToolExecutorBinding,
-    ToolFailure,
-    ToolResult,
+    SkillResult,
     parse_plan_definition,
-    parse_step,
-    parse_tool_definition,
+    parse_skill_definition,
+    parse_skill_invocation,
 )
 
 
@@ -61,10 +61,10 @@ class StageExecutionOutcome:
         """Return a serializable payload fragment for logs/task payloads."""
 
         return {
-            "selectedTool": self.selected_skill,
+            "selectedSkill": self.selected_skill,
             "adapterId": self.adapter_id,
             "executionPath": self.execution_path,
-            "usedTools": self.used_skills,
+            "usedSkills": self.used_skills,
             "usedFallback": self.used_fallback,
             "shadowModeRequested": self.shadow_mode_requested,
         }
@@ -80,19 +80,19 @@ __all__ = [
     "PlanPolicy",
     "PlanRegistrySnapshot",
     "REGISTRY_DIGEST_PREFIX",
-    "ToolDefinition",
-    "ToolExecutorBinding",
-    "ToolFailure",
-    "Step",
+    "SkillDefinition",
+    "SkillExecutorBinding",
+    "SkillFailure",
+    "SkillInvocation",
     "SkillPolicies",
     "SkillPolicyRetries",
     "SkillPolicyTimeouts",
-    "ToolResult",
+    "SkillResult",
     "StageExecutionDecision",
     "StageExecutionOutcome",
     "SUPPORTED_FAILURE_MODES",
     "SUPPORTED_PLAN_VERSIONS",
     "parse_plan_definition",
-    "parse_tool_definition",
-    "parse_step",
+    "parse_skill_definition",
+    "parse_skill_invocation",
 ]

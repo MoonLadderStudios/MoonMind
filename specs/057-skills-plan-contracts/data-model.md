@@ -14,7 +14,7 @@
   - Artifact content for a digest cannot be overwritten with different bytes.
   - Large outputs are represented by artifact refs, not expanded inline.
 
-## Entity: ToolDefinition
+## Entity: SkillDefinition
 
 - **Description**: Registry contract describing one executable capability.
 - **Fields**:
@@ -36,18 +36,18 @@
   - Registry key `(name, version)` must be unique.
   - Activity binding is mandatory and cannot be inferred by interpreter.
 
-## Entity: ToolRegistrySnapshot
+## Entity: SkillRegistrySnapshot
 
 - **Description**: Immutable, digest-pinned snapshot used by a plan execution.
 - **Fields**:
   - `digest` (string; prefix `reg:sha256:`)
   - `artifact_ref` (string; snapshot artifact)
-  - `skills` (array of `ToolDefinition`)
+  - `skills` (array of `SkillDefinition`)
 - **Rules**:
   - Plan execution resolves skills from this snapshot only.
   - Snapshot digest must correspond to canonical registry serialization.
 
-## Entity: StepNode
+## Entity: SkillInvocationNode
 
 - **Description**: One plan node invoking a pinned skill contract.
 - **Fields**:
@@ -73,7 +73,7 @@
   - `metadata.registry_snapshot.artifact_ref` (string)
   - `policy.failure_mode` (`FAIL_FAST` | `CONTINUE`)
   - `policy.max_concurrency` (integer > 0)
-  - `nodes` (array of `StepNode`)
+  - `nodes` (array of `SkillInvocationNode`)
   - `edges` (array of `{from,to}`)
 - **Rules**:
   - Graph must be acyclic.
@@ -91,7 +91,7 @@
   - Pointer must resolve to valid output path for referenced skill schema.
   - Self-references are invalid.
 
-## Entity: ToolResult
+## Entity: SkillResult
 
 - **Description**: Normalized node execution output envelope.
 - **Fields**:
@@ -103,7 +103,7 @@
   - Large outputs must be represented through `output_artifacts`.
   - Result status drives downstream scheduling/failure policy behavior.
 
-## Entity: ToolFailure
+## Entity: SkillFailure
 
 - **Description**: Standardized error envelope for validation, dispatch, and execution failures.
 - **Fields**:
@@ -111,7 +111,7 @@
   - `message` (string)
   - `retryable` (boolean)
   - `details` (object)
-  - `cause` (`ToolFailure`, optional)
+  - `cause` (`SkillFailure`, optional)
 - **Rules**:
   - Policy configuration controls retry behavior.
   - Non-retryable code lists stop retries immediately.
@@ -136,8 +136,8 @@
 - **Description**: Terminal run summary including per-node outcomes and artifact refs.
 - **Fields**:
   - `status` (`SUCCEEDED` | `FAILED` | `PARTIAL`)
-  - `results` (map node id -> `ToolResult`)
-  - `failures` (map node id -> `ToolFailure`)
+  - `results` (map node id -> `SkillResult`)
+  - `failures` (map node id -> `SkillFailure`)
   - `skipped` (array of node ids)
   - `progress` (`PlanProgress`)
   - `progress_artifact_ref` (string nullable)

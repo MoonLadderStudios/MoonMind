@@ -1,1 +1,0 @@
-../../.agents/skills/batch-pr-resolver/SKILL.md

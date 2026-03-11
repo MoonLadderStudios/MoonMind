@@ -55,7 +55,7 @@ Normalized API contract for phase details returned by `/api/spec-automation/runs
   - `used_fallback` (bool | null)
   - `shadow_mode_requested` (bool | null)
 - **Validation rules**:
-  - API `selected_skill` maps from normalized metadata `selectedTool`.
+  - API `selected_skill` maps from normalized metadata `selectedSkill`.
   - API `adapter_id` maps from normalized metadata `adapterId`.
   - API `execution_path` maps from normalized metadata `executionPath`.
 

@@ -34,7 +34,7 @@ As a platform engineer, I want automation phase telemetry and contracts to be sk
 **Acceptance Scenarios**:
 
 1. **Given** a legacy phase (`speckit_specify`, `speckit_plan`, `speckit_tasks`), **When** run detail is serialized, **Then** response metadata defaults to `selected_skill=speckit` and `execution_path=skill`.
-2. **Given** explicit skills metadata in phase state payload (`selectedTool`, `executionPath`), **When** run detail is serialized, **Then** API responses expose the explicit values without loss.
+2. **Given** explicit skills metadata in phase state payload (`selectedSkill`, `executionPath`), **When** run detail is serialized, **Then** API responses expose the explicit values without loss.
 3. **Given** new stage aliases for analyze and implement, **When** phase contracts are documented, **Then** they remain backward compatible with existing persisted phase values.
 
 ---
@@ -65,8 +65,8 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 ### Functional Requirements
 
 - **FR-001**: Worker startup MUST verify Speckit capability for automation worker processes, independent of selected stage skill.
-- **FR-002**: Automation phase contracts MUST support skills-first metadata (`selectedTool`, `executionPath`, fallback/shadow flags) while preserving backward compatibility with legacy phase values.
-- **FR-003**: Legacy Speckit phases MUST normalize to default skills metadata (`selectedTool=speckit`, `executionPath=skill`) when explicit metadata is absent.
+- **FR-002**: Automation phase contracts MUST support skills-first metadata (`selectedSkill`, `executionPath`, fallback/shadow flags) while preserving backward compatibility with legacy phase values.
+- **FR-003**: Legacy Speckit phases MUST normalize to default skills metadata (`selectedSkill=speckit`, `executionPath=skill`) when explicit metadata is absent.
 - **FR-004**: API run detail responses for automation runs MUST expose normalized skills metadata fields per phase.
 - **FR-005**: Existing automation API routes and artifact download behavior MUST remain backward compatible.
 - **FR-006**: Automation data model and contracts MUST include stage aliases for analyze and implement to align with umbrella stage coverage goals.
