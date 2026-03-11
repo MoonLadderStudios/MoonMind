@@ -218,26 +218,74 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
-        sandbox_result = await workflow.execute_activity(
-            "sandbox.run_command",
+        if not plan_ref:
+            raise ValueError("plan_ref is required for execution stage")
+
+        # 1. Read the plan from plan_ref
+        plan_payload = await workflow.execute_activity(
+            "artifact.read",
             {
                 "principal": self._principal(),
-                "cmd": "echo executing",
-                "timeout_seconds": 300,
+                "artifact_ref": plan_ref,
             },
-            start_to_close_timeout=timedelta(minutes=10),
-            task_queue=SANDBOX_TASK_QUEUE,
+            start_to_close_timeout=timedelta(minutes=5),
+            task_queue=LLM_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
-        logs_ref = (
-            sandbox_result.get("diagnostics_ref")
-            if isinstance(sandbox_result, dict)
-            else getattr(sandbox_result, "diagnostics_ref", None)
+        import json
+
+        plan_dict = (
+            json.loads(
+                plan_payload
+                if isinstance(plan_payload, str)
+                else plan_payload.decode("utf-8")
+            )
+            if isinstance(plan_payload, (str, bytes))
+            else plan_payload
         )
-        if logs_ref:
-            self._logs_ref = logs_ref
-            self._update_memo()
+
+        nodes = plan_dict.get("nodes", [])
+
+        # 2 & 3. Dispatch each node
+        for node in nodes:
+            skill = node.get("skill", {})
+            skill_name = skill.get("name", "auto")
+            skill_version = skill.get("version", "1.0")
+
+            invocation_payload = {
+                "id": node.get("id"),
+                "skill": {"name": skill_name, "version": skill_version},
+                "inputs": node.get("inputs", {}),
+                "options": node.get("options", {}),
+            }
+
+            try:
+                skill_result = await workflow.execute_activity(
+                    "mm.skill.execute",
+                    {
+                        "invocation_payload": invocation_payload,
+                        "principal": self._principal(),
+                        "registry_snapshot_ref": plan_dict.get("metadata", {})
+                        .get("registry_snapshot", {})
+                        .get("artifact_ref"),
+                        "context": {
+                            "workflow_id": workflow.info().workflow_id,
+                            "run_id": workflow.info().run_id,
+                            "node_id": node.get("id", "unknown"),
+                        },
+                    },
+                    start_to_close_timeout=timedelta(minutes=30),
+                    task_queue=LLM_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                )
+            except Exception as exc:
+                workflow.logger.error(f"Skill execution failed: {exc}")
+                failure_mode = plan_dict.get("policy", {}).get(
+                    "failure_mode", "FAIL_FAST"
+                )
+                if failure_mode == "FAIL_FAST":
+                    raise
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
