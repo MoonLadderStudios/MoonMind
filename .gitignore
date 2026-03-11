@@ -65,3 +65,19 @@ coverage/
 Thumbs.db
 *.tmp
 *.swp
+
+# Temporary scripts and reports
+action_status.json
+check_defaults.py
+fix_comments.py
+fix_test.py
+register_sa.py
+resolve_conflicts.py
+speckit_analyze_report.md
+step-*-report.md
+update_http_exception.py
+
+# Temporary files
+tmp-*.json
+tmp-*.md
+tmp_*.md
