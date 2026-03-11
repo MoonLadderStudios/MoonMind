@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
-from moonmind.workflows.speckit_celery.orchestrator import (
+from moonmind.workflows.speckit_celery import celery_app  # noqa: F401
+from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: F401
     TriggeredWorkflow,
     WorkflowConflictError,
     WorkflowRetryError,
@@ -30,7 +31,6 @@ def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepositor
     """Factory helper used by FastAPI dependencies to access repositories."""
 
     return SpecWorkflowRepository(session)
-
 
 def get_spec_automation_repository(session: AsyncSession) -> SpecAutomationRepository:
     """Factory helper returning the Spec Automation repository for a DB session."""
@@ -105,6 +105,7 @@ __all__ = sorted(
         "TriggeredWorkflow",
         "WorkflowConflictError",
         "WorkflowRetryError",
+        "celery_app",
         "get_agent_queue_repository",
         "get_agent_queue_service",
         "get_spec_automation_repository",

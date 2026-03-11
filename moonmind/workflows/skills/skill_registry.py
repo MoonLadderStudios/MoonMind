@@ -1,0 +1,22 @@
+"""Legacy compatibility exports for skill-named registry helpers."""
+
+from __future__ import annotations
+
+from .tool_registry import *  # noqa: F401,F403
+from .tool_registry import (
+    ToolRegistryError as SkillRegistryError,
+    ToolRegistrySnapshot as SkillRegistrySnapshot,
+    load_tool_registry as load_skill_registry,
+    parse_tool_registry as parse_skill_registry,
+    validate_tool_registry as validate_skill_registry,
+)
+
+__all__ = [
+    "SkillRegistryError",
+    "SkillRegistrySnapshot",
+    "create_registry_snapshot",
+    "load_registry_snapshot_from_artifact",
+    "load_skill_registry",
+    "parse_skill_registry",
+    "validate_skill_registry",
+]

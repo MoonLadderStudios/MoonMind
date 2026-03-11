@@ -332,7 +332,7 @@ def _build_queue_request(
             "requiredCapabilities": ["gh"],
             "task": {
                 "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
-                # Aligned with Step contract: skill.name + skill.version required;
+                # Aligned with SkillInvocation contract: skill.name + skill.version required;
                 # skill inputs live at the task-node level (not inside skill).
                 "skill": {
                     "name": "pr-resolver",

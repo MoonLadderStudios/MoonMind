@@ -28,7 +28,7 @@ Fully implement the canonical Temporal activity catalog and worker topology desc
 - **I. One-Click Agent Deployment**: PASS. Worker fleets are planned as Docker Compose services with documented env defaults and no new hidden prerequisites.
 - **II. Avoid Vendor Lock-In**: PASS. Activity contracts remain provider-neutral; provider-specific behavior stays behind adapters (`TemporalArtifactStore`, integration adapters, LLM provider selection inside worker logic).
 - **III. Own Your Data**: PASS. Large inputs, outputs, logs, and previews remain MoonMind-managed artifacts rather than provider-owned opaque payloads.
-- **IV. Skills Are First-Class and Easy to Add**: PASS. `mm.tool.execute` stays the low-ceremony default while explicit bindings remain registry-declared exceptions.
+- **IV. Skills Are First-Class and Easy to Add**: PASS. `mm.skill.execute` stays the low-ceremony default while explicit bindings remain registry-declared exceptions.
 - **V. The Bittersweet Lesson**: PASS. Stable activity names are the durable contracts; worker implementations and provider adapters remain replaceable.
 - **VI. Powerful Runtime Configurability**: PASS. Queue names, concurrency, backend selection, provider routing, and fleet enablement remain configuration-driven and observable.
 - **VII. Modular and Extensible Architecture**: PASS. The feature extends existing temporal, skills, adapter, and compose boundaries instead of introducing a parallel runtime model.
@@ -75,9 +75,9 @@ moonmind/
 │   ├── adapters/
 │   │   └── jules_client.py
 │   ├── skills/
-│   │   ├── tool_dispatcher.py
-│   │   ├── tool_plan_contracts.py
-│   │   └── tool_registry.py
+│   │   ├── skill_dispatcher.py
+│   │   ├── skill_plan_contracts.py
+│   │   └── skill_registry.py
 │   └── temporal/
 │       ├── __init__.py
 │       ├── activity_catalog.py
@@ -163,7 +163,7 @@ Research outcomes in `specs/047-activity-worker-topology/research.md` establish:
 
 ### 5. Enforce hybrid skill binding rules
 
-- Preserve `mm.tool.execute` as the default registry-dispatched path.
+- Preserve `mm.skill.execute` as the default registry-dispatched path.
 - Extend skill definition validation so curated explicit bindings require one of the allowed operational reasons: stronger isolation, specialized credentials, or clearer routing.
 - Route default dispatcher executions by declared capability (`llm`, `sandbox`, `artifacts`, `integration:<provider>`) while keeping provider selection inside the LLM worker for v1.
 

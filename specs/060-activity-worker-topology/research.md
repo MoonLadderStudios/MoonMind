@@ -18,7 +18,7 @@
 
 ## Decision 3: Resolve routing per invocation from activity catalog plus skill capability metadata
 
-- **Decision**: Keep routing selection capability-based per activity invocation, with `mm.tool.execute` resolved by the pinned skill registry snapshot and explicit catalog entries used for curated activity types.
+- **Decision**: Keep routing selection capability-based per activity invocation, with `mm.skill.execute` resolved by the pinned skill registry snapshot and explicit catalog entries used for curated activity types.
 - **Rationale**: Routing by capability preserves least-privilege fleet assignment and matches the documented hybrid binding model.
 - **Alternatives considered**:
   - Route by workflow type: rejected because the source doc forbids workflow-type-based routing.
@@ -34,7 +34,7 @@
 
 ## Decision 5: Enforce explicit skill bindings as fail-closed exceptions
 
-- **Decision**: Preserve `mm.tool.execute` as the default path and require registry-declared justification for any explicit activity binding.
+- **Decision**: Preserve `mm.skill.execute` as the default path and require registry-declared justification for any explicit activity binding.
 - **Rationale**: The source document and feature clarification both treat explicit bindings as exceptions for stronger isolation, specialized credentials, or clearer routing only.
 - **Alternatives considered**:
   - Allow any skill to bind directly to any explicit activity type: rejected because it bypasses least-privilege routing and destabilizes the catalog.

@@ -110,7 +110,7 @@
 - [x] T035 Integrate skills policy resolution + stage execution metadata into discover/submit/publish tasks in `moonmind/workflows/speckit_celery/tasks.py`.
 - [x] T036 Ensure Speckit capability checks run at startup for both `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py`.
 - [x] T037 Add unit coverage for skills runner decisions and fallback behavior in `tests/unit/workflows/test_skills_runner.py`.
-- [x] T038 Update existing task-flow tests to assert `selectedTool` and `executionPath` payload fields in `tests/unit/workflows/test_tasks.py`.
+- [x] T038 Update existing task-flow tests to assert `selectedSkill` and `executionPath` payload fields in `tests/unit/workflows/test_tasks.py`.
 - [x] T039 Update 001 spec artifacts (`spec.md`, `plan.md`, `quickstart.md`, `tasks.md`) to explicitly reflect the 015 umbrella alignment contract.
 
 ---

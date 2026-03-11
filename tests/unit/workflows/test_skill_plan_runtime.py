@@ -17,19 +17,19 @@ from moonmind.workflows.skills.plan_validation import (
     PlanValidationError,
     validate_plan_payload,
 )
-from moonmind.workflows.skills.tool_dispatcher import (
-    ToolActivityDispatcher,
-    ToolDispatchError,
-    execute_tool_activity,
+from moonmind.workflows.skills.skill_dispatcher import (
+    SkillActivityDispatcher,
+    SkillDispatchError,
+    execute_skill_activity,
     plan_validate_activity,
 )
-from moonmind.workflows.skills.tool_plan_contracts import (
-    ToolResult,
+from moonmind.workflows.skills.skill_plan_contracts import (
+    SkillResult,
     parse_plan_definition,
 )
-from moonmind.workflows.skills.tool_registry import (
+from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
-    parse_tool_registry,
+    parse_skill_registry,
 )
 
 
@@ -57,7 +57,7 @@ def _registry_payload() -> dict:
                     }
                 },
                 "executor": {
-                    "activity_type": "mm.tool.execute",
+                    "activity_type": "mm.skill.execute",
                     "selector": {"mode": "by_capability"},
                 },
                 "requirements": {"capabilities": ["sandbox"]},
@@ -162,7 +162,7 @@ def _plan_payload(
 
 
 def _snapshot(store: InMemoryArtifactStore):
-    skills = parse_tool_registry(_registry_payload())
+    skills = parse_skill_registry(_registry_payload())
     return create_registry_snapshot(skills=skills, artifact_store=store)
 
 
@@ -262,16 +262,16 @@ def test_plan_validate_activity_persists_validated_plan_artifact():
     assert saved["plan_version"] == "1.0"
 
 
-def test_tool_dispatcher_routes_mm_skill_execute_and_activity_handlers():
+def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
-    dispatcher = ToolActivityDispatcher()
+    dispatcher = SkillActivityDispatcher()
 
     seen_inputs = {}
 
     def mm_handler(inputs, _context):
         seen_inputs.update(inputs)
-        return ToolResult(
+        return SkillResult(
             status="SUCCEEDED",
             outputs={"test_report_artifact": "art:sha256:feed"},
             progress={"percent": 100},
@@ -279,7 +279,7 @@ def test_tool_dispatcher_routes_mm_skill_execute_and_activity_handlers():
 
     def sandbox_handler(invocation, _context):
         assert invocation.skill_name == "repo.apply_patch"
-        return ToolResult(
+        return SkillResult(
             status="SUCCEEDED",
             outputs={"files_changed": 1},
             progress={"percent": 100},
@@ -293,7 +293,7 @@ def test_tool_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     )
 
     result_a = asyncio.run(
-        execute_tool_activity(
+        execute_skill_activity(
             invocation_payload={
                 "id": "n1",
                 "skill": {"name": "repo.run_tests", "version": "1.0.0"},
@@ -304,7 +304,7 @@ def test_tool_dispatcher_routes_mm_skill_execute_and_activity_handlers():
         )
     )
     result_b = asyncio.run(
-        execute_tool_activity(
+        execute_skill_activity(
             invocation_payload={
                 "id": "n2",
                 "skill": {"name": "repo.apply_patch", "version": "2.1.0"},
@@ -323,12 +323,12 @@ def test_tool_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     assert seen_inputs["repo_ref"] == "git:org/repo#branch"
 
 
-def test_tool_dispatcher_rejects_missing_handlers():
+def test_skill_dispatcher_rejects_missing_handlers():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
-    dispatcher = ToolActivityDispatcher()
+    dispatcher = SkillActivityDispatcher()
 
-    with pytest.raises(ToolDispatchError, match="No mm.tool.execute handler"):
+    with pytest.raises(SkillDispatchError, match="No mm.skill.execute handler"):
         asyncio.run(
             dispatcher.execute(
                 invocation=parse_plan_definition(
@@ -354,7 +354,7 @@ def test_plan_interpreter_fail_fast_skips_dependents():
 
     async def executor(invocation):
         if invocation.id == "n1":
-            return ToolResult(status="FAILED", outputs={}, progress={"percent": 100})
+            return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
         raise AssertionError("Dependent node should not execute under fail-fast")
 
     summary = asyncio.run(
@@ -387,8 +387,8 @@ def test_plan_interpreter_continue_executes_independent_nodes():
 
     async def executor(invocation):
         if invocation.id == "n1":
-            return ToolResult(status="FAILED", outputs={}, progress={"percent": 100})
-        return ToolResult(
+            return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
+        return SkillResult(
             status="SUCCEEDED",
             outputs={"files_changed": 2},
             progress={"percent": 100},
@@ -423,9 +423,9 @@ def test_plan_interpreter_fail_fast_records_cancelled_in_flight_nodes():
     async def executor(invocation):
         if invocation.id == "n1":
             await asyncio.sleep(0)
-            return ToolResult(status="FAILED", outputs={}, progress={"percent": 100})
+            return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
         await asyncio.sleep(30)
-        return ToolResult(
+        return SkillResult(
             status="SUCCEEDED",
             outputs={"files_changed": 2},
             progress={"percent": 100},

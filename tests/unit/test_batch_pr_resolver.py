@@ -293,7 +293,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     with patch.object(httpx, "AsyncClient", FakeAsyncClient):
         submission = _make_submission(module)
-        created, errors = asyncio.run(
+        created, errors = asyncio.get_event_loop().run_until_complete(
             submit_jobs_via_http(
                 [submission],
                 moonmind_url="http://api:5000",
@@ -332,7 +332,9 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     # patch.dict doesn't work for runpy'd modules because the function's __globals__
     # dict IS the module dict; we must mutate it in place via setitem.
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_http", fake_http)
-    created, errors = asyncio.run(submit_jobs([submission]))
+    created, errors = asyncio.get_event_loop().run_until_complete(
+        submit_jobs([submission])
+    )
 
     assert http_called == ["http://api:5000"]
     assert len(created) == 1
@@ -355,7 +357,9 @@ def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
     submission = _make_submission(module)
 
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
-    created, errors = asyncio.run(submit_jobs([submission]))
+    created, errors = asyncio.get_event_loop().run_until_complete(
+        submit_jobs([submission])
+    )
 
     assert db_called == [True]
     assert len(created) == 1
@@ -393,7 +397,7 @@ def test_read_worker_token_prefers_env_over_file(
 
 
 # ---------------------------------------------------------------------------
-# Step payload contract tests
+# SkillInvocation payload contract tests
 # ---------------------------------------------------------------------------
 
 
@@ -419,7 +423,7 @@ def test_build_queue_request_skill_contract() -> None:
     task = req["payload"]["task"]
     skill = task["skill"]
 
-    # Correct fields per Step contract
+    # Correct fields per SkillInvocation contract
     assert skill.get("name") == "pr-resolver", "skill.name must be 'pr-resolver'"
     assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
 

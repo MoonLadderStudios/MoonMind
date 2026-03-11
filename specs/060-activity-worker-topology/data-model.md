@@ -85,13 +85,13 @@
 - **Fields**:
   - `skillName` (string)
   - `version` (string)
-  - `activityType` (string; default `mm.tool.execute`)
+  - `activityType` (string; default `mm.skill.execute`)
   - `requiredCapabilities` (array[string])
   - `explicitBindingReason` (enum nullable: `stronger_isolation|specialized_credentials|clearer_routing`)
   - `policies` (`ActivityPolicyProfile`)
 - **Rules**:
   - Explicit activity bindings require `explicitBindingReason`.
-  - `mm.tool.execute` routes by declared capability.
+  - `mm.skill.execute` routes by declared capability.
   - Missing or unsupported capability declarations invalidate the binding.
 
 ## Entity: WorkerFleetProfile
@@ -207,7 +207,7 @@
 ## Invariants
 
 - Every canonical activity type has one stable name and one default v1 route.
-- `mm.tool.execute` remains the default skill path unless an explicit binding reason is declared.
+- `mm.skill.execute` remains the default skill path unless an explicit binding reason is declared.
 - Large inputs, outputs, and logs are represented as artifact references.
 - Activities do not update workflow visibility fields directly.
 - Sandbox heartbeats are required for long-running operations.

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.workflows.skills.tool_plan_contracts import (
+from moonmind.workflows.skills.skill_plan_contracts import (
     ContractValidationError,
-    parse_tool_definition,
+    parse_skill_definition,
 )
 from moonmind.workflows.temporal import (
     build_activity_invocation_envelope,
@@ -61,7 +61,7 @@ def test_shared_envelope_contract_requires_idempotency_for_side_effecting_inputs
 
 def test_explicit_skill_binding_requires_declared_operational_reason() -> None:
     with pytest.raises(ContractValidationError, match="binding_reason"):
-        parse_tool_definition(
+        parse_skill_definition(
             {
                 "name": "integration.fetch",
                 "version": "1.0.0",

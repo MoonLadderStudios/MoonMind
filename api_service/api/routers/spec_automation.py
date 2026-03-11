@@ -48,7 +48,6 @@ def _serialize_phase_state(
     state: models.SpecAutomationTaskState,
 ) -> SpecAutomationPhaseState:
     skill_meta = state.get_skill_execution_metadata() or {}
-    # Prefer new key names; fall back to legacy keys for records persisted before the rename.
     selected_skill = skill_meta.get("selectedTool") or skill_meta.get("selectedSkill")
     used_skills = (
         skill_meta.get("usedTools")
@@ -192,7 +191,7 @@ def _ensure_run_access(run: models.SpecAutomationRun, user: User) -> None:
 
 
 def _resolve_artifact_file(storage_path: str) -> Path:
-    """Resolve an artifact storage path to a filesystem location within the artifact root."""
+    """Resolve artifact storage paths inside the configured artifacts root."""
 
     base = Path(settings.spec_workflow.artifacts_root).resolve()
     candidate = (

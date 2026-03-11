@@ -88,7 +88,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
    curl http://localhost:5000/api/workflows/runs/{run_id}/tasks | jq
    ```
    Stage payloads should include:
-   - `selectedTool` (default `speckit` unless overridden),
+   - `selectedSkill` (default `speckit` unless overridden),
    - `executionPath` (`skill`, `direct_fallback`, or `direct_only`).
 
 3. **Inspect artifacts**

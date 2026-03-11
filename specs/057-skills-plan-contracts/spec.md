@@ -129,10 +129,10 @@ An operations user monitors active and completed runs and needs structured progr
 
 - **ArtifactRef**: Immutable reference envelope for large input/output payloads, including content metadata and creation timestamp.
 - **RegistrySnapshot**: Immutable digest + artifact reference bundle that pins available skill definitions for one execution.
-- **ToolDefinition**: Versioned skill contract with input/output schemas, executor binding, policy defaults, and capability/security constraints.
-- **Step Node**: Plan node containing unique ID, pinned skill name/version, validated inputs, and bounded execution overrides.
+- **SkillDefinition**: Versioned skill contract with input/output schemas, executor binding, policy defaults, and capability/security constraints.
+- **SkillInvocation Node**: Plan node containing unique ID, pinned skill name/version, validated inputs, and bounded execution overrides.
 - **Plan**: DAG artifact containing metadata, policy, node list, and dependency edges.
-- **ToolResult / ToolFailure**: Standardized per-node execution outcome model with small inline outputs and artifact-based large outputs.
+- **SkillResult / SkillFailure**: Standardized per-node execution outcome model with small inline outputs and artifact-based large outputs.
 - **ExecutionProgress**: Structured progress state for query/read models (node counts, last event, timestamp).
 
 ### Assumptions & Dependencies
@@ -171,5 +171,5 @@ An operations user monitors active and completed runs and needs structured progr
 
 ### Residual risks
 
-- Contract behavior spans multiple runtime modules (`tool_registry`, `plan_validation`, `tool_dispatcher`, and `plan_interpreter`), so implementation drift remains possible if changes bypass shared contracts.
+- Contract behavior spans multiple runtime modules (`skill_registry`, `plan_validation`, `skill_dispatcher`, and `plan_interpreter`), so implementation drift remains possible if changes bypass shared contracts.
 - Failure-policy and dependency-ordering regressions remain possible if edge-case tests are skipped during implementation.

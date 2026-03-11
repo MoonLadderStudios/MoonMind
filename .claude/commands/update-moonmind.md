@@ -1,1 +1,0 @@
-../../.agents/skills/update-moonmind/SKILL.md

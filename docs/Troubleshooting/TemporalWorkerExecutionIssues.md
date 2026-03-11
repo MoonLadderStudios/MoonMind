@@ -13,7 +13,7 @@ The `MoonMind.Run` workflow and other Temporal tasks were failing to execute or 
 - **Fix**: Modified `build_activity_bindings()` inside `activity_runtime.py` to check for and dynamically apply `@activity.defn` if an activity class method was not decorated.
 
 ### 3. Shim `*kwargs` in Temporal Activities
-- **Issue**: The Python Temporal SDK actively rejects activities that possess keyword-only arguments or `**kwargs` signatures. Our `mm.tool.execute` activity and others possessed such arguments.
+- **Issue**: The Python Temporal SDK actively rejects activities that possess keyword-only arguments or `**kwargs` signatures. Our `mm.skill.execute` activity and others possessed such arguments.
 - **Fix**: Built a `make_wrapper` closure factory to replace the signature with `_wrapper(self, request=None)` dynamically when registering activities without breaking the interior payload routing.
 
 ### 4. Provide a Stub Planner for `plan.generate`

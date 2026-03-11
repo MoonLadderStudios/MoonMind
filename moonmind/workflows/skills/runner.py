@@ -27,10 +27,10 @@ def _set_context_execution(
     if not isinstance(execution, dict):
         return
     execution[stage_name] = {
-        "selectedTool": selected_skill,
+        "selectedSkill": selected_skill,
         "adapterId": adapter_id,
         "executionPath": execution_path,
-        "usedTools": used_skills,
+        "usedSkills": used_skills,
         "usedFallback": used_fallback,
         "shadowModeRequested": shadow_mode_requested,
     }

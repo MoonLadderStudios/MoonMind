@@ -7,8 +7,10 @@ from .storage import (
     ArtifactStorageError,
     ArtifactWriteResult,
 )
+from .tasks import app
 
 __all__ = [
+    "app",
     "OrchestratorRepository",
     "ArtifactStorage",
     "ArtifactStorageError",
