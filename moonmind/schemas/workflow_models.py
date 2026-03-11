@@ -216,9 +216,7 @@ class CodexShardHealthModel(BaseModel):
     hash_modulo: int = Field(..., alias="hashModulo", ge=1)
     worker_hostname: Optional[str] = Field(None, alias="workerHostname")
     volume_name: Optional[str] = Field(None, alias="volumeName")
-    volume_status: Optional[CodexAuthVolumeStatus] = Field(
-        None, alias="volumeStatus"
-    )
+    volume_status: Optional[CodexAuthVolumeStatus] = Field(None, alias="volumeStatus")
     volume_last_verified_at: datetime | None = Field(None, alias="volumeLastVerifiedAt")
     volume_worker_affinity: Optional[str] = Field(None, alias="volumeWorkerAffinity")
     volume_notes: Optional[str] = Field(None, alias="volumeNotes")
