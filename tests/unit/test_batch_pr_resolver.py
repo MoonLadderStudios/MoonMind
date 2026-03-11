@@ -7,8 +7,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-
-
 def _load_module() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
     return runpy.run_path(
@@ -327,7 +325,9 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
 
     http_called = []
 
-    async def fake_http(requests: list, *, moonmind_url: str, worker_token: Any) -> tuple:
+    async def fake_http(
+        requests: list, *, moonmind_url: str, worker_token: Any
+    ) -> tuple:
         http_called.append(moonmind_url)
         return [{"pr": 1, "branch": "b", "jobId": "x"}], []
 
@@ -384,7 +384,9 @@ def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:
     assert read_worker_token() == "my-file-token"
 
 
-def test_read_worker_token_prefers_env_over_file(monkeypatch: Any, tmp_path: Path) -> None:
+def test_read_worker_token_prefers_env_over_file(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
     """_read_worker_token prefers MOONMIND_WORKER_TOKEN over MOONMIND_WORKER_TOKEN_FILE."""
     module = _load_module()
     read_worker_token = module["_read_worker_token"]
@@ -430,8 +432,12 @@ def test_build_queue_request_skill_contract() -> None:
     assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
 
     # Legacy / wrong fields must NOT be present
-    assert "id" not in skill, "skill.id is the legacy field; must not be sent to Temporal"
-    assert "args" not in skill, "skill.args is legacy; inputs now live at task-node level"
+    assert (
+        "id" not in skill
+    ), "skill.id is the legacy field; must not be sent to Temporal"
+    assert (
+        "args" not in skill
+    ), "skill.args is legacy; inputs now live at task-node level"
 
     # inputs live at the task-node level, not inside skill
     inputs = task.get("inputs")
@@ -455,9 +461,9 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
 
     # Wrong nesting must NOT be present
     skill = task["skill"]
-    assert "requiredCapabilities" not in skill, (
-        "requiredCapabilities must not be nested inside skill"
-    )
+    assert (
+        "requiredCapabilities" not in skill
+    ), "requiredCapabilities must not be nested inside skill"
 
 
 def test_build_queue_request_skill_version_passthrough() -> None:

@@ -450,7 +450,9 @@ async def _submit_jobs_via_http(
     if worker_token:
         headers["X-MoonMind-Worker-Token"] = worker_token
     base = moonmind_url.rstrip("/")
-    async with httpx.AsyncClient(base_url=base, timeout=30.0, headers=headers) as client:
+    async with httpx.AsyncClient(
+        base_url=base, timeout=30.0, headers=headers
+    ) as client:
         for submission in queue_requests:
             request = submission.queue_request
             body = {
