@@ -314,6 +314,41 @@ class TemporalExecutionService:
                 raise exc
             return await self._sync_projection_best_effort(existing)
         await self._session.refresh(record)
+
+        try:
+            input_args: dict[str, Any] = {}
+            if workflow_type_enum is TemporalWorkflowType.RUN:
+                input_args = {
+                    "workflow_type": "MoonMind.Run",
+                    "title": resolved_title,
+                    "initial_parameters": params,
+                    "input_artifact_ref": input_artifact_ref,
+                    "plan_artifact_ref": plan_artifact_ref,
+                }
+            elif workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
+                input_args = {
+                    "workflow_type": "MoonMind.ManifestIngest",
+                    "manifest_ref": manifest_artifact_ref,
+                    "action": params.get("action", "apply"),
+                    "options": params.get("options", {}),
+                }
+
+            start_result = await self._client_adapter.start_workflow(
+                workflow_type=workflow_type_enum.value,
+                workflow_id=record.workflow_id,
+                input_args=input_args,
+                memo=memo,
+                search_attributes=search_attributes,
+            )
+            if start_result.run_id != record.run_id:
+                record.run_id = start_result.run_id
+                await self._session.commit()
+                await self._session.refresh(record)
+        except Exception as exc:
+            logger.exception(
+                "Failed to start Temporal workflow for execution %s", record.workflow_id
+            )
+
         return await self._sync_projection_best_effort(record)
 
     async def list_executions(

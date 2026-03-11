@@ -650,7 +650,7 @@ def test_describe_execution_disables_actions_when_feature_flag_off(
     assert body["debugFields"] is None
 
 
-def test_action_endpoints_still_work_when_actions_are_ui_disabled(
+def test_action_endpoints_return_403_when_actions_are_ui_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
@@ -673,12 +673,19 @@ def test_action_endpoints_still_work_when_actions_are_ui_disabled(
         update_response = test_client.post(
             "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
         )
-        assert update_response.status_code == 200
+        assert update_response.status_code == 403
+        assert update_response.json()["detail"]["code"] == "actions_disabled"
 
         signal_response = test_client.post(
             "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
         )
-        assert signal_response.status_code == 202
+        assert signal_response.status_code == 403
+        assert signal_response.json()["detail"]["code"] == "actions_disabled"
 
         cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
-        assert cancel_response.status_code == 202
+        assert cancel_response.status_code == 403
+        assert cancel_response.json()["detail"]["code"] == "actions_disabled"
+
+    mock_service.update_execution.assert_not_awaited()
+    mock_service.signal_execution.assert_not_awaited()
+    mock_service.cancel_execution.assert_not_awaited()

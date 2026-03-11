@@ -226,6 +226,188 @@ services:
       - local-network
     restart: unless-stopped
 
+  temporal-worker-workflow:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_WORKER_FLEET=workflow
+      - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
+      - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  temporal-worker-artifacts:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_WORKER_FLEET=artifacts
+      - TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE=${TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE:-mm.activity.artifacts}
+      - TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY=${TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY:-8}
+      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
+      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://minio:9000}
+      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
+      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
+      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  temporal-worker-llm:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_WORKER_FLEET=llm
+      - TEMPORAL_ACTIVITY_LLM_TASK_QUEUE=${TEMPORAL_ACTIVITY_LLM_TASK_QUEUE:-mm.activity.llm}
+      - TEMPORAL_LLM_WORKER_CONCURRENCY=${TEMPORAL_LLM_WORKER_CONCURRENCY:-4}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  temporal-worker-sandbox:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_WORKER_FLEET=sandbox
+      - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
+      - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+      - agent_workspaces:/work/agent_jobs
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+      agent-workspaces-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  temporal-worker-integrations:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_WORKER_FLEET=integrations
+      - TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE=${TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE:-mm.activity.integrations}
+      - TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY=${TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY:-4}
+      - JULES_ENABLED=${JULES_ENABLED:-false}
+      - JULES_API_URL=${JULES_API_URL:-}
+      - JULES_API_KEY=${JULES_API_KEY:-}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:v1.14.1
     ports:

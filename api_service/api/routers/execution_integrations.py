@@ -240,15 +240,15 @@ async def ingest_integration_callback(
                 TemporalArtifactRepository(session)
             )
             event_type = str(payload.event_type).strip()
-                artifact_ref = await artifact_service.write_integration_event_artifact(
-                    principal="service:integration-callback",
-                    execution=ExecutionRef(
-                        namespace=target_record.namespace,
-                        workflow_id=target_record.workflow_id,
-                        run_id=target_record.run_id,
-                        link_type="debug.trace",
-                    ),
-                    integration_name=str(integration_name).strip().lower(),
+            artifact_ref = await artifact_service.write_integration_event_artifact(
+                principal="service:integration-callback",
+                execution=ExecutionRef(
+                    namespace=target_record.namespace,
+                    workflow_id=target_record.workflow_id,
+                    run_id=target_record.run_id,
+                    link_type=f"integration.{integration_name}.callback",
+                ),
+                integration_name=str(integration_name).strip().lower(),
                 correlation_id=(target_record.integration_state or {}).get(
                     "correlation_id", callback_correlation_key
                 ),
