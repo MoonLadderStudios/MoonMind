@@ -2044,14 +2044,14 @@ class SpecWorkflowRun(Base):
         "User",
         foreign_keys=lambda: [SpecWorkflowRun.created_by],
     )
-    codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
+    codex_auth_volume: Mapped[Any] = relationship(
         "CodexAuthVolume",
-        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",  # noqa: F821
+        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",
         foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
     )
-    codex_shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
+    codex_shard: Mapped[Any] = relationship(
         "CodexWorkerShard",
-        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",  # noqa: F821
+        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",
         foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
     )
 
