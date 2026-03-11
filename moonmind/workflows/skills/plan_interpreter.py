@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from .artifact_store import ArtifactStore
 from .plan_validation import PlanValidationError, ValidatedPlan, validate_plan
-from .tool_plan_contracts import ToolFailure, Step, ToolResult
+from .tool_plan_contracts import Step, ToolFailure, ToolResult
 from .tool_registry import ToolRegistrySnapshot
 
 SkillFailure = ToolFailure

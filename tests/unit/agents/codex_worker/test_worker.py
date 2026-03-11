@@ -5400,11 +5400,7 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
     )
     monkeypatch.setattr(
         "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
-        lambda *,
-        selection,
-        run_root,
-        cache_root,
-        verify_signatures: _MaterializedWorkspace(),
+        lambda *, selection, run_root, cache_root, verify_signatures: _MaterializedWorkspace(),
     )
 
     job = ClaimedJob(

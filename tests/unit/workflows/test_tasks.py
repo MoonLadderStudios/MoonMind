@@ -850,18 +850,18 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     states_by_name = {state.task_name: state for state in persisted.task_states}
 
     discover_state = states_by_name.get(tasks.TASK_DISCOVER)
-    assert discover_state is not None, (
-        f"Discover task state '{tasks.TASK_DISCOVER}' not found."
-    )
+    assert (
+        discover_state is not None
+    ), f"Discover task state '{tasks.TASK_DISCOVER}' not found."
     assert discover_state.payload is not None, "Discover task state has no payload."
     assert discover_state.payload["taskId"] == "T010"
     assert discover_state.payload["selectedTool"] == "speckit"
     assert discover_state.payload["executionPath"] == "skill"
 
     submit_state = states_by_name.get(tasks.TASK_SUBMIT)
-    assert submit_state is not None, (
-        f"Submit task state '{tasks.TASK_SUBMIT}' not found."
-    )
+    assert (
+        submit_state is not None
+    ), f"Submit task state '{tasks.TASK_SUBMIT}' not found."
     assert submit_state.payload is not None, "Submit task state has no payload."
     assert (
         submit_state.payload["logsPath"]
@@ -871,9 +871,9 @@ async def test_celery_chain_happy_path_persists_task_states(tmp_path, monkeypatc
     assert submit_state.payload["executionPath"] == "skill"
 
     publish_state = states_by_name.get(tasks.TASK_PUBLISH)
-    assert publish_state is not None, (
-        f"Publish task state '{tasks.TASK_PUBLISH}' not found."
-    )
+    assert (
+        publish_state is not None
+    ), f"Publish task state '{tasks.TASK_PUBLISH}' not found."
     assert publish_state.payload is not None, "Publish task state has no payload."
     assert (
         publish_state.payload["patchPath"]

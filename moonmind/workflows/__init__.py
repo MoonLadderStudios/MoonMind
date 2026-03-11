@@ -32,10 +32,13 @@ def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepositor
 
     return SpecWorkflowRepository(session)
 
+
 def get_spec_automation_repository(session: AsyncSession) -> SpecAutomationRepository:
     """Factory helper returning the Spec Automation repository for a DB session."""
 
     return SpecAutomationRepository(session)
+
+
 def get_agent_queue_repository(session: AsyncSession) -> AgentQueueRepository:
     """Factory helper used by queue APIs to access queue persistence."""
 

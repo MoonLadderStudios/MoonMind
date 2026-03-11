@@ -906,9 +906,9 @@ class RecurringTasksService:
         )
 
         jobs = (await self._session.execute(job_stmt)).scalars().all()
-        existing_jobs_by_run_and_type: dict[
-            tuple[UUID, str], queue_models.AgentJob
-        ] = {}
+        existing_jobs_by_run_and_type: dict[tuple[UUID, str], queue_models.AgentJob] = (
+            {}
+        )
         for job in jobs:
             payload = dict(job.payload or {})
             system_node = payload.get("system")

@@ -116,9 +116,9 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
             continue
         doc_req_id = f"DOC-REQ-{doc_req_match.group(1)}"
 
-        assert doc_req_id not in rows, (
-            f"Duplicate DOC-REQ traceability row in {traceability_path}: {doc_req_id}"
-        )
+        assert (
+            doc_req_id not in rows
+        ), f"Duplicate DOC-REQ traceability row in {traceability_path}: {doc_req_id}"
 
         validation_value = cells[validation_col].strip()
         normalized_validation = _normalize_validation_value(validation_value)

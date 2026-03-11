@@ -10,15 +10,14 @@ from moonmind.config.settings import settings
 
 from .artifact_store import ArtifactStore
 from .contracts import StageExecutionDecision
+from .tool_registry import ToolRegistryError, ToolRegistrySnapshot
+from .tool_registry import create_registry_snapshot as create_contract_registry_snapshot
 from .tool_registry import (
-    ToolRegistryError,
-    ToolRegistrySnapshot,
-    create_registry_snapshot as create_contract_registry_snapshot,
     load_registry_snapshot_from_artifact as load_contract_registry_snapshot_from_artifact,
-    load_tool_registry as load_contract_tool_registry,
-    parse_tool_registry as parse_contract_tool_registry,
-    validate_tool_registry as validate_contract_tool_registry,
 )
+from .tool_registry import load_tool_registry as load_contract_tool_registry
+from .tool_registry import parse_tool_registry as parse_contract_tool_registry
+from .tool_registry import validate_tool_registry as validate_contract_tool_registry
 
 SkillRegistryError = ToolRegistryError
 SkillRegistrySnapshot = ToolRegistrySnapshot

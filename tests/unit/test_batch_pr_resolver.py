@@ -428,12 +428,12 @@ def test_build_queue_request_skill_contract() -> None:
     assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
 
     # Legacy / wrong fields must NOT be present
-    assert "id" not in skill, (
-        "skill.id is the legacy field; must not be sent to Temporal"
-    )
-    assert "args" not in skill, (
-        "skill.args is legacy; inputs now live at task-node level"
-    )
+    assert (
+        "id" not in skill
+    ), "skill.id is the legacy field; must not be sent to Temporal"
+    assert (
+        "args" not in skill
+    ), "skill.args is legacy; inputs now live at task-node level"
 
     # inputs live at the task-node level, not inside skill
     inputs = task.get("inputs")
@@ -457,9 +457,9 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
 
     # Wrong nesting must NOT be present
     skill = task["skill"]
-    assert "requiredCapabilities" not in skill, (
-        "requiredCapabilities must not be nested inside skill"
-    )
+    assert (
+        "requiredCapabilities" not in skill
+    ), "requiredCapabilities must not be nested inside skill"
 
 
 def test_build_queue_request_skill_version_passthrough() -> None:

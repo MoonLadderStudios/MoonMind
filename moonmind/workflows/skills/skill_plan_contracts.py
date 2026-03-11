@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
+from .tool_plan_contracts import Step as SkillInvocation
+from .tool_plan_contracts import ToolDefinition as SkillDefinition
+from .tool_plan_contracts import ToolExecutorBinding as SkillExecutorBinding
+from .tool_plan_contracts import ToolFailure as SkillFailure
+from .tool_plan_contracts import ToolResult as SkillResult
 from .tool_plan_contracts import *  # noqa: F401,F403
-from .tool_plan_contracts import (
-    Step as SkillInvocation,
-    ToolDefinition as SkillDefinition,
-    ToolExecutorBinding as SkillExecutorBinding,
-    ToolFailure as SkillFailure,
-    ToolResult as SkillResult,
-    parse_step as parse_skill_invocation,
-    parse_tool_definition as parse_skill_definition,
-)
+from .tool_plan_contracts import parse_step as parse_skill_invocation
+from .tool_plan_contracts import parse_tool_definition as parse_skill_definition
 
 __all__ = [
     "ARTIFACT_REF_PREFIX",

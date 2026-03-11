@@ -116,7 +116,9 @@ async def get_or_create_default_user(
         user = await user_manager.get(default_user_uuid)
         if user:
             return user
-    except Exception:  # Catch potential errors if user_manager.get fails for non-existent user (though it usually returns None)
+    except (
+        Exception
+    ):  # Catch potential errors if user_manager.get fails for non-existent user (though it usually returns None)
         pass  # User not found by ID, proceed to check by email or create
 
     # Attempt to get user by email if not found by ID
