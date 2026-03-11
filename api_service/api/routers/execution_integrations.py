@@ -246,6 +246,7 @@ async def ingest_integration_callback(
                     namespace=target_record.namespace,
                     workflow_id=target_record.workflow_id,
                     run_id=target_record.run_id,
+                    link_type=f"integration.{integration_name}.callback",
                 ),
                 integration_name=str(integration_name).strip().lower(),
                 correlation_id=(target_record.integration_state or {}).get(

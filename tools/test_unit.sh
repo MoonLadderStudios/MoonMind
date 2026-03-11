@@ -50,7 +50,7 @@ else
     echo "Warning: pytest-xdist is not installed; running unit tests without parallel workers." >&2
 fi
 
-"$PYTHON_BIN" -m pytest -q "${PYTEST_PARALLEL_ARGS[@]}" tests/unit
+"$PYTHON_BIN" -m pytest -q "${PYTEST_PARALLEL_ARGS[@]:-}" tests/unit
 
 if command -v node >/dev/null 2>&1; then
     for test_file in \

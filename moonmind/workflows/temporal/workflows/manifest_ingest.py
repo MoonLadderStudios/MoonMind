@@ -11,8 +11,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 
-with workflow.unsafe.imports_passed_through():
-    from moonmind.workflows.temporal.activity_catalog import WORKFLOW_TASK_QUEUE
+WORKFLOW_TASK_QUEUE = "mm.workflow"
 
 WORKFLOW_NAME = "MoonMind.ManifestIngest"
 

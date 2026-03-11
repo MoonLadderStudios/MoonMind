@@ -82,10 +82,9 @@ def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
 
 
-async def get_temporal_client(
-    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
-) -> Client:
-    return await adapter.get_client()
+async def _lazy_get_temporal_client() -> Client:
+    """Lazy helper — resolves the Temporal client on demand without DI."""
+    return await get_temporal_client_adapter().get_client()
 
 
 def _is_execution_admin(user: User | None) -> bool:
@@ -126,17 +125,25 @@ def _manifest_attr(manifest_status, field: str, default=None):
 
 
 def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
-    owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
+    attr_val = search_attributes.get("mm_owner_type")
+    if isinstance(attr_val, list) and attr_val:
+        attr_val = attr_val[0]
+    owner_type = str(attr_val or "").strip().lower()
     if owner_type in _ALLOWED_OWNER_TYPES:
         return owner_type
-    owner_id = str(record.owner_id or "").strip().lower()
+
+    owner_id_val = search_attributes.get("mm_owner_id")
+    if isinstance(owner_id_val, list) and owner_id_val:
+        owner_id_val = owner_id_val[0]
+    owner_id = str(owner_id_val or record.owner_id or "").strip().lower()
     return "system" if owner_id == "system" or not owner_id else "user"
 
 
 def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
-    entry = str(
-        search_attributes.get("mm_entry") or getattr(record, "entry", "")
-    ).strip()
+    attr_val = search_attributes.get("mm_entry")
+    if isinstance(attr_val, list) and attr_val:
+        attr_val = attr_val[0]
+    entry = str(attr_val or getattr(record, "entry", "")).strip()
     if entry:
         return entry.lower()
 
@@ -702,7 +709,6 @@ async def list_executions(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
-    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
     if _is_execution_admin(user):
         effective_owner_type = owner_type
@@ -732,7 +738,7 @@ async def list_executions(
         try:
             from api_service.core.sync import map_temporal_state_to_projection
 
-            client = temporal_client
+            client = await _lazy_get_temporal_client()
 
             def escape_val(v: str) -> str:
                 return v.replace('"', '\\"')
@@ -759,7 +765,7 @@ async def list_executions(
 
             items = []
             async for wf in client.list_workflows(query=query_str):
-                payload = map_temporal_state_to_projection(wf)
+                payload = await map_temporal_state_to_projection(wf)
                 # We need a record-like object for serialization
                 from types import SimpleNamespace
 
@@ -809,7 +815,7 @@ async def list_executions(
             from api_service.core.sync import sync_temporal_executions_safely
 
             try:
-                client = temporal_client
+                client = await _lazy_get_temporal_client()
                 result.items = await sync_temporal_executions_safely(
                     session, result.items, client
                 )
@@ -851,7 +857,6 @@ async def describe_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
-    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
@@ -859,7 +864,7 @@ async def describe_execution(
 
     if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
         try:
-            client = temporal_client
+            client = await _lazy_get_temporal_client()
             await fetch_and_sync_execution(session, canonical_workflow_id, client)
             await session.commit()
         except RPCError as exc:
@@ -905,6 +910,15 @@ async def update_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> UpdateExecutionResponse:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Execution actions are currently disabled.",
+            },
+        )
+
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -1096,6 +1110,15 @@ async def signal_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Execution actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     try:
@@ -1136,6 +1159,15 @@ async def cancel_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Execution actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
