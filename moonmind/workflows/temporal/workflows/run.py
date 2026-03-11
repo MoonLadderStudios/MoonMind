@@ -261,7 +261,11 @@ class MoonMindRunWorkflow:
         registry_snapshot_ref: Optional[str],
     ) -> None:
         if plan_ref is None:
-            raise ValueError("plan_ref is required for execution stage")
+            raise ValueError(
+                "plan_ref is required for execution stage: the planning stage must "
+                "produce a plan artifact reference before execution can proceed. "
+                "Ensure the planning activity returns a non-None 'plan_ref'."
+            )
 
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
@@ -321,7 +325,8 @@ class MoonMindRunWorkflow:
                 unexecuted = sorted(pending)
                 raise RuntimeError(
                     f"Execution deadlocked: {len(unexecuted)} node(s) could not be "
-                    f"scheduled (unexecuted: {unexecuted}, failures: {self._failures})"
+                    f"scheduled (plan_ref={plan_ref!r}, unexecuted: {unexecuted}, "
+                    f"failures: {self._failures})"
                 )
 
             while ready and len(running) < max_concurrency:
