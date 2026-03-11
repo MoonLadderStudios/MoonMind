@@ -90,8 +90,8 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
-        workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref = self._initialize_from_payload(
-            input_payload
+        workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref = (
+            self._initialize_from_payload(input_payload)
         )
         workflow.logger.info(
             "Starting MoonMind.Run workflow",
@@ -106,11 +106,13 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        resolved_plan_ref, resolved_registry_snapshot_ref = await self._run_planning_stage(
-            parameters=parameters,
-            input_ref=input_ref,
-            plan_ref=plan_ref,
-            registry_snapshot_ref=registry_snapshot_ref,
+        resolved_plan_ref, resolved_registry_snapshot_ref = (
+            await self._run_planning_stage(
+                parameters=parameters,
+                input_ref=input_ref,
+                plan_ref=plan_ref,
+                registry_snapshot_ref=registry_snapshot_ref,
+            )
         )
         await self._run_execution_stage(
             parameters=parameters,
@@ -235,7 +237,11 @@ class MoonMindRunWorkflow:
         return resolved_plan_ref, resolved_registry_snapshot_ref
 
     async def _run_execution_stage(
-        self, *, parameters: dict[str, Any], plan_ref: Optional[str], registry_snapshot_ref: Optional[str]
+        self,
+        *,
+        parameters: dict[str, Any],
+        plan_ref: Optional[str],
+        registry_snapshot_ref: Optional[str],
     ) -> None:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1

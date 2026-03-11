@@ -483,7 +483,7 @@ class TemporalPlanActivities:
         )
         return PlanGenerateActivityResult(
             plan_ref=plan_ref,
-            registry_snapshot_ref=snapshot.artifact_ref if snapshot else None
+            registry_snapshot_ref=snapshot.artifact_ref if snapshot else None,
         )
 
     async def plan_validate(

@@ -67,11 +67,13 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
 
-    resolved_plan_ref, resolved_registry_snapshot_ref = await workflow._run_planning_stage(
-        parameters={"repo": "MoonLadderStudios/MoonMind"},
-        input_ref="art_input_1",
-        plan_ref=None,
-        registry_snapshot_ref=None,
+    resolved_plan_ref, resolved_registry_snapshot_ref = (
+        await workflow._run_planning_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            input_ref="art_input_1",
+            plan_ref=None,
+            registry_snapshot_ref=None,
+        )
     )
 
     assert captured["activity_type"] == "plan.generate"
