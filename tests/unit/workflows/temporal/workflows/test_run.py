@@ -1,5 +1,5 @@
-import unittest
 import json
+import unittest
 from typing import Any, Dict
 
 import pytest
@@ -151,7 +151,11 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue=LLM_TASK_QUEUE,
-                    activities=[mock_plan_generate, mock_artifact_read, mock_skill_execute],
+                    activities=[
+                        mock_plan_generate,
+                        mock_artifact_read,
+                        mock_skill_execute,
+                    ],
                 ),
                 Worker(
                     env.client,
@@ -205,7 +209,11 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue=LLM_TASK_QUEUE,
-                    activities=[mock_plan_generate, mock_artifact_read, mock_skill_execute],
+                    activities=[
+                        mock_plan_generate,
+                        mock_artifact_read,
+                        mock_skill_execute,
+                    ],
                 ),
                 Worker(
                     env.client,

@@ -238,9 +238,11 @@ class MoonMindRunWorkflow:
         plan_dict = (
             json.loads(plan_payload.decode("utf-8"))
             if isinstance(plan_payload, bytes)
-            else json.loads(plan_payload)
-            if isinstance(plan_payload, str)
-            else plan_payload
+            else (
+                json.loads(plan_payload)
+                if isinstance(plan_payload, str)
+                else plan_payload
+            )
         )
         if not isinstance(plan_dict, Mapping):
             raise ValueError("plan_ref must resolve to a JSON object")

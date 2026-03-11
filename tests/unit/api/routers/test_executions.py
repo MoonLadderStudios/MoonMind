@@ -39,6 +39,7 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNa
     }
     if not user_dependencies:
         user_dependencies = {get_current_user()}
+
     def _current_user() -> SimpleNamespace:
         return mock_user
 
