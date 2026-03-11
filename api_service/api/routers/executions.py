@@ -126,16 +126,26 @@ def _manifest_attr(manifest_status, field: str, default=None):
 
 
 def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
-    owner_type = str(search_attributes.get("mm_owner_type") or "").strip().lower()
+    attr_val = search_attributes.get("mm_owner_type")
+    if isinstance(attr_val, list) and attr_val:
+        attr_val = attr_val[0]
+    owner_type = str(attr_val or "").strip().lower()
     if owner_type in _ALLOWED_OWNER_TYPES:
         return owner_type
-    owner_id = str(record.owner_id or "").strip().lower()
+    
+    owner_id_val = search_attributes.get("mm_owner_id")
+    if isinstance(owner_id_val, list) and owner_id_val:
+        owner_id_val = owner_id_val[0]
+    owner_id = str(owner_id_val or record.owner_id or "").strip().lower()
     return "system" if owner_id == "system" or not owner_id else "user"
 
 
 def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
+    attr_val = search_attributes.get("mm_entry")
+    if isinstance(attr_val, list) and attr_val:
+        attr_val = attr_val[0]
     entry = str(
-        search_attributes.get("mm_entry") or getattr(record, "entry", "")
+        attr_val or getattr(record, "entry", "")
     ).strip()
     if entry:
         return entry.lower()

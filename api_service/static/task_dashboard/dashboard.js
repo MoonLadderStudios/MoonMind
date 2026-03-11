@@ -4040,7 +4040,22 @@
           params.set("integration", filterState.integration);
         }
         const temporalListEndpoint = temporalSourceConfig.list || "/api/executions";
-        const payload = await fetchJson(`${temporalListEndpoint}?${params.toString()}`);
+        let payload;
+        try {
+          payload = await fetchJson(`${temporalListEndpoint}?${params.toString()}`);
+        } catch (error) {
+          if (!pageActive) {
+            return;
+          }
+          console.error("failed to load temporal executions source", error);
+          setView(
+            "Tasks List",
+            "Temporal-backed tasks with exact Temporal pagination.",
+            `<div class="notice error">Failed to load tasks: ${escapeHtml(error.message || "Unknown error")}</div>`,
+            { showAutoRefreshControls: true },
+          );
+          return;
+        }
         if (!pageActive) {
           return;
         }
@@ -4100,7 +4115,22 @@
           ).catch(() => ({ items: [] })),
         );
       }
-      const [payload, orchestratorPayload, temporalPayload] = await Promise.all(requests);
+      let payload, orchestratorPayload, temporalPayload;
+      try {
+        [payload, orchestratorPayload, temporalPayload] = await Promise.all(requests);
+      } catch (error) {
+        if (!pageActive) {
+          return;
+        }
+        console.error("failed to load unified queue sources", error);
+        setView(
+          "Tasks List",
+          "Unified tasks across available execution sources.",
+          `<div class="notice error">Failed to load tasks: ${escapeHtml(error.message || "Unknown error")}</div>`,
+          { showAutoRefreshControls: true },
+        );
+        return;
+      }
       if (!pageActive) {
         return;
       }
