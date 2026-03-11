@@ -7,9 +7,12 @@ from typing import Any, Optional, TypedDict
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
-from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
-from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE, build_default_activity_catalog
 
+from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
+from moonmind.workflows.temporal.activity_catalog import (
+    ARTIFACTS_TASK_QUEUE,
+    build_default_activity_catalog,
+)
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -282,7 +285,9 @@ class MoonMindRunWorkflow:
 
                 # We could resolve a real route here, but standard skill route goes to LLM_TASK_QUEUE
                 # For generic routing (since we don't have SkillRegistry parsed inside workflow)
-                route = build_default_activity_catalog().resolve_activity("mm.skill.execute")
+                route = build_default_activity_catalog().resolve_activity(
+                    "mm.skill.execute"
+                )
 
                 task = asyncio.create_task(
                     workflow.execute_activity(
@@ -297,13 +302,21 @@ class MoonMindRunWorkflow:
                             },
                         },
                         task_queue=route.task_queue,
-                        start_to_close_timeout=timedelta(seconds=route.timeouts.start_to_close_seconds),
-                        schedule_to_close_timeout=timedelta(seconds=route.timeouts.schedule_to_close_seconds),
+                        start_to_close_timeout=timedelta(
+                            seconds=route.timeouts.start_to_close_seconds
+                        ),
+                        schedule_to_close_timeout=timedelta(
+                            seconds=route.timeouts.schedule_to_close_seconds
+                        ),
                         retry_policy=RetryPolicy(
                             maximum_attempts=route.retries.max_attempts,
                             initial_interval=timedelta(seconds=5),
-                            maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
-                            non_retryable_error_types=list(route.retries.non_retryable_error_codes),
+                            maximum_interval=timedelta(
+                                seconds=route.retries.max_interval_seconds
+                            ),
+                            non_retryable_error_types=list(
+                                route.retries.non_retryable_error_codes
+                            ),
                         ),
                     )
                 )
@@ -312,7 +325,9 @@ class MoonMindRunWorkflow:
             if not running:
                 continue
 
-            done, _ = await asyncio.wait(running.keys(), return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                running.keys(), return_when=asyncio.FIRST_COMPLETED
+            )
 
             for task in done:
                 node_id = running.pop(task)
@@ -324,8 +339,12 @@ class MoonMindRunWorkflow:
                         outputs = result.get("output_artifacts", [])
                         if outputs and isinstance(outputs[0], dict):
                             self._logs_ref = outputs[0].get("artifact_ref")
-                    elif hasattr(result, "output_artifacts") and result.output_artifacts:
-                        self._logs_ref = getattr(result.output_artifacts[0], "artifact_ref", None)
+                    elif (
+                        hasattr(result, "output_artifacts") and result.output_artifacts
+                    ):
+                        self._logs_ref = getattr(
+                            result.output_artifacts[0], "artifact_ref", None
+                        )
 
                 except ActivityError as e:
                     failures[node_id] = str(e)
