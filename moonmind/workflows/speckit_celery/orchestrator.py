@@ -62,7 +62,6 @@ async def trigger_spec_workflow_run(
     NOTE: Celery dispatch has been removed. This creates the DB record only.
     """
 
-
     from moonmind.config.settings import settings
 
     async with get_async_session_context() as session:
