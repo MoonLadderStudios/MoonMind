@@ -9,7 +9,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
-from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalJulesActivities,
     TemporalPlanActivities,
@@ -77,7 +77,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service, planner=_dummy_planner
             ),
             skill_activities=TemporalSkillActivities(
-                dispatcher=SkillActivityDispatcher()
+                dispatcher=ToolActivityDispatcher()
             ),
             sandbox_activities=TemporalSandboxActivities(
                 artifact_service=artifact_service

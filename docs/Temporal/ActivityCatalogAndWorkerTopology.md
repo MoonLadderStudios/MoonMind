@@ -83,7 +83,7 @@ This subsystem's design maps to the following constitutional principles:
 | **I — One-Click Deployment** | All worker fleets are provisionable as Docker Compose services with only documented prerequisites and minimal secrets. |
 | **II — Avoid Vendor Lock-In** | Artifact storage uses the `TemporalArtifactStore` adapter interface with MinIO/S3-compatible backends by default and explicit override paths for alternates. Integration activities sit behind provider adapter interfaces. |
 | **III — Own Your Data** | Large execution inputs/outputs remain portable, inspectable artifacts under MoonMind-managed storage rather than provider-specific opaque payloads. |
-| **IV — Skills Are First-Class** | Skill activities must declare inputs, outputs, external dependencies, and failure modes via `SkillDefinition` and `SkillPolicies`. |
+| **IV — Skills Are First-Class** | Skill activities must declare inputs, outputs, external dependencies, and failure modes via `ToolDefinition` and `SkillPolicies`. |
 | **V — Bittersweet Lesson** | Activity Type names are the stable contracts; implementations are replaceable. Design for deletion. |
 | **VI — Powerful Runtime Configurability** | Queue routing, backend selection, retention policy, and worker capability bindings are configuration-driven and must remain observable in run metadata/logging. |
 | **VII — Modular Architecture** | Fleet segmentation enforces clear module boundaries. Core orchestration depends on stable Activity Type interfaces, not vendor specifics. |
@@ -124,7 +124,7 @@ Activity Type names use dotted namespaces:
 
 * `artifact.*` for artifact store operations
 * `plan.*` for plan creation/validation (planning is a Skill that returns a Plan)
-* `mm.skill.execute` for the default registry-dispatched skill executor
+* `mm.tool.execute` for the default registry-dispatched skill executor
 * `sandbox.*` for OS/process execution and repo operations
 * `integration.<provider>.*` for external systems
 * `system.*` for housekeeping / reconciliation (rare; prefer Schedules + workflows)
@@ -139,7 +139,7 @@ Curated exceptions may bind a skill directly to an explicit Activity Type when t
 * `artifact.link`
 * `plan.generate`
 * `plan.validate`
-* `mm.skill.execute`
+* `mm.tool.execute`
 * `sandbox.run_command`
 * `integration.jules.start`
 * `integration.jules.status`
@@ -177,7 +177,7 @@ These values should come from the Temporal runtime/activity context for logging,
 * `ArtifactRef` — see `moonmind/workflows/temporal/artifacts.py` (`artifact_ref_v`, `artifact_id`, `sha256`, `size_bytes`, `content_type`, `encryption`)
 * `ExecutionRef` — see `moonmind/workflows/temporal/artifacts.py` (`namespace`, `workflow_id`, `run_id`, `link_type`, `label`, `created_by_activity_type`, `created_by_worker`)
 * `StageExecutionDecision` / `StageExecutionOutcome` — see `moonmind/workflows/skills/contracts.py`
-* `PlanDefinition`, `SkillDefinition`, `SkillPolicies` — see `moonmind/workflows/skills/skill_plan_contracts.py`
+* `PlanDefinition`, `ToolDefinition`, `SkillPolicies` — see `moonmind/workflows/skills/tool_plan_contracts.py`
 
 ---
 
@@ -240,9 +240,9 @@ Key constraints:
 Core Activities:
 
 * `plan.generate(inputs_ref, parameters) -> plan_ref`
-* `plan.validate(plan_ref, registry_snapshot_ref) -> validated_plan_ref | SkillFailure`
+* `plan.validate(plan_ref, registry_snapshot_ref) -> validated_plan_ref | ToolFailure`
 
-The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/skill_plan_contracts.py`): a DAG of `SkillInvocation` nodes connected by `PlanEdge` dependencies. Each node references a `SkillDefinition` with declared inputs, outputs, and `SkillPolicies` (retries, timeouts, failure modes).
+The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/tool_plan_contracts.py`): a DAG of `Step` nodes connected by `PlanEdge` dependencies. Each node references a `ToolDefinition` with declared inputs, outputs, and `SkillPolicies` (retries, timeouts, failure modes).
 
 Worker queue: typically `mm.activity.llm` for LLM planners, but non-LLM planners may run on `mm.activity.sandbox` or `mm.activity.integrations` depending on implementation.
 
@@ -254,7 +254,7 @@ Key constraints:
 
 ---
 
-### 6.3 Skill execution activities (`mm.skill.execute` + curated explicit types)
+### 6.3 Tool execution activities (`mm.tool.execute` + curated explicit types)
 
 **Purpose:** Execute a specific skill; this is the core unit of "doing work" in MoonMind.
 
@@ -264,7 +264,7 @@ MoonMind uses a **hybrid activity binding model**:
 
 **Default path: registry-dispatched executor**
 
-* `mm.skill.execute(invocation_payload) -> SkillResult`
+* `mm.tool.execute(invocation_payload) -> ToolResult`
 
 Pros:
 
@@ -285,7 +285,7 @@ Examples:
 * `integration.jules.*`
 * other explicit types declared by the Skill Registry when stronger isolation, least-privilege, or specialized worker code is required
 
-**Recommendation:** Default to `mm.skill.execute`; bind a skill directly to an explicit Activity Type only when the registry declares a concrete operational reason.
+**Recommendation:** Default to `mm.tool.execute`; bind a skill directly to an explicit Activity Type only when the registry declares a concrete operational reason.
 
 Worker queue: depends on skill capability mapping (see routing rules below).
 
@@ -358,7 +358,7 @@ Workflows select Activity routing via **Activity Options**.
 
 Skill Registry (or equivalent config) must map each Skill to:
 
-* Activity Type (`mm.skill.execute` by default, or a curated explicit type)
+* Activity Type (`mm.tool.execute` by default, or a curated explicit type)
 * Required capability class:
 
   * `llm`
@@ -582,7 +582,7 @@ If using OpenTelemetry:
    * `plan.validate` as the authoritative deep-validation gate before execution
 4. Add default skill dispatch:
 
-   * `mm.skill.execute` backed by the pinned Skill Registry snapshot
+   * `mm.tool.execute` backed by the pinned Skill Registry snapshot
 5. Add sandbox fleet:
 
    * `sandbox.run_command` with heartbeats and strict isolation
@@ -626,7 +626,7 @@ These were previously open questions; decisions are now recorded:
 
 **Skills**
 
-* `mm.skill.execute`
+* `mm.tool.execute`
 
 **Sandbox** *(phase 4)*
 

@@ -5,7 +5,7 @@
 
 ## Summary
 
-Align `specs/015-skills-workflow` with current MoonMind runtime strategy by using canonical workflow stage names, documenting shared-skills workspace behavior, and preserving runtime/API metadata observability (`selectedSkill`, `adapterId`, `executionPath` to API `selected_skill`, `adapter_id`, `execution_path`).  
+Align `specs/015-skills-workflow` with current MoonMind runtime strategy by using canonical workflow stage names, documenting shared-skills workspace behavior, and preserving runtime/API metadata observability (`selectedTool`, `adapterId`, `executionPath` to API `selected_skill`, `adapter_id`, `execution_path`).
 The selected orchestration mode for this feature is **runtime implementation**, so planning explicitly includes production code surfaces under `moonmind/` and validation through `./tools/test_unit.sh` instead of docs-only completion.
 
 ## Technical Context

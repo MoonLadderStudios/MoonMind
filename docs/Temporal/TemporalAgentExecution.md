@@ -131,7 +131,7 @@ async def _run_execution_stage(self, *, parameters, plan_ref):
 ```
 
 The execution stage currently runs `echo executing` via `sandbox.run_command`
-and returns immediately. **It does not invoke `mm.skill.execute` or dispatch
+and returns immediately. **It does not invoke `mm.tool.execute` or dispatch
 any real work.**
 
 ### 2.5 Execution stage (🎯 target design)
@@ -140,13 +140,13 @@ any real work.**
 _run_execution_stage()
   │
   │  1. Read the resolved plan from plan_ref
-  │  2. For each node in plan.nodes (a SkillInvocation):
+  │  2. For each node in plan.nodes (a Step):
   │     a. Resolve routing via TemporalActivityCatalog.resolve_skill()
   │     b. Build the invocation payload
   │     c. Execute activity:
   │
   ▼
-workflow.execute_activity("mm.skill.execute", {
+workflow.execute_activity("mm.tool.execute", {
     invocation_payload: {
         id:           "<node-id>",
         skill:        { name: "pr-resolver", version: "1.0" },
@@ -162,17 +162,17 @@ workflow.execute_activity("mm.skill.execute", {
 TemporalSkillActivities.mm_skill_execute()       ← activity_runtime.py
   │
   │  1. Resolve registry snapshot (from ref or inline)
-  │  2. Parse invocation_payload as SkillInvocation
-  │  3. Delegate to execute_skill_activity() → SkillActivityDispatcher
-  │  4. Return SkillResult { status, outputs, output_artifacts }
+  │  2. Parse invocation_payload as Step
+  │  3. Delegate to execute_tool_activity() → ToolActivityDispatcher
+  │  4. Return ToolResult { status, outputs, output_artifacts }
   │
   ▼
-SkillActivityDispatcher.execute()                ← skill_dispatcher.py
+ToolActivityDispatcher.execute()                ← tool_dispatcher.py
   │
-  │  1. Look up handler by activity_type ("mm.skill.execute")
+  │  1. Look up handler by activity_type ("mm.tool.execute")
   │     or by skill name+version from registry
   │  2. Execute the handler (the actual skill logic)
-  │  3. Return SkillResult
+  │  3. Return ToolResult
 ```
 
 For **generic LLM text instructions** (no specific skill), the plan generator
@@ -215,9 +215,9 @@ inputs. The dispatcher would route this to a generic LLM execution handler.
 }
 ```
 
-### 3.2 `SkillInvocation` contract (plan node level)
+### 3.2 `Step` contract (plan node level)
 
-From `moonmind/workflows/skills/skill_plan_contracts.py`:
+From `moonmind/workflows/skills/tool_plan_contracts.py`:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -235,7 +235,7 @@ Serialized payload form: `{ id, skill: { name, version }, inputs: {...} }`
 |---------------|-------|------------|-------------|
 | `plan.generate` | llm | `mm.activity.llm` | LLM-driven plan generation |
 | `plan.validate` | llm | `mm.activity.llm` | Plan validation against registry |
-| `mm.skill.execute` | by_capability | `mm.activity.llm` (default) | Skill dispatch via registry |
+| `mm.tool.execute` | by_capability | `mm.activity.llm` (default) | Skill dispatch via registry |
 | `sandbox.run_command` | sandbox | `mm.activity.sandbox` | Shell command execution |
 | `sandbox.checkout_repo` | sandbox | `mm.activity.sandbox` | Git repo checkout |
 | `sandbox.apply_patch` | sandbox | `mm.activity.sandbox` | Patch application |
@@ -264,9 +264,9 @@ Serialized payload form: `{ id, skill: { name, version }, inputs: {...} }`
 | **`MoonMind.Run` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
 | **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
 | **Execution stage** (`_run_execution_stage`) | ⚠️ **Stub** | Runs `echo executing` only |
-| **`mm.skill.execute` activity** | ✅ Implemented | `TemporalSkillActivities.mm_skill_execute` is wired up |
-| **`SkillActivityDispatcher`** | ✅ Implemented | Routing by activity type and skill name/version |
-| **`SkillInvocation` contract** | ✅ Implemented | Validated dataclass in `skill_plan_contracts.py` |
+| **`mm.tool.execute` activity** | ✅ Implemented | `TemporalSkillActivities.mm_skill_execute` is wired up |
+| **`ToolActivityDispatcher`** | ✅ Implemented | Routing by activity type and skill name/version |
+| **`Step` contract** | ✅ Implemented | Validated dataclass in `tool_plan_contracts.py` |
 | **Activity catalog** | ✅ Implemented | 18 activities, 5 fleets, correct routing |
 | **Worker runtime bindings** | ✅ Implemented | `build_activity_bindings` wires handlers to catalog |
 | **Temporal↔DB state sync** | ✅ Implemented | Projection sync from Temporal visibility |
@@ -279,23 +279,23 @@ Serialized payload form: `{ id, skill: { name, version }, inputs: {...} }`
 
 ## 5. Remaining Work — Tasks and Acceptance Criteria
 
-### Task 1: Wire `_run_execution_stage` to `mm.skill.execute`
+### Task 1: Wire `_run_execution_stage` to `mm.tool.execute`
 
 **The critical missing piece.** Replace the `echo executing` stub with real
 skill dispatch.
 
 **Implementation:**
 1. Read the plan from `plan_ref` (via `artifact.read` activity)
-2. Parse plan nodes as `SkillInvocation` objects
-3. For each node, call `workflow.execute_activity("mm.skill.execute", ...)`
+2. Parse plan nodes as `Step` objects
+3. For each node, call `workflow.execute_activity("mm.tool.execute", ...)`
 4. Handle node-level success/failure and aggregate results
 
 **Acceptance criteria:**
 - [ ] `_run_execution_stage` reads and parses the plan artifact
-- [ ] Each plan node is dispatched as an `mm.skill.execute` activity call
+- [ ] Each plan node is dispatched as an `mm.tool.execute` activity call
 - [ ] Activity routing uses `TemporalActivityCatalog.resolve_skill()` for correct
       task queue and timeout selection
-- [ ] `SkillResult` from each node is captured and logged
+- [ ] `ToolResult` from each node is captured and logged
 - [ ] Plan-level failure policy (`FAIL_FAST` vs `CONTINUE`) is honored
 - [ ] Node dependency edges from `plan.edges` are respected (sequential ordering)
 - [ ] Workflow memo is updated with execution progress
@@ -321,7 +321,7 @@ the system should route to a generic LLM execution path.
 
 ### Task 3: Skill registry availability at runtime
 
-The `mm.skill.execute` handler requires a `SkillRegistrySnapshot` to resolve
+The `mm.tool.execute` handler requires a `ToolRegistrySnapshot` to resolve
 skill definitions, timeouts, and retry policies.
 
 **Acceptance criteria:**
@@ -336,8 +336,8 @@ skill definitions, timeouts, and retry policies.
 - [ ] A test submits a `batch-pr-resolver` style payload via `POST /api/queue/jobs`
 - [ ] The `MoonMind.Run` workflow starts on Temporal
 - [ ] `plan.generate` produces a valid plan with a `pr-resolver` skill node
-- [ ] `mm.skill.execute` dispatches the `pr-resolver` skill
-- [ ] The skill handler executes (even if mocked) and returns a `SkillResult`
+- [ ] `mm.tool.execute` dispatches the `pr-resolver` skill
+- [ ] The skill handler executes (even if mocked) and returns a `ToolResult`
 - [ ] Workflow reaches `succeeded` state
 - [ ] Temporal↔DB sync reflects the final status in the dashboard
 
@@ -352,7 +352,7 @@ skill definitions, timeouts, and retry policies.
 ### Task 6: Error handling and retry semantics
 
 **Acceptance criteria:**
-- [ ] `SkillFailure` exceptions are caught and mapped to `SkillResult.status = "FAILED"`
+- [ ] `ToolFailure` exceptions are caught and mapped to `ToolResult.status = "FAILED"`
 - [ ] Retryable failures respect the retry policy from the skill definition
 - [ ] Non-retryable error codes (`INVALID_INPUT`, `PERMISSION_DENIED`, etc.)
       are propagated without retry
@@ -387,7 +387,7 @@ skill definitions, timeouts, and retry policies.
 │   │                  │          │                                │         │
 │   │    ┌─────────────┘          └──────────────┐                │         │
 │   │    ▼                                       ▼                │         │
-│   │  plan.generate              mm.skill.execute (per node)     │         │
+│   │  plan.generate              mm.tool.execute (per node)     │         │
 │   │  (mm.activity.llm)          (routed by capability)          │         │
 │   │                                       │                     │         │
 │   │                              ┌────────┼────────┐            │         │
