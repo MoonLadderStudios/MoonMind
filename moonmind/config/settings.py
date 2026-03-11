@@ -49,9 +49,6 @@ class DatabaseSettings(BaseSettings):
     )
 
 
-
-
-
 class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
 

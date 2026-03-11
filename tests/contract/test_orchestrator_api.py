@@ -20,7 +20,6 @@ from api_service.db.models import (
     OrchestratorRunArtifactType,
     OrchestratorRunPriority,
     OrchestratorRunStatus,
-    OrchestratorTaskState,
 )
 from api_service.main import app
 from moonmind.config.settings import settings

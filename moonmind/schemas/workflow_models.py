@@ -17,7 +17,6 @@ from api_service.db.models import (
     OrchestratorRunArtifactType,
     OrchestratorRunPriority,
     OrchestratorRunStatus,
-    OrchestratorTaskState,
     SpecWorkflowTaskName,
 )
 
