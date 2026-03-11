@@ -82,10 +82,9 @@ def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
 
 
-async def get_temporal_client(
-    adapter: TemporalClientAdapter = Depends(get_temporal_client_adapter),
-) -> Client:
-    return await adapter.get_client()
+async def _lazy_get_temporal_client() -> Client:
+    """Lazy helper — resolves the Temporal client on demand without DI."""
+    return await get_temporal_client_adapter().get_client()
 
 
 def _is_execution_admin(user: User | None) -> bool:
@@ -710,7 +709,6 @@ async def list_executions(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
-    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionListResponse:
     if _is_execution_admin(user):
         effective_owner_type = owner_type
@@ -740,7 +738,7 @@ async def list_executions(
         try:
             from api_service.core.sync import map_temporal_state_to_projection
 
-            client = temporal_client
+            client = await _lazy_get_temporal_client()
 
             def escape_val(v: str) -> str:
                 return v.replace('"', '\\"')
@@ -817,7 +815,7 @@ async def list_executions(
             from api_service.core.sync import sync_temporal_executions_safely
 
             try:
-                client = temporal_client
+                client = await _lazy_get_temporal_client()
                 result.items = await sync_temporal_executions_safely(
                     session, result.items, client
                 )
@@ -859,7 +857,6 @@ async def describe_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
     session: AsyncSession = Depends(get_async_session),
-    temporal_client: Client = Depends(get_temporal_client),
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
@@ -867,7 +864,7 @@ async def describe_execution(
 
     if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
         try:
-            client = temporal_client
+            client = await _lazy_get_temporal_client()
             await fetch_and_sync_execution(session, canonical_workflow_id, client)
             await session.commit()
         except RPCError as exc:
@@ -913,6 +910,15 @@ async def update_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> UpdateExecutionResponse:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Execution actions are currently disabled.",
+            },
+        )
+
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -1104,6 +1110,15 @@ async def signal_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Execution actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     try:
@@ -1144,6 +1159,15 @@ async def cancel_execution(
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ExecutionModel:
+    if not settings.temporal_dashboard.actions_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "actions_disabled",
+                "message": "Execution actions are currently disabled.",
+            },
+        )
+
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
 
     request = payload or CancelExecutionRequest()
