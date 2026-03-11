@@ -106,7 +106,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 return SkillResult(
                     status="FAILED",
                     outputs={"error": str(e)},
-                    progress={"details": "Failed to checkout repository in auto skill handler"},
+                    progress={
+                        "details": "Failed to checkout repository in auto skill handler"
+                    },
                 )
 
             # 2. Invoke the appropriate CLI (codex/gemini/claude) using local python run_command
