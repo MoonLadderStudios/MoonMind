@@ -1342,10 +1342,10 @@ def _set_stage_execution_payload(
     execution = context.setdefault("skill_execution", {})
     if isinstance(execution, dict):
         execution[stage_name] = {
-            "selectedSkill": selected_skill,
+            "selectedTool": selected_skill,
             "adapterId": adapter_id,
             "executionPath": execution_path,
-            "usedSkills": used_skills,
+            "usedTools": used_skills,
             "usedFallback": used_fallback,
             "shadowModeRequested": shadow_mode_requested,
         }
@@ -1363,10 +1363,10 @@ def _stage_execution_payload(
     if not isinstance(entry, Mapping):
         return {}
     return {
-        "selectedSkill": entry.get("selectedSkill"),
+        "selectedTool": entry.get("selectedTool"),
         "adapterId": entry.get("adapterId"),
         "executionPath": entry.get("executionPath"),
-        "usedSkills": entry.get("usedSkills"),
+        "usedTools": entry.get("usedTools"),
         "usedFallback": entry.get("usedFallback"),
         "shadowModeRequested": entry.get("shadowModeRequested"),
     }

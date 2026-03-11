@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
 from moonmind.config.settings import settings
-from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
 from moonmind.workflows.temporal import (
     ARTIFACTS_FLEET,
     INTEGRATIONS_FLEET,
@@ -79,9 +79,9 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
     assert "OPENAI_API_KEY" in topologies[LLM_FLEET].required_secrets
     assert "JULES_API_KEY" in topologies[INTEGRATIONS_FLEET].required_secrets
     assert topologies[SANDBOX_FLEET].concurrency_limit == 2
-    assert "mm.skill.execute" in topologies[ARTIFACTS_FLEET].activity_types
-    assert "mm.skill.execute" in topologies[SANDBOX_FLEET].activity_types
-    assert "mm.skill.execute" in topologies[INTEGRATIONS_FLEET].activity_types
+    assert "mm.tool.execute" in topologies[ARTIFACTS_FLEET].activity_types
+    assert "mm.tool.execute" in topologies[SANDBOX_FLEET].activity_types
+    assert "mm.tool.execute" in topologies[INTEGRATIONS_FLEET].activity_types
 
 
 def test_registered_workflow_types_include_manifest_ingest():
@@ -119,7 +119,7 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                 artifact_activities=TemporalArtifactActivities(service),
                 plan_activities=TemporalPlanActivities(artifact_service=service),
                 skill_activities=TemporalSkillActivities(
-                    dispatcher=SkillActivityDispatcher()
+                    dispatcher=ToolActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalJulesActivities(
@@ -130,7 +130,7 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
 
             assert bindings
             assert {binding.fleet for binding in bindings} == {ARTIFACTS_FLEET}
-            assert "mm.skill.execute" in {binding.activity_type for binding in bindings}
+            assert "mm.tool.execute" in {binding.activity_type for binding in bindings}
             assert {binding.task_queue for binding in bindings} == {
                 settings.temporal.activity_artifacts_task_queue
             }
@@ -153,7 +153,7 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                 artifact_activities=TemporalArtifactActivities(service),
                 plan_activities=TemporalPlanActivities(artifact_service=service),
                 skill_activities=TemporalSkillActivities(
-                    dispatcher=SkillActivityDispatcher()
+                    dispatcher=ToolActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalJulesActivities(
@@ -165,7 +165,7 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
             mm_skill_bindings = [
                 binding
                 for binding in bindings
-                if binding.activity_type == "mm.skill.execute"
+                if binding.activity_type == "mm.tool.execute"
             ]
             assert len(mm_skill_bindings) == 1
             assert (

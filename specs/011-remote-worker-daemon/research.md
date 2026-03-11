@@ -26,7 +26,7 @@
 
 ## Decision 5: Event payloads include execution metadata
 
-- **Decision**: Emitted worker events include `selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`.
+- **Decision**: Emitted worker events include `selectedTool`, `executionPath`, `usedTools`, `usedFallback`, `shadowModeRequested`.
 - **Rationale**: Brings remote worker observability into parity with umbrella skills-first telemetry expectations.
 - **Alternative rejected**: Summary-only event text was rejected as insufficient for path diagnostics.
 

@@ -24,20 +24,20 @@ from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
-from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
-from moonmind.workflows.skills.skill_plan_contracts import (
+from moonmind.workflows.skills.tool_dispatcher import execute_tool_activity
+from moonmind.workflows.skills.tool_plan_contracts import (
     ActivityExecutionContext,
     ActivityInvocationEnvelope,
     CompactActivityResult,
     ObservabilitySummary,
     PlanDefinition,
-    SkillResult,
+    ToolResult,
     parse_plan_definition,
 )
-from moonmind.workflows.skills.skill_registry import (
-    SkillRegistrySnapshot,
+from moonmind.workflows.skills.tool_registry import (
+    ToolRegistrySnapshot,
     create_registry_snapshot,
-    parse_skill_registry,
+    parse_tool_registry,
 )
 from moonmind.workflows.temporal.activity_catalog import TemporalActivityCatalog
 from moonmind.workflows.temporal.artifacts import (
@@ -56,7 +56,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
 PlanGenerator = Callable[
-    [Any, Mapping[str, Any], SkillRegistrySnapshot | None],
+    [Any, Mapping[str, Any], ToolRegistrySnapshot | None],
     Mapping[str, Any] | PlanDefinition | Awaitable[Mapping[str, Any] | PlanDefinition],
 ]
 JulesClientFactory = Callable[[], JulesClient]
@@ -157,7 +157,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.lifecycle_sweep": ("artifacts", "artifact_lifecycle_sweep"),
     "plan.generate": ("plans", "plan_generate"),
     "plan.validate": ("plans", "plan_validate"),
-    "mm.skill.execute": ("skills", "mm_skill_execute"),
+    "mm.tool.execute": ("skills", "mm_skill_execute"),
     "sandbox.checkout_repo": ("sandbox", "sandbox_checkout_repo"),
     "sandbox.apply_patch": ("sandbox", "sandbox_apply_patch"),
     "sandbox.run_command": ("sandbox", "sandbox_run_command"),
@@ -193,13 +193,13 @@ def _temporal_snapshot_from_payload(
     payload: Mapping[str, Any],
     *,
     artifact_locator: str,
-) -> SkillRegistrySnapshot:
-    skills = parse_skill_registry(payload)
+) -> ToolRegistrySnapshot:
+    skills = parse_tool_registry(payload)
     digest_only = create_registry_snapshot(
         skills=skills,
         artifact_store=InMemoryArtifactStore(),
     )
-    return SkillRegistrySnapshot(
+    return ToolRegistrySnapshot(
         digest=digest_only.digest,
         artifact_ref=artifact_locator,
         skills=skills,
@@ -417,7 +417,7 @@ class TemporalPlanActivities:
                 principal=principal,
             )
 
-        snapshot: SkillRegistrySnapshot | None = None
+        snapshot: ToolRegistrySnapshot | None = None
         if registry_snapshot_ref is not None:
             registry_payload = await _read_json_artifact(
                 self._artifact_service,
@@ -530,7 +530,7 @@ class TemporalPlanActivities:
 
 
 class TemporalSkillActivities:
-    """Implementation helper for ``mm.skill.execute``."""
+    """Implementation helper for ``mm.tool.execute``."""
 
     def __init__(self, *, dispatcher: Any) -> None:
         self._dispatcher = dispatcher
@@ -539,12 +539,12 @@ class TemporalSkillActivities:
         self,
         *,
         invocation_payload: Mapping[str, Any],
-        registry_snapshot: SkillRegistrySnapshot | None = None,
+        registry_snapshot: ToolRegistrySnapshot | None = None,
         registry_snapshot_ref: ArtifactRef | str | None = None,
         artifact_service: TemporalArtifactService | None = None,
         principal: str | None = None,
         context: Mapping[str, Any] | None = None,
-    ) -> SkillResult:
+    ) -> ToolResult:
         resolved_snapshot = registry_snapshot
         if resolved_snapshot is None:
             if (
@@ -569,7 +569,7 @@ class TemporalSkillActivities:
                 artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
             )
 
-        return await execute_skill_activity(
+        return await execute_tool_activity(
             invocation_payload=invocation_payload,
             registry_snapshot=resolved_snapshot,
             dispatcher=self._dispatcher,
@@ -1360,13 +1360,13 @@ def build_activity_bindings(
                 continue
             if requested_fleets and fleet.fleet not in requested_fleets:
                 continue
-            binding_key = ("mm.skill.execute", fleet.fleet)
+            binding_key = ("mm.tool.execute", fleet.fleet)
             if binding_key in bound_keys:
                 continue
             func = getattr(type(skill_activities), "mm_skill_execute", None)
             if func is None:
                 raise TemporalActivityRuntimeError(
-                    f"Activity 'mm.skill.execute' requires handler "
+                    f"Activity 'mm.tool.execute' requires handler "
                     f"'mm_skill_execute' on {type(skill_activities).__name__}"
                 )
             if not hasattr(func, "__temporal_activity_definition"):
@@ -1384,13 +1384,13 @@ def build_activity_bindings(
                 _wrapper.__qualname__ = func.__qualname__
                 _wrapper.__doc__ = func.__doc__
 
-                decorated_func = activity.defn(name="mm.skill.execute")(_wrapper)
+                decorated_func = activity.defn(name="mm.tool.execute")(_wrapper)
                 setattr(type(skill_activities), "mm_skill_execute", decorated_func)
 
             handler = getattr(skill_activities, "mm_skill_execute")
             bindings.append(
                 TemporalActivityBinding(
-                    activity_type="mm.skill.execute",
+                    activity_type="mm.tool.execute",
                     task_queue=fleet.task_queues[0],
                     fleet=fleet.fleet,
                     handler=handler,

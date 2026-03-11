@@ -187,7 +187,7 @@ class SkillPolicies:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillExecutorBinding:
+class ToolExecutorBinding:
     """Execution binding of a skill to activity type and selector mode."""
 
     activity_type: str
@@ -197,7 +197,7 @@ class SkillExecutorBinding:
     def __post_init__(self) -> None:
         _ensure_non_empty(self.activity_type, field_name="executor.activity_type")
         _ensure_non_empty(self.selector_mode, field_name="executor.selector.mode")
-        if self.activity_type == "mm.skill.execute":
+        if self.activity_type == "mm.tool.execute":
             if self.explicit_binding_reason is not None:
                 raise ContractValidationError(
                     "invalid_contract",
@@ -222,7 +222,7 @@ class SkillExecutorBinding:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillDefinition:
+class ToolDefinition:
     """Validated skill contract stored in the registry snapshot."""
 
     name: str
@@ -230,7 +230,7 @@ class SkillDefinition:
     description: str
     input_schema: Mapping[str, Any]
     output_schema: Mapping[str, Any]
-    executor: SkillExecutorBinding
+    executor: ToolExecutorBinding
     required_capabilities: tuple[str, ...]
     policies: SkillPolicies
     allowed_roles: tuple[str, ...] = ()
@@ -271,7 +271,7 @@ class SkillDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillInvocation:
+class Step:
     """Plan node invocation of a skill contract."""
 
     id: str
@@ -309,14 +309,14 @@ class SkillInvocation:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillFailure(Exception):
+class ToolFailure(Exception):
     """Normalized failure envelope for skill execution."""
 
     error_code: str
     message: str
     retryable: bool
     details: Mapping[str, Any] = field(default_factory=dict)
-    cause: "SkillFailure | None" = None
+    cause: "ToolFailure | None" = None
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.error_code, field_name="error_code")
@@ -335,7 +335,7 @@ class SkillFailure(Exception):
 
 
 @dataclass(frozen=True, slots=True)
-class SkillResult:
+class ToolResult:
     """Structured result for one skill invocation."""
 
     status: str
@@ -616,7 +616,7 @@ class PlanDefinition:
     plan_version: str
     metadata: PlanMetadata
     policy: PlanPolicy
-    nodes: tuple[SkillInvocation, ...]
+    nodes: tuple[Step, ...]
     edges: tuple[PlanEdge, ...]
 
     def __post_init__(self) -> None:
@@ -640,14 +640,14 @@ class PlanDefinition:
         }
 
 
-def parse_skill_invocation(payload: Mapping[str, Any]) -> SkillInvocation:
-    """Parse one plan node payload into ``SkillInvocation``."""
+def parse_step(payload: Mapping[str, Any]) -> Step:
+    """Parse one plan node payload into ``Step``."""
 
     skill = payload.get("skill")
     if not isinstance(skill, Mapping):
         raise ContractValidationError("invalid_plan", "node.skill must be an object")
 
-    return SkillInvocation(
+    return Step(
         id=str(payload.get("id") or "").strip(),
         skill_name=str(skill.get("name") or "").strip(),
         skill_version=str(skill.get("version") or "").strip(),
@@ -689,7 +689,7 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
     if not isinstance(edges_raw, list):
         raise ContractValidationError("invalid_plan", "edges must be an array")
 
-    nodes = tuple(parse_skill_invocation(node) for node in nodes_raw)
+    nodes = tuple(parse_step(node) for node in nodes_raw)
 
     parsed_edges: list[PlanEdge] = []
     for edge in edges_raw:
@@ -727,7 +727,7 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
     )
 
 
-def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
+def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
     """Parse and validate a registry skill definition payload."""
 
     if not isinstance(payload, Mapping):
@@ -787,13 +787,13 @@ def parse_skill_definition(payload: Mapping[str, Any]) -> SkillDefinition:
             "policies.retries.non_retryable_error_codes must be an array",
         )
 
-    return SkillDefinition(
+    return ToolDefinition(
         name=str(payload.get("name") or "").strip(),
         version=str(payload.get("version") or "").strip(),
         description=str(payload.get("description") or "").strip(),
         input_schema=dict(inputs["schema"]),
         output_schema=dict(outputs["schema"]),
-        executor=SkillExecutorBinding(
+        executor=ToolExecutorBinding(
             activity_type=str(executor.get("activity_type") or "").strip(),
             selector_mode=str(
                 (
@@ -852,15 +852,15 @@ __all__ = [
     "PlanMetadata",
     "PlanPolicy",
     "PlanRegistrySnapshot",
-    "SkillDefinition",
-    "SkillExecutorBinding",
-    "SkillFailure",
-    "SkillInvocation",
+    "ToolDefinition",
+    "ToolExecutorBinding",
+    "ToolFailure",
+    "Step",
     "SkillPolicies",
     "SkillPolicyRetries",
     "SkillPolicyTimeouts",
-    "SkillResult",
+    "ToolResult",
     "parse_plan_definition",
-    "parse_skill_definition",
-    "parse_skill_invocation",
+    "parse_tool_definition",
+    "parse_step",
 ]

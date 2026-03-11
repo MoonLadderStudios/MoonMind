@@ -351,10 +351,10 @@ def test_spec_automation_task_state_defaults_skill_metadata():
     metadata = state.get_skill_execution_metadata()
 
     assert metadata is not None
-    assert metadata["selectedSkill"] == "speckit"
+    assert metadata["selectedTool"] == "speckit"
     assert metadata["adapterId"] == "speckit"
     assert metadata["executionPath"] == "skill"
-    assert metadata["usedSkills"] is True
+    assert metadata["usedTools"] is True
     assert metadata["usedFallback"] is False
 
 
@@ -370,10 +370,10 @@ def test_spec_automation_task_state_honors_explicit_skill_metadata():
     )
     state.set_metadata(
         {
-            "selectedSkill": "custom-skill",
+            "selectedTool": "custom-skill",
             "adapterId": "custom-adapter",
             "executionPath": "direct_fallback",
-            "usedSkills": True,
+            "usedTools": True,
             "usedFallback": True,
             "shadowModeRequested": False,
         }
@@ -382,10 +382,10 @@ def test_spec_automation_task_state_honors_explicit_skill_metadata():
     metadata = state.get_skill_execution_metadata()
 
     assert metadata == {
-        "selectedSkill": "custom-skill",
+        "selectedTool": "custom-skill",
         "adapterId": "custom-adapter",
         "executionPath": "direct_fallback",
-        "usedSkills": True,
+        "usedTools": True,
         "usedFallback": True,
         "shadowModeRequested": False,
     }
@@ -403,7 +403,7 @@ def test_spec_automation_task_state_backfills_blank_speckit_adapter_fields():
     )
     state.set_metadata(
         {
-            "selectedSkill": "speckit",
+            "selectedTool": "speckit",
             "adapterId": "   ",
             "executionPath": "   ",
         }
@@ -412,10 +412,10 @@ def test_spec_automation_task_state_backfills_blank_speckit_adapter_fields():
     metadata = state.get_skill_execution_metadata()
 
     assert metadata is not None
-    assert metadata["selectedSkill"] == "speckit"
+    assert metadata["selectedTool"] == "speckit"
     assert metadata["adapterId"] == "speckit"
     assert metadata["executionPath"] == "skill"
-    assert metadata["usedSkills"] is True
+    assert metadata["usedTools"] is True
     assert metadata["usedFallback"] is False
 
 
@@ -434,10 +434,10 @@ def test_spec_automation_task_state_keeps_non_speckit_partial_metadata():
     metadata = state.get_skill_execution_metadata()
 
     assert metadata == {
-        "selectedSkill": None,
+        "selectedTool": None,
         "adapterId": None,
         "executionPath": "direct_only",
-        "usedSkills": False,
+        "usedTools": False,
         "usedFallback": False,
         "shadowModeRequested": None,
     }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definition
+from moonmind.workflows.skills.tool_plan_contracts import parse_tool_definition
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_FLEET,
     ARTIFACTS_TASK_QUEUE,
@@ -22,13 +22,13 @@ from moonmind.workflows.temporal.activity_catalog import (
 
 def _skill_definition(
     *,
-    activity_type: str = "mm.skill.execute",
+    activity_type: str = "mm.tool.execute",
     capabilities: list[str] | None = None,
     start_to_close_seconds: int = 120,
     schedule_to_close_seconds: int = 300,
     binding_reason: str | None = None,
 ) -> object:
-    return parse_skill_definition(
+    return parse_tool_definition(
         {
             "name": "test.skill",
             "version": "1.0.0",

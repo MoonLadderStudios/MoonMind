@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from moonmind.config.settings import TemporalSettings, settings
-from moonmind.workflows.skills.skill_plan_contracts import (
-    SkillDefinition,
+from moonmind.workflows.skills.tool_plan_contracts import (
+    ToolDefinition,
     SkillPolicies,
 )
 
@@ -195,9 +195,9 @@ class TemporalActivityCatalog:
             heartbeat_required=entry.heartbeat_required,
         )
 
-    def resolve_skill(self, definition: SkillDefinition) -> TemporalActivityRoute:
+    def resolve_skill(self, definition: ToolDefinition) -> TemporalActivityRoute:
         activity_type = definition.executor.activity_type
-        if activity_type != "mm.skill.execute":
+        if activity_type != "mm.tool.execute":
             route = self.resolve_activity(activity_type)
         else:
             fleet, capability_class = _skill_route_family(
@@ -388,7 +388,7 @@ def build_default_activity_catalog(
             ),
         ),
         TemporalActivityDefinition(
-            activity_type="mm.skill.execute",
+            activity_type="mm.tool.execute",
             family="skill",
             capability_class="by_capability",
             task_queue=cfg.activity_llm_task_queue,
@@ -485,7 +485,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == ARTIFACTS_FLEET
                 )
-                + ["mm.skill.execute"]
+                + ["mm.tool.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -510,7 +510,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == SANDBOX_FLEET
                 )
-                + ["mm.skill.execute"]
+                + ["mm.tool.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -525,7 +525,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == INTEGRATIONS_FLEET
                 )
-                + ["mm.skill.execute"]
+                + ["mm.tool.execute"]
             ),
         ),
     )

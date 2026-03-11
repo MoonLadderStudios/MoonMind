@@ -58,10 +58,10 @@ class FakeTaskState:
                 return value.strip() or None
             return None
 
-        selected = _coerce_str(metadata.get("selectedSkill"))
+        selected = _coerce_str(metadata.get("selectedTool"))
         adapter = _coerce_str(metadata.get("adapterId"))
         execution = _coerce_str(metadata.get("executionPath"))
-        used_skills = metadata.get("usedSkills")
+        used_skills = metadata.get("usedTools")
         used_fallback = metadata.get("usedFallback")
         shadow_mode = metadata.get("shadowModeRequested")
         if selected is None and self.phase.value.startswith("speckit_"):
@@ -86,10 +86,10 @@ class FakeTaskState:
             return None
 
         return {
-            "selectedSkill": selected,
+            "selectedTool": selected,
             "adapterId": adapter,
             "executionPath": execution,
-            "usedSkills": used_skills,
+            "usedTools": used_skills,
             "usedFallback": used_fallback,
             "shadowModeRequested": shadow_mode,
         }
@@ -211,10 +211,10 @@ def test_get_run_detail_uses_explicit_skill_metadata(
         phase=models.SpecAutomationPhase.SPECKIT_PLAN,
         status=models.SpecAutomationTaskStatus.SUCCEEDED,
         metadata={
-            "selectedSkill": "custom-skill",
+            "selectedTool": "custom-skill",
             "adapterId": "custom-adapter",
             "executionPath": "direct_fallback",
-            "usedSkills": True,
+            "usedTools": True,
             "usedFallback": True,
             "shadowModeRequested": False,
         },
@@ -244,7 +244,7 @@ def test_get_run_detail_backfills_blank_speckit_adapter_fields(
         phase=models.SpecAutomationPhase.SPECKIT_ANALYZE,
         status=models.SpecAutomationTaskStatus.SUCCEEDED,
         metadata={
-            "selectedSkill": "speckit",
+            "selectedTool": "speckit",
             "adapterId": "   ",
             "executionPath": "   ",
         },

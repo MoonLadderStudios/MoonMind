@@ -9,10 +9,10 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from .artifact_store import ArtifactStore
 from .plan_validation import PlanValidationError, ValidatedPlan, validate_plan
-from .skill_plan_contracts import SkillFailure, SkillInvocation, SkillResult
-from .skill_registry import SkillRegistrySnapshot
+from .tool_plan_contracts import ToolFailure, Step, ToolResult
+from .tool_registry import ToolRegistrySnapshot
 
-SkillExecutor = Callable[[SkillInvocation], SkillResult | Awaitable[SkillResult]]
+ToolExecutor = Callable[[Step], ToolResult | Awaitable[ToolResult]]
 
 
 class PlanExecutionError(RuntimeError):
@@ -74,8 +74,8 @@ class PlanExecutionSummary:
     """Aggregated terminal result of a plan execution."""
 
     status: str
-    results: Mapping[str, SkillResult]
-    failures: Mapping[str, SkillFailure]
+    results: Mapping[str, ToolResult]
+    failures: Mapping[str, ToolFailure]
     skipped: tuple[str, ...]
     progress: PlanProgress
     progress_artifact_ref: str | None = None
@@ -108,8 +108,8 @@ class PlanInterpreter:
     """Deterministically execute a validated DAG plan."""
 
     validated_plan: ValidatedPlan
-    registry_snapshot: SkillRegistrySnapshot
-    executor: SkillExecutor
+    registry_snapshot: ToolRegistrySnapshot
+    executor: ToolExecutor
     artifact_store: ArtifactStore | None = None
     write_progress_artifact: bool = False
     _latest_progress: PlanProgress | None = field(default=None, init=False)
@@ -120,8 +120,8 @@ class PlanInterpreter:
         cls,
         *,
         plan: Any,
-        registry_snapshot: SkillRegistrySnapshot,
-        executor: SkillExecutor,
+        registry_snapshot: ToolRegistrySnapshot,
+        executor: ToolExecutor,
         artifact_store: ArtifactStore | None = None,
         write_progress_artifact: bool = False,
     ) -> "PlanInterpreter":
@@ -222,7 +222,7 @@ class PlanInterpreter:
         self,
         value: Any,
         *,
-        results: Mapping[str, SkillResult],
+        results: Mapping[str, ToolResult],
     ) -> Any:
         if (
             isinstance(value, Mapping)
@@ -249,11 +249,11 @@ class PlanInterpreter:
             return [self._resolve_inputs(item, results=results) for item in value]
         return value
 
-    async def _execute_node(self, invocation: SkillInvocation) -> SkillResult:
+    async def _execute_node(self, invocation: Step) -> ToolResult:
         resolved = self.executor(invocation)
         if asyncio.iscoroutine(resolved):
             resolved = await resolved
-        if not isinstance(resolved, SkillResult):
+        if not isinstance(resolved, ToolResult):
             raise PlanExecutionError(
                 "invalid_result",
                 f"Executor returned unsupported result type: {type(resolved)!r}",
@@ -263,27 +263,27 @@ class PlanInterpreter:
     @staticmethod
     def _record_task_outcome(
         *,
-        task: asyncio.Task[SkillResult],
+        task: asyncio.Task[ToolResult],
         node_id: str,
-        succeeded: dict[str, SkillResult],
-        failures: dict[str, SkillFailure],
+        succeeded: dict[str, ToolResult],
+        failures: dict[str, ToolFailure],
     ) -> None:
         if node_id in succeeded or node_id in failures:
             return
         try:
             result = task.result()
         except asyncio.CancelledError:
-            failures[node_id] = SkillFailure(
+            failures[node_id] = ToolFailure(
                 error_code="CANCELLED",
                 message=f"Node '{node_id}' was cancelled",
                 retryable=False,
             )
             return
-        except SkillFailure as failure:
+        except ToolFailure as failure:
             failures[node_id] = failure
             return
         except Exception as exc:
-            failures[node_id] = SkillFailure(
+            failures[node_id] = ToolFailure(
                 error_code="INTERNAL",
                 message=f"Node '{node_id}' raised: {exc}",
                 retryable=True,
@@ -293,13 +293,13 @@ class PlanInterpreter:
         if result.status == "SUCCEEDED":
             succeeded[node_id] = result
         elif result.status == "CANCELLED":
-            failures[node_id] = SkillFailure(
+            failures[node_id] = ToolFailure(
                 error_code="CANCELLED",
                 message=f"Node '{node_id}' returned CANCELLED",
                 retryable=False,
             )
         else:
-            failures[node_id] = SkillFailure(
+            failures[node_id] = ToolFailure(
                 error_code="EXTERNAL_FAILED",
                 message=f"Node '{node_id}' returned status {result.status}",
                 retryable=False,
@@ -313,9 +313,9 @@ class PlanInterpreter:
         nodes = {node.id: node for node in self._plan.nodes}
 
         pending: set[str] = set(nodes.keys())
-        running: dict[asyncio.Task[SkillResult], str] = {}
-        succeeded: dict[str, SkillResult] = {}
-        failures: dict[str, SkillFailure] = {}
+        running: dict[asyncio.Task[ToolResult], str] = {}
+        succeeded: dict[str, ToolResult] = {}
+        failures: dict[str, ToolFailure] = {}
         skipped: set[str] = set()
 
         max_concurrency = self._plan.policy.max_concurrency
@@ -374,7 +374,7 @@ class PlanInterpreter:
                         node.inputs, results=succeeded
                     )
                 except PlanExecutionError as exc:
-                    failures[node_id] = SkillFailure(
+                    failures[node_id] = ToolFailure(
                         error_code=exc.code.upper(),
                         message=str(exc),
                         retryable=False,
@@ -389,7 +389,7 @@ class PlanInterpreter:
                     )
                     continue
 
-                invocation = SkillInvocation(
+                invocation = Step(
                     id=node.id,
                     skill_name=node.skill_name,
                     skill_version=node.skill_version,
@@ -489,8 +489,8 @@ class PlanInterpreter:
 def create_validated_interpreter(
     *,
     plan: Any,
-    registry_snapshot: SkillRegistrySnapshot,
-    executor: SkillExecutor,
+    registry_snapshot: ToolRegistrySnapshot,
+    executor: ToolExecutor,
     artifact_store: ArtifactStore | None = None,
     write_progress_artifact: bool = False,
 ) -> PlanInterpreter:
@@ -509,8 +509,8 @@ def create_validated_interpreter(
 def validate_then_execute(
     *,
     plan: Any,
-    registry_snapshot: SkillRegistrySnapshot,
-    executor: SkillExecutor,
+    registry_snapshot: ToolRegistrySnapshot,
+    executor: ToolExecutor,
     artifact_store: ArtifactStore | None = None,
     write_progress_artifact: bool = False,
 ) -> Awaitable[PlanExecutionSummary]:

@@ -19,7 +19,7 @@ MoonMind operator wants the shortest path to launch an authenticated Codex worke
 
 1. **Given** `DEFAULT_EMBEDDING_PROVIDER=google`, `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`, and `GOOGLE_API_KEY` are configured, **When** services start, **Then** embedding runtime resolves to Google Gemini without additional runtime overrides.
 2. **Given** Codex auth is performed once on `CODEX_VOLUME_NAME`, **When** `celery_codex_worker` restarts, **Then** startup preflight succeeds non-interactively and processing can begin immediately.
-3. **Given** a workflow stage executes under default policy, **When** task states are persisted, **Then** payloads include selected skill and execution path metadata (`selectedSkill`, `executionPath`) for observability.
+3. **Given** a workflow stage executes under default policy, **When** task states are persisted, **Then** payloads include selected skill and execution path metadata (`selectedTool`, `executionPath`) for observability.
 
 ### User Story 1 - Trigger Next Spec Phase (Priority: P1)
 
@@ -109,7 +109,7 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - **SC-003**: Operators report (via post-run feedback or survey) that 90% of runs provide sufficient context to resolve failures without escalating to engineering.
 - **SC-004**: Automation reduces manual time spent per Spec Kit phase handoff by at least 70% compared to the prior semi-manual process over one release cycle.
 - **SC-005**: Startup quickstart from a clean `.env` produces ready `celery_codex_worker` and `celery_gemini_worker` processes without interactive prompts.
-- **SC-006**: 100% of discover/submit/publish task payloads include `selectedSkill` and `executionPath`.
+- **SC-006**: 100% of discover/submit/publish task payloads include `selectedTool` and `executionPath`.
 - **SC-007**: Validation gate `./tools/test_unit.sh` passes with skills-first runtime changes enabled by default.
 
 ## Assumptions & Dependencies

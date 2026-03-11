@@ -8,23 +8,23 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from .artifact_store import ArtifactStore
 from .plan_validation import PlanValidationError, validate_plan_payload
-from .skill_plan_contracts import SkillFailure, SkillInvocation, SkillResult
-from .skill_registry import (
-    SkillRegistryError,
-    SkillRegistrySnapshot,
+from .tool_plan_contracts import ToolFailure, Step, ToolResult
+from .tool_registry import (
+    ToolRegistryError,
+    ToolRegistrySnapshot,
     load_registry_snapshot_from_artifact,
 )
 
 ActivityHandler = Callable[
-    [SkillInvocation, Mapping[str, Any] | None],
-    SkillResult | Awaitable[SkillResult],
+    [Step, Mapping[str, Any] | None],
+    ToolResult | Awaitable[ToolResult],
 ]
 SkillHandler = Callable[
-    [Mapping[str, Any], Mapping[str, Any] | None], SkillResult | Awaitable[SkillResult]
+    [Mapping[str, Any], Mapping[str, Any] | None], ToolResult | Awaitable[ToolResult]
 ]
 
 
-class SkillDispatchError(RuntimeError):
+class ToolDispatchError(RuntimeError):
     """Raised when a skill invocation cannot be dispatched."""
 
     def __init__(self, code: str, message: str) -> None:
@@ -33,7 +33,7 @@ class SkillDispatchError(RuntimeError):
 
 
 @dataclass(slots=True)
-class SkillActivityDispatcher:
+class ToolActivityDispatcher:
     """Routes skill invocations based on activity type and skill key."""
 
     _activity_handlers: dict[str, ActivityHandler] = field(default_factory=dict)
@@ -44,7 +44,7 @@ class SkillActivityDispatcher:
     ) -> None:
         normalized = str(activity_type or "").strip()
         if not normalized:
-            raise SkillDispatchError(
+            raise ToolDispatchError(
                 "invalid_dispatch", "activity_type must be non-empty"
             )
         self._activity_handlers[normalized] = handler
@@ -58,7 +58,7 @@ class SkillActivityDispatcher:
     ) -> None:
         key = (str(skill_name or "").strip(), str(version or "").strip())
         if not key[0] or not key[1]:
-            raise SkillDispatchError(
+            raise ToolDispatchError(
                 "invalid_dispatch", "skill_name and version must be non-empty"
             )
         self._skill_handlers[key] = handler
@@ -66,28 +66,28 @@ class SkillActivityDispatcher:
     async def execute(
         self,
         *,
-        invocation: SkillInvocation,
-        snapshot: SkillRegistrySnapshot,
+        invocation: Step,
+        snapshot: ToolRegistrySnapshot,
         context: Mapping[str, Any] | None = None,
-    ) -> SkillResult:
+    ) -> ToolResult:
         definition = snapshot.get_skill(
             name=invocation.skill_name,
             version=invocation.skill_version,
         )
         activity_type = definition.executor.activity_type
 
-        if activity_type == "mm.skill.execute":
+        if activity_type == "mm.tool.execute":
             handler = self._skill_handlers.get(invocation.skill_key)
             if handler is None:
-                raise SkillDispatchError(
+                raise ToolDispatchError(
                     "skill_handler_not_registered",
-                    f"No mm.skill.execute handler registered for {invocation.skill_name}:{invocation.skill_version}",
+                    f"No mm.tool.execute handler registered for {invocation.skill_name}:{invocation.skill_version}",
                 )
             result = handler(invocation.inputs, context)
         else:
             activity_handler = self._activity_handlers.get(activity_type)
             if activity_handler is None:
-                raise SkillDispatchError(
+                raise ToolDispatchError(
                     "activity_handler_not_registered",
                     f"No handler registered for activity type {activity_type}",
                 )
@@ -96,29 +96,29 @@ class SkillActivityDispatcher:
         if asyncio.iscoroutine(result):
             result = await result
 
-        if not isinstance(result, SkillResult):
-            raise SkillDispatchError(
+        if not isinstance(result, ToolResult):
+            raise ToolDispatchError(
                 "invalid_skill_result",
                 f"Handler returned unsupported result type: {type(result)!r}",
             )
         return result
 
 
-async def execute_skill_activity(
+async def execute_tool_activity(
     *,
     invocation_payload: Mapping[str, Any],
-    registry_snapshot: SkillRegistrySnapshot,
-    dispatcher: SkillActivityDispatcher,
+    registry_snapshot: ToolRegistrySnapshot,
+    dispatcher: ToolActivityDispatcher,
     context: Mapping[str, Any] | None = None,
-) -> SkillResult:
+) -> ToolResult:
     """Execute one skill invocation payload through dispatcher semantics."""
 
     try:
         skill_payload = invocation_payload.get("skill")
         if not isinstance(skill_payload, Mapping):
-            raise SkillDispatchError("invalid_payload", "skill payload is required")
+            raise ToolDispatchError("invalid_payload", "skill payload is required")
 
-        invocation = SkillInvocation(
+        invocation = Step(
             id=str(invocation_payload.get("id") or "").strip(),
             skill_name=str(skill_payload.get("name") or "").strip(),
             skill_version=str(skill_payload.get("version") or "").strip(),
@@ -138,16 +138,16 @@ async def execute_skill_activity(
             snapshot=registry_snapshot,
             context=context,
         )
-    except SkillFailure:
+    except ToolFailure:
         raise
-    except (SkillRegistryError, SkillDispatchError, ValueError) as exc:
-        raise SkillFailure(
+    except (ToolRegistryError, ToolDispatchError, ValueError) as exc:
+        raise ToolFailure(
             error_code="INVALID_INPUT",
             message=str(exc),
             retryable=False,
         ) from exc
     except Exception as exc:  # pragma: no cover - defensive fallback
-        raise SkillFailure(
+        raise ToolFailure(
             error_code="INTERNAL",
             message=f"Unhandled skill execution error: {exc}",
             retryable=True,
@@ -171,7 +171,7 @@ def plan_validate_activity(
     )
     plan_payload = artifact_store.get_json(plan_artifact_ref)
     if not isinstance(plan_payload, Mapping):
-        raise SkillFailure(
+        raise ToolFailure(
             error_code="INVALID_INPUT",
             message="Plan artifact payload must be a JSON object",
             retryable=False,
@@ -183,7 +183,7 @@ def plan_validate_activity(
             registry_snapshot=snapshot,
         )
     except PlanValidationError as exc:
-        raise SkillFailure(
+        raise ToolFailure(
             error_code="INVALID_INPUT",
             message=str(exc),
             retryable=False,
@@ -203,8 +203,8 @@ def plan_validate_activity(
 
 
 __all__ = [
-    "SkillActivityDispatcher",
-    "SkillDispatchError",
-    "execute_skill_activity",
+    "ToolActivityDispatcher",
+    "ToolDispatchError",
+    "execute_tool_activity",
     "plan_validate_activity",
 ]

@@ -11,41 +11,41 @@ from typing import Any, Mapping
 import yaml
 
 from .artifact_store import ArtifactStore
-from .skill_plan_contracts import (
+from .tool_plan_contracts import (
     REGISTRY_DIGEST_PREFIX,
     ContractValidationError,
-    SkillDefinition,
-    parse_skill_definition,
+    ToolDefinition,
+    parse_tool_definition,
 )
 
 
-class SkillRegistryError(ValueError):
+class ToolRegistryError(ValueError):
     """Raised when registry definitions or snapshots are invalid."""
 
 
 @dataclass(frozen=True, slots=True)
-class SkillRegistrySnapshot:
+class ToolRegistrySnapshot:
     """Immutable registry snapshot pinned by plan metadata."""
 
     digest: str
     artifact_ref: str
-    skills: tuple[SkillDefinition, ...]
+    skills: tuple[ToolDefinition, ...]
 
     def __post_init__(self) -> None:
         if not self.digest.startswith(REGISTRY_DIGEST_PREFIX):
-            raise SkillRegistryError(
+            raise ToolRegistryError(
                 f"Invalid snapshot digest '{self.digest}': expected {REGISTRY_DIGEST_PREFIX}*"
             )
 
     @property
-    def by_key(self) -> dict[tuple[str, str], SkillDefinition]:
+    def by_key(self) -> dict[tuple[str, str], ToolDefinition]:
         return {skill.key: skill for skill in self.skills}
 
-    def get_skill(self, *, name: str, version: str) -> SkillDefinition:
+    def get_skill(self, *, name: str, version: str) -> ToolDefinition:
         try:
             return self.by_key[(name, version)]
         except KeyError as exc:
-            raise SkillRegistryError(
+            raise ToolRegistryError(
                 f"Skill '{name}:{version}' was not found in pinned snapshot {self.digest}"
             ) from exc
 
@@ -57,7 +57,7 @@ class SkillRegistrySnapshot:
         }
 
 
-def _canonical_registry_doc(skills: tuple[SkillDefinition, ...]) -> dict[str, Any]:
+def _canonical_registry_doc(skills: tuple[ToolDefinition, ...]) -> dict[str, Any]:
     ordered = sorted(skills, key=lambda skill: (skill.name, skill.version))
     return {
         "schema_version": "1.0",
@@ -70,22 +70,22 @@ def _digest_registry_doc(payload: Mapping[str, Any]) -> str:
     return f"{REGISTRY_DIGEST_PREFIX}{hashlib.sha256(encoded).hexdigest()}"
 
 
-def validate_skill_registry(skills: tuple[SkillDefinition, ...]) -> None:
+def validate_tool_registry(skills: tuple[ToolDefinition, ...]) -> None:
     """Validate a registry payload after it has been parsed."""
 
     if not skills:
-        raise SkillRegistryError("Registry is empty")
+        raise ToolRegistryError("Registry is empty")
 
     seen: set[tuple[str, str]] = set()
     for skill in skills:
         if skill.key in seen:
-            raise SkillRegistryError(
+            raise ToolRegistryError(
                 f"Duplicate skill definition for '{skill.name}:{skill.version}'"
             )
         seen.add(skill.key)
 
 
-def parse_skill_registry(payload: Mapping[str, Any]) -> tuple[SkillDefinition, ...]:
+def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[ToolDefinition, ...]:
     """Parse untrusted registry payload into validated skill definitions."""
 
     raw_skills: Any
@@ -95,27 +95,27 @@ def parse_skill_registry(payload: Mapping[str, Any]) -> tuple[SkillDefinition, .
         raw_skills = payload
 
     if isinstance(raw_skills, Mapping):
-        raise SkillRegistryError("Registry 'skills' must be an array")
+        raise ToolRegistryError("Registry 'skills' must be an array")
     if not isinstance(raw_skills, list):
-        raise SkillRegistryError(
+        raise ToolRegistryError(
             "Registry payload must be an object with a skills array"
         )
 
-    parsed: list[SkillDefinition] = []
+    parsed: list[ToolDefinition] = []
     for entry in raw_skills:
         if not isinstance(entry, Mapping):
-            raise SkillRegistryError("Skill registry entries must be objects")
+            raise ToolRegistryError("Skill registry entries must be objects")
         try:
-            parsed.append(parse_skill_definition(entry))
+            parsed.append(parse_tool_definition(entry))
         except ContractValidationError as exc:
-            raise SkillRegistryError(str(exc)) from exc
+            raise ToolRegistryError(str(exc)) from exc
 
     skills = tuple(parsed)
-    validate_skill_registry(skills)
+    validate_tool_registry(skills)
     return skills
 
 
-def load_skill_registry(path: Path) -> tuple[SkillDefinition, ...]:
+def load_tool_registry(path: Path) -> tuple[ToolDefinition, ...]:
     """Load registry definitions from a YAML or JSON file."""
 
     data = path.read_text(encoding="utf-8")
@@ -125,21 +125,21 @@ def load_skill_registry(path: Path) -> tuple[SkillDefinition, ...]:
     elif suffix == ".json":
         payload = json.loads(data)
     else:
-        raise SkillRegistryError(f"Unsupported registry file extension: {path}")
+        raise ToolRegistryError(f"Unsupported registry file extension: {path}")
 
     if not isinstance(payload, Mapping):
-        raise SkillRegistryError("Registry root must be an object")
-    return parse_skill_registry(payload)
+        raise ToolRegistryError("Registry root must be an object")
+    return parse_tool_registry(payload)
 
 
 def create_registry_snapshot(
     *,
-    skills: tuple[SkillDefinition, ...],
+    skills: tuple[ToolDefinition, ...],
     artifact_store: ArtifactStore,
-) -> SkillRegistrySnapshot:
+) -> ToolRegistrySnapshot:
     """Create and persist an immutable registry snapshot artifact."""
 
-    validate_skill_registry(skills)
+    validate_tool_registry(skills)
     canonical = _canonical_registry_doc(skills)
     digest = _digest_registry_doc(canonical)
 
@@ -153,7 +153,7 @@ def create_registry_snapshot(
         },
     )
 
-    return SkillRegistrySnapshot(
+    return ToolRegistrySnapshot(
         digest=digest, artifact_ref=artifact.artifact_ref, skills=skills
     )
 
@@ -162,26 +162,26 @@ def load_registry_snapshot_from_artifact(
     *,
     artifact_ref: str,
     artifact_store: ArtifactStore,
-) -> SkillRegistrySnapshot:
+) -> ToolRegistrySnapshot:
     """Load and validate a registry snapshot from artifact storage."""
 
     payload = artifact_store.get_json(artifact_ref)
     if not isinstance(payload, Mapping):
-        raise SkillRegistryError("Registry snapshot artifact payload must be an object")
+        raise ToolRegistryError("Registry snapshot artifact payload must be an object")
 
-    skills = parse_skill_registry(payload)
+    skills = parse_tool_registry(payload)
     digest = _digest_registry_doc(_canonical_registry_doc(skills))
-    return SkillRegistrySnapshot(
+    return ToolRegistrySnapshot(
         digest=digest, artifact_ref=artifact_ref, skills=skills
     )
 
 
 __all__ = [
-    "SkillRegistryError",
-    "SkillRegistrySnapshot",
+    "ToolRegistryError",
+    "ToolRegistrySnapshot",
     "create_registry_snapshot",
     "load_registry_snapshot_from_artifact",
-    "load_skill_registry",
-    "parse_skill_registry",
-    "validate_skill_registry",
+    "load_tool_registry",
+    "parse_tool_registry",
+    "validate_tool_registry",
 ]

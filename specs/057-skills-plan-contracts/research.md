@@ -2,7 +2,7 @@
 
 ## Decision 1: Keep contracts as explicit runtime data models
 
-- **Decision**: Implement canonical skill, plan, artifact, and result contracts as dataclasses in `moonmind/workflows/skills/skill_plan_contracts.py`.
+- **Decision**: Implement canonical skill, plan, artifact, and result contracts as dataclasses in `moonmind/workflows/skills/tool_plan_contracts.py`.
 - **Rationale**: Supports deterministic orchestration and prevents hidden behavior from ad hoc payload parsing.
 - **Alternatives considered**:
   - Dynamic dictionary-only handling: rejected because validation and compatibility become ambiguous.
@@ -42,7 +42,7 @@
 
 ## Decision 6: Use declared activity bindings for dispatch, never inference
 
-- **Decision**: Route invocations by `SkillDefinition.executor.activity_type` in `skill_dispatcher.py`.
+- **Decision**: Route invocations by `ToolDefinition.executor.activity_type` in `tool_dispatcher.py`.
 - **Rationale**: Preserves explicit least-guess routing and supports curated specialized activity handlers.
 - **Alternatives considered**:
   - Infer handler from skill name prefix: rejected as brittle and non-contractual.
@@ -58,7 +58,7 @@
 
 ## Decision 8: Normalize failures with the standard skill error model
 
-- **Decision**: Convert validation/dispatch/runtime failures into `SkillFailure` envelopes with explicit codes.
+- **Decision**: Convert validation/dispatch/runtime failures into `ToolFailure` envelopes with explicit codes.
 - **Rationale**: Ensures consistent retry and operator-facing diagnostics.
 - **Alternatives considered**:
   - Raw exceptions bubbling to callers: rejected because policies cannot be applied uniformly.

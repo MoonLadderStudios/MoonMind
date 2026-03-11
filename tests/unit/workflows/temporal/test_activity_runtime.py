@@ -15,11 +15,11 @@ from moonmind.config.settings import settings
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
-from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
-from moonmind.workflows.skills.skill_plan_contracts import SkillResult
-from moonmind.workflows.skills.skill_registry import (
+from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
+from moonmind.workflows.skills.tool_plan_contracts import ToolResult
+from moonmind.workflows.skills.tool_registry import (
     create_registry_snapshot,
-    parse_skill_registry,
+    parse_tool_registry,
 )
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_FLEET,
@@ -86,7 +86,7 @@ def _registry_payload() -> dict:
                     }
                 },
                 "executor": {
-                    "activity_type": "mm.skill.execute",
+                    "activity_type": "mm.tool.execute",
                     "selector": {"mode": "by_capability"},
                 },
                 "requirements": {"capabilities": ["sandbox"]},
@@ -201,7 +201,7 @@ async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Pa
             registry_payload = _registry_payload()
 
             snapshot = create_registry_snapshot(
-                skills=parse_skill_registry(registry_payload),
+                skills=parse_tool_registry(registry_payload),
                 artifact_store=InMemoryArtifactStore(),
             )
             plan_payload = _plan_payload(
@@ -252,11 +252,11 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
                 content_type="application/json",
             )
 
-            dispatcher = SkillActivityDispatcher()
+            dispatcher = ToolActivityDispatcher()
             dispatcher.register_skill(
                 skill_name="repo.run_tests",
                 version="1.0.0",
-                handler=lambda inputs, _context: SkillResult(
+                handler=lambda inputs, _context: ToolResult(
                     status="SUCCEEDED",
                     outputs={"ok": inputs["repo_ref"].endswith("#main")},
                     progress={"percent": 100},
@@ -642,7 +642,7 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                 artifact_activities=TemporalArtifactActivities(service),
                 plan_activities=TemporalPlanActivities(artifact_service=service),
                 skill_activities=TemporalSkillActivities(
-                    dispatcher=SkillActivityDispatcher()
+                    dispatcher=ToolActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
                 integration_activities=TemporalJulesActivities(
@@ -654,7 +654,7 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
 
             assert bindings
             assert {binding.fleet for binding in bindings} == {ARTIFACTS_FLEET}
-            assert "mm.skill.execute" in {binding.activity_type for binding in bindings}
+            assert "mm.tool.execute" in {binding.activity_type for binding in bindings}
             assert "artifact.lifecycle_sweep" in {
                 binding.activity_type for binding in bindings
             }
