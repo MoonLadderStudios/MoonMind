@@ -12,7 +12,10 @@ from api_service.db.models import (
 )
 
 
-def test_map_temporal_state_to_projection_success():
+import pytest
+
+@pytest.mark.asyncio
+async def test_map_temporal_state_to_projection_success():
     start_time = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
     desc.id = "mm:123"
@@ -31,7 +34,10 @@ def test_map_temporal_state_to_projection_success():
         "paused": True,
         "step_count": 5,
     }
-    desc.memo = memo_data
+    async def mock_memo():
+        return memo_data
+
+    desc.memo = mock_memo
 
     class MockSearchAttribute:
         def __init__(self, data):
@@ -42,7 +48,7 @@ def test_map_temporal_state_to_projection_success():
         "mm_custom": MockSearchAttribute(b'{"key": "value"}'),
     }
 
-    result = map_temporal_state_to_projection(desc)
+    result = await map_temporal_state_to_projection(desc)
 
     assert result["workflow_id"] == "mm:123"
     assert result["run_id"] == "run-123"
