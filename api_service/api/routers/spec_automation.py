@@ -50,7 +50,11 @@ def _serialize_phase_state(
     skill_meta = state.get_skill_execution_metadata() or {}
     # Prefer new key names; fall back to legacy keys for records persisted before the rename.
     selected_skill = skill_meta.get("selectedTool") or skill_meta.get("selectedSkill")
-    used_skills = skill_meta.get("usedTools") if "usedTools" in skill_meta else skill_meta.get("usedSkills")
+    used_skills = (
+        skill_meta.get("usedTools")
+        if "usedTools" in skill_meta
+        else skill_meta.get("usedSkills")
+    )
     return SpecAutomationPhaseState(
         phase=state.phase,
         status=state.status,
