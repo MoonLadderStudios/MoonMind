@@ -285,7 +285,7 @@ class TestSpecWorkflowSettings:
         """Attachment-related settings should expose stable defaults."""
 
         settings = SpecWorkflowSettings(_env_file=None)
-        assert settings.agent_job_attachment_enabled is True
+        assert settings.agent_job_attachment_enabled is False
         assert settings.agent_job_attachment_max_count == 10
         assert settings.agent_job_attachment_max_bytes == 10 * 1024 * 1024
         assert settings.agent_job_attachment_total_bytes == 25 * 1024 * 1024
