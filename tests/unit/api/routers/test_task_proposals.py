@@ -101,7 +101,7 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
 
 
 def test_create_proposal_with_worker_token(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     proposal = _build_proposal()

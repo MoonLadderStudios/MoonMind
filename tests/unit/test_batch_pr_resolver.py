@@ -219,11 +219,7 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 
     task_context = tmp_path / "task_context.json"
     task_context.write_text(
-        (
-            "{"
-            '"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low"}'
-            "}"
-        ),
+        ('{"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low"}}'),
         encoding="utf-8",
     )
     args = type(
@@ -397,7 +393,7 @@ def test_read_worker_token_prefers_env_over_file(
 
 
 # ---------------------------------------------------------------------------
-# Step payload contract tests
+# SkillInvocation payload contract tests
 # ---------------------------------------------------------------------------
 
 
@@ -423,17 +419,17 @@ def test_build_queue_request_skill_contract() -> None:
     task = req["payload"]["task"]
     skill = task["skill"]
 
-    # Correct fields per Step contract
+    # Correct fields per SkillInvocation contract
     assert skill.get("name") == "pr-resolver", "skill.name must be 'pr-resolver'"
     assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
 
     # Legacy / wrong fields must NOT be present
-    assert (
-        "id" not in skill
-    ), "skill.id is the legacy field; must not be sent to Temporal"
-    assert (
-        "args" not in skill
-    ), "skill.args is legacy; inputs now live at task-node level"
+    assert "id" not in skill, (
+        "skill.id is the legacy field; must not be sent to Temporal"
+    )
+    assert "args" not in skill, (
+        "skill.args is legacy; inputs now live at task-node level"
+    )
 
     # inputs live at the task-node level, not inside skill
     inputs = task.get("inputs")
@@ -457,9 +453,9 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
 
     # Wrong nesting must NOT be present
     skill = task["skill"]
-    assert (
-        "requiredCapabilities" not in skill
-    ), "requiredCapabilities must not be nested inside skill"
+    assert "requiredCapabilities" not in skill, (
+        "requiredCapabilities must not be nested inside skill"
+    )
 
 
 def test_build_queue_request_skill_version_passthrough() -> None:

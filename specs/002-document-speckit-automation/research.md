@@ -14,7 +14,7 @@
   - Keep metadata embedded-only: rejected because clients would need brittle metadata parsing.
 
 ## Decision 3: Legacy Defaults for Missing Metadata
-- **Decision**: When legacy `speckit_*` phases have no explicit metadata, default to `selectedTool=speckit` and `executionPath=skill`.
+- **Decision**: When legacy `speckit_*` phases have no explicit metadata, default to `selectedSkill=speckit` and `executionPath=skill`.
 - **Rationale**: Preserves historical behavior while making skills-path semantics explicit.
 - **Alternatives Considered**:
   - Return null for missing values: rejected because it weakens observability and breaks deterministic interpretation.

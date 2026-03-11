@@ -87,9 +87,7 @@ class JiraIndexer:
 
         try:
             node_parser = service_context.node_parser
-        except (
-            AttributeError
-        ):  # Fallback if node_parser is not directly on Settings (older LlamaIndex or custom setup)
+        except AttributeError:  # Fallback if node_parser is not directly on Settings (older LlamaIndex or custom setup)
             self.logger.warning(
                 "service_context.node_parser not found, falling back to SimpleNodeParser.from_defaults()"
             )

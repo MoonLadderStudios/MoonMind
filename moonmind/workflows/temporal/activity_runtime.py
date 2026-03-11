@@ -79,7 +79,6 @@ class PlanGenerateActivityResult:
     """Result from ``plan.generate``."""
 
     plan_ref: ArtifactRef
-    registry_snapshot_ref: ArtifactRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,10 +480,7 @@ class TemporalPlanActivities:
                 "labels": ["plan"],
             },
         )
-        return PlanGenerateActivityResult(
-            plan_ref=plan_ref,
-            registry_snapshot_ref=snapshot.artifact_ref if snapshot else None,
-        )
+        return PlanGenerateActivityResult(plan_ref=plan_ref)
 
     async def plan_validate(
         self,

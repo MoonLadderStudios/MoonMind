@@ -1393,7 +1393,6 @@ async def resolve_manifest_job_secrets(
             else None
         )
         if payload.include_profile:
-
             resolution_results = []
             for ref in profile_refs:
                 value = await auth_manager.get_secret(

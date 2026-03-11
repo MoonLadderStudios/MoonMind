@@ -144,9 +144,7 @@ class ModelCache:
             if settings.openai.openai_enabled and bool(resolved_openai_api_key):
                 openai_models_raw = list_openai_models(api_key=resolved_openai_api_key)
                 self.logger.info(f"Fetched {len(openai_models_raw)} raw OpenAI models.")
-                for (
-                    model
-                ) in (
+                for model in (
                     openai_models_raw
                 ):  # Assuming model is an object with an 'id' attribute
                     model_id = model.id

@@ -9,10 +9,10 @@
 ## 2. Review implementation surfaces
 
 - Contracts and runtime:
-  - `moonmind/workflows/skills/tool_plan_contracts.py`
-  - `moonmind/workflows/skills/tool_registry.py`
+  - `moonmind/workflows/skills/skill_plan_contracts.py`
+  - `moonmind/workflows/skills/skill_registry.py`
   - `moonmind/workflows/skills/plan_validation.py`
-  - `moonmind/workflows/skills/tool_dispatcher.py`
+  - `moonmind/workflows/skills/skill_dispatcher.py`
   - `moonmind/workflows/skills/plan_interpreter.py`
   - `moonmind/workflows/skills/artifact_store.py`
 - Integration wrapper:

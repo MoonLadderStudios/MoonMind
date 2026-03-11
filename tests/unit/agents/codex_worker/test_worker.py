@@ -3424,9 +3424,7 @@ async def test_run_once_task_step_completion_identity_dedupes_exact_duplicate_re
     """Exact duplicate completion resend should emit once across all sinks."""
 
     completion_block = (
-        "assistant\n"
-        "**Completion Summary**\n"
-        "- Added deterministic completion keys.\n"
+        "assistant\n**Completion Summary**\n- Added deterministic completion keys.\n"
     )
 
     async def fake_exec(*args, **kwargs):
@@ -3493,9 +3491,7 @@ async def test_run_once_task_step_completion_identity_dedupes_near_duplicate_res
     """Whitespace/chunk-drift replay should still dedupe for one completion identity."""
 
     completion_block = (
-        "assistant\n"
-        "**Completion Summary**\n"
-        "- Added deterministic completion keys.\n"
+        "assistant\n**Completion Summary**\n- Added deterministic completion keys.\n"
     )
     replay_with_whitespace_drift = (
         "assistant\n\n**Completion Summary**\n"
@@ -3565,9 +3561,7 @@ async def test_run_once_task_step_completion_identity_preserves_repeated_text_ac
     """Identical assistant text in distinct step identities should be preserved."""
 
     completion_block = (
-        "assistant\n"
-        "**Completion Summary**\n"
-        "- Added deterministic completion keys.\n"
+        "assistant\n**Completion Summary**\n- Added deterministic completion keys.\n"
     )
 
     async def fake_exec(*args, **kwargs):
@@ -5406,7 +5400,11 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
     )
     monkeypatch.setattr(
         "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
-        lambda *, selection, run_root, cache_root, verify_signatures: _MaterializedWorkspace(),
+        lambda *,
+        selection,
+        run_root,
+        cache_root,
+        verify_signatures: _MaterializedWorkspace(),
     )
 
     job = ClaimedJob(
@@ -7408,7 +7406,7 @@ def test_collect_verification_evidence_ignores_non_prefixed_stdout_lines(
         publish_command_env=None,
     )
     prepared.execute_log_path.write_text(
-        "$ pytest\n" "[command] $ ./tools/test_unit.sh\n" "[command] $ npm run build\n",
+        "$ pytest\n[command] $ ./tools/test_unit.sh\n[command] $ npm run build\n",
         encoding="utf-8",
     )
     evidence, read_errors = CodexWorker._collect_verification_evidence(

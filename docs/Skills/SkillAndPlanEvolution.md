@@ -4,13 +4,13 @@
 
 ## Current MoonMind Skill & Plan Contracts
 
-MoonMind’s **ToolDefinition** (in a registry) includes `name`, `version`, JSON schemas for inputs/outputs, executor binding, capability requirements, and default policies (timeouts, retries)【61†L379-L388】. For example, a skill YAML has fields for `inputs.schema`, `outputs.schema`, `executor.activity_type`, `requirements.capabilities`, and `policies.{timeouts,retries}`【61†L379-L388】【61†L390-L399】. A Step in a plan is a JSON node with a unique `id`, skill name+version, inputs, and optional overrides【61†L410-L422】. The **Plan** format is a JSON object with a DAG: an array of `nodes` (each a Step) and `edges` listing dependencies【12†L531-L540】【12†L557-L560】.  Example edges `[{ "from": "n1", "to": "n2" }]` mean “n2 may start only after n1 succeeds”【12†L557-L560】.  Large inputs/outputs (plans, artifacts, transcripts) are stored outside the workflow; workflows and activities carry only opaque `artifact_ref`s【61†L318-L327】【61†L332-L335】.  MoonMind emphasizes **determinism boundaries**: workflow code is purely orchestration (no nondeterministic calls)【61†L288-L296】, while skills (activities) do all external I/O【61†L288-L296】.  Progress is tracked via structured counters (nodes pending/running/succeeded/failed) and exposed by Temporal queries and optional progress artifacts【13†L683-L692】【13†L699-L704】.
+MoonMind’s **SkillDefinition** (in a registry) includes `name`, `version`, JSON schemas for inputs/outputs, executor binding, capability requirements, and default policies (timeouts, retries)【61†L379-L388】. For example, a skill YAML has fields for `inputs.schema`, `outputs.schema`, `executor.activity_type`, `requirements.capabilities`, and `policies.{timeouts,retries}`【61†L379-L388】【61†L390-L399】. A SkillInvocation in a plan is a JSON node with a unique `id`, skill name+version, inputs, and optional overrides【61†L410-L422】. The **Plan** format is a JSON object with a DAG: an array of `nodes` (each a SkillInvocation) and `edges` listing dependencies【12†L531-L540】【12†L557-L560】.  Example edges `[{ "from": "n1", "to": "n2" }]` mean “n2 may start only after n1 succeeds”【12†L557-L560】.  Large inputs/outputs (plans, artifacts, transcripts) are stored outside the workflow; workflows and activities carry only opaque `artifact_ref`s【61†L318-L327】【61†L332-L335】.  MoonMind emphasizes **determinism boundaries**: workflow code is purely orchestration (no nondeterministic calls)【61†L288-L296】, while skills (activities) do all external I/O【61†L288-L296】.  Progress is tracked via structured counters (nodes pending/running/succeeded/failed) and exposed by Temporal queries and optional progress artifacts【13†L683-L692】【13†L699-L704】.
 
 ### Observed Gaps and Characteristics
 
 - **Versioning & Pinning:** Plans carry a `registry_snapshot` (digest + artifact) to pin skill versions【12†L531-L540】. This ensures reproducibility (plan re-runs see the same skill definitions)【13†L745-L754】.  
-- **Error Model:** Skills return a structured `ToolResult` with status, small JSON outputs, list of `output_artifacts`, and optional progress info【12†L441-L449】. Failures use a standard schema (`error_code`, `message`, `retryable`, etc.)【12†L468-L476】, driving retry logic (e.g. `non_retryable_error_codes` in the skill def)【12†L481-L489】【12†L494-L499】.
-- **Policies & Retries:** Default activity timeouts/retries come from ToolDefinition, with overrides allowed within safe bounds【61†L412-L421】. Retry is “at least once” by default (Temporal will retry until success)【58†L139-L142】, so **Activities must be idempotent or side-effects safe**.
+- **Error Model:** Skills return a structured `SkillResult` with status, small JSON outputs, list of `output_artifacts`, and optional progress info【12†L441-L449】. Failures use a standard schema (`error_code`, `message`, `retryable`, etc.)【12†L468-L476】, driving retry logic (e.g. `non_retryable_error_codes` in the skill def)【12†L481-L489】【12†L494-L499】.
+- **Policies & Retries:** Default activity timeouts/retries come from SkillDefinition, with overrides allowed within safe bounds【61†L412-L421】. Retry is “at least once” by default (Temporal will retry until success)【58†L139-L142】, so **Activities must be idempotent or side-effects safe**.
 
 Overall, the current spec is thorough. However, implementation is greenfield: we must enforce these contracts in code. For example, a “plan.validate” activity should enforce JSON-schema and DAG invariants【13†L727-L735】.  Worker fleets must honor `requirements.capabilities` to route skills to the right task queue【12†L523-L531】. Telemetry (StatsD, logs) is mentioned in older docs and should be extended to Temporal metrics and search attributes.
 
@@ -18,7 +18,7 @@ Overall, the current spec is thorough. However, implementation is greenfield: we
 
 **Deterministic Orchestration:** Temporal requires deterministic workflow logic; it excels at *orchestration* and state durability【36†L93-L102】. As MoonMind’s doc states, “Workflow code orchestrates only. No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities”【61†L288-L296】.  This aligns perfectly with Temporal guidance: workflows replay reliably using past decisions, while non-deterministic AI calls live in Activities【36†L99-L102】. Thus, skill-invocation and plan execution belong in Activities, while the plan interpreter (in the Workflow) only schedules nodes, updates progress, and applies failure policies. 
 
-**Idempotency & Retries:** By default Temporal will retry an Activity on failure (up to `max_attempts`)【58†L139-L142】. We must design Skills so that **re-running an Activity is safe or idempotent**【58†L139-L142】. For example, writing to a DB should use unique keys or check existing records (idempotency keys)【58†L154-L163】【58†L178-L187】. Activities like `mm.tool.execute` can compute an idempotency key (e.g. `workflowRunId-activityId`) and skip duplicate side-effects【58†L178-L187】. We should make clear in the Skill contract how Activities achieve idempotency (e.g. through transactional design or dedup keys). Non-idempotent logic should raise retriable vs non-retriable errors appropriately, consistent with our `ToolFailure` codes【12†L468-L477】【58†L139-L142】.
+**Idempotency & Retries:** By default Temporal will retry an Activity on failure (up to `max_attempts`)【58†L139-L142】. We must design Skills so that **re-running an Activity is safe or idempotent**【58†L139-L142】. For example, writing to a DB should use unique keys or check existing records (idempotency keys)【58†L154-L163】【58†L178-L187】. Activities like `mm.skill.execute` can compute an idempotency key (e.g. `workflowRunId-activityId`) and skip duplicate side-effects【58†L178-L187】. We should make clear in the Skill contract how Activities achieve idempotency (e.g. through transactional design or dedup keys). Non-idempotent logic should raise retriable vs non-retriable errors appropriately, consistent with our `SkillFailure` codes【12†L468-L477】【58†L139-L142】.
 
 **Observability:** Temporal supports *Query* calls and Search Attributes for workflows.  MoonMind’s progress model (nodes pending/succeeded etc.) should be exposed via a Workflow Query (as planned)【13†L699-L704】. We should also register relevant Search Attributes (e.g. plan title, status) so operators can list workflows. Periodic progress snapshots (the `progress.json` artifact) can be supplemented by logs or metrics. We should instrument key events (node started, succeeded, failed) with logs and metrics (e.g. StatsD or OpenTelemetry). Temporal workers can emit metrics (like how many skills executed, failures, latencies), possibly tagged by skill name/version. The design already mentions emitting StatsD and writing artifacts【54†L1-L4】; ensure the new Temporal version includes these.
 
@@ -73,7 +73,7 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
               if len(running) < plan.policy.max_concurrency:
                   # schedule skill activity
                   running[node.id] = workflow.execute_activity(
-                      tool_dispatcher,
+                      skill_dispatcher,
                       node.skill.name, node.skill.version, node.inputs,
                       timeouts=node.options.timeouts_override,
                       retry_options=node.options.retries_override,
@@ -93,15 +93,15 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
                   break
       return summarize_execution() 
   ```
-  (A **Dispatcher Activity** `mm.tool.execute` routes to the actual skill implementation based on worker capability).
+  (A **Dispatcher Activity** `mm.skill.execute` routes to the actual skill implementation based on worker capability).
 
-- **Activity Design:** Each Skill invocation becomes one Activity. The default activity type (`mm.tool.execute`) handles generic invocation: it looks up the `ToolDefinition` (from the snapshot), validates inputs, performs the operation (LLM, API call, etc.), writes any artifacts, and returns a `ToolResult` (status, outputs, artifact refs)【12†L441-L450】. For special cases, some skills may bind to custom activity types (e.g. `artifact.read`, `integration.github.call`) for isolation【13†L842-L847】. Activities must catch exceptions and wrap them into our `ToolFailure` format (error code, message) to inform retry policies【12†L468-L477】. Use idempotency keys inside Activities to avoid duplicate side-effects【58†L178-L187】.
+- **Activity Design:** Each Skill invocation becomes one Activity. The default activity type (`mm.skill.execute`) handles generic invocation: it looks up the `SkillDefinition` (from the snapshot), validates inputs, performs the operation (LLM, API call, etc.), writes any artifacts, and returns a `SkillResult` (status, outputs, artifact refs)【12†L441-L450】. For special cases, some skills may bind to custom activity types (e.g. `artifact.read`, `integration.github.call`) for isolation【13†L842-L847】. Activities must catch exceptions and wrap them into our `SkillFailure` format (error code, message) to inform retry policies【12†L468-L477】. Use idempotency keys inside Activities to avoid duplicate side-effects【58†L178-L187】.
 
 - **Concurrency & Failure Policy:** Implement max concurrency by tracking how many nodes are currently running (as above). Enforce **FAIL_FAST** by canceling outstanding activities when one fails (then let Temporal cancel others via `ctx.cancel()`), or **CONTINUE** by letting independent branches finish and collecting failures. On completion, write a final summary artifact (with overall status, any failed node errors) and exit. Use Temporal signals/queries if you want to allow mid-flight cancellation or progress queries (queries are already planned).
 
 - **Observability & Telemetry:** Expose a Workflow Query for progress (using the structured object model【13†L683-L692】). Emit logs/metrics at key points (node start/completion, pipeline end). Map each plan/workflow to identifiable search attributes (e.g. `PlanId`, `PlanStatus`). Use StatsD or OpenTelemetry to push metrics about skills executed, durations, failures (the original code hints at StatsD【54†L1-L4】 – preserve or upgrade to OTEL). Periodically (or on significant events) write a `progress.json` artifact as a durable snapshot【13†L699-L704】.
 
-- **Security & Access:** The ToolDefinition includes `allowed_roles`【61†L395-L398】 – during invocation, check caller identity (if using a User->API->Temporal flow) and forbid unauthorized usage. Artifacts and plan data may contain sensitive info; consider encrypting artifact storage (the doc hints at encryption support【61†L333-L335】). Ensure that Activity workers run in isolated environments if needed (e.g. sandboxed container for risky skills).
+- **Security & Access:** The SkillDefinition includes `allowed_roles`【61†L395-L398】 – during invocation, check caller identity (if using a User->API->Temporal flow) and forbid unauthorized usage. Artifacts and plan data may contain sensitive info; consider encrypting artifact storage (the doc hints at encryption support【61†L333-L335】). Ensure that Activity workers run in isolated environments if needed (e.g. sandboxed container for risky skills).
 
 - **Versioning & Migration:** Since plans pin a skill registry snapshot【13†L758-L767】, we can evolve skill schemas by introducing new versions without breaking old plans. We should include a version in the plan schema (`plan_version`)【12†L531-L540】 so we can parse old vs new formats. Introduce any new fields (e.g. `edges[].condition`) in a backward-compatible way (ignored in v1)【13†L771-L780】. On deployment, update the Skill registry (new versions) alongside worker code, then update the orchestrator. Existing running workflows will continue using the old registry snapshot for consistency. 
 
@@ -125,19 +125,19 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
 
 ## Implementation Roadmap
 
-1. **Registry & Loader:** Define YAML/JSON schema for ToolDefinitions. Implement a registry loader that validates each entry (using a JSON Schema validator) at build-time and startup【11†L356-L364】. Compute a registry snapshot digest (SHA) and publish it as an artifact for reproducibility【13†L745-L754】.
+1. **Registry & Loader:** Define YAML/JSON schema for SkillDefinitions. Implement a registry loader that validates each entry (using a JSON Schema validator) at build-time and startup【11†L356-L364】. Compute a registry snapshot digest (SHA) and publish it as an artifact for reproducibility【13†L745-L754】.
 
-2. **Validation Activity:** Build an activity `plan.validate(artifactRef, registryDigest)`. It reads the plan, checks structural rules (node IDs unique, edges valid, acyclic) and JSON-schema rules (inputs match skills)【13†L727-L735】. Return either a validated plan reference or a ToolFailure. Workflow should invoke this before execution【13†L810-L818】.
+2. **Validation Activity:** Build an activity `plan.validate(artifactRef, registryDigest)`. It reads the plan, checks structural rules (node IDs unique, edges valid, acyclic) and JSON-schema rules (inputs match skills)【13†L727-L735】. Return either a validated plan reference or a SkillFailure. Workflow should invoke this before execution【13†L810-L818】.
 
-3. **Workflow (Interpreter):** Implement the Plan Interpreter algorithm as a Temporal workflow (`MoonMind.Run`). Use a deterministic loop: compute ready nodes, schedule activities, wait for completions, update state/progress, apply policy【13†L634-L644】【13†L649-L657】. Use `workflow.ExecuteActivity` to call `mm.tool.execute` for each node.
+3. **Workflow (Interpreter):** Implement the Plan Interpreter algorithm as a Temporal workflow (`MoonMind.Run`). Use a deterministic loop: compute ready nodes, schedule activities, wait for completions, update state/progress, apply policy【13†L634-L644】【13†L649-L657】. Use `workflow.ExecuteActivity` to call `mm.skill.execute` for each node.
 
-4. **Activity Dispatcher:** In the worker fleet, code `mm.tool.execute(context, skillName, skillVersion, inputs, overrides)` to perform a skill call. It should resolve the `ToolDefinition` (from pinned snapshot), enforce timeouts/retries, route to the correct queue, perform the action (LLM call, shell command, etc.), and collect outputs/artifacts. For example, if `executor.activity_type` is custom (per-skill activity), route accordingly【14†L841-L847】.
+4. **Activity Dispatcher:** In the worker fleet, code `mm.skill.execute(context, skillName, skillVersion, inputs, overrides)` to perform a skill call. It should resolve the `SkillDefinition` (from pinned snapshot), enforce timeouts/retries, route to the correct queue, perform the action (LLM call, shell command, etc.), and collect outputs/artifacts. For example, if `executor.activity_type` is custom (per-skill activity), route accordingly【14†L841-L847】.
 
 5. **Progress & Query:** Maintain counters in workflow state. Implement a Query handler returning `{total_nodes, pending, running, succeeded, failed, last_event, updated_at}`【13†L683-L692】. Optionally write `progress.json` to artifact storage on schedule or completion【13†L699-L704】.
 
 6. **Logging & Metrics:** Add instrumentation: increment a metric per skill start/finish, gauge of running nodes, counters of failures by error_code, etc. Use Temporal interceptors or wrappers. For observability, consider exposing metrics via Prometheus/StatsD and log structured events on the console or an event store.
 
-7. **Security & Secrets:** Integrate a secret manager for any credentials (e.g. integration APIs). Enforce `ToolDefinition.security.allowed_roles` by checking caller identity (if any). Encrypt artifact storage if needed (the design hints at this).
+7. **Security & Secrets:** Integrate a secret manager for any credentials (e.g. integration APIs). Enforce `SkillDefinition.security.allowed_roles` by checking caller identity (if any). Encrypt artifact storage if needed (the design hints at this).
 
 8. **Migration:** Ship v1 of these interfaces and workflows. Document that plans/tasks must conform to v1 schema. When updating (v2), use Temporal’s versioning APIs to evolve workflow logic without breaking in-flight workflows. Provide upgrade scripts or backwards-compatible code so older plans still run (e.g. ignore new fields).
 
@@ -151,8 +151,8 @@ flowchart LR
     C -- Yes --> D[Compute Ready Nodes]
     D -->|Node n1 ready| A1[ExecuteActivity: Skill:n1]
     D -->|Node n2 ready| A2[ExecuteActivity: Skill:n2]
-    A1 --> F1[ToolResult n1]
-    A2 --> F2[ToolResult n2]
+    A1 --> F1[SkillResult n1]
+    A2 --> F2[SkillResult n2]
     F1 & F2 --> U{Update Results \n & Progress}
     U --> D
     U -->|All done| G[Generate Summary Artifact]
@@ -169,7 +169,7 @@ flowchart LR
     Z2 -->|return| F2
   end
 ```
-This illustrates the workflow reading a plan, validating it, then in rounds scheduling ready nodes (activities). Each activity uses a ToolDefinition to invoke the actual work (LLM or integration), producing a `ToolResult` that the workflow collects.
+This illustrates the workflow reading a plan, validating it, then in rounds scheduling ready nodes (activities). Each activity uses a SkillDefinition to invoke the actual work (LLM or integration), producing a `SkillResult` that the workflow collects.
 
 ## Conclusion
 

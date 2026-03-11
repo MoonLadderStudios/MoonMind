@@ -35,18 +35,18 @@ Stage execution returns:
 ## Metadata Normalization Contract
 
 - Persisted metadata payload keys:
-  - `selectedTool`
+  - `selectedSkill`
   - `adapterId`
   - `executionPath`
-  - `usedTools`
+  - `usedSkills`
   - `usedFallback`
   - `shadowModeRequested`
 - API phase payload projection:
-  - `selected_skill <- selectedTool`
+  - `selected_skill <- selectedSkill`
   - `adapter_id <- adapterId`
   - `execution_path <- executionPath`
 - Legacy fallback defaults for Speckit phases:
-  - missing `selectedTool` -> `speckit`
+  - missing `selectedSkill` -> `speckit`
   - missing `adapterId` with Speckit selection -> `speckit`
   - missing `executionPath` with Speckit selection -> `skill`
 

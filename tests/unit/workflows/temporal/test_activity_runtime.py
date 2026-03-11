@@ -405,11 +405,7 @@ async def test_sandbox_checkout_apply_patch_and_run_tests(tmp_path: Path):
                 artifact_id=patch_artifact.artifact_id,
                 principal="user-1",
                 payload=(
-                    "--- sample.txt\n"
-                    "+++ sample.txt\n"
-                    "@@ -1 +1 @@\n"
-                    "-hello\n"
-                    "+patched\n"
+                    "--- sample.txt\n+++ sample.txt\n@@ -1 +1 @@\n-hello\n+patched\n"
                 ).encode("utf-8"),
                 content_type="text/plain",
             )

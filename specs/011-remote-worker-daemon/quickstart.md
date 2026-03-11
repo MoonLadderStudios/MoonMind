@@ -119,9 +119,9 @@ curl -H "Authorization: Bearer $MOONMIND_WORKER_TOKEN" \
 
 Event payloads include execution metadata:
 
-- `selectedTool`
+- `selectedSkill`
 - `executionPath`
-- `usedTools`
+- `usedSkills`
 - `usedFallback`
 - `shadowModeRequested`
 

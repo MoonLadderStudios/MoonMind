@@ -243,7 +243,10 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
         await conn.run_sync(Base.metadata.create_all)
 
     try:
-        async with session_factory() as winner_session, session_factory() as loser_session:
+        async with (
+            session_factory() as winner_session,
+            session_factory() as loser_session,
+        ):
             winner_service = TemporalExecutionService(winner_session)
             loser_service = TemporalExecutionService(loser_session)
             owner_id = uuid4()

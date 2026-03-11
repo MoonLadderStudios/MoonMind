@@ -205,9 +205,9 @@ def test_validate_plan_payload_rejects_invalid_reference_pointer():
         snapshot_digest=snapshot.digest,
         snapshot_ref=snapshot.artifact_ref,
     )
-    plan_payload["nodes"][1]["inputs"]["patch_artifact"]["ref"][
-        "json_pointer"
-    ] = "/outputs/missing_key"
+    plan_payload["nodes"][1]["inputs"]["patch_artifact"]["ref"]["json_pointer"] = (
+        "/outputs/missing_key"
+    )
 
     with pytest.raises(PlanValidationError, match="invalid output path"):
         validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)

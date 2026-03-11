@@ -85,9 +85,9 @@ curl http://localhost:5000/api/workflows/runs
 
 Task payloads in run detail continue to include stage execution metadata:
 
-- `selectedTool`
+- `selectedSkill`
 - `executionPath`
-- `usedTools`
+- `usedSkills`
 - `usedFallback`
 - `shadowModeRequested`
 

@@ -155,8 +155,7 @@ def test_manifest_secret_scanner_allows_vault_reference() -> None:
     """Secret detection should allow sanctioned vault references."""
 
     safe_yaml = INLINE_MANIFEST + (
-        '\nauth:\n  apiKey: "vault://manifests/demo#api_key"\n'
-        '  token: "${ENV_TOKEN}"\n'
+        '\nauth:\n  apiKey: "vault://manifests/demo#api_key"\n  token: "${ENV_TOKEN}"\n'
     )
     normalized = normalize_manifest_job_payload(_payload(yaml=safe_yaml))
     assert normalized["manifestHash"].startswith("sha256:")

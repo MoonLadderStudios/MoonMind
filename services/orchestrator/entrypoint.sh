@@ -51,7 +51,22 @@ else
   export PYTHONPATH="${WORKSPACE_ROOT}"
 fi
 
-cmd=(python -m moonmind.temporal.worker)
+CELERY_APP=${ORCHESTRATOR_CELERY_APP:-moonmind.workflows.orchestrator.tasks}
+CELERY_QUEUE=${ORCHESTRATOR_CELERY_QUEUE:-orchestrator.run}
+CELERY_LOG_LEVEL=${ORCHESTRATOR_LOG_LEVEL:-info}
+CELERY_CONCURRENCY=${ORCHESTRATOR_CONCURRENCY:-1}
+CELERY_HOSTNAME=${ORCHESTRATOR_HOSTNAME:-orchestrator@%h}
+
+cmd=(celery)
+
+cmd+=(
+  -A "${CELERY_APP}"
+  worker
+  "--loglevel=${CELERY_LOG_LEVEL}"
+  "--queues=${CELERY_QUEUE}"
+  "--concurrency=${CELERY_CONCURRENCY}"
+  "--hostname=${CELERY_HOSTNAME}"
+)
 
 # Surface orchestrator metrics configuration for downstream processes.
 export ORCHESTRATOR_METRICS_PREFIX="${ORCHESTRATOR_METRICS_PREFIX:-moonmind.orchestrator}"

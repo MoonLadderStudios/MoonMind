@@ -48,13 +48,6 @@ def _serialize_phase_state(
     state: models.SpecAutomationTaskState,
 ) -> SpecAutomationPhaseState:
     skill_meta = state.get_skill_execution_metadata() or {}
-    # Prefer new key names; fall back to legacy keys for records persisted before the rename.
-    selected_skill = skill_meta.get("selectedTool") or skill_meta.get("selectedSkill")
-    used_skills = (
-        skill_meta.get("usedTools")
-        if "usedTools" in skill_meta
-        else skill_meta.get("usedSkills")
-    )
     return SpecAutomationPhaseState(
         phase=state.phase,
         status=state.status,
@@ -64,10 +57,10 @@ def _serialize_phase_state(
         stdout_path=state.stdout_path,
         stderr_path=state.stderr_path,
         metadata=state.get_metadata(),
-        selected_skill=selected_skill,
+        selected_skill=skill_meta.get("selectedTool"),
         adapter_id=skill_meta.get("adapterId"),
         execution_path=skill_meta.get("executionPath"),
-        used_skills=used_skills,
+        used_skills=skill_meta.get("usedTools"),
         used_fallback=skill_meta.get("usedFallback"),
         shadow_mode_requested=skill_meta.get("shadowModeRequested"),
     )

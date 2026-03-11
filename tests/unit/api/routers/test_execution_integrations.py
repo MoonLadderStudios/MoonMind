@@ -16,7 +16,6 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from api_service.main import app
 from moonmind.config.settings import settings
-from moonmind.workflows.temporal.client import TemporalClientAdapter
 
 CURRENT_USER_DEP = get_current_user()
 
@@ -36,18 +35,6 @@ def _reset_callback_rate_limiter():
     yield
     execution_integrations_router._callback_rate_limiter = (
         execution_integrations_router._CallbackRateLimiter()
-    )
-
-
-@pytest.fixture(autouse=True)
-def _stub_temporal_signal(monkeypatch):
-    async def _noop_signal_workflow(_self, _workflow_id, _signal_name, _arg=None):
-        return None
-
-    monkeypatch.setattr(
-        TemporalClientAdapter,
-        "signal_workflow",
-        _noop_signal_workflow,
     )
 
 

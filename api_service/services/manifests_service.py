@@ -323,15 +323,18 @@ class ManifestsService:
                 manifest_artifact_ref=execution.manifest_ref,
             )
         try:
-            compile_result, child_nodes, summary_ref, run_index_ref = (
-                await self._bootstrap_temporal_manifest_execution(
-                    principal=principal,
-                    record=record,
-                    action=action,
-                    options=options,
-                    execution=execution,
-                    manifest_artifact_ref=manifest_artifact_ref,
-                )
+            (
+                compile_result,
+                child_nodes,
+                summary_ref,
+                run_index_ref,
+            ) = await self._bootstrap_temporal_manifest_execution(
+                principal=principal,
+                record=record,
+                action=action,
+                options=options,
+                execution=execution,
+                manifest_artifact_ref=manifest_artifact_ref,
             )
         except ManifestIngestValidationError as exc:
             raise TemporalExecutionValidationError(str(exc)) from exc

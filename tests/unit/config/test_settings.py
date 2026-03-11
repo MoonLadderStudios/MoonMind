@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from moonmind.config.settings import (
     AppSettings,
     AtlassianSettings,
+    CelerySettings,
     FeatureFlagsSettings,
     GoogleSettings,
     OIDCSettings,
@@ -238,13 +239,6 @@ class TestSpecWorkflowSettings:
             "MOONMIND_CODEX_EFFORT",
             "MOONMIND_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
-            "AGENT_JOB_ARTIFACT_ROOT",
-            "AGENT_JOB_ARTIFACT_MAX_BYTES",
-            "AGENT_JOB_ATTACHMENT_ENABLED",
-            "AGENT_JOB_ATTACHMENT_MAX_COUNT",
-            "AGENT_JOB_ATTACHMENT_MAX_BYTES",
-            "AGENT_JOB_ATTACHMENT_TOTAL_BYTES",
-            "AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
             "WORKFLOW_GITHUB_REPOSITORY",
             "SPEC_WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
@@ -768,6 +762,82 @@ class TestSpecWorkflowSettings:
 
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("speckit",)
+
+    def test_app_settings_defaults_codex_queue_to_celery_default(
+        self, app_settings_defaults
+    ):
+        """When codex queue is unset, app settings should align it to default queue."""
+
+        settings = AppSettings(
+            **app_settings_defaults,
+            celery={
+                "default_queue": "moonmind.jobs",
+                "default_exchange": "moonmind.jobs",
+                "default_routing_key": "moonmind.jobs",
+            },
+            spec_workflow={"codex_queue": None},
+        )
+
+        assert settings.celery.default_queue == "moonmind.jobs"
+        assert settings.spec_workflow.codex_queue == "moonmind.jobs"
+
+
+def test_task_proposal_policy_settings_defaults(app_settings_defaults):
+    """Task proposal defaults should expose policy knobs on both settings."""
+
+    settings = AppSettings(_env_file=None, **app_settings_defaults)
+    assert settings.task_proposals.proposal_targets_default == "project"
+    assert settings.spec_workflow.proposal_targets_default == "project"
+    assert settings.task_proposals.max_items_project_default == 3
+    assert settings.spec_workflow.proposal_max_items_project == 3
+    assert settings.task_proposals.moonmind_severity_floor_default == "high"
+    assert settings.spec_workflow.proposal_moonmind_severity_floor == "high"
+
+
+def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
+    """Environment variables should override policy defaults everywhere."""
+
+    monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
+    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", "5")
+    monkeypatch.setenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
+    monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
+
+    settings = AppSettings(_env_file=None, **app_settings_defaults)
+
+    assert settings.task_proposals.proposal_targets_default == "both"
+    assert settings.spec_workflow.proposal_targets_default == "both"
+    assert settings.task_proposals.max_items_project_default == 5
+    assert settings.spec_workflow.proposal_max_items_project == 5
+    assert settings.task_proposals.max_items_moonmind_default == 4
+    assert settings.spec_workflow.proposal_max_items_moonmind == 4
+    assert settings.task_proposals.moonmind_severity_floor_default == "medium"
+    assert settings.spec_workflow.proposal_moonmind_severity_floor == "medium"
+
+    monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
+    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
+    monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
+    monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
+
+
+def test_celery_settings_accept_workflow_queue_aliases(monkeypatch) -> None:
+    """WORKFLOW_DEFAULT_* aliases should configure Celery queue defaults."""
+
+    monkeypatch.setenv("WORKFLOW_DEFAULT_QUEUE", "workflow.jobs")
+    monkeypatch.setenv("WORKFLOW_DEFAULT_EXCHANGE", "workflow.jobs")
+    monkeypatch.setenv("WORKFLOW_DEFAULT_ROUTING_KEY", "workflow.jobs")
+    monkeypatch.delenv("CELERY_DEFAULT_QUEUE", raising=False)
+    monkeypatch.delenv("CELERY_DEFAULT_EXCHANGE", raising=False)
+    monkeypatch.delenv("CELERY_DEFAULT_ROUTING_KEY", raising=False)
+
+    settings = CelerySettings(_env_file=None)
+
+    assert settings.default_queue == "workflow.jobs"
+    assert settings.default_exchange == "workflow.jobs"
+    assert settings.default_routing_key == "workflow.jobs"
+
+    monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
+    monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)
+    monkeypatch.delenv("WORKFLOW_DEFAULT_ROUTING_KEY", raising=False)
 
 
 class TestAppSettingsRuntimeValidation:

@@ -49,7 +49,7 @@ def main():
             dashboard_status = current_state.get("dashboardStatus")
 
             print(
-                f"[{i+1}/{max_retries}] Workflow {workflow_id} state: {state} (raw: {raw_state}), temporalStatus: {temporal_status}, dashboardStatus: {dashboard_status}"
+                f"[{i + 1}/{max_retries}] Workflow {workflow_id} state: {state} (raw: {raw_state}), temporalStatus: {temporal_status}, dashboardStatus: {dashboard_status}"
             )
 
             # Wait for completion

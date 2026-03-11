@@ -81,7 +81,7 @@
 - [X] T021 [US2] Implement `UpdateInputs`, `SetTitle`, and idempotency-key replay response envelope in moonmind/workflows/temporal/service.py and moonmind/schemas/temporal_models.py (DOC-REQ-003, DOC-REQ-009, DOC-REQ-010)
 - [X] T022 [US2] Implement `RequestRerun` Continue-As-New path that preserves Workflow ID in moonmind/workflows/temporal/service.py (DOC-REQ-005, DOC-REQ-010, DOC-REQ-013)
 - [X] T023 [US2] Implement `ExternalEvent`/`Approve` and optional `Pause`/`Resume` signal handlers in moonmind/workflows/temporal/service.py and moonmind/schemas/temporal_models.py (DOC-REQ-011)
-- [X] T024 [US2] Integrate activity-side authenticity verification hooks for external signals in moonmind/workflows/temporal/service.py and moonmind/workflows/skills/tool_dispatcher.py (DOC-REQ-011, DOC-REQ-017)
+- [X] T024 [US2] Integrate activity-side authenticity verification hooks for external signals in moonmind/workflows/temporal/service.py and moonmind/workflows/skills/skill_dispatcher.py (DOC-REQ-011, DOC-REQ-017)
 - [X] T025 [US2] Implement graceful cancel and forced-termination handling with summary reason capture in api_service/api/routers/executions.py and moonmind/workflows/temporal/service.py (DOC-REQ-012)
 - [X] T026 [US2] Enforce owner/admin controls at API and runtime boundaries for update/signal/cancel/rerun paths in api_service/api/routers/executions.py and moonmind/workflows/temporal/service.py (DOC-REQ-017, DOC-REQ-018)
 

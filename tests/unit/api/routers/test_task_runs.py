@@ -147,7 +147,7 @@ def test_create_live_session_success(client: tuple[TestClient, AsyncMock]) -> No
 
 
 def test_get_live_session_returns_404_when_missing(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -160,7 +160,7 @@ def test_get_live_session_returns_404_when_missing(
 
 
 def test_get_live_session_unauthorized_maps_403(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -173,7 +173,7 @@ def test_get_live_session_unauthorized_maps_403(
 
 
 def test_get_live_session_worker_endpoint_success(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -186,7 +186,7 @@ def test_get_live_session_worker_endpoint_success(
 
 
 def test_get_live_session_worker_endpoint_rejects_oidc_auth(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     test_client.app.dependency_overrides[_require_worker_auth] = (
@@ -228,7 +228,7 @@ def test_grant_live_session_write_success(client: tuple[TestClient, AsyncMock]) 
 
 
 def test_grant_live_session_write_maps_live_session_not_found(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     service.grant_live_session_write.side_effect = LiveSessionNotFoundError("missing")
@@ -243,7 +243,7 @@ def test_grant_live_session_write_maps_live_session_not_found(
 
 
 def test_grant_live_session_write_maps_live_session_state_conflict(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     service.grant_live_session_write.side_effect = LiveSessionStateError("not ready")
@@ -338,7 +338,7 @@ def test_apply_control_action_rejects_deferred_recovery_actions(
 
 
 def test_operator_message_returns_control_event(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -356,7 +356,7 @@ def test_operator_message_returns_control_event(
 
 
 def test_worker_report_rejects_worker_id_mismatch(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -371,7 +371,7 @@ def test_worker_report_rejects_worker_id_mismatch(
 
 
 def test_worker_heartbeat_rejects_worker_id_mismatch(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -387,7 +387,7 @@ def test_worker_heartbeat_rejects_worker_id_mismatch(
 
 
 def test_worker_report_rejects_oidc_auth_source(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()
@@ -412,7 +412,7 @@ def test_worker_report_rejects_oidc_auth_source(
 
 
 def test_worker_heartbeat_rejects_oidc_auth_source(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     test_client, service = client
     task_run_id = uuid4()

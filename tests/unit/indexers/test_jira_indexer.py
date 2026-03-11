@@ -223,9 +223,7 @@ class TestJiraIndexer(unittest.TestCase):
         mock_index_instance = mock_from_documents.return_value
         mock_index_instance.insert_nodes = MagicMock()
 
-        self.mock_jira_reader_instance.load_data.return_value = (
-            []
-        )  # No documents returned
+        self.mock_jira_reader_instance.load_data.return_value = []  # No documents returned
 
         self.mock_settings_obj.node_parser.get_nodes_from_documents.return_value = []
 

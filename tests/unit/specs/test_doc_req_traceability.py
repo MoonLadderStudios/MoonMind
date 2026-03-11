@@ -117,8 +117,7 @@ def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
         doc_req_id = f"DOC-REQ-{doc_req_match.group(1)}"
 
         assert doc_req_id not in rows, (
-            "Duplicate DOC-REQ traceability row in "
-            f"{traceability_path}: {doc_req_id}"
+            f"Duplicate DOC-REQ traceability row in {traceability_path}: {doc_req_id}"
         )
 
         validation_value = cells[validation_col].strip()

@@ -450,7 +450,6 @@ class TemporalExecutionService:
             canonical_workflow_id,
         )
         if record is None:
-
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )

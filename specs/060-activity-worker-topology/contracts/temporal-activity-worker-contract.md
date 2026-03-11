@@ -53,12 +53,12 @@ Contract rules:
 
 ### 3.3 Skill family
 
-- `mm.tool.execute`
+- `mm.skill.execute`
 - curated explicit activity types declared by the registry only when an operational reason exists
 
 Contract rules:
 
-- Default path is `mm.tool.execute`.
+- Default path is `mm.skill.execute`.
 - Explicit binding requires one declared reason:
   - `stronger_isolation`
   - `specialized_credentials`
@@ -133,7 +133,7 @@ Contract rules:
 | `artifact.*` | short | bounded retry-safe retries | optional |
 | `plan.generate` | moderate | bounded backoff | optional |
 | `plan.validate` | short-to-moderate | bounded, invalid-input non-retryable | optional |
-| `mm.tool.execute` | policy-driven | policy-driven | capability-dependent |
+| `mm.skill.execute` | policy-driven | policy-driven | capability-dependent |
 | `sandbox.*` | long | carefully bounded | required for long-running operations |
 | `integration.*` | short per call | bounded backoff | optional; prefer workflow-timer polling over monolithic long activities |
 

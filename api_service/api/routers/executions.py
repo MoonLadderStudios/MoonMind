@@ -82,14 +82,9 @@ def get_temporal_client_adapter() -> TemporalClientAdapter:
     return TemporalClientAdapter()
 
 
-async def get_temporal_client() -> Client:
-    """Compatibility dependency that returns a Temporal client instance."""
-    return await get_temporal_client_adapter().get_client()
-
-
 async def _lazy_get_temporal_client() -> Client:
     """Lazy helper — resolves the Temporal client on demand without DI."""
-    return await get_temporal_client()
+    return await get_temporal_client_adapter().get_client()
 
 
 def _is_execution_admin(user: User | None) -> bool:

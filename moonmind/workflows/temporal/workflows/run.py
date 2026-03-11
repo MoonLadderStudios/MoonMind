@@ -1,18 +1,10 @@
 import asyncio
-import json
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
-
-from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
-from moonmind.workflows.temporal.activity_catalog import (
-    ARTIFACTS_TASK_QUEUE,
-    build_default_activity_catalog,
-)
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -75,7 +67,6 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
-        self._registry_snapshot_ref: Optional[str] = None
 
         # State tracking
         self._paused: bool = False
@@ -95,12 +86,11 @@ class MoonMindRunWorkflow:
         self._step_count = 0
         self._max_wait_cycles = 100
         self._max_steps = 100
-        self._failures: dict[str, str] = {}
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
-        workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref = (
-            self._initialize_from_payload(input_payload)
+        workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
+            input_payload
         )
         workflow.logger.info(
             "Starting MoonMind.Run workflow",
@@ -115,18 +105,14 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        resolved_plan_ref, resolved_registry_snapshot_ref = (
-            await self._run_planning_stage(
-                parameters=parameters,
-                input_ref=input_ref,
-                plan_ref=plan_ref,
-                registry_snapshot_ref=registry_snapshot_ref,
-            )
+        resolved_plan_ref = await self._run_planning_stage(
+            parameters=parameters,
+            input_ref=input_ref,
+            plan_ref=plan_ref,
         )
         await self._run_execution_stage(
             parameters=parameters,
             plan_ref=resolved_plan_ref,
-            registry_snapshot_ref=resolved_registry_snapshot_ref,
         )
 
         if self._cancel_requested:
@@ -141,7 +127,7 @@ class MoonMindRunWorkflow:
 
     def _initialize_from_payload(
         self, input_payload: dict[str, Any]
-    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str], Optional[str]]:
+    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
             raise exceptions.ApplicationError(
                 "input_payload must be a dictionary",
@@ -189,20 +175,13 @@ class MoonMindRunWorkflow:
             "planArtifactRef",
             "plan_artifact_ref",
         )
-        registry_snapshot_ref = self._optional_string(
-            input_payload,
-            "registrySnapshotRef",
-            "registry_snapshot_ref",
-        )
 
         if input_ref:
             self._input_ref = input_ref
         if plan_ref:
             self._plan_ref = plan_ref
-        if registry_snapshot_ref:
-            self._registry_snapshot_ref = registry_snapshot_ref
 
-        return workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref
+        return workflow_type, parameters, input_ref, plan_ref
 
     async def _run_planning_stage(
         self,
@@ -210,10 +189,9 @@ class MoonMindRunWorkflow:
         parameters: dict[str, Any],
         input_ref: Optional[str],
         plan_ref: Optional[str],
-        registry_snapshot_ref: Optional[str],
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> Optional[str]:
         if plan_ref:
-            return plan_ref, registry_snapshot_ref
+            return plan_ref
 
         plan_result = await workflow.execute_activity(
             "plan.generate",
@@ -237,168 +215,37 @@ class MoonMindRunWorkflow:
             if isinstance(plan_result, dict)
             else getattr(plan_result, "plan_ref", None)
         )
-        resolved_registry_snapshot_ref = (
-            plan_result.get("registry_snapshot_ref")
-            if isinstance(plan_result, dict)
-            else getattr(plan_result, "registry_snapshot_ref", None)
-        )
-
         if resolved_plan_ref:
             self._plan_ref = resolved_plan_ref
-        if resolved_registry_snapshot_ref:
-            self._registry_snapshot_ref = resolved_registry_snapshot_ref
-
-        if resolved_plan_ref or resolved_registry_snapshot_ref:
             self._update_memo()
-
-        return resolved_plan_ref, resolved_registry_snapshot_ref
+        return resolved_plan_ref
 
     async def _run_execution_stage(
-        self,
-        *,
-        parameters: dict[str, Any],
-        plan_ref: Optional[str],
-        registry_snapshot_ref: Optional[str],
+        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
-        if plan_ref is None:
-            raise ValueError("plan_ref is required for execution stage")
-
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
-        payload_bytes = await workflow.execute_activity(
-            "artifact.read",
+        sandbox_result = await workflow.execute_activity(
+            "sandbox.run_command",
             {
                 "principal": self._principal(),
-                "artifact_ref": plan_ref,
+                "cmd": "echo executing",
+                "timeout_seconds": 300,
             },
-            start_to_close_timeout=timedelta(minutes=1),
-            task_queue=ARTIFACTS_TASK_QUEUE,
+            start_to_close_timeout=timedelta(minutes=10),
+            task_queue=SANDBOX_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
-        payload = json.loads(payload_bytes.decode("utf-8"))
-        plan = parse_plan_definition(payload)
-        registry_snapshot_ref = plan.metadata.registry_snapshot.artifact_ref
-
-        max_concurrency = plan.policy.max_concurrency
-        failure_mode = plan.policy.failure_mode
-
-        dependencies: dict[str, list[str]] = {node.id: [] for node in plan.nodes}
-        for edge in plan.edges:
-            dependencies[edge.to_node].append(edge.from_node)
-
-        pending = {node.id for node in plan.nodes}
-        running: dict[asyncio.Task[Any], str] = {}
-        succeeded: dict[str, Any] = {}
-        self._failures = {}
-        nodes_by_id = {node.id: node for node in plan.nodes}
-
-        # Build activity catalog once — avoid reconstructing on every loop iteration
-        activity_catalog = build_default_activity_catalog()
-
-        while pending or running:
-            if failure_mode == "FAIL_FAST" and self._failures:
-                for running_task in running:
-                    running_task.cancel()
-                if running:
-                    await asyncio.wait(running.keys())
-                pending.clear()
-                running.clear()
-                self._update_memo()
-                break
-
-            ready = sorted(
-                node_id
-                for node_id in pending
-                if all(dep in succeeded for dep in dependencies.get(node_id, []))
-            )
-
-            if not ready and not running:
-                # Deadlock: pending nodes exist but none are ready and none are running.
-                # This happens when a dependency fails under CONTINUE mode.
-                # Surface this as an error rather than silently succeeding.
-                unexecuted = sorted(pending)
-                raise RuntimeError(
-                    f"Execution deadlocked: {len(unexecuted)} node(s) could not be "
-                    f"scheduled (unexecuted: {unexecuted}, failures: {self._failures})"
-                )
-
-            while ready and len(running) < max_concurrency:
-                node_id = ready.pop(0)
-                pending.remove(node_id)
-                node = nodes_by_id[node_id]
-
-                # NOTE: routing is resolved from the default catalog. Per-skill registry
-                # routing (resolve_skill) is a known gap that requires SkillRegistry access
-                # inside the workflow sandbox — tracked as follow-up work.
-                route = activity_catalog.resolve_activity("mm.skill.execute")
-
-                task = asyncio.create_task(
-                    workflow.execute_activity(
-                        "mm.skill.execute",
-                        {
-                            "invocation_payload": node.to_payload(),
-                            "registry_snapshot_ref": registry_snapshot_ref,
-                            "principal": self._principal(),
-                            "context": {
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                            },
-                        },
-                        task_queue=route.task_queue,
-                        start_to_close_timeout=timedelta(
-                            seconds=route.timeouts.start_to_close_seconds
-                        ),
-                        schedule_to_close_timeout=timedelta(
-                            seconds=route.timeouts.schedule_to_close_seconds
-                        ),
-                        retry_policy=RetryPolicy(
-                            maximum_attempts=route.retries.max_attempts,
-                            initial_interval=timedelta(seconds=5),
-                            maximum_interval=timedelta(
-                                seconds=route.retries.max_interval_seconds
-                            ),
-                            non_retryable_error_types=list(
-                                route.retries.non_retryable_error_codes
-                            ),
-                        ),
-                    )
-                )
-                running[task] = node_id
-
-            if not running:
-                continue
-
-            done, _ = await asyncio.wait(
-                running.keys(), return_when=asyncio.FIRST_COMPLETED
-            )
-
-            # Sort by node_id for deterministic state updates during Temporal replay
-            for task in sorted(done, key=lambda t: running[t]):
-                node_id = running.pop(task)
-                try:
-                    result = task.result()
-                    succeeded[node_id] = result
-
-                    if isinstance(result, dict):
-                        outputs = result.get("output_artifacts", [])
-                        if outputs and isinstance(outputs[0], dict):
-                            self._logs_ref = outputs[0].get("artifact_ref")
-                    elif (
-                        hasattr(result, "output_artifacts") and result.output_artifacts
-                    ):
-                        self._logs_ref = getattr(
-                            result.output_artifacts[0], "artifact_ref", None
-                        )
-
-                except ActivityError as e:
-                    self._failures[node_id] = str(e)
-
+        logs_ref = (
+            sandbox_result.get("diagnostics_ref")
+            if isinstance(sandbox_result, dict)
+            else getattr(sandbox_result, "diagnostics_ref", None)
+        )
+        if logs_ref:
+            self._logs_ref = logs_ref
             self._update_memo()
-
-        if self._failures and failure_mode == "FAIL_FAST":
-            raise RuntimeError(f"Execution failed with failures: {self._failures}")
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
