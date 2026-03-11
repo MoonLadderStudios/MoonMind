@@ -2105,9 +2105,9 @@
         finishedAt: pick(item, "finishedAt"),
         updatedAt: pick(item, "updatedAt"),
         sortTimestamp:
-          pick(item, "updatedAt") ||
-          pick(item, "startedAt") ||
           pick(item, "createdAt") ||
+          pick(item, "startedAt") ||
+          pick(item, "updatedAt") ||
           pick(item, "finishedAt"),
         link: buildUnifiedTaskDetailRoute(pick(item, "id"), "queue"),
       };
@@ -2496,6 +2496,14 @@
   };
 
   const shouldUseTemporalSubmit = (runtimeMode, options = {}) => {
+    const isEditMode = Boolean(options.isEditMode);
+    const preferQueueSubmit = Boolean(options.preferQueueSubmit);
+    const enabled = options.temporalSubmitEnabled !== undefined
+      ? Boolean(options.temporalSubmitEnabled)
+      : temporalSubmitEnabled;
+    if (!enabled || isEditMode || preferQueueSubmit) {
+      return false;
+    }
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     return normalizedMode !== ORCHESTRATOR_RUNTIME;
   };
@@ -3234,10 +3242,10 @@
       finishedAt: pick(run, "completedAt"),
       updatedAt: pick(run, "updatedAt") || pick(run, "completedAt") || pick(run, "startedAt"),
       sortTimestamp:
-        pick(run, "updatedAt") ||
-        pick(run, "completedAt") ||
+        pick(run, "queuedAt") ||
         pick(run, "startedAt") ||
-        pick(run, "queuedAt"),
+        pick(run, "updatedAt") ||
+        pick(run, "completedAt"),
       link: buildUnifiedTaskDetailRoute(
         pick(run, "taskId") || pick(run, "runId"),
         "orchestrator",
@@ -3302,7 +3310,7 @@
         finishedAt: pick(item, "closedAt"),
         updatedAt,
         closedAt: pick(item, "closedAt"),
-        sortTimestamp: updatedAt || pick(item, "closedAt"),
+        sortTimestamp: pick(item, "createdAt") || pick(item, "startedAt") || updatedAt || pick(item, "closedAt"),
         link: buildUnifiedTaskDetailRoute(workflowId, "temporal"),
       };
     });
