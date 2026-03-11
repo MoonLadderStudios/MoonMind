@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from api_service.db.models import (
+from api_service.db.enums import (
     CodexAuthVolumeStatus,
     CodexCredentialStatus,
     CodexPreflightStatus,
