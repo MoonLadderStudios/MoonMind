@@ -8,7 +8,7 @@ from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
-from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
+from moonmind.workflows.skills.tool_plan_contracts import parse_plan_definition
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_TASK_QUEUE,
     build_default_activity_catalog,
@@ -384,18 +384,34 @@ class MoonMindRunWorkflow:
                 node_id = running.pop(task)
                 try:
                     result = task.result()
-                    succeeded[node_id] = result
 
-                    if isinstance(result, dict):
-                        outputs = result.get("output_artifacts", [])
-                        if outputs and isinstance(outputs[0], dict):
-                            self._logs_ref = outputs[0].get("artifact_ref")
-                    elif (
-                        hasattr(result, "output_artifacts") and result.output_artifacts
-                    ):
-                        self._logs_ref = getattr(
-                            result.output_artifacts[0], "artifact_ref", None
+                    # Check for SkillResult with FAILED status — handlers may return
+                    # a failed result without raising, which must also be tracked.
+                    result_status = (
+                        result.get("status")
+                        if isinstance(result, dict)
+                        else getattr(result, "status", None)
+                    )
+                    if result_status == "FAILED":
+                        result_detail = (
+                            result.get("outputs", {})
+                            if isinstance(result, dict)
+                            else getattr(result, "outputs", {})
                         )
+                        self._failures[node_id] = str(result_detail)
+                    else:
+                        succeeded[node_id] = result
+
+                        if isinstance(result, dict):
+                            outputs = result.get("output_artifacts", [])
+                            if outputs and isinstance(outputs[0], dict):
+                                self._logs_ref = outputs[0].get("artifact_ref")
+                        elif (
+                            hasattr(result, "output_artifacts") and result.output_artifacts
+                        ):
+                            self._logs_ref = getattr(
+                                result.output_artifacts[0], "artifact_ref", None
+                            )
 
                 except ActivityError as e:
                     self._failures[node_id] = str(e)
