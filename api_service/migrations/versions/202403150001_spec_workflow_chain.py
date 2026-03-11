@@ -131,6 +131,7 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "spec_workflow_runs": (
         "id",
         "feature_key",
+        "celery_chain_id",
         "status",
         "phase",
         "branch_name",
@@ -163,6 +164,8 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "orchestrator_run_id",
         "plan_step",
         "plan_step_status",
+        "celery_state",
+        "celery_task_id",
         "message",
         "artifact_refs",
     ),
@@ -501,6 +504,11 @@ def upgrade() -> None:  # noqa: D401
         sa.Column(
             "plan_step_status",
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
+            nullable=True,
+        ),
+        sa.Column(
+            "celery_state",
+            postgresql.ENUM(name="orchestratortaskstate", create_type=False),
             nullable=True,
         ),
         sa.Column("message", sa.Text(), nullable=True),
@@ -1025,6 +1033,9 @@ def downgrade() -> None:  # noqa: D401
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
             nullable=True,
         ),
+    )
+    op.add_column(
+        "spec_workflow_task_states",
     )
     op.add_column(
         "spec_workflow_task_states",

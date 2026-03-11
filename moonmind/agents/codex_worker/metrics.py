@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping
 
-from moonmind.workflows.speckit_celery.tasks import _MetricsEmitter
+
 
 
 class WorkerMetrics:
     """Thin wrapper around the shared Spec workflow StatsD emitter."""
 
-    def __init__(self, emitter: _MetricsEmitter | None = None) -> None:
-        self._emitter = emitter or _MetricsEmitter()
+    def __init__(self, emitter: Any | None = None) -> None:
+        self._emitter = emitter
 
     @property
     def enabled(self) -> bool:

@@ -77,7 +77,7 @@ tasks_file="${feature_dir}/tasks.md"
 
 matches_runtime_path() {
   local path="$1"
-  [[ "$path" =~ ^(api_service/|moonmind/|celery_worker/|services/|docker-compose\.yaml$|docker-compose\.test\.yaml$) ]]
+  [[ "$path" =~ ^(api_service/|moonmind/|services/|docker-compose\.yaml$|docker-compose\.test\.yaml$) ]]
 }
 
 matches_validation_path() {

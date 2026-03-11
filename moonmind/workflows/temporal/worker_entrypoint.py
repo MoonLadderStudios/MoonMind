@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from temporalio.client import Client
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Worker
 
 from moonmind.config.settings import settings
 from moonmind.workflows.temporal.workers import (
@@ -48,7 +48,6 @@ async def main():
         workflows=workflows,
         activities=activities,
         max_concurrent_activities=topology.concurrency_limit or 100,
-        workflow_runner=UnsandboxedWorkflowRunner(),
     )
 
     logger.info(

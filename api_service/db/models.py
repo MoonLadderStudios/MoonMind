@@ -5,8 +5,14 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from importlib import import_module
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from moonmind.workflows.speckit_celery.models import (
+        CodexAuthVolume,
+        CodexWorkerShard,
+    )
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
@@ -2231,9 +2237,10 @@ Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
-    if False:
+    if TYPE_CHECKING:
         return
 
+    import_module("moonmind.workflows.speckit_celery.models")
     import_module("moonmind.workflows.agent_queue.models")
 
 

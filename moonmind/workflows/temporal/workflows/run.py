@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
-from temporalio import exceptions, workflow
+from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
@@ -13,9 +13,12 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 
-INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
-LLM_TASK_QUEUE = "mm.activity.llm"
-SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
+with workflow.unsafe.imports_passed_through():
+    from moonmind.workflows.temporal.activity_catalog import (
+        INTEGRATIONS_TASK_QUEUE,
+        LLM_TASK_QUEUE,
+        SANDBOX_TASK_QUEUE,
+    )
 
 
 class RunWorkflowInput(TypedDict, total=False):
@@ -129,11 +132,7 @@ class MoonMindRunWorkflow:
         self, input_payload: dict[str, Any]
     ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
-            raise exceptions.ApplicationError(
-                "input_payload must be a dictionary",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("input_payload must be a dictionary")
 
         workflow_type = self._required_string(
             input_payload,
@@ -142,11 +141,7 @@ class MoonMindRunWorkflow:
             error_message="workflowType is required",
         )
         if workflow_type != WORKFLOW_NAME:
-            raise exceptions.ApplicationError(
-                f"workflowType must be {WORKFLOW_NAME}",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError(f"workflowType must be {WORKFLOW_NAME}")
 
         self._workflow_type = workflow_type
         self._entry = "run"
@@ -200,10 +195,8 @@ class MoonMindRunWorkflow:
                 "inputs_ref": input_ref,
                 "parameters": parameters,
                 "execution_ref": {
-                    "namespace": workflow.info().namespace,
                     "workflow_id": workflow.info().workflow_id,
                     "run_id": workflow.info().run_id,
-                    "link_type": "plan",
                 },
             },
             start_to_close_timeout=timedelta(minutes=15),
@@ -275,11 +268,7 @@ class MoonMindRunWorkflow:
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
-            raise exceptions.ApplicationError(
-                "integration metadata must be an object when provided",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("integration metadata must be an object when provided")
         metadata.setdefault("repo", self._repo)
         metadata.setdefault("planRef", plan_ref)
         integration_parameters["metadata"] = metadata
@@ -330,10 +319,9 @@ class MoonMindRunWorkflow:
                         "correlation_id": correlation_id,
                         "parameters": integration_parameters,
                         "execution_ref": {
-                            "namespace": workflow.info().namespace,
                             "workflow_id": workflow.info().workflow_id,
                             "run_id": workflow.info().run_id,
-                            "link_type": "output.summary",
+                            "kind": "output.summary",
                         },
                     },
                     start_to_close_timeout=timedelta(minutes=5),
@@ -373,20 +361,12 @@ class MoonMindRunWorkflow:
 
     def _principal(self) -> str:
         if not self._owner_id:
-            raise exceptions.ApplicationError(
-                "Trusted owner metadata is required",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("Trusted owner metadata is required")
         return self._owner_id
 
     def _integration_activity_type(self, operation: str = "start") -> str:
         if not self._integration:
-            raise exceptions.ApplicationError(
-                "integration is required for integration activities",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("integration is required for integration activities")
         return f"integration.{self._integration}.{operation}"
 
     def _trusted_owner_metadata(self) -> tuple[str, str]:
@@ -398,10 +378,8 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise exceptions.ApplicationError(
-                "Trusted owner metadata is required in Temporal search attributes",
-                type="ValueError",
-                non_retryable=True,
+            raise ValueError(
+                "Trusted owner metadata is required in Temporal search attributes"
             )
         return owner_type, owner_id
 
@@ -422,9 +400,7 @@ class MoonMindRunWorkflow:
     ) -> str:
         value = self._optional_string(payload, *keys)
         if value is None:
-            raise exceptions.ApplicationError(
-                error_message, type="ValueError", non_retryable=True
-            )
+            raise ValueError(error_message)
         return value
 
     def _optional_string(self, payload: Mapping[str, Any], *keys: str) -> Optional[str]:
@@ -433,11 +409,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise exceptions.ApplicationError(
-                    f"{key} must be a string when provided",
-                    type="ValueError",
-                    non_retryable=True,
-                )
+                raise ValueError(f"{key} must be a string when provided")
             normalized = value.strip()
             if normalized:
                 return normalized
@@ -449,11 +421,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, Mapping):
-                raise exceptions.ApplicationError(
-                    f"{key} must be an object when provided",
-                    type="ValueError",
-                    non_retryable=True,
-                )
+                raise ValueError(f"{key} must be an object when provided")
             return self._json_mapping(value, path=key)
         return {}
 
@@ -461,11 +429,7 @@ class MoonMindRunWorkflow:
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
-                raise exceptions.ApplicationError(
-                    f"{path} keys must be strings",
-                    type="ValueError",
-                    non_retryable=True,
-                )
+                raise ValueError(f"{path} keys must be strings")
             normalized[key] = self._json_value(item, path=f"{path}.{key}")
         return normalized
 
@@ -476,11 +440,7 @@ class MoonMindRunWorkflow:
             return self._json_mapping(value, path=path)
         if isinstance(value, list):
             return [self._json_value(item, path=f"{path}[]") for item in value]
-        raise exceptions.ApplicationError(
-            f"{path} must contain only JSON-compatible values",
-            type="ValueError",
-            non_retryable=True,
-        )
+        raise ValueError(f"{path} must contain only JSON-compatible values")
 
     def _string_from_mapping(
         self, payload: Mapping[str, Any], key: str
@@ -489,11 +449,7 @@ class MoonMindRunWorkflow:
         if value is None:
             return None
         if not isinstance(value, str):
-            raise exceptions.ApplicationError(
-                f"{key} must be a string when provided",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError(f"{key} must be a string when provided")
         normalized = value.strip()
         return normalized or None
 

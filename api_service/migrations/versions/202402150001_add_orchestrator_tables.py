@@ -346,6 +346,14 @@ def upgrade() -> None:  # noqa: D401
     )
     op.add_column(
         "spec_workflow_task_states",
+        sa.Column(
+            "celery_state",
+            ORCHESTRATOR_TASK_STATE,
+            nullable=True,
+        ),
+    )
+    op.add_column(
+        "spec_workflow_task_states",
         sa.Column("message", sa.Text(), nullable=True),
     )
     op.add_column(

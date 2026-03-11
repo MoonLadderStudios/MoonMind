@@ -84,7 +84,6 @@ from moonmind.workflows.skills.workspace_links import (
     SkillWorkspaceError,
     ensure_shared_skill_links,
 )
-from moonmind.workflows.speckit_celery.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
 
@@ -11146,3 +11145,20 @@ __all__ = [
     "QueueApiClient",
     "QueueClientError",
 ]
+import datetime
+from uuid import UUID
+
+def generate_branch_name(
+    run_id: UUID | str,
+    *,
+    prefix: str = "task",
+    suffix: str | None = None,
+) -> str:
+    """Return a reproducible Git branch name for a task execution run."""
+    run_str = str(run_id)
+    short_id = run_str[:8]
+    date_str = datetime.date.today().strftime("%Y%m%d")
+    branch = f"{prefix}/{date_str}/{short_id}"
+    if suffix:
+        branch = f"{branch}-{suffix}"
+    return branch

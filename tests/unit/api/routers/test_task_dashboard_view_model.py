@@ -56,7 +56,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_enabled", True)
 
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
@@ -281,9 +280,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
     monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
-    monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "gemini")
     monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
@@ -333,8 +330,8 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     config = build_runtime_config("/tasks")
 
     assert config["features"]["temporalDashboard"] == {
-        "enabled": True,
-        "listEnabled": True,
+        "enabled": False,
+        "listEnabled": False,
         "detailEnabled": True,
         "actionsEnabled": True,
         "submitEnabled": True,

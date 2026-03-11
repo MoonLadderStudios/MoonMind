@@ -1317,33 +1317,12 @@ def build_activity_bindings(
                 f"{implementation_key.rstrip('s')} implementation"
             )
 
-        from temporalio import activity
-
-        func = getattr(type(implementation), attr_name, None)
-        if func is None:
+        handler = getattr(implementation, attr_name, None)
+        if handler is None:
             raise TemporalActivityRuntimeError(
                 f"Activity '{definition.activity_type}' requires handler "
                 f"'{attr_name}' on {type(implementation).__name__}"
             )
-
-        if not hasattr(func, "__temporal_activity_definition"):
-
-            def make_wrapper(f):
-                async def _wrapper(self, request=None):
-                    return await f(self, request)
-
-                return _wrapper
-
-            _wrapper = make_wrapper(func)
-
-            _wrapper.__name__ = func.__name__
-            _wrapper.__qualname__ = func.__qualname__
-            _wrapper.__doc__ = func.__doc__
-
-            decorated_func = activity.defn(name=definition.activity_type)(_wrapper)
-            setattr(type(implementation), attr_name, decorated_func)
-
-        handler = getattr(implementation, attr_name)
 
         binding = TemporalActivityBinding(
             activity_type=definition.activity_type,
@@ -1363,31 +1342,12 @@ def build_activity_bindings(
             binding_key = ("mm.skill.execute", fleet.fleet)
             if binding_key in bound_keys:
                 continue
-            func = getattr(type(skill_activities), "mm_skill_execute", None)
-            if func is None:
+            handler = getattr(skill_activities, "mm_skill_execute", None)
+            if handler is None:
                 raise TemporalActivityRuntimeError(
                     f"Activity 'mm.skill.execute' requires handler "
                     f"'mm_skill_execute' on {type(skill_activities).__name__}"
                 )
-            if not hasattr(func, "__temporal_activity_definition"):
-                from temporalio import activity
-
-                def make_wrapper(f):
-                    async def _wrapper(self, request=None):
-                        return await f(self, request)
-
-                    return _wrapper
-
-                _wrapper = make_wrapper(func)
-
-                _wrapper.__name__ = func.__name__
-                _wrapper.__qualname__ = func.__qualname__
-                _wrapper.__doc__ = func.__doc__
-
-                decorated_func = activity.defn(name="mm.skill.execute")(_wrapper)
-                setattr(type(skill_activities), "mm_skill_execute", decorated_func)
-
-            handler = getattr(skill_activities, "mm_skill_execute")
             bindings.append(
                 TemporalActivityBinding(
                     activity_type="mm.skill.execute",

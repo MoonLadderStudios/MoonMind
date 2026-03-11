@@ -49,30 +49,102 @@ class DatabaseSettings(BaseSettings):
     )
 
 
+class CelerySettings(BaseSettings):
+    """Celery broker and result backend settings."""
+
+    broker_url: str = Field(
+        "amqp://guest:guest@rabbitmq:5672//",
+        env="CELERY_BROKER_URL",
+        description="AMQP URL for the Celery broker (RabbitMQ).",
+    )
+    result_backend: Optional[str] = Field(
+        None,
+        env="CELERY_RESULT_BACKEND",
+        description="Database URL used by Celery to persist task results.",
+    )
+    default_queue: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE", "CELERY_DEFAULT_QUEUE"),
+        description="Default queue name for workflow tasks.",
+    )
+    default_exchange: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_EXCHANGE", "CELERY_DEFAULT_EXCHANGE"
+        ),
+        description="Default exchange for workflow tasks.",
+    )
+    default_routing_key: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_ROUTING_KEY", "CELERY_DEFAULT_ROUTING_KEY"
+        ),
+        description="Default routing key used by the workflow queue.",
+    )
+    task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
+    result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
+    accept_content: tuple[str, ...] = Field(
+        ("json",),
+        env="CELERY_ACCEPT_CONTENT",
+        description="Accepted content types for Celery tasks.",
+    )
+    task_acks_late: bool = Field(True, env="CELERY_TASK_ACKS_LATE")
+    task_acks_on_failure_or_timeout: bool = Field(
+        True, env="CELERY_TASK_ACKS_ON_FAILURE_OR_TIMEOUT"
+    )
+    task_reject_on_worker_lost: bool = Field(
+        True, env="CELERY_TASK_REJECT_ON_WORKER_LOST"
+    )
+    worker_prefetch_multiplier: int = Field(1, env="CELERY_WORKER_PREFETCH_MULTIPLIER")
+    imports: tuple[str, ...] = Field(
+        (),
+        env="CELERY_IMPORTS",
+        description="Celery modules imported by the worker on startup.",
+    )
+    result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
+    result_expires: int = Field(7 * 24 * 60 * 60, env="CELERY_RESULT_EXPIRES")
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("accept_content", "imports", mode="before")
+    @classmethod
+    def _split_csv(cls, value):
+        """Allow comma-delimited strings for tuple fields."""
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return tuple(items)
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return value
+
+
 class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
 
-    address: str = Field("temporal:7233", validation_alias="TEMPORAL_ADDRESS")
-    namespace: str = Field("moonmind", validation_alias="TEMPORAL_NAMESPACE")
-    worker_fleet: str = Field("workflow", validation_alias="TEMPORAL_WORKER_FLEET")
-    workflow_task_queue: str = Field(
-        "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
-    )
+    address: str = Field("temporal:7233", env="TEMPORAL_ADDRESS")
+    namespace: str = Field("moonmind", env="TEMPORAL_NAMESPACE")
+    worker_fleet: str = Field("workflow", env="TEMPORAL_WORKER_FLEET")
+    workflow_task_queue: str = Field("mm.workflow", env="TEMPORAL_WORKFLOW_TASK_QUEUE")
     activity_artifacts_task_queue: str = Field(
         "mm.activity.artifacts",
-        validation_alias="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
+        env="TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE",
     )
     activity_llm_task_queue: str = Field(
         "mm.activity.llm",
-        validation_alias="TEMPORAL_ACTIVITY_LLM_TASK_QUEUE",
+        env="TEMPORAL_ACTIVITY_LLM_TASK_QUEUE",
     )
     activity_sandbox_task_queue: str = Field(
         "mm.activity.sandbox",
-        validation_alias="TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE",
+        env="TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE",
     )
     activity_integrations_task_queue: str = Field(
         "mm.activity.integrations",
-        validation_alias="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
+        env="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
     )
     temporal_authoritative_read_enabled: bool = Field(
         False,
@@ -80,58 +152,58 @@ class TemporalSettings(BaseSettings):
     )
     workflow_worker_concurrency: int | None = Field(
         8,
-        validation_alias="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
+        env="TEMPORAL_WORKFLOW_WORKER_CONCURRENCY",
         ge=1,
     )
     artifacts_worker_concurrency: int | None = Field(
         8,
-        validation_alias="TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY",
+        env="TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY",
         ge=1,
     )
     llm_worker_concurrency: int | None = Field(
         4,
-        validation_alias="TEMPORAL_LLM_WORKER_CONCURRENCY",
+        env="TEMPORAL_LLM_WORKER_CONCURRENCY",
         ge=1,
     )
     sandbox_worker_concurrency: int | None = Field(
         2,
-        validation_alias="TEMPORAL_SANDBOX_WORKER_CONCURRENCY",
+        env="TEMPORAL_SANDBOX_WORKER_CONCURRENCY",
         ge=1,
     )
     integrations_worker_concurrency: int | None = Field(
         4,
-        validation_alias="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
+        env="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
         ge=1,
     )
     integration_poll_initial_seconds: int = Field(
         5,
-        validation_alias="TEMPORAL_INTEGRATION_POLL_INITIAL_SECONDS",
+        env="TEMPORAL_INTEGRATION_POLL_INITIAL_SECONDS",
         ge=1,
     )
     integration_poll_max_seconds: int = Field(
         300,
-        validation_alias="TEMPORAL_INTEGRATION_POLL_MAX_SECONDS",
+        env="TEMPORAL_INTEGRATION_POLL_MAX_SECONDS",
         ge=1,
     )
     integration_poll_jitter_ratio: float = Field(
         0.2,
-        validation_alias="TEMPORAL_INTEGRATION_POLL_JITTER_RATIO",
+        env="TEMPORAL_INTEGRATION_POLL_JITTER_RATIO",
         ge=0.0,
         le=1.0,
     )
     run_continue_as_new_step_threshold: int = Field(
         500,
-        validation_alias="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
+        env="TEMPORAL_RUN_CONTINUE_AS_NEW_STEP_THRESHOLD",
         ge=1,
     )
     run_continue_as_new_wait_cycle_threshold: int = Field(
         200,
-        validation_alias="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
+        env="TEMPORAL_RUN_CONTINUE_AS_NEW_WAIT_CYCLE_THRESHOLD",
         ge=1,
     )
     manifest_continue_as_new_phase_threshold: int = Field(
         5,
-        validation_alias="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
+        env="TEMPORAL_MANIFEST_CONTINUE_AS_NEW_PHASE_THRESHOLD",
         ge=1,
     )
 
@@ -498,6 +570,24 @@ class SpecWorkflowSettings(BaseSettings):
         "/work",
         env="SPEC_AUTOMATION_WORKSPACE_ROOT",
         description="Host-mounted root directory for Spec Automation workspaces.",
+    )
+    celery_broker_url: Optional[str] = Field(
+        None,
+        env=(
+            "WORKFLOW_CELERY_BROKER_URL",
+            "SPEC_WORKFLOW_CELERY_BROKER_URL",
+            "CELERY_BROKER_URL",
+        ),
+        description="Override Celery broker URL dedicated to Spec workflow chains.",
+    )
+    celery_result_backend: Optional[str] = Field(
+        None,
+        env=(
+            "WORKFLOW_CELERY_RESULT_BACKEND",
+            "SPEC_WORKFLOW_CELERY_RESULT_BACKEND",
+            "CELERY_RESULT_BACKEND",
+        ),
+        description="Override Celery result backend for Spec workflow chains.",
     )
     metrics_enabled: bool = Field(
         False,
@@ -1061,6 +1151,8 @@ class SpecWorkflowSettings(BaseSettings):
 
     @field_validator(
         "metrics_host",
+        "celery_broker_url",
+        "celery_result_backend",
         "codex_environment",
         "codex_model",
         "codex_effort",
@@ -1742,6 +1834,7 @@ class AppSettings(BaseSettings):
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
+    celery: CelerySettings = Field(default_factory=CelerySettings)
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
     temporal_dashboard: TemporalDashboardSettings = Field(
         default_factory=TemporalDashboardSettings
@@ -2063,7 +2156,22 @@ class AppSettings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Populate derived Celery defaults after settings load."""
         super().model_post_init(__context)
+        if not self.celery.result_backend:
+            db = self.database
+            self.celery.result_backend = "db+postgresql://{}:{}@{}:{}/{}".format(
+                db.POSTGRES_USER,
+                db.POSTGRES_PASSWORD,
+                db.POSTGRES_HOST,
+                db.POSTGRES_PORT,
+                db.POSTGRES_DB,
+            )
 
+        if not self.spec_workflow.celery_broker_url:
+            self.spec_workflow.celery_broker_url = self.celery.broker_url
+        if not self.spec_workflow.celery_result_backend:
+            self.spec_workflow.celery_result_backend = self.celery.result_backend
+        if not self.spec_workflow.codex_queue:
+            self.spec_workflow.codex_queue = self.celery.default_queue
         if self.worker_enable_task_proposals is not None:
             self.spec_workflow.enable_task_proposals = self.worker_enable_task_proposals
         if self.worker_stage_command_timeout_seconds is not None:

@@ -26,24 +26,6 @@ def disabled_env_keys(monkeypatch):
     yield
 
 
-@pytest.fixture(autouse=True)
-def mock_temporal_environment(monkeypatch):
-    from unittest.mock import AsyncMock
-
-    from moonmind.workflows.temporal.client import TemporalClientAdapter
-
-    m = AsyncMock()
-    m.id = "mock-id"
-    m.run_id = "mock-run-id"
-
-    monkeypatch.setattr(
-        TemporalClientAdapter, "start_workflow", AsyncMock(return_value=m)
-    )
-    monkeypatch.setattr(TemporalClientAdapter, "signal_workflow", AsyncMock())
-    monkeypatch.setattr(TemporalClientAdapter, "get_client", AsyncMock())
-    yield
-
-
 @pytest.fixture
 def keycloak_mode(monkeypatch):
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)

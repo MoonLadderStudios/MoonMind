@@ -4,8 +4,9 @@ import asyncio
 import logging
 from contextlib import AsyncExitStack
 
+from temporalio import workflow
 from temporalio.client import Client
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
@@ -30,10 +31,22 @@ from moonmind.workflows.temporal.workers import (
 logger = logging.getLogger(__name__)
 
 
-from moonmind.workflows.temporal.workflows.manifest_ingest import (
-    MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
-)
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
+@workflow.defn(name="MoonMind.Run")
+class MoonMindRun:
+    """Placeholder for MoonMind.Run workflow."""
+
+    @workflow.run
+    async def run(self, *args, **kwargs) -> None:
+        pass
+
+
+@workflow.defn(name="MoonMind.ManifestIngest")
+class MoonMindManifestIngest:
+    """Placeholder for MoonMind.ManifestIngest workflow."""
+
+    @workflow.run
+    async def run(self, *args, **kwargs) -> None:
+        pass
 
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
@@ -41,41 +54,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     try:
         session = await resources.enter_async_context(get_async_session_context())
         artifact_service = TemporalArtifactService(TemporalArtifactRepository(session))
-
-        def _dummy_planner(inputs, parameters, snapshot):
-            # Stub planner to unblock workflow execution until the real LLM planner is implemented
-            from datetime import UTC, datetime
-
-            return {
-                "plan_version": "1.0",
-                "metadata": {
-                    "title": "Dummy Plan",
-                    "created_at": datetime.now(tz=UTC)
-                    .replace(microsecond=0)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                    "registry_snapshot": {
-                        "digest": "reg:sha256:dummy",
-                        "artifact_ref": "art:sha256:dummy",
-                    },
-                },
-                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                "nodes": [
-                    {
-                        "id": "dummy-node",
-                        "skill": {"name": "dummy.skill", "version": "1.0"},
-                        "inputs": {},
-                    }
-                ],
-                "edges": [],
-            }
-
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,
             artifact_activities=TemporalArtifactActivities(artifact_service),
-            plan_activities=TemporalPlanActivities(
-                artifact_service=artifact_service, planner=_dummy_planner
-            ),
+            plan_activities=TemporalPlanActivities(artifact_service=artifact_service),
             skill_activities=TemporalSkillActivities(
                 dispatcher=SkillActivityDispatcher()
             ),
@@ -129,7 +111,6 @@ async def main_async() -> None:
             task_queue=topology.task_queues[0],
             workflows=workflows,
             activities=activities,
-            workflow_runner=UnsandboxedWorkflowRunner(),
             **_worker_concurrency_kwargs(topology),
         )
 

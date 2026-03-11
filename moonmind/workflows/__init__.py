@@ -15,6 +15,7 @@ from moonmind.workflows.temporal import (
 )
 
 
+
 def get_agent_queue_repository(session: AsyncSession) -> AgentQueueRepository:
     """Factory helper used by queue APIs to access queue persistence."""
 
@@ -25,6 +26,8 @@ def get_agent_queue_service(session: AsyncSession) -> AgentQueueService:
     """Factory helper returning the queue service for a DB session."""
 
     return AgentQueueService(get_agent_queue_repository(session))
+
+
 
 
 def get_task_proposal_repository(session: AsyncSession) -> TaskProposalRepository:

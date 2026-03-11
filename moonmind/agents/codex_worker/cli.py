@@ -10,17 +10,7 @@ import re
 import subprocess
 from typing import Mapping, Sequence
 
-from celery_worker.runtime_mode import (
-    format_invalid_claude_cli_auth_mode_error,
-    format_invalid_gemini_cli_auth_mode_error,
-    inspect_claude_home_for_auth_mode,
-    inspect_gemini_home_for_auth_mode,
-    is_invalid_claude_cli_auth_mode,
-    is_invalid_gemini_cli_auth_mode,
-    resolve_claude_cli_auth_mode,
-    resolve_gemini_cli_auth_mode,
 )
-
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
 from moonmind.agents.codex_worker.utils import (
     CliVerificationError,
