@@ -5,7 +5,6 @@ from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
