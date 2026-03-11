@@ -1798,7 +1798,9 @@ class CodexAuthVolume(Base):
 
     __tablename__ = "codex_auth_volumes"
     __table_args__ = (
-        UniqueConstraint("worker_affinity", name="uq_codex_auth_volumes_worker_affinity"),
+        UniqueConstraint(
+            "worker_affinity", name="uq_codex_auth_volumes_worker_affinity"
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(64), primary_key=True)

@@ -12,6 +12,7 @@ from moonmind.workflows.speckit_celery.celeryconfig import (
     build_task_router,
     get_codex_shard_router,
 )
+
 CELERY_NAMESPACE = "moonmind.workflows.speckit_celery"
 _TASK_IMPORT = "moonmind.workflows.speckit_celery.tasks"
 _MODELS_MODULE = "moonmind.workflows.speckit_celery.models"
