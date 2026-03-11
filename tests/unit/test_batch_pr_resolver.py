@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import runpy
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from moonmind.workflows.agent_queue.task_contract import normalize_queue_job_payload
+
 
 
 def _load_module() -> dict[str, Any]:
@@ -105,11 +107,11 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
         max_attempts=4,
     )
 
-    normalized = normalize_queue_job_payload(
-        job_type=request["type"], payload=request["payload"]
-    )
-    assert normalized["task"]["skill"]["id"] == "pr-resolver"
-    assert normalized["task"]["publish"]["mode"] == "none"
+    # Assert directly on the raw Temporal-contract payload. normalize_queue_job_payload
+    # uses the legacy queue-worker contract (skill.id) and will fail on the new
+    # skill.name shape.  Publish and skill identity assertions are covered by the
+    # dedicated contract tests below.
+    assert request["payload"]["task"]["publish"]["mode"] == "none"
 
 
 def test_load_parent_repository_reads_task_context(tmp_path: Path):
@@ -241,3 +243,226 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     assert runtime.mode == "gemini"
     assert runtime.model == "gemini-2.5-pro"
     assert runtime.effort == "high"
+
+
+# ---------------------------------------------------------------------------
+# HTTP submission path tests
+# ---------------------------------------------------------------------------
+
+
+def _make_submission(module: dict[str, Any]) -> Any:
+    """Build a minimal JobSubmission for testing."""
+    _JobSubmission = module["JobSubmission"]
+    _RuntimeSelection = module["RuntimeSelection"]
+    build = module["_build_queue_request"]
+    req = build(
+        "MoonLadderStudios/MoonMind",
+        pr_number=42,
+        branch="feature/test",
+        runtime=_RuntimeSelection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+    return _JobSubmission(queue_request=req, pr_number=42, branch="feature/test")
+
+
+def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
+    """When MOONMIND_URL is set, _submit_jobs should POST to /api/queue/jobs."""
+    module = _load_module()
+    submit_jobs_via_http = module["_submit_jobs_via_http"]
+    _read_worker_token = module["_read_worker_token"]
+
+    monkeypatch.setenv("MOONMIND_WORKER_TOKEN", "test-token-abc")
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status = MagicMock()
+    fake_response.json = MagicMock(return_value={"id": "uuid-1234", "status": "queued"})
+
+    mock_post = AsyncMock(return_value=fake_response)
+
+    import httpx
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, path: str, **kwargs: Any) -> Any:
+            return await mock_post(path, **kwargs)
+
+    with patch.object(httpx, "AsyncClient", FakeAsyncClient):
+        submission = _make_submission(module)
+        created, errors = asyncio.get_event_loop().run_until_complete(
+            submit_jobs_via_http(
+                [submission],
+                moonmind_url="http://api:5000",
+                worker_token="test-token-abc",
+            )
+        )
+
+    assert errors == []
+    assert len(created) == 1
+    assert created[0]["jobId"] == "uuid-1234"
+    assert created[0]["pr"] == 42
+    mock_post.assert_awaited_once()
+    call_path = mock_post.await_args[0][0]
+    assert call_path == "/api/queue/jobs"
+
+
+def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
+    """_submit_jobs dispatches to HTTP when MOONMIND_URL is configured."""
+    module = _load_module()
+    submit_jobs = module["_submit_jobs"]
+
+    monkeypatch.setenv("MOONMIND_URL", "http://api:5000")
+    monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
+    monkeypatch.delenv("MOONMIND_WORKER_TOKEN_FILE", raising=False)
+
+    http_called = []
+
+    async def fake_http(requests: list, *, moonmind_url: str, worker_token: Any) -> tuple:
+        http_called.append(moonmind_url)
+        return [{"pr": 1, "branch": "b", "jobId": "x"}], []
+
+    submission = _make_submission(module)
+
+    # patch.dict doesn't work for runpy'd modules because the function's __globals__
+    # dict IS the module dict; we must mutate it in place via setitem.
+    monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_http", fake_http)
+    created, errors = asyncio.get_event_loop().run_until_complete(
+        submit_jobs([submission])
+    )
+
+    assert http_called == ["http://api:5000"]
+    assert len(created) == 1
+    assert errors == []
+
+
+def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
+    """_submit_jobs falls back to DB path and logs a warning when MOONMIND_URL is absent."""
+    module = _load_module()
+    submit_jobs = module["_submit_jobs"]
+
+    monkeypatch.delenv("MOONMIND_URL", raising=False)
+
+    db_called = []
+
+    async def fake_db(requests: list) -> tuple:
+        db_called.append(True)
+        return [{"pr": 1, "branch": "b", "jobId": "y"}], []
+
+    submission = _make_submission(module)
+
+    monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
+    created, errors = asyncio.get_event_loop().run_until_complete(
+        submit_jobs([submission])
+    )
+
+    assert db_called == [True]
+    assert len(created) == 1
+    assert errors == []
+
+
+def test_read_worker_token_from_file(monkeypatch: Any, tmp_path: Path) -> None:
+    """_read_worker_token reads from MOONMIND_WORKER_TOKEN_FILE when TOKEN env is absent."""
+    module = _load_module()
+    read_worker_token = module["_read_worker_token"]
+
+    token_file = tmp_path / "worker_token"
+    token_file.write_text("  my-file-token  ", encoding="utf-8")
+
+    monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
+    monkeypatch.setenv("MOONMIND_WORKER_TOKEN_FILE", str(token_file))
+
+    assert read_worker_token() == "my-file-token"
+
+
+def test_read_worker_token_prefers_env_over_file(monkeypatch: Any, tmp_path: Path) -> None:
+    """_read_worker_token prefers MOONMIND_WORKER_TOKEN over MOONMIND_WORKER_TOKEN_FILE."""
+    module = _load_module()
+    read_worker_token = module["_read_worker_token"]
+
+    token_file = tmp_path / "worker_token"
+    token_file.write_text("file-token", encoding="utf-8")
+
+    monkeypatch.setenv("MOONMIND_WORKER_TOKEN", "env-token")
+    monkeypatch.setenv("MOONMIND_WORKER_TOKEN_FILE", str(token_file))
+
+    assert read_worker_token() == "env-token"
+
+
+# ---------------------------------------------------------------------------
+# SkillInvocation payload contract tests
+# ---------------------------------------------------------------------------
+
+
+def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """Call _build_queue_request with sensible defaults, returning the raw dict."""
+    _RuntimeSelection = module["RuntimeSelection"]
+    build = module["_build_queue_request"]
+    kwargs: dict[str, Any] = dict(
+        runtime=_RuntimeSelection(mode="codex", model=None, effort=None),
+        merge_method="squash",
+        max_iterations=3,
+        priority=0,
+        max_attempts=3,
+    )
+    kwargs.update(overrides)
+    return build("MoonLadderStudios/MoonMind", 42, "feature/test", **kwargs)
+
+
+def test_build_queue_request_skill_contract() -> None:
+    """skill.name + skill.version are present; legacy skill.id and skill.args are absent."""
+    module = _load_module()
+    req = _build_request(module)
+    task = req["payload"]["task"]
+    skill = task["skill"]
+
+    # Correct fields per SkillInvocation contract
+    assert skill.get("name") == "pr-resolver", "skill.name must be 'pr-resolver'"
+    assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
+
+    # Legacy / wrong fields must NOT be present
+    assert "id" not in skill, "skill.id is the legacy field; must not be sent to Temporal"
+    assert "args" not in skill, "skill.args is legacy; inputs now live at task-node level"
+
+    # inputs live at the task-node level, not inside skill
+    inputs = task.get("inputs")
+    assert isinstance(inputs, dict), "inputs must be a top-level key on task node"
+    assert inputs.get("repo") == "MoonLadderStudios/MoonMind"
+    assert inputs.get("pr") == "42"
+    assert inputs.get("branch") == "feature/test"
+    assert inputs.get("mergeMethod") == "squash"
+    assert inputs.get("maxIterations") == 3
+
+
+def test_build_queue_request_required_capabilities_toplevel() -> None:
+    """requiredCapabilities must live at payload level, not inside skill."""
+    module = _load_module()
+    req = _build_request(module)
+    payload = req["payload"]
+    task = payload["task"]
+
+    # Correct: top-level on payload so _create_execution_from_task_request can read it
+    assert payload.get("requiredCapabilities") == ["gh"]
+
+    # Wrong nesting must NOT be present
+    skill = task["skill"]
+    assert "requiredCapabilities" not in skill, (
+        "requiredCapabilities must not be nested inside skill"
+    )
+
+
+def test_build_queue_request_skill_version_passthrough() -> None:
+    """--skill-version value is forwarded to the payload."""
+    module = _load_module()
+    req = _build_request(module, skill_version="2.3")
+    skill = req["payload"]["task"]["skill"]
+    assert skill.get("version") == "2.3"

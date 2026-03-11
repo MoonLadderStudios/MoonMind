@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import re
 import subprocess
@@ -14,9 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from api_service.db.base import get_async_session_context
-from moonmind.workflows import get_agent_queue_service
+import httpx
+
 from moonmind.workflows.agent_queue.task_contract import resolve_publish_mode_for_skill
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -309,6 +312,7 @@ def _build_queue_request(
     max_iterations: int,
     priority: int,
     max_attempts: int,
+    skill_version: str = "1.0",
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
     runtime_payload: dict[str, Any] = {"mode": runtime.mode}
@@ -324,18 +328,22 @@ def _build_queue_request(
         "payload": {
             "repository": repo,
             "targetRuntime": runtime.mode,
+            # Top-level on payload so _create_execution_from_task_request can read it.
+            "requiredCapabilities": ["gh"],
             "task": {
                 "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
+                # Aligned with SkillInvocation contract: skill.name + skill.version required;
+                # skill inputs live at the task-node level (not inside skill).
                 "skill": {
-                    "id": "pr-resolver",
-                    "args": {
-                        "repo": repo,
-                        "pr": str(pr_number),
-                        "branch": branch,
-                        "mergeMethod": merge_method,
-                        "maxIterations": max_iterations,
-                    },
-                    "requiredCapabilities": ["gh"],
+                    "name": "pr-resolver",
+                    "version": skill_version,
+                },
+                "inputs": {
+                    "repo": repo,
+                    "pr": str(pr_number),
+                    "branch": branch,
+                    "mergeMethod": merge_method,
+                    "maxIterations": max_iterations,
                 },
                 "runtime": runtime_payload,
                 "git": {
@@ -404,6 +412,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument(
+        "--skill-version",
+        default="1.0",
+        help="Skill registry version for the pr-resolver skill (default: 1.0).",
+    )
+    parser.add_argument(
         "--artifacts-dir",
         default="artifacts",
         help="Directory to write artifacts to.",
@@ -411,9 +424,71 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _submit_jobs(
+def _read_worker_token() -> str | None:
+    """Read the MoonMind worker token from env or token file."""
+    token = str(os.getenv("MOONMIND_WORKER_TOKEN", "")).strip()
+    if token:
+        return token
+    token_file = str(os.getenv("MOONMIND_WORKER_TOKEN_FILE", "")).strip()
+    if token_file:
+        path = Path(token_file)
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip() or None
+    return None
+
+
+async def _submit_jobs_via_http(
+    queue_requests: list[JobSubmission],
+    *,
+    moonmind_url: str,
+    worker_token: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Submit jobs to the MoonMind queue API (Temporal-aware path)."""
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if worker_token:
+        headers["X-MoonMind-Worker-Token"] = worker_token
+    base = moonmind_url.rstrip("/")
+    async with httpx.AsyncClient(base_url=base, timeout=30.0, headers=headers) as client:
+        for submission in queue_requests:
+            request = submission.queue_request
+            body = {
+                "type": str(request["type"]),
+                "payload": request["payload"],
+                "priority": int(request.get("priority", 0)),
+                "maxAttempts": int(request.get("maxAttempts", 3)),
+            }
+            try:
+                response = await client.post("/api/queue/jobs", json=body)
+                response.raise_for_status()
+                data = response.json()
+                job_id = str(data.get("id", "")) or "(unknown)"
+                created.append(
+                    {
+                        "pr": submission.pr_number,
+                        "branch": submission.branch,
+                        "jobId": job_id,
+                    }
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "pr": submission.pr_number,
+                        "branch": submission.branch,
+                        "error": str(exc),
+                    }
+                )
+    return created, errors
+
+
+async def _submit_jobs_via_db(
     queue_requests: list[JobSubmission],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fallback: submit jobs directly to the DB queue (skips Temporal routing)."""
+    from api_service.db.base import get_async_session_context
+    from moonmind.workflows import get_agent_queue_service
+
     created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     async with get_async_session_context() as session:
@@ -446,7 +521,27 @@ async def _submit_jobs(
                         "error": str(exc),
                     }
                 )
-        return created, errors
+    return created, errors
+
+
+async def _submit_jobs(
+    queue_requests: list[JobSubmission],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Submit jobs via the MoonMind HTTP API (Temporal-aware), with DB fallback."""
+    moonmind_url = str(os.getenv("MOONMIND_URL", "")).strip()
+    if moonmind_url:
+        worker_token = _read_worker_token()
+        return await _submit_jobs_via_http(
+            queue_requests,
+            moonmind_url=moonmind_url,
+            worker_token=worker_token,
+        )
+    # Fallback for environments without a running API (e.g. direct invocation).
+    logger.warning(
+        "MOONMIND_URL is not set; submitting jobs directly to the DB queue. "
+        "This bypasses Temporal routing and should only be used in dev/test environments."
+    )
+    return await _submit_jobs_via_db(queue_requests)
 
 
 def _build_request_records(
@@ -484,6 +579,7 @@ def _build_request_records(
             max_iterations=args.max_iterations,
             priority=args.priority,
             max_attempts=args.max_attempts,
+            skill_version=args.skill_version,
         )
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
