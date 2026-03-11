@@ -67,6 +67,7 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
+        self._registry_snapshot_ref: Optional[str] = None
 
         # State tracking
         self._paused: bool = False
@@ -89,8 +90,8 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
-        workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
-            input_payload
+        workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref = (
+            self._initialize_from_payload(input_payload)
         )
         workflow.logger.info(
             "Starting MoonMind.Run workflow",
@@ -105,14 +106,18 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        resolved_plan_ref = await self._run_planning_stage(
-            parameters=parameters,
-            input_ref=input_ref,
-            plan_ref=plan_ref,
+        resolved_plan_ref, resolved_registry_snapshot_ref = (
+            await self._run_planning_stage(
+                parameters=parameters,
+                input_ref=input_ref,
+                plan_ref=plan_ref,
+                registry_snapshot_ref=registry_snapshot_ref,
+            )
         )
         await self._run_execution_stage(
             parameters=parameters,
             plan_ref=resolved_plan_ref,
+            registry_snapshot_ref=resolved_registry_snapshot_ref,
         )
 
         if self._cancel_requested:
@@ -127,7 +132,7 @@ class MoonMindRunWorkflow:
 
     def _initialize_from_payload(
         self, input_payload: dict[str, Any]
-    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
+    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
             raise exceptions.ApplicationError(
                 "input_payload must be a dictionary",
@@ -175,13 +180,20 @@ class MoonMindRunWorkflow:
             "planArtifactRef",
             "plan_artifact_ref",
         )
+        registry_snapshot_ref = self._optional_string(
+            input_payload,
+            "registrySnapshotRef",
+            "registry_snapshot_ref",
+        )
 
         if input_ref:
             self._input_ref = input_ref
         if plan_ref:
             self._plan_ref = plan_ref
+        if registry_snapshot_ref:
+            self._registry_snapshot_ref = registry_snapshot_ref
 
-        return workflow_type, parameters, input_ref, plan_ref
+        return workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref
 
     async def _run_planning_stage(
         self,
@@ -189,9 +201,10 @@ class MoonMindRunWorkflow:
         parameters: dict[str, Any],
         input_ref: Optional[str],
         plan_ref: Optional[str],
-    ) -> Optional[str]:
+        registry_snapshot_ref: Optional[str],
+    ) -> tuple[Optional[str], Optional[str]]:
         if plan_ref:
-            return plan_ref
+            return plan_ref, registry_snapshot_ref
 
         plan_result = await workflow.execute_activity(
             "plan.generate",
@@ -215,13 +228,28 @@ class MoonMindRunWorkflow:
             if isinstance(plan_result, dict)
             else getattr(plan_result, "plan_ref", None)
         )
+        resolved_registry_snapshot_ref = (
+            plan_result.get("registry_snapshot_ref")
+            if isinstance(plan_result, dict)
+            else getattr(plan_result, "registry_snapshot_ref", None)
+        )
+
         if resolved_plan_ref:
             self._plan_ref = resolved_plan_ref
+        if resolved_registry_snapshot_ref:
+            self._registry_snapshot_ref = resolved_registry_snapshot_ref
+
+        if resolved_plan_ref or resolved_registry_snapshot_ref:
             self._update_memo()
-        return resolved_plan_ref
+
+        return resolved_plan_ref, resolved_registry_snapshot_ref
 
     async def _run_execution_stage(
-        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
+        self,
+        *,
+        parameters: dict[str, Any],
+        plan_ref: Optional[str],
+        registry_snapshot_ref: Optional[str],
     ) -> None:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
@@ -232,6 +260,7 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "cmd": "echo executing",
                 "timeout_seconds": 300,
+                "registry_snapshot_ref": registry_snapshot_ref,
             },
             start_to_close_timeout=timedelta(minutes=10),
             task_queue=SANDBOX_TASK_QUEUE,

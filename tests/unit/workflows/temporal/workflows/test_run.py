@@ -81,7 +81,10 @@ async def _wait_for_condition(
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
-    return {"plan_ref": "artifact://plan/123"}
+    return {
+        "plan_ref": "artifact://plan/123",
+        "registry_snapshot_ref": "artifact://registry/123",
+    }
 
 
 @activity.defn(name="sandbox.run_command")
