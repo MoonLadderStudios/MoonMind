@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.spec_automation import _get_repository, router
 from api_service.auth_providers import get_current_user
+from api_service.db import models
 from moonmind.config import settings
 
 ALLOWED_REPOSITORY = "moonladder/moonmind"
