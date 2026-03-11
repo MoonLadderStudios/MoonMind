@@ -1,4 +1,10 @@
-"""SQLAlchemy models for Spec Kit Celery workflow persistence."""
+"""SQLAlchemy models for Spec Kit Celery workflow persistence.
+
+This module has been restored to provide backward-compatible imports for
+code that was not updated when speckit_celery was refactored.  The enums
+are now defined in api_service.db.enums; ORM models that were originally
+here are recreated below for database persistence.
+"""
 
 from __future__ import annotations
 
@@ -25,18 +31,27 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from api_service.db.models import (
-    Base,
+from api_service.db.enums import (
+    CodexAuthVolumeStatus,
     CodexCredentialStatus,
     CodexPreflightStatus,
+    CodexWorkerShardStatus,
     GitHubCredentialStatus,
-    SpecWorkflowRun,
+    SpecAutomationArtifactType,
+    SpecAutomationPhase,
+    SpecAutomationRunStatus,
+    SpecAutomationTaskStatus,
     SpecWorkflowRunPhase,
     SpecWorkflowRunStatus,
-    SpecWorkflowTaskState,
     SpecWorkflowTaskStatus,
-    WorkflowArtifact,
     WorkflowArtifactType,
+)
+from api_service.db.models import (
+    Base,
+    SpecWorkflowRun,
+    SpecWorkflowTaskName,
+    SpecWorkflowTaskState,
+    WorkflowArtifact,
     WorkflowCredentialAudit,
 )
 
@@ -47,22 +62,6 @@ def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum member values so SQLAlchemy stores lowercase labels."""
 
     return [member.value for member in enum_cls]
-
-
-class CodexAuthVolumeStatus(str, enum.Enum):
-    """Health states for persisted Codex authentication volumes."""
-
-    READY = "ready"
-    NEEDS_AUTH = "needs_auth"
-    ERROR = "error"
-
-
-class CodexWorkerShardStatus(str, enum.Enum):
-    """Lifecycle states for Codex-focused Celery workers."""
-
-    ACTIVE = "active"
-    DRAINING = "draining"
-    OFFLINE = "offline"
 
 
 @dataclass(slots=True)
@@ -132,7 +131,7 @@ class CodexAuthVolume(Base):
 
 
 class CodexWorkerShard(Base):
-    """Celery worker dedicated to Codex tasks and its routing metadata."""
+    """Worker dedicated to Codex tasks and its routing metadata."""
 
     __tablename__ = "codex_worker_shards"
     __table_args__ = (
@@ -178,60 +177,6 @@ class CodexWorkerShard(Base):
         back_populates="codex_shard",
         primaryjoin="CodexWorkerShard.queue_name == SpecWorkflowRun.codex_queue",
     )
-
-
-class SpecAutomationRunStatus(str, enum.Enum):
-    """Lifecycle states for Spec Automation runs."""
-
-    QUEUED = "queued"
-    IN_PROGRESS = "in_progress"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    NO_CHANGES = "no_changes"
-
-
-class SpecAutomationPhase(str, enum.Enum):
-    """Phases executed during the Spec Automation pipeline."""
-
-    PREPARE_JOB = "prepare_job"
-    START_JOB_CONTAINER = "start_job_container"
-    GIT_CLONE = "git_clone"
-    SPECIFY = "speckit_specify"
-    PLAN = "speckit_plan"
-    TASKS = "speckit_tasks"
-    ANALYZE = "speckit_analyze"
-    IMPLEMENT = "speckit_implement"
-    # Backward-compatible aliases for persisted values and legacy clients.
-    SPECKIT_SPECIFY = SPECIFY
-    SPECKIT_PLAN = PLAN
-    SPECKIT_TASKS = TASKS
-    SPECKIT_ANALYZE = ANALYZE
-    SPECKIT_IMPLEMENT = IMPLEMENT
-    COMMIT_PUSH = "commit_push"
-    OPEN_PR = "open_pr"
-    CLEANUP = "cleanup"
-
-
-class SpecAutomationTaskStatus(str, enum.Enum):
-    """Per-phase task status values for Spec Automation."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    RETRYING = "retrying"
-
-
-class SpecAutomationArtifactType(str, enum.Enum):
-    """Artifact classifications produced by Spec Automation."""
-
-    STDOUT_LOG = "stdout_log"
-    STDERR_LOG = "stderr_log"
-    DIFF_SUMMARY = "diff_summary"
-    COMMIT_STATUS = "commit_status"
-    METRICS_SNAPSHOT = "metrics_snapshot"
-    ENVIRONMENT_INFO = "environment_info"
 
 
 class SpecAutomationRun(Base):
@@ -536,6 +481,7 @@ __all__ = [
     "SpecWorkflowRunPhase",
     "SpecWorkflowTaskState",
     "SpecWorkflowTaskStatus",
+    "SpecWorkflowTaskName",
     "WorkflowCredentialAudit",
     "CodexCredentialStatus",
     "CodexPreflightStatus",
@@ -543,6 +489,10 @@ __all__ = [
     "WorkflowArtifact",
     "WorkflowArtifactType",
     "CredentialAuditResult",
+    "CodexAuthVolume",
+    "CodexAuthVolumeStatus",
+    "CodexWorkerShard",
+    "CodexWorkerShardStatus",
     "SpecAutomationRun",
     "SpecAutomationRunStatus",
     "SpecAutomationPhase",

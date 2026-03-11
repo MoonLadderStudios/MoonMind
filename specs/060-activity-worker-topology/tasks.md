@@ -30,7 +30,7 @@
 **⚠️ CRITICAL**: No user story work should start until this phase is complete.
 
 - [X] T004 Implement the complete canonical activity catalog, family policy profiles, and fail-closed route validation in `moonmind/workflows/temporal/activity_catalog.py` for `DOC-REQ-001`, `DOC-REQ-002`, `DOC-REQ-009`, `DOC-REQ-010`, `DOC-REQ-012`, `DOC-REQ-016`, and `DOC-REQ-017`
-- [X] T005 [P] Add shared invocation envelope, compact result, and runtime-context helpers in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/skills/skill_plan_contracts.py` for `DOC-REQ-003`, `DOC-REQ-005`, `DOC-REQ-012`, and `DOC-REQ-017`
+- [X] T005 [P] Add shared invocation envelope, compact result, and runtime-context helpers in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/skills/tool_plan_contracts.py` for `DOC-REQ-003`, `DOC-REQ-005`, `DOC-REQ-012`, and `DOC-REQ-017`
 - [X] T006 [P] Create dedicated worker fleet bootstrap and registration helpers in `moonmind/workflows/temporal/workers.py` for `DOC-REQ-001`, `DOC-REQ-010`, `DOC-REQ-011`, `DOC-REQ-014`, `DOC-REQ-015`, and `DOC-REQ-016`
 - [X] T007 Wire the workflow/artifacts/llm/sandbox/integrations services into `docker-compose.yaml` using the shared worker bootstrap from `services/temporal/scripts/start-worker.sh` for `DOC-REQ-010`, `DOC-REQ-011`, `DOC-REQ-013`, `DOC-REQ-015`, `DOC-REQ-016`, and `DOC-REQ-018`
 
@@ -76,8 +76,8 @@
 
 - [X] T017 [US2] Implement shared request/result envelope parsing, runtime-context metadata, and workflow-owned visibility boundaries in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/temporal/service.py` for `DOC-REQ-003`, `DOC-REQ-005`, `DOC-REQ-012`, and `DOC-REQ-017`
 - [X] T018 [US2] Complete `artifact.write_complete`, `artifact.list_for_execution`, `artifact.compute_preview`, link, pin, unpin, and lifecycle-sweep behavior in `moonmind/workflows/temporal/artifacts.py` and `api_service/api/routers/temporal_artifacts.py` for `DOC-REQ-004`, `DOC-REQ-013`, and `DOC-REQ-016`
-- [X] T019 [US2] Implement artifact-backed `plan.generate` and authoritative `plan.validate` flows in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/skills/skill_plan_contracts.py` for `DOC-REQ-003`, `DOC-REQ-005`, and `DOC-REQ-016`
-- [X] T020 [US2] Enforce the hybrid skill execution model and explicit binding reason validation in `moonmind/workflows/skills/skill_registry.py` and `moonmind/workflows/skills/skill_dispatcher.py` for `DOC-REQ-006`, `DOC-REQ-009`, `DOC-REQ-012`, and `DOC-REQ-016`
+- [X] T019 [US2] Implement artifact-backed `plan.generate` and authoritative `plan.validate` flows in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/skills/tool_plan_contracts.py` for `DOC-REQ-003`, `DOC-REQ-005`, and `DOC-REQ-016`
+- [X] T020 [US2] Enforce the hybrid skill execution model and explicit binding reason validation in `moonmind/workflows/skills/tool_registry.py` and `moonmind/workflows/skills/tool_dispatcher.py` for `DOC-REQ-006`, `DOC-REQ-009`, `DOC-REQ-012`, and `DOC-REQ-016`
 - [X] T021 [US2] Add canonical sandbox and integration activity contracts, including checkout/apply-patch/run-tests request shapes and compact result envelopes, in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/adapters/jules_client.py` for `DOC-REQ-007`, `DOC-REQ-008`, and `DOC-REQ-016`
 
 **Checkpoint**: Canonical activity contracts are stable, artifact-backed, and independently verifiable without relying on inline workflow-history blobs.

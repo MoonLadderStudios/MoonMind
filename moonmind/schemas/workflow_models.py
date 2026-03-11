@@ -10,17 +10,28 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from api_service.db.models import (
+from api_service.db.enums import (
+    CodexAuthVolumeStatus,
+    CodexCredentialStatus,
+    CodexPreflightStatus,
+    CodexWorkerShardStatus,
+    GitHubCredentialStatus,
     OrchestratorPlanOrigin,
     OrchestratorPlanStep,
     OrchestratorPlanStepStatus,
     OrchestratorRunArtifactType,
     OrchestratorRunPriority,
     OrchestratorRunStatus,
-    OrchestratorTaskState,
+    SpecAutomationArtifactType,
+    SpecAutomationPhase,
+    SpecAutomationRunStatus,
+    SpecAutomationTaskStatus,
+    SpecWorkflowRunPhase,
+    SpecWorkflowRunStatus,
     SpecWorkflowTaskName,
+    SpecWorkflowTaskStatus,
+    WorkflowArtifactType,
 )
-from moonmind.workflows.speckit_celery import models
 
 _REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -29,26 +40,26 @@ def _validate_repository_slug(value: str) -> str:
     """Ensure repository strings avoid traversal sequences like ``../``."""
 
     if not _REPOSITORY_SLUG_PATTERN.fullmatch(value):
-        raise ValueError("Repository must be in the form 'owner/repo'.")
+        raise ValueError(f"Repository must be in the form 'owner/repo', got: {value!r}")
 
     owner, repo = value.split("/", 1)
     for segment in (owner, repo):
         if segment in {".", ".."} or ".." in segment:
             raise ValueError(
-                "Repository segments cannot contain path traversal tokens."
+                f"Repository segment {segment!r} contains path traversal tokens "
+                "('.' or '..'). Both the owner and repo parts must be plain names."
             )
 
     return value
 
 
 class WorkflowTaskStateModel(BaseModel):
-    """Schema for individual Celery task states."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     id: Optional[UUID] = Field(None, alias="id")
     task_name: str = Field(..., alias="taskName")
-    status: models.SpecWorkflowTaskStatus = Field(..., alias="status")
+    status: SpecWorkflowTaskStatus = Field(..., alias="status")
     attempt: int = Field(..., alias="attempt")
     payload: dict[str, Any] | None = Field(None, alias="payload")
     message: Optional[str] = Field(None, alias="message")
@@ -65,7 +76,7 @@ class WorkflowTaskSummaryModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     task_name: str = Field(..., alias="taskName")
-    status: models.SpecWorkflowTaskStatus = Field(..., alias="status")
+    status: SpecWorkflowTaskStatus = Field(..., alias="status")
     attempt: int = Field(..., alias="attempt")
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
@@ -78,7 +89,7 @@ class WorkflowArtifactModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: Optional[UUID] = Field(None, alias="id")
-    artifact_type: models.WorkflowArtifactType = Field(..., alias="artifactType")
+    artifact_type: WorkflowArtifactType = Field(..., alias="artifactType")
     path: str = Field(..., alias="path")
     content_type: Optional[str] = Field(None, alias="contentType")
     size_bytes: Optional[int] = Field(None, alias="sizeBytes")
@@ -91,8 +102,8 @@ class WorkflowCredentialAuditModel(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    codex_status: models.CodexCredentialStatus = Field(..., alias="codexStatus")
-    github_status: models.GitHubCredentialStatus = Field(..., alias="githubStatus")
+    codex_status: CodexCredentialStatus = Field(..., alias="codexStatus")
+    github_status: GitHubCredentialStatus = Field(..., alias="githubStatus")
     checked_at: datetime | None = Field(None, alias="checkedAt")
     notes: Optional[str] = Field(None, alias="notes")
 
@@ -104,21 +115,20 @@ class SpecWorkflowRunModel(BaseModel):
 
     id: UUID = Field(..., alias="id")
     feature_key: str = Field(..., alias="featureKey")
-    status: models.SpecWorkflowRunStatus = Field(..., alias="status")
-    phase: models.SpecWorkflowRunPhase = Field(..., alias="phase")
+    status: SpecWorkflowRunStatus = Field(..., alias="status")
+    phase: SpecWorkflowRunPhase = Field(..., alias="phase")
     repository: Optional[str] = Field(None, alias="repository")
     branch_name: Optional[str] = Field(None, alias="branchName")
     pr_url: Optional[str] = Field(None, alias="prUrl")
     codex_task_id: Optional[str] = Field(None, alias="codexTaskId")
     codex_queue: Optional[str] = Field(None, alias="codexQueue")
     codex_volume: Optional[str] = Field(None, alias="codexVolume")
-    codex_preflight_status: Optional[models.CodexPreflightStatus] = Field(
+    codex_preflight_status: Optional[CodexPreflightStatus] = Field(
         None, alias="codexPreflightStatus"
     )
     codex_preflight_message: Optional[str] = Field(None, alias="codexPreflightMessage")
     codex_logs_path: Optional[str] = Field(None, alias="codexLogsPath")
     codex_patch_path: Optional[str] = Field(None, alias="codexPatchPath")
-    celery_chain_id: Optional[str] = Field(None, alias="celeryChainId")
     requested_by: Optional[UUID] = Field(None, alias="requestedBy")
     created_by: Optional[UUID] = Field(None, alias="createdBy")
     current_task_name: Optional[SpecWorkflowTaskName] = Field(
@@ -203,21 +213,19 @@ class CodexShardHealthModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     queue_name: str = Field(..., alias="queueName")
-    status: models.CodexWorkerShardStatus = Field(..., alias="status")
+    status: CodexWorkerShardStatus = Field(..., alias="status")
     hash_modulo: int = Field(..., alias="hashModulo", ge=1)
     worker_hostname: Optional[str] = Field(None, alias="workerHostname")
     volume_name: Optional[str] = Field(None, alias="volumeName")
-    volume_status: Optional[models.CodexAuthVolumeStatus] = Field(
-        None, alias="volumeStatus"
-    )
+    volume_status: Optional[CodexAuthVolumeStatus] = Field(None, alias="volumeStatus")
     volume_last_verified_at: datetime | None = Field(None, alias="volumeLastVerifiedAt")
     volume_worker_affinity: Optional[str] = Field(None, alias="volumeWorkerAffinity")
     volume_notes: Optional[str] = Field(None, alias="volumeNotes")
     latest_run_id: Optional[UUID] = Field(None, alias="latestRunId")
-    latest_run_status: Optional[models.SpecWorkflowRunStatus] = Field(
+    latest_run_status: Optional[SpecWorkflowRunStatus] = Field(
         None, alias="latestRunStatus"
     )
-    latest_preflight_status: Optional[models.CodexPreflightStatus] = Field(
+    latest_preflight_status: Optional[CodexPreflightStatus] = Field(
         None, alias="latestPreflightStatus"
     )
     latest_preflight_message: Optional[str] = Field(
@@ -253,7 +261,7 @@ class CodexPreflightResultModel(BaseModel):
     run_id: UUID = Field(..., alias="runId")
     queue_name: Optional[str] = Field(None, alias="queueName")
     volume_name: Optional[str] = Field(None, alias="volumeName")
-    status: models.CodexPreflightStatus = Field(..., alias="status")
+    status: CodexPreflightStatus = Field(..., alias="status")
     checked_at: datetime | None = Field(None, alias="checkedAt")
     message: Optional[str] = Field(None, alias="message")
 
@@ -329,8 +337,6 @@ class OrchestratorPlanStepStateModel(BaseModel):
     status: OrchestratorPlanStepStatus | None = Field(None, alias="status")
     started_at: datetime | None = Field(None, alias="startedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
-    celery_task_id: Optional[str] = Field(None, alias="celeryTaskId")
-    celery_state: Optional[OrchestratorTaskState] = Field(None, alias="celeryState")
     message: Optional[str] = Field(None, alias="message")
     artifact_refs: list[UUID] = Field(default_factory=list, alias="artifactRefs")
 
@@ -520,8 +526,8 @@ class SpecAutomationPhaseState(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    phase: models.SpecAutomationPhase
-    status: models.SpecAutomationTaskStatus
+    phase: SpecAutomationPhase
+    status: SpecAutomationTaskStatus
     attempt: int = Field(ge=1)
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -543,12 +549,12 @@ class SpecAutomationArtifactSummary(BaseModel):
 
     artifact_id: UUID
     name: str
-    artifact_type: models.SpecAutomationArtifactType
+    artifact_type: SpecAutomationArtifactType
     storage_path: str | None = None
     content_type: str | None = None
     size_bytes: int | None = None
     expires_at: datetime | None = None
-    source_phase: models.SpecAutomationPhase | None = None
+    source_phase: SpecAutomationPhase | None = None
 
 
 class SpecAutomationArtifactDetail(SpecAutomationArtifactSummary):
@@ -563,7 +569,7 @@ class SpecAutomationRunResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     run_id: UUID
-    status: models.SpecAutomationRunStatus
+    status: SpecAutomationRunStatus
     accepted_at: datetime | None = None
 
 
@@ -573,7 +579,7 @@ class SpecAutomationRunDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     run_id: UUID
-    status: models.SpecAutomationRunStatus
+    status: SpecAutomationRunStatus
     branch_name: str | None = None
     pull_request_url: str | None = None
     result_summary: str | None = None

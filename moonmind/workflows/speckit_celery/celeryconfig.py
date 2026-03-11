@@ -6,8 +6,6 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Tuple
 
-from kombu import Queue
-
 from moonmind.config.settings import settings
 
 CODEX_QUEUE_PREFIX = "codex-"
@@ -53,11 +51,11 @@ class CodexShardRouter:
 
     @property
     def default_exchange(self) -> str:
-        return settings.celery.default_exchange
+        return "default"
 
     @property
     def default_queue(self) -> str:
-        return settings.celery.default_queue
+        return settings.spec_workflow.codex_queue or "speckit"
 
     def queue_name(self, shard_index: int) -> str:
         if self.codex_queue:
@@ -92,14 +90,17 @@ class CodexShardRouter:
             return self.codex_queue
         return self.queue_name(self.shard_for_key(affinity_key))
 
-    def build_queues(self, *, include_default: bool = False) -> Tuple[Queue, ...]:
+    def build_queues(self, *, include_default: bool = False) -> tuple:
+        """Build kombu Queue objects.  Requires kombu to be installed."""
+        from kombu import Queue  # type: ignore[import-untyped]  # noqa: PLC0415
+
         queues: list[Queue] = []
         if include_default:
             queues.append(
                 Queue(
                     self.default_queue,
                     exchange=self.default_exchange,
-                    routing_key=settings.celery.default_routing_key,
+                    routing_key=self.default_queue,
                     durable=True,
                 )
             )
@@ -125,9 +126,7 @@ def get_codex_shard_router(
     codex_queue: str | None = None,
 ) -> CodexShardRouter:
     if codex_queue is None:
-        codex_queue = (
-            settings.spec_workflow.codex_queue or settings.celery.default_queue
-        )
+        codex_queue = settings.spec_workflow.codex_queue or None
     if codex_queue:
         return CodexShardRouter(shard_count=1, codex_queue=codex_queue)
     count = shard_count or settings.spec_workflow.codex_shards
@@ -171,9 +170,10 @@ def build_task_router(
             queue_name = router.queue_for_key(str(affinity))
             return {"queue": queue_name, "routing_key": queue_name}
 
+        default_q = settings.spec_workflow.codex_queue or "speckit"
         return {
-            "queue": settings.celery.default_queue,
-            "routing_key": settings.celery.default_routing_key,
+            "queue": default_q,
+            "routing_key": default_q,
         }
 
     return (_route_task,)

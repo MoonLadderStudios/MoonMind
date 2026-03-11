@@ -76,7 +76,7 @@ As a platform owner, I want heartbeats, artifact upload, and terminal status han
 - **FR-004**: Worker claim policy MUST support `codex_exec` and `codex_skill` types and forward capabilities to claim endpoints.
 - **FR-005**: `codex_exec` jobs MUST execute through the existing checkout + `codex exec` + patch/log artifact pipeline.
 - **FR-006**: `codex_skill` jobs MUST execute through skills-first semantics with allowlist enforcement and compatibility fallback support.
-- **FR-007**: Worker events for claimed/started/completed/failed jobs MUST include skill execution metadata (`selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`).
+- **FR-007**: Worker events for claimed/started/completed/failed jobs MUST include skill execution metadata (`selectedTool`, `executionPath`, `usedTools`, `usedFallback`, `shadowModeRequested`).
 - **FR-008**: Worker MUST preserve heartbeat cadence and terminal status behavior for crash/reclaim compatibility.
 - **FR-009**: Runtime deliverables MUST include production code and validation tests; docs-only updates are insufficient.
 - **FR-010**: Worker MUST support per-task Codex runtime overrides via payload `codex.model` and `codex.effort` for `codex_exec`/`codex_skill`, with precedence `task override -> worker default -> Codex CLI default`.

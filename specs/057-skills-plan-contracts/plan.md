@@ -69,9 +69,9 @@ moonmind/workflows/skills/
 ├── plan_interpreter.py
 ├── plan_validation.py
 ├── registry.py
-├── skill_dispatcher.py
-├── skill_plan_contracts.py
-└── skill_registry.py
+├── tool_dispatcher.py
+├── tool_plan_contracts.py
+└── tool_registry.py
 
 tests/unit/workflows/
 ├── test_skill_plan_runtime.py
@@ -93,7 +93,7 @@ Research outcomes in `specs/045-skills-plan-contracts/research.md` establish:
 
 ## Phase 1 - Design Outputs
 
-- **Data Model**: `data-model.md` defines ArtifactRef, SkillDefinition, RegistrySnapshot, SkillInvocation, PlanDefinition, validation/reporting, and execution summary entities.
+- **Data Model**: `data-model.md` defines ArtifactRef, ToolDefinition, RegistrySnapshot, Step, PlanDefinition, validation/reporting, and execution summary entities.
 - **API Contract**: `contracts/skills-plan-runtime.openapi.yaml` defines registry snapshot, validation, execution, progress, and summary endpoints for runtime surfaces.
 - **Traceability**: `contracts/requirements-traceability.md` maps all `DOC-REQ-001` through `DOC-REQ-016` to FRs, implementation surfaces, implementation task coverage, validation task coverage, and validation strategy.
 - **Execution Guide**: `quickstart.md` documents runtime-mode validation flow and repository-standard unit test path.
@@ -102,14 +102,14 @@ Research outcomes in `specs/045-skills-plan-contracts/research.md` establish:
 
 ### 1. Contract model hardening
 
-- Keep canonical contract types in `skill_plan_contracts.py` for:
-  - `ArtifactRef`, `SkillDefinition`, `SkillInvocation`, `SkillResult`, `SkillFailure`
+- Keep canonical contract types in `tool_plan_contracts.py` for:
+  - `ArtifactRef`, `ToolDefinition`, `Step`, `ToolResult`, `ToolFailure`
   - `PlanDefinition`, `PlanPolicy`, `PlanEdge`, `PlanRegistrySnapshot`
 - Ensure parser/validator code rejects unsupported plan versions, failure modes, and malformed references.
 
 ### 2. Registry loading, validation, and snapshot pinning
 
-- Validate required skill fields and uniqueness in `skill_registry.py`.
+- Validate required skill fields and uniqueness in `tool_registry.py`.
 - Generate deterministic registry digest and immutable snapshot artifact refs.
 - Ensure consumers resolve definitions from pinned snapshots only (`load_registry_snapshot_from_artifact`).
 
@@ -127,8 +127,8 @@ Research outcomes in `specs/045-skills-plan-contracts/research.md` establish:
 
 ### 5. Skill dispatch and binding safety
 
-- Use declared registry activity type for routing (`mm.skill.execute` plus curated explicit activity types).
-- Keep dispatch failure normalization in `SkillFailure` envelopes.
+- Use declared registry activity type for routing (`mm.tool.execute` plus curated explicit activity types).
+- Keep dispatch failure normalization in `ToolFailure` envelopes.
 - Prevent inferred/guessed bindings; missing handlers fail explicitly.
 
 ### 6. Observability and payload discipline

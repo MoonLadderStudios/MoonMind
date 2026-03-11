@@ -718,7 +718,7 @@ async def test_run_once_success_uploads_and_completes(tmp_path: Path) -> None:
     )
     payload = claimed["payload"]
     assert isinstance(payload, dict)
-    assert payload["selectedSkill"] == "auto"
+    assert payload["selectedTool"] == "auto"
     assert payload["executionPath"] == "direct_only"
 
 
@@ -1200,7 +1200,7 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
     payload = claimed["payload"]
     assert isinstance(payload, dict)
     assert payload["executionPath"] == "skill"
-    assert payload["usedSkills"] is True
+    assert payload["usedTools"] is True
     assert payload["usedFallback"] is False
 
 
@@ -1246,7 +1246,7 @@ async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> 
     )
     payload = claimed["payload"]
     assert isinstance(payload, dict)
-    assert payload["selectedSkill"] == "auto"
+    assert payload["selectedTool"] == "auto"
     assert payload["executionPath"] == "direct_only"
     assert "ref" not in handler.exec_payloads[0]
     assert "logs/publish.log" in queue.uploaded
@@ -4431,7 +4431,7 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
             self.selected = selected
 
         def to_payload(self):
-            return {"selectedSkills": self.selected}
+            return {"selectedTools": self.selected}
 
     captured: dict[str, object] = {}
 
