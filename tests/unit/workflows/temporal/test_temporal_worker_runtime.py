@@ -99,7 +99,7 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
-@patch("moonmind.workflows.temporal.worker_runtime.ToolActivityDispatcher")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
 async def test_build_runtime_activities_injects_concrete_handlers(
     mock_dispatcher_cls,
     mock_repository_cls,

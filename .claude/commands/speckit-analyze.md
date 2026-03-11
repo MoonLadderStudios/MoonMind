@@ -1,1 +1,0 @@
-../../.agents/skills/skills/speckit-analyze/SKILL.md

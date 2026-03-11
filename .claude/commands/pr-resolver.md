@@ -1,1 +1,0 @@
-../../.agents/skills/pr-resolver/SKILL.md

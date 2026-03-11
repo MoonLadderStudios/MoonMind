@@ -2000,7 +2000,7 @@ class CodexWorker:
                     message="Skill is not allowlisted for this worker",
                     payload={
                         "jobType": job.type,
-                        "selectedTools": disallowed,
+                        "selectedSkills": disallowed,
                         **skill_meta,
                     },
                 )
@@ -3024,7 +3024,7 @@ class CodexWorker:
                     message="Skill is not allowlisted for this worker",
                     payload={
                         "jobType": job.type,
-                        "selectedTools": disallowed,
+                        "selectedSkills": disallowed,
                         **skill_meta,
                     },
                 )
@@ -3934,11 +3934,11 @@ class CodexWorker:
             execution_path = "direct_fallback"
 
         metadata: dict[str, Any] = {
-            "selectedTool": selected_skill,
-            "selectedTools": selected_skills,
+            "selectedSkill": selected_skill,
+            "selectedSkills": selected_skills,
             "stepCount": len(resolved_steps),
             "executionPath": execution_path,
-            "usedTools": used_skills,
+            "usedSkills": used_skills,
             "usedFallback": used_fallback,
             "shadowModeRequested": False,
             "runtimeModel": selected_model,

@@ -14,8 +14,8 @@
   - `moonmind/workflows/temporal/workers.py` (planned)
 - Artifact and plan execution:
   - `moonmind/workflows/temporal/artifacts.py`
-  - `moonmind/workflows/skills/tool_dispatcher.py`
-  - `moonmind/workflows/skills/tool_plan_contracts.py`
+  - `moonmind/workflows/skills/skill_dispatcher.py`
+  - `moonmind/workflows/skills/skill_plan_contracts.py`
 - Fleet/runtime wiring:
   - `moonmind/config/settings.py`
   - `docker-compose.yaml`

@@ -2105,9 +2105,9 @@
         finishedAt: pick(item, "finishedAt"),
         updatedAt: pick(item, "updatedAt"),
         sortTimestamp:
-          pick(item, "createdAt") ||
-          pick(item, "startedAt") ||
           pick(item, "updatedAt") ||
+          pick(item, "startedAt") ||
+          pick(item, "createdAt") ||
           pick(item, "finishedAt"),
         link: buildUnifiedTaskDetailRoute(pick(item, "id"), "queue"),
       };
@@ -2496,14 +2496,6 @@
   };
 
   const shouldUseTemporalSubmit = (runtimeMode, options = {}) => {
-    const isEditMode = Boolean(options.isEditMode);
-    const preferQueueSubmit = Boolean(options.preferQueueSubmit);
-    const enabled = options.temporalSubmitEnabled !== undefined
-      ? Boolean(options.temporalSubmitEnabled)
-      : temporalSubmitEnabled;
-    if (!enabled || isEditMode || preferQueueSubmit) {
-      return false;
-    }
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     return normalizedMode !== ORCHESTRATOR_RUNTIME;
   };
@@ -3242,10 +3234,10 @@
       finishedAt: pick(run, "completedAt"),
       updatedAt: pick(run, "updatedAt") || pick(run, "completedAt") || pick(run, "startedAt"),
       sortTimestamp:
-        pick(run, "queuedAt") ||
-        pick(run, "startedAt") ||
         pick(run, "updatedAt") ||
-        pick(run, "completedAt"),
+        pick(run, "completedAt") ||
+        pick(run, "startedAt") ||
+        pick(run, "queuedAt"),
       link: buildUnifiedTaskDetailRoute(
         pick(run, "taskId") || pick(run, "runId"),
         "orchestrator",
@@ -3310,7 +3302,7 @@
         finishedAt: pick(item, "closedAt"),
         updatedAt,
         closedAt: pick(item, "closedAt"),
-        sortTimestamp: pick(item, "createdAt") || pick(item, "startedAt") || updatedAt || pick(item, "closedAt"),
+        sortTimestamp: updatedAt || pick(item, "closedAt"),
         link: buildUnifiedTaskDetailRoute(workflowId, "temporal"),
       };
     });
@@ -4048,22 +4040,7 @@
           params.set("integration", filterState.integration);
         }
         const temporalListEndpoint = temporalSourceConfig.list || "/api/executions";
-        let payload;
-        try {
-          payload = await fetchJson(`${temporalListEndpoint}?${params.toString()}`);
-        } catch (error) {
-          if (!pageActive) {
-            return;
-          }
-          console.error("failed to load temporal executions source", error);
-          setView(
-            "Tasks List",
-            "Temporal-backed tasks with exact Temporal pagination.",
-            `<div class="notice error">Failed to load tasks: ${escapeHtml(error.message || "Unknown error")}</div>`,
-            { showAutoRefreshControls: true },
-          );
-          return;
-        }
+        const payload = await fetchJson(`${temporalListEndpoint}?${params.toString()}`);
         if (!pageActive) {
           return;
         }
@@ -4123,22 +4100,7 @@
           ).catch(() => ({ items: [] })),
         );
       }
-      let payload, orchestratorPayload, temporalPayload;
-      try {
-        [payload, orchestratorPayload, temporalPayload] = await Promise.all(requests);
-      } catch (error) {
-        if (!pageActive) {
-          return;
-        }
-        console.error("failed to load unified queue sources", error);
-        setView(
-          "Tasks List",
-          "Unified tasks across available execution sources.",
-          `<div class="notice error">Failed to load tasks: ${escapeHtml(error.message || "Unknown error")}</div>`,
-          { showAutoRefreshControls: true },
-        );
-        return;
-      }
+      const [payload, orchestratorPayload, temporalPayload] = await Promise.all(requests);
       if (!pageActive) {
         return;
       }

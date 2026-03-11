@@ -39,6 +39,7 @@ from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
+from api_service.api.routers.spec_automation import router as spec_automation_router
 from api_service.api.routers.system_worker_pause import (
     router as system_worker_pause_router,
 )
@@ -54,6 +55,7 @@ from api_service.api.routers.task_step_templates import (
 from api_service.api.routers.temporal_artifacts import (
     router as temporal_artifacts_router,
 )
+from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.schemas import UserProfileUpdate
 
 # Auth imports
@@ -75,18 +77,6 @@ from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 
 logger.info("Starting FastAPI...")
-
-try:
-    from api_service.api.routers.workflows import router as workflows_router
-except Exception as exc:  # pragma: no cover - startup guard for optional module
-    workflows_router = None
-    logger.warning("Workflow router disabled at startup: %s", exc)
-
-try:
-    from api_service.api.routers.spec_automation import router as spec_automation_router
-except Exception as exc:  # pragma: no cover - startup guard for optional module
-    spec_automation_router = None
-    logger.warning("Spec automation router disabled at startup: %s", exc)
 
 
 def _initialize_embedding_model(app_state, app_settings):
@@ -305,12 +295,10 @@ app.include_router(manifests_router)
 app.include_router(
     profile_router, prefix="", tags=["Profile"]
 )  # Include profile router
-if workflows_router is not None:
-    app.include_router(workflows_router)
+app.include_router(workflows_router)
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
-if spec_automation_router is not None:
-    app.include_router(spec_automation_router)
+app.include_router(spec_automation_router)
 app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
 app.include_router(system_worker_pause_router)

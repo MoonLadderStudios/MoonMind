@@ -9,7 +9,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
-from moonmind.workflows.skills.tool_dispatcher import ToolActivityDispatcher
+from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalJulesActivities,
     TemporalPlanActivities,
@@ -70,18 +70,101 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 "edges": [],
             }
 
+        dispatcher = SkillActivityDispatcher()
+
+        sandbox_activities = TemporalSandboxActivities(
+            artifact_service=artifact_service
+        )
+
+        from moonmind.workflows.skills.skill_plan_contracts import SkillResult
+
+        async def _auto_skill_handler(inputs, context):
+            target_runtime = inputs.get("runtime", {}).get(
+                "mode", inputs.get("targetRuntime", "codex")
+            )
+            model = inputs.get("runtime", {}).get("model", inputs.get("model", ""))
+            effort = inputs.get("runtime", {}).get("effort", inputs.get("effort", ""))
+            instructions = inputs.get("instructions", "")
+            repo = inputs.get("repo", "moonladder/moonmind")
+            branch = inputs.get("branch", "main")
+
+            principal = context.get("principal", "system") if context else "system"
+
+            workflow_id = (
+                context.get("workflow_id", "unknown") if context else "unknown"
+            )
+            node_id = context.get("node_id", "unknown") if context else "unknown"
+
+            # 1. Checkout the repository directly using the sandbox python methods
+            try:
+                workspace_path = await sandbox_activities.sandbox_checkout_repo(
+                    repo_ref=f"https://github.com/{repo}.git",
+                    idempotency_key=f"auto-{workflow_id}-{node_id}",
+                    checkout_revision=branch,
+                )
+            except Exception as e:
+                return SkillResult(
+                    status="FAILED",
+                    outputs={"error": str(e)},
+                    progress={
+                        "details": "Failed to checkout repository in auto skill handler"
+                    },
+                )
+
+            # 2. Invoke the appropriate CLI (codex/gemini/claude) using local python run_command
+            cmd = [target_runtime, "run", "--instructions", instructions]
+            if model:
+                cmd.extend(["--model", model])
+            if effort:
+                cmd.extend(["--effort", effort])
+
+            try:
+                sandbox_result = await sandbox_activities.sandbox_run_command(
+                    workspace_ref=workspace_path,
+                    cmd=cmd,
+                    principal=principal,
+                    timeout_seconds=900,
+                )
+            except Exception as e:
+                return SkillResult(
+                    status="FAILED",
+                    outputs={"error": str(e)},
+                    progress={
+                        "details": f"Failed to execute generic LLM handler for {target_runtime}"
+                    },
+                )
+
+            outputs = {
+                "exit_code": sandbox_result.exit_code,
+                "stdout_tail": sandbox_result.stdout_tail,
+                "stderr_tail": sandbox_result.stderr_tail,
+            }
+
+            output_artifacts = []
+            if sandbox_result.diagnostics_ref:
+                output_artifacts.append(sandbox_result.diagnostics_ref)
+
+            return SkillResult(
+                status="SUCCEEDED" if sandbox_result.exit_code == 0 else "FAILED",
+                outputs=outputs,
+                output_artifacts=tuple(output_artifacts),
+                progress={
+                    "details": f"Executed generic LLM handler via {target_runtime}"
+                },
+            )
+
+        dispatcher.register_skill(
+            skill_name="auto", version="1.0", handler=_auto_skill_handler
+        )
+
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,
             artifact_activities=TemporalArtifactActivities(artifact_service),
             plan_activities=TemporalPlanActivities(
                 artifact_service=artifact_service, planner=_dummy_planner
             ),
-            skill_activities=TemporalSkillActivities(
-                dispatcher=ToolActivityDispatcher()
-            ),
-            sandbox_activities=TemporalSandboxActivities(
-                artifact_service=artifact_service
-            ),
+            skill_activities=TemporalSkillActivities(dispatcher=dispatcher),
+            sandbox_activities=sandbox_activities,
             integration_activities=TemporalJulesActivities(
                 artifact_service=artifact_service
             ),

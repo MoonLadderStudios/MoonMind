@@ -1,18 +1,10 @@
 import asyncio
-import json
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
-from temporalio import exceptions, workflow
+from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
-
-from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
-from moonmind.workflows.temporal.activity_catalog import (
-    ARTIFACTS_TASK_QUEUE,
-    build_default_activity_catalog,
-)
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -75,7 +67,6 @@ class MoonMindRunWorkflow:
         self._plan_ref: Optional[str] = None
         self._logs_ref: Optional[str] = None
         self._summary_ref: Optional[str] = None
-        self._registry_snapshot_ref: Optional[str] = None
 
         # State tracking
         self._paused: bool = False
@@ -95,12 +86,11 @@ class MoonMindRunWorkflow:
         self._step_count = 0
         self._max_wait_cycles = 100
         self._max_steps = 100
-        self._failures: dict[str, str] = {}
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
-        workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref = (
-            self._initialize_from_payload(input_payload)
+        workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
+            input_payload
         )
         workflow.logger.info(
             "Starting MoonMind.Run workflow",
@@ -115,18 +105,14 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        resolved_plan_ref, resolved_registry_snapshot_ref = (
-            await self._run_planning_stage(
-                parameters=parameters,
-                input_ref=input_ref,
-                plan_ref=plan_ref,
-                registry_snapshot_ref=registry_snapshot_ref,
-            )
+        resolved_plan_ref = await self._run_planning_stage(
+            parameters=parameters,
+            input_ref=input_ref,
+            plan_ref=plan_ref,
         )
         await self._run_execution_stage(
             parameters=parameters,
             plan_ref=resolved_plan_ref,
-            registry_snapshot_ref=resolved_registry_snapshot_ref,
         )
 
         if self._cancel_requested:
@@ -141,13 +127,9 @@ class MoonMindRunWorkflow:
 
     def _initialize_from_payload(
         self, input_payload: dict[str, Any]
-    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str], Optional[str]]:
+    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
-            raise exceptions.ApplicationError(
-                "input_payload must be a dictionary",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("input_payload must be a dictionary")
 
         workflow_type = self._required_string(
             input_payload,
@@ -156,11 +138,7 @@ class MoonMindRunWorkflow:
             error_message="workflowType is required",
         )
         if workflow_type != WORKFLOW_NAME:
-            raise exceptions.ApplicationError(
-                f"workflowType must be {WORKFLOW_NAME}",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError(f"workflowType must be {WORKFLOW_NAME}")
 
         self._workflow_type = workflow_type
         self._entry = "run"
@@ -189,20 +167,13 @@ class MoonMindRunWorkflow:
             "planArtifactRef",
             "plan_artifact_ref",
         )
-        registry_snapshot_ref = self._optional_string(
-            input_payload,
-            "registrySnapshotRef",
-            "registry_snapshot_ref",
-        )
 
         if input_ref:
             self._input_ref = input_ref
         if plan_ref:
             self._plan_ref = plan_ref
-        if registry_snapshot_ref:
-            self._registry_snapshot_ref = registry_snapshot_ref
 
-        return workflow_type, parameters, input_ref, plan_ref, registry_snapshot_ref
+        return workflow_type, parameters, input_ref, plan_ref
 
     async def _run_planning_stage(
         self,
@@ -210,10 +181,9 @@ class MoonMindRunWorkflow:
         parameters: dict[str, Any],
         input_ref: Optional[str],
         plan_ref: Optional[str],
-        registry_snapshot_ref: Optional[str],
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> Optional[str]:
         if plan_ref:
-            return plan_ref, registry_snapshot_ref
+            return plan_ref
 
         plan_result = await workflow.execute_activity(
             "plan.generate",
@@ -237,173 +207,85 @@ class MoonMindRunWorkflow:
             if isinstance(plan_result, dict)
             else getattr(plan_result, "plan_ref", None)
         )
-        resolved_registry_snapshot_ref = (
-            plan_result.get("registry_snapshot_ref")
-            if isinstance(plan_result, dict)
-            else getattr(plan_result, "registry_snapshot_ref", None)
-        )
-
         if resolved_plan_ref:
             self._plan_ref = resolved_plan_ref
-        if resolved_registry_snapshot_ref:
-            self._registry_snapshot_ref = resolved_registry_snapshot_ref
-
-        if resolved_plan_ref or resolved_registry_snapshot_ref:
             self._update_memo()
-
-        return resolved_plan_ref, resolved_registry_snapshot_ref
+        return resolved_plan_ref
 
     async def _run_execution_stage(
-        self,
-        *,
-        parameters: dict[str, Any],
-        plan_ref: Optional[str],
-        registry_snapshot_ref: Optional[str],
+        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
-        if plan_ref is None:
-            raise ValueError(
-                "plan_ref is required for execution stage: the planning stage must "
-                "produce a plan artifact reference before execution can proceed. "
-                "Ensure the planning activity returns a non-None 'plan_ref'."
-            )
-
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
-        payload_bytes = await workflow.execute_activity(
+        if not plan_ref:
+            raise ValueError("plan_ref is required for execution stage")
+
+        # 1. Read the plan from plan_ref
+        plan_payload = await workflow.execute_activity(
             "artifact.read",
             {
                 "principal": self._principal(),
                 "artifact_ref": plan_ref,
             },
-            start_to_close_timeout=timedelta(minutes=1),
-            task_queue=ARTIFACTS_TASK_QUEUE,
+            start_to_close_timeout=timedelta(minutes=5),
+            task_queue=LLM_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
 
-        payload = json.loads(payload_bytes.decode("utf-8"))
-        plan = parse_plan_definition(payload)
-        registry_snapshot_ref = plan.metadata.registry_snapshot.artifact_ref
+        import json
 
-        max_concurrency = plan.policy.max_concurrency
-        failure_mode = plan.policy.failure_mode
-
-        dependencies: dict[str, list[str]] = {node.id: [] for node in plan.nodes}
-        for edge in plan.edges:
-            dependencies[edge.to_node].append(edge.from_node)
-
-        pending = {node.id for node in plan.nodes}
-        running: dict[asyncio.Task[Any], str] = {}
-        succeeded: dict[str, Any] = {}
-        self._failures = {}
-        nodes_by_id = {node.id: node for node in plan.nodes}
-
-        # Build activity catalog once — avoid reconstructing on every loop iteration
-        activity_catalog = build_default_activity_catalog()
-
-        while pending or running:
-            if failure_mode == "FAIL_FAST" and self._failures:
-                for running_task in running:
-                    running_task.cancel()
-                if running:
-                    await asyncio.wait(running.keys())
-                pending.clear()
-                running.clear()
-                self._update_memo()
-                break
-
-            ready = sorted(
-                node_id
-                for node_id in pending
-                if all(dep in succeeded for dep in dependencies.get(node_id, []))
+        plan_dict = (
+            json.loads(
+                plan_payload
+                if isinstance(plan_payload, str)
+                else plan_payload.decode("utf-8")
             )
+            if isinstance(plan_payload, (str, bytes))
+            else plan_payload
+        )
 
-            if not ready and not running:
-                # Deadlock: pending nodes exist but none are ready and none are running.
-                # This happens when a dependency fails under CONTINUE mode.
-                # Surface this as an error rather than silently succeeding.
-                unexecuted = sorted(pending)
-                raise RuntimeError(
-                    f"Execution deadlocked: {len(unexecuted)} node(s) could not be "
-                    f"scheduled (plan_ref={plan_ref!r}, unexecuted: {unexecuted}, "
-                    f"failures: {self._failures})"
-                )
+        nodes = plan_dict.get("nodes", [])
 
-            while ready and len(running) < max_concurrency:
-                node_id = ready.pop(0)
-                pending.remove(node_id)
-                node = nodes_by_id[node_id]
+        # 2 & 3. Dispatch each node
+        for node in nodes:
+            skill = node.get("skill", {})
+            skill_name = skill.get("name", "auto")
+            skill_version = skill.get("version", "1.0")
 
-                # NOTE: routing is resolved from the default catalog. Per-skill registry
-                # routing (resolve_skill) is a known gap that requires SkillRegistry access
-                # inside the workflow sandbox — tracked as follow-up work.
-                route = activity_catalog.resolve_activity("mm.skill.execute")
+            invocation_payload = {
+                "id": node.get("id"),
+                "skill": {"name": skill_name, "version": skill_version},
+                "inputs": node.get("inputs", {}),
+                "options": node.get("options", {}),
+            }
 
-                task = asyncio.create_task(
-                    workflow.execute_activity(
-                        "mm.skill.execute",
-                        {
-                            "invocation_payload": node.to_payload(),
-                            "registry_snapshot_ref": registry_snapshot_ref,
-                            "principal": self._principal(),
-                            "context": {
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                            },
+            try:
+                skill_result = await workflow.execute_activity(
+                    "mm.skill.execute",
+                    {
+                        "invocation_payload": invocation_payload,
+                        "principal": self._principal(),
+                        "registry_snapshot_ref": plan_dict.get("metadata", {})
+                        .get("registry_snapshot", {})
+                        .get("artifact_ref"),
+                        "context": {
+                            "workflow_id": workflow.info().workflow_id,
+                            "run_id": workflow.info().run_id,
+                            "node_id": node.get("id", "unknown"),
                         },
-                        task_queue=route.task_queue,
-                        start_to_close_timeout=timedelta(
-                            seconds=route.timeouts.start_to_close_seconds
-                        ),
-                        schedule_to_close_timeout=timedelta(
-                            seconds=route.timeouts.schedule_to_close_seconds
-                        ),
-                        retry_policy=RetryPolicy(
-                            maximum_attempts=route.retries.max_attempts,
-                            initial_interval=timedelta(seconds=5),
-                            maximum_interval=timedelta(
-                                seconds=route.retries.max_interval_seconds
-                            ),
-                            non_retryable_error_types=list(
-                                route.retries.non_retryable_error_codes
-                            ),
-                        ),
-                    )
+                    },
+                    start_to_close_timeout=timedelta(minutes=30),
+                    task_queue=LLM_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
                 )
-                running[task] = node_id
-
-            if not running:
-                continue
-
-            done, _ = await asyncio.wait(
-                running.keys(), return_when=asyncio.FIRST_COMPLETED
-            )
-
-            # Sort by node_id for deterministic state updates during Temporal replay
-            for task in sorted(done, key=lambda t: running[t]):
-                node_id = running.pop(task)
-                try:
-                    result = task.result()
-                    succeeded[node_id] = result
-
-                    if isinstance(result, dict):
-                        outputs = result.get("output_artifacts", [])
-                        if outputs and isinstance(outputs[0], dict):
-                            self._logs_ref = outputs[0].get("artifact_ref")
-                    elif (
-                        hasattr(result, "output_artifacts") and result.output_artifacts
-                    ):
-                        self._logs_ref = getattr(
-                            result.output_artifacts[0], "artifact_ref", None
-                        )
-
-                except ActivityError as e:
-                    self._failures[node_id] = str(e)
-
-            self._update_memo()
-
-        if self._failures and failure_mode == "FAIL_FAST":
-            raise RuntimeError(f"Execution failed with failures: {self._failures}")
+            except Exception as exc:
+                workflow.logger.error(f"Skill execution failed: {exc}")
+                failure_mode = plan_dict.get("policy", {}).get(
+                    "failure_mode", "FAIL_FAST"
+                )
+                if failure_mode == "FAIL_FAST":
+                    raise
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
@@ -433,11 +315,7 @@ class MoonMindRunWorkflow:
         if metadata is None:
             metadata = {}
         if not isinstance(metadata, dict):
-            raise exceptions.ApplicationError(
-                "integration metadata must be an object when provided",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("integration metadata must be an object when provided")
         metadata.setdefault("repo", self._repo)
         metadata.setdefault("planRef", plan_ref)
         integration_parameters["metadata"] = metadata
@@ -531,20 +409,12 @@ class MoonMindRunWorkflow:
 
     def _principal(self) -> str:
         if not self._owner_id:
-            raise exceptions.ApplicationError(
-                "Trusted owner metadata is required",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("Trusted owner metadata is required")
         return self._owner_id
 
     def _integration_activity_type(self, operation: str = "start") -> str:
         if not self._integration:
-            raise exceptions.ApplicationError(
-                "integration is required for integration activities",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError("integration is required for integration activities")
         return f"integration.{self._integration}.{operation}"
 
     def _trusted_owner_metadata(self) -> tuple[str, str]:
@@ -556,10 +426,8 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise exceptions.ApplicationError(
-                "Trusted owner metadata is required in Temporal search attributes",
-                type="ValueError",
-                non_retryable=True,
+            raise ValueError(
+                "Trusted owner metadata is required in Temporal search attributes"
             )
         return owner_type, owner_id
 
@@ -580,9 +448,7 @@ class MoonMindRunWorkflow:
     ) -> str:
         value = self._optional_string(payload, *keys)
         if value is None:
-            raise exceptions.ApplicationError(
-                error_message, type="ValueError", non_retryable=True
-            )
+            raise ValueError(error_message)
         return value
 
     def _optional_string(self, payload: Mapping[str, Any], *keys: str) -> Optional[str]:
@@ -591,11 +457,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, str):
-                raise exceptions.ApplicationError(
-                    f"{key} must be a string when provided",
-                    type="ValueError",
-                    non_retryable=True,
-                )
+                raise ValueError(f"{key} must be a string when provided")
             normalized = value.strip()
             if normalized:
                 return normalized
@@ -607,11 +469,7 @@ class MoonMindRunWorkflow:
             if value is None:
                 continue
             if not isinstance(value, Mapping):
-                raise exceptions.ApplicationError(
-                    f"{key} must be an object when provided",
-                    type="ValueError",
-                    non_retryable=True,
-                )
+                raise ValueError(f"{key} must be an object when provided")
             return self._json_mapping(value, path=key)
         return {}
 
@@ -619,11 +477,7 @@ class MoonMindRunWorkflow:
         normalized: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
-                raise exceptions.ApplicationError(
-                    f"{path} keys must be strings",
-                    type="ValueError",
-                    non_retryable=True,
-                )
+                raise ValueError(f"{path} keys must be strings")
             normalized[key] = self._json_value(item, path=f"{path}.{key}")
         return normalized
 
@@ -634,11 +488,7 @@ class MoonMindRunWorkflow:
             return self._json_mapping(value, path=path)
         if isinstance(value, list):
             return [self._json_value(item, path=f"{path}[]") for item in value]
-        raise exceptions.ApplicationError(
-            f"{path} must contain only JSON-compatible values",
-            type="ValueError",
-            non_retryable=True,
-        )
+        raise ValueError(f"{path} must contain only JSON-compatible values")
 
     def _string_from_mapping(
         self, payload: Mapping[str, Any], key: str
@@ -647,11 +497,7 @@ class MoonMindRunWorkflow:
         if value is None:
             return None
         if not isinstance(value, str):
-            raise exceptions.ApplicationError(
-                f"{key} must be a string when provided",
-                type="ValueError",
-                non_retryable=True,
-            )
+            raise ValueError(f"{key} must be a string when provided")
         normalized = value.strip()
         return normalized or None
 

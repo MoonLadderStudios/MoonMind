@@ -65,9 +65,9 @@ For discover/submit/publish task-state payloads.
   - `status`
   - `message`
   - stage-specific task fields (`taskId`, `logsPath`, `patchPath`, etc.)
-  - `selectedTool`
+  - `selectedSkill`
   - `executionPath`
-  - `usedTools`
+  - `usedSkills`
   - `usedFallback`
   - `shadowModeRequested`
 

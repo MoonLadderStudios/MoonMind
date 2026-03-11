@@ -13,7 +13,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
     - name: Check out code
       uses: actions/checkout@v6
@@ -63,7 +62,6 @@ jobs:
         npm run dashboard:css:min
         git diff --exit-code -- api_service/static/task_dashboard/dashboard.css
     - name: Run pytest unit tests
-      timeout-minutes: 10
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |

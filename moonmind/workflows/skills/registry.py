@@ -10,14 +10,16 @@ from moonmind.config.settings import settings
 
 from .artifact_store import ArtifactStore
 from .contracts import StageExecutionDecision
-from .tool_registry import ToolRegistryError, ToolRegistrySnapshot
-from .tool_registry import create_registry_snapshot as create_contract_registry_snapshot
-from .tool_registry import (
+from .skill_registry import SkillRegistryError, SkillRegistrySnapshot
+from .skill_registry import (
+    create_registry_snapshot as create_contract_registry_snapshot,
+)
+from .skill_registry import (
     load_registry_snapshot_from_artifact as load_contract_registry_snapshot_from_artifact,
 )
-from .tool_registry import load_tool_registry as load_contract_tool_registry
-from .tool_registry import parse_tool_registry as parse_contract_tool_registry
-from .tool_registry import validate_tool_registry as validate_contract_tool_registry
+from .skill_registry import load_skill_registry as load_contract_skill_registry
+from .skill_registry import parse_skill_registry as parse_contract_skill_registry
+from .skill_registry import validate_skill_registry as validate_contract_skill_registry
 
 _SPECKIT_ADAPTER_ID = "speckit"
 _SKILL_ADAPTERS: dict[str, str] = {
@@ -129,29 +131,29 @@ def configured_stage_skills_require_speckit() -> bool:
     )
 
 
-def load_tool_registry(path: Path) -> tuple[Any, ...]:
+def load_skill_registry(path: Path) -> tuple[Any, ...]:
     """Load contract skill definitions from YAML/JSON registry file."""
 
-    return load_contract_tool_registry(path)
+    return load_contract_skill_registry(path)
 
 
-def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[Any, ...]:
+def parse_skill_registry(payload: Mapping[str, Any]) -> tuple[Any, ...]:
     """Parse untrusted registry payload into validated skill definitions."""
 
-    return parse_contract_tool_registry(payload)
+    return parse_contract_skill_registry(payload)
 
 
-def validate_tool_registry(skills: tuple[Any, ...]) -> None:
+def validate_skill_registry(skills: tuple[Any, ...]) -> None:
     """Validate contract skill definitions."""
 
-    validate_contract_tool_registry(skills)
+    validate_contract_skill_registry(skills)
 
 
 def create_registry_snapshot(
     *,
     skills: tuple[Any, ...],
     artifact_store: ArtifactStore,
-) -> ToolRegistrySnapshot:
+) -> SkillRegistrySnapshot:
     """Create immutable registry snapshot artifact for plan pinning."""
 
     return create_contract_registry_snapshot(
@@ -163,7 +165,7 @@ def load_registry_snapshot_from_artifact(
     *,
     artifact_ref: str,
     artifact_store: ArtifactStore,
-) -> ToolRegistrySnapshot:
+) -> SkillRegistrySnapshot:
     """Load registry snapshot from immutable artifact storage."""
 
     return load_contract_registry_snapshot_from_artifact(
@@ -173,16 +175,16 @@ def load_registry_snapshot_from_artifact(
 
 
 __all__ = [
-    "ToolRegistryError",
-    "ToolRegistrySnapshot",
+    "SkillRegistryError",
+    "SkillRegistrySnapshot",
     "configured_stage_skills",
     "configured_stage_skills_require_speckit",
     "create_registry_snapshot",
     "get_stage_adapter",
     "load_registry_snapshot_from_artifact",
-    "load_tool_registry",
-    "parse_tool_registry",
+    "load_skill_registry",
+    "parse_skill_registry",
     "resolve_stage_execution",
     "skill_requires_speckit",
-    "validate_tool_registry",
+    "validate_skill_registry",
 ]

@@ -16,7 +16,7 @@
 
 ## Decision 3: Preserve compatibility defaults for legacy Speckit metadata
 
-- **Decision**: For legacy Speckit phase records missing skill fields, derive defaults (`selectedTool=speckit`, `adapterId=speckit`, `executionPath=skill`).
+- **Decision**: For legacy Speckit phase records missing skill fields, derive defaults (`selectedSkill=speckit`, `adapterId=speckit`, `executionPath=skill`).
 - **Rationale**: Historical records should remain interpretable without requiring data backfills.
 - **Alternatives considered**:
   - Return null for missing fields: rejected because it weakens operator diagnostics on older runs.

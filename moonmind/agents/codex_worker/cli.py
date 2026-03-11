@@ -20,7 +20,6 @@ from celery_worker.runtime_mode import (
     resolve_claude_cli_auth_mode,
     resolve_gemini_cli_auth_mode,
 )
-
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
 from moonmind.agents.codex_worker.utils import (
     CliVerificationError,

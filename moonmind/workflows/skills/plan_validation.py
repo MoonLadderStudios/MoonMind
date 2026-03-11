@@ -6,13 +6,13 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .tool_plan_contracts import (
+from .skill_plan_contracts import (
     PlanDefinition,
-    Step,
-    ToolDefinition,
+    SkillDefinition,
+    SkillInvocation,
     parse_plan_definition,
 )
-from .tool_registry import ToolRegistrySnapshot
+from .skill_registry import SkillRegistrySnapshot
 
 
 class PlanValidationError(ValueError):
@@ -31,7 +31,7 @@ class ValidatedPlan:
     topological_order: tuple[str, ...]
 
     @property
-    def node_map(self) -> dict[str, Step]:
+    def node_map(self) -> dict[str, SkillInvocation]:
         return {node.id: node for node in self.plan.nodes}
 
 
@@ -298,7 +298,7 @@ def _is_reachable(
 def validate_plan(
     *,
     plan: PlanDefinition,
-    registry_snapshot: ToolRegistrySnapshot,
+    registry_snapshot: SkillRegistrySnapshot,
 ) -> ValidatedPlan:
     """Validate a parsed plan against the pinned registry snapshot."""
 
@@ -314,7 +314,7 @@ def validate_plan(
             "Plan metadata registry snapshot artifact_ref does not match provided registry snapshot",
         )
 
-    node_map: dict[str, Step] = {}
+    node_map: dict[str, SkillInvocation] = {}
     for node in plan.nodes:
         if node.id in node_map:
             raise PlanValidationError(
@@ -342,7 +342,7 @@ def validate_plan(
         node_id: tuple(sorted(values)) for node_id, values in outgoing_list.items()
     }
 
-    registry_skills: dict[tuple[str, str], ToolDefinition] = registry_snapshot.by_key
+    registry_skills: dict[tuple[str, str], SkillDefinition] = registry_snapshot.by_key
     for node in plan.nodes:
         definition = registry_skills.get(node.skill_key)
         if definition is None:
@@ -410,7 +410,7 @@ def validate_plan(
 def validate_plan_payload(
     *,
     payload: Mapping[str, Any],
-    registry_snapshot: ToolRegistrySnapshot,
+    registry_snapshot: SkillRegistrySnapshot,
 ) -> ValidatedPlan:
     """Parse and validate a plan payload against the pinned registry snapshot."""
 
