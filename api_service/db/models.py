@@ -8,7 +8,6 @@ from importlib import import_module
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
     JSON,
