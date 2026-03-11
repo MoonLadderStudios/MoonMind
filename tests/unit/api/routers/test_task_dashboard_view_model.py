@@ -56,6 +56,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
+    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_enabled", True)
 
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
@@ -330,8 +331,8 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     config = build_runtime_config("/tasks")
 
     assert config["features"]["temporalDashboard"] == {
-        "enabled": False,
-        "listEnabled": False,
+        "enabled": True,
+        "listEnabled": True,
         "detailEnabled": True,
         "actionsEnabled": True,
         "submitEnabled": True,

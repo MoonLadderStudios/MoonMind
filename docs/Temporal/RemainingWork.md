@@ -46,3 +46,11 @@ To ensure stability and usability for engineering teams:
 * **End-to-End Acceptance Test:** Write a comprehensive E2E test that proves the real user path—creating a task, letting an activity execute, validating artifact linkage, fetching details, and performing an operator action.
 
 **Release Gate:** The switchover will only be considered complete when real workers poll queues by default, a task can be fully created and operated on via Mission Control using Temporal, artifacts link properly, and the E2E acceptance test passes.
+
+## 6. UI Acceptance Criteria
+
+The following conditions must be met to consider the UI fully migrated to Temporal:
+1. **Primary Navigation**: The legacy "Tasks" and "Orchestrator" dashboard navigation links are removed from `task_dashboard.html`. The "Temporal" view is visible and serves as the primary task management interface.
+2. **Default Routing**: Visiting the root `/tasks` path automatically directs users to the Temporal execution list (`/tasks/list?source=temporal`) rather than the legacy queue.
+3. **Task Submission Defaults**: New task submissions from the UI must durably create a Temporal workflow via `POST /api/executions` under the hood, completely skipping legacy `/api/queue/jobs` logic.
+4. **Action Buttons Enabled**: All run operation buttons (Pause, Resume, Approve, Cancel) in the Temporal detail view function accurately by invoking backend Temporal signals.
