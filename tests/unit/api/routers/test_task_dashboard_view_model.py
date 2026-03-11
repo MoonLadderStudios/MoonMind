@@ -283,6 +283,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
     monkeypatch.setenv("MOONMIND_WORKER_RUNTIME", "gemini")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
+    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "gemini")
     monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
