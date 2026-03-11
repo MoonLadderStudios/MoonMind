@@ -131,7 +131,6 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "spec_workflow_runs": (
         "id",
         "feature_key",
-        "celery_chain_id",
         "status",
         "phase",
         "branch_name",
@@ -164,8 +163,6 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "orchestrator_run_id",
         "plan_step",
         "plan_step_status",
-        "celery_state",
-        "celery_task_id",
         "message",
         "artifact_refs",
     ),
@@ -367,7 +364,6 @@ def upgrade() -> None:  # noqa: D401
         "spec_workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
-        sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
             SPEC_WORKFLOW_RUN_STATUS,
@@ -507,12 +503,6 @@ def upgrade() -> None:  # noqa: D401
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
             nullable=True,
         ),
-        sa.Column(
-            "celery_state",
-            postgresql.ENUM(name="orchestratortaskstate", create_type=False),
-            nullable=True,
-        ),
-        sa.Column("celery_task_id", sa.String(length=255), nullable=True),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column(
             "artifact_refs",
@@ -796,7 +786,6 @@ def downgrade() -> None:  # noqa: D401
         "spec_workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
-        sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
             legacy_run_status,
@@ -1036,18 +1025,6 @@ def downgrade() -> None:  # noqa: D401
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
             nullable=True,
         ),
-    )
-    op.add_column(
-        "spec_workflow_task_states",
-        sa.Column(
-            "celery_state",
-            postgresql.ENUM(name="orchestratortaskstate", create_type=False),
-            nullable=True,
-        ),
-    )
-    op.add_column(
-        "spec_workflow_task_states",
-        sa.Column("celery_task_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
         "spec_workflow_task_states",
