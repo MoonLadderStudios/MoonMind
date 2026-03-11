@@ -95,6 +95,7 @@ class MoonMindRunWorkflow:
         self._step_count = 0
         self._max_wait_cycles = 100
         self._max_steps = 100
+        self._failures: dict[str, str] = {}
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
@@ -290,11 +291,14 @@ class MoonMindRunWorkflow:
         pending = {node.id for node in plan.nodes}
         running: dict[asyncio.Task[Any], str] = {}
         succeeded: dict[str, Any] = {}
-        failures: dict[str, str] = {}
+        self._failures = {}
         nodes_by_id = {node.id: node for node in plan.nodes}
 
+        # Build activity catalog once — avoid reconstructing on every loop iteration
+        activity_catalog = build_default_activity_catalog()
+
         while pending or running:
-            if failure_mode == "FAIL_FAST" and failures:
+            if failure_mode == "FAIL_FAST" and self._failures:
                 for running_task in running:
                     running_task.cancel()
                 if running:
@@ -311,19 +315,24 @@ class MoonMindRunWorkflow:
             )
 
             if not ready and not running:
-                # Deadlock or blocked
-                break
+                # Deadlock: pending nodes exist but none are ready and none are running.
+                # This happens when a dependency fails under CONTINUE mode.
+                # Surface this as an error rather than silently succeeding.
+                unexecuted = sorted(pending)
+                raise RuntimeError(
+                    f"Execution deadlocked: {len(unexecuted)} node(s) could not be "
+                    f"scheduled (unexecuted: {unexecuted}, failures: {self._failures})"
+                )
 
             while ready and len(running) < max_concurrency:
                 node_id = ready.pop(0)
                 pending.remove(node_id)
                 node = nodes_by_id[node_id]
 
-                # We could resolve a real route here, but standard skill route goes to LLM_TASK_QUEUE
-                # For generic routing (since we don't have SkillRegistry parsed inside workflow)
-                route = build_default_activity_catalog().resolve_activity(
-                    "mm.skill.execute"
-                )
+                # NOTE: routing is resolved from the default catalog. Per-skill registry
+                # routing (resolve_skill) is a known gap that requires SkillRegistry access
+                # inside the workflow sandbox — tracked as follow-up work.
+                route = activity_catalog.resolve_activity("mm.skill.execute")
 
                 task = asyncio.create_task(
                     workflow.execute_activity(
@@ -365,7 +374,8 @@ class MoonMindRunWorkflow:
                 running.keys(), return_when=asyncio.FIRST_COMPLETED
             )
 
-            for task in done:
+            # Sort by node_id for deterministic state updates during Temporal replay
+            for task in sorted(done, key=lambda t: running[t]):
                 node_id = running.pop(task)
                 try:
                     result = task.result()
@@ -383,12 +393,12 @@ class MoonMindRunWorkflow:
                         )
 
                 except ActivityError as e:
-                    failures[node_id] = str(e)
+                    self._failures[node_id] = str(e)
 
             self._update_memo()
 
-        if failures and failure_mode == "FAIL_FAST":
-            raise RuntimeError(f"Execution failed with failures: {failures}")
+        if self._failures and failure_mode == "FAIL_FAST":
+            raise RuntimeError(f"Execution failed with failures: {self._failures}")
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
