@@ -40,9 +40,7 @@ def _validate_repository_slug(value: str) -> str:
     """Ensure repository strings avoid traversal sequences like ``../``."""
 
     if not _REPOSITORY_SLUG_PATTERN.fullmatch(value):
-        raise ValueError(
-            f"Repository must be in the form 'owner/repo', got: {value!r}"
-        )
+        raise ValueError(f"Repository must be in the form 'owner/repo', got: {value!r}")
 
     owner, repo = value.split("/", 1)
     for segment in (owner, repo):
