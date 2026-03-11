@@ -5,6 +5,7 @@ from typing import Any, Optional, TypedDict
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
@@ -407,8 +408,9 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise ValueError(
-                "Trusted owner metadata is required in Temporal search attributes"
+            raise ApplicationError(
+                "Trusted owner metadata is required in Temporal search attributes",
+                non_retryable=True,
             )
         return owner_type, owner_id
 
@@ -429,7 +431,7 @@ class MoonMindRunWorkflow:
     ) -> str:
         value = self._optional_string(payload, *keys)
         if value is None:
-            raise ValueError(error_message)
+            raise ApplicationError(error_message, non_retryable=True)
         return value
 
     def _optional_string(self, payload: Mapping[str, Any], *keys: str) -> Optional[str]:
