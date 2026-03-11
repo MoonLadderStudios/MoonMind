@@ -2064,12 +2064,6 @@ class AppSettings(BaseSettings):
         """Populate derived Celery defaults after settings load."""
         super().model_post_init(__context)
 
-        if not self.spec_workflow.celery_broker_url:
-            self.spec_workflow.celery_broker_url = self.celery.broker_url
-        if not self.spec_workflow.celery_result_backend:
-            self.spec_workflow.celery_result_backend = self.celery.result_backend
-        if not self.spec_workflow.codex_queue:
-            self.spec_workflow.codex_queue = self.celery.default_queue
         if self.worker_enable_task_proposals is not None:
             self.spec_workflow.enable_task_proposals = self.worker_enable_task_proposals
         if self.worker_stage_command_timeout_seconds is not None:
