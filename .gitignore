@@ -65,3 +65,15 @@ coverage/
 Thumbs.db
 *.tmp
 *.swp
+check_defaults.py
+fix_comments.py
+fix_test.py
+register_sa.py
+resolve_conflicts.py
+speckit_analyze_report.md
+step-*-report.md
+update_http_exception.py
+tmp-comments*.json
+tmp-speckit-analyze.md
+tmp_skill.md
+tmp_speckit_clarify.md

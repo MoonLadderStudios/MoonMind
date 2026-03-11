@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
@@ -224,26 +225,78 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
-        sandbox_result = await workflow.execute_activity(
-            "sandbox.run_command",
+        plan_payload = await workflow.execute_activity(
+            "artifact.read",
             {
                 "principal": self._principal(),
-                "cmd": "echo executing",
-                "timeout_seconds": 300,
+                "artifact_ref": plan_ref,
             },
-            start_to_close_timeout=timedelta(minutes=10),
-            task_queue=SANDBOX_TASK_QUEUE,
+            start_to_close_timeout=timedelta(minutes=5),
+            task_queue=LLM_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
-
-        logs_ref = (
-            sandbox_result.get("diagnostics_ref")
-            if isinstance(sandbox_result, dict)
-            else getattr(sandbox_result, "diagnostics_ref", None)
+        plan_dict = (
+            json.loads(plan_payload.decode("utf-8"))
+            if isinstance(plan_payload, bytes)
+            else json.loads(plan_payload)
+            if isinstance(plan_payload, str)
+            else plan_payload
         )
-        if logs_ref:
-            self._logs_ref = logs_ref
-            self._update_memo()
+        if not isinstance(plan_dict, Mapping):
+            raise ValueError("plan_ref must resolve to a JSON object")
+
+        nodes = plan_dict.get("nodes")
+        if not isinstance(nodes, list):
+            raise ValueError("plan payload must include a nodes array")
+
+        registry_snapshot_ref = (
+            plan_dict.get("metadata", {})
+            .get("registry_snapshot", {})
+            .get("artifact_ref")
+        )
+        failure_mode = (
+            str(plan_dict.get("policy", {}).get("failure_mode") or "FAIL_FAST")
+            .strip()
+            .upper()
+        )
+
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                raise ValueError("plan nodes must be objects")
+            skill = node.get("skill")
+            if not isinstance(skill, Mapping):
+                raise ValueError("plan node skill definition is required")
+
+            invocation_payload = {
+                "id": node.get("id"),
+                "skill": {
+                    "name": skill.get("name"),
+                    "version": skill.get("version"),
+                },
+                "inputs": node.get("inputs", {}),
+                "options": node.get("options", {}),
+            }
+
+            try:
+                await workflow.execute_activity(
+                    "mm.skill.execute",
+                    {
+                        "invocation_payload": invocation_payload,
+                        "principal": self._principal(),
+                        "registry_snapshot_ref": registry_snapshot_ref,
+                        "context": {
+                            "workflow_id": workflow.info().workflow_id,
+                            "run_id": workflow.info().run_id,
+                            "node_id": node.get("id", "unknown"),
+                        },
+                    },
+                    start_to_close_timeout=timedelta(minutes=30),
+                    task_queue=LLM_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                )
+            except Exception:
+                if failure_mode == "FAIL_FAST":
+                    raise
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)
