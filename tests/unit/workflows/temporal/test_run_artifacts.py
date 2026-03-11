@@ -141,4 +141,5 @@ async def test_run_execution_stage_extracts_logs_ref_from_activity_result(
     payload = captured["payload"]
     assert isinstance(payload, dict)
     assert payload["cmd"] == "echo executing"
+    assert payload["registry_snapshot_ref"] == "art_reg_1"
     assert workflow._logs_ref == "art_logs_1"
