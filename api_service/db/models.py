@@ -5,14 +5,8 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 from uuid import UUID, uuid4
-
-if TYPE_CHECKING:
-    from moonmind.workflows.speckit_celery.models import (
-        CodexAuthVolume,
-        CodexWorkerShard,
-    )
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
@@ -2052,12 +2046,12 @@ class SpecWorkflowRun(Base):
     )
     codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
         "CodexAuthVolume",
-        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",
+        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",  # noqa: F821
         foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
     )
     codex_shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
         "CodexWorkerShard",
-        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",
+        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",  # noqa: F821
         foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
     )
 
@@ -2237,10 +2231,9 @@ Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
-    if TYPE_CHECKING:
+    if False:
         return
 
-    import_module("moonmind.workflows.speckit_celery.models")
     import_module("moonmind.workflows.agent_queue.models")
 
 
