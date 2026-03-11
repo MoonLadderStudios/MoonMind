@@ -6,7 +6,6 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Tuple
 
-
 from moonmind.config.settings import settings
 
 CODEX_QUEUE_PREFIX = "codex-"

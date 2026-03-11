@@ -43,10 +43,8 @@ from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
 from api_service.db.enums import (
-    CodexAuthVolumeStatus,
     CodexCredentialStatus,
     CodexPreflightStatus,
-    CodexWorkerShardStatus,
     GitHubCredentialStatus,
     OrchestratorApprovalRequirement,
     OrchestratorPlanOrigin,
@@ -57,10 +55,6 @@ from api_service.db.enums import (
     OrchestratorRunStatus,
     OrchestratorTaskState,
     OrchestratorTaskStepStatus,
-    SpecAutomationArtifactType,
-    SpecAutomationPhase,
-    SpecAutomationRunStatus,
-    SpecAutomationTaskStatus,
     SpecWorkflowRunPhase,
     SpecWorkflowRunStatus,
     SpecWorkflowTaskName,
@@ -453,7 +447,6 @@ class ApproverRoleListType(TypeDecorator):
         return list(value)
 
 
-
 # ---------------------------------------------------------------------------
 # Enums are defined in api_service.db.enums and imported above.
 # Kept reference here for backward compatibility.
@@ -673,8 +666,6 @@ class TaskStepTemplateRecent(Base):
     )
 
 
-
-
 class TemporalArtifactStorageBackend(str, enum.Enum):
     """Supported backing stores for Temporal artifact bytes."""
 
@@ -722,8 +713,6 @@ class TemporalArtifactUploadMode(str, enum.Enum):
 
     SINGLE_PUT = "single_put"
     MULTIPART = "multipart"
-
-
 
 
 class TemporalWorkflowType(str, enum.Enum):

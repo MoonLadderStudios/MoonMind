@@ -8,8 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from moonmind.schemas.queue_system_models import QueueSystemMetadataModel
 from moonmind.config.settings import settings
+from moonmind.schemas.queue_system_models import QueueSystemMetadataModel
 from moonmind.workflows.agent_queue import models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.agent_queue.manifest_contract import sanitize_manifest_payload

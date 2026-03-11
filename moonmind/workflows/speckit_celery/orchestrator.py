@@ -62,7 +62,7 @@ async def trigger_spec_workflow_run(
     NOTE: Celery dispatch has been removed. This creates the DB record only.
     """
 
-    from uuid import uuid4
+
     from moonmind.config.settings import settings
 
     async with get_async_session_context() as session:
@@ -105,7 +105,9 @@ async def retry_spec_workflow_run(
         repo = SpecWorkflowRepository(session)
         run = await repo.get_run(run_id, with_relations=True)
         if run is None:
-            raise WorkflowRetryError(run_id, f"Run {run_id} not found", code="workflow_not_found")
+            raise WorkflowRetryError(
+                run_id, f"Run {run_id} not found", code="workflow_not_found"
+            )
 
         if run.status not in (
             models.SpecWorkflowRunStatus.FAILED,

@@ -10,7 +10,7 @@ import logging
 import os
 import socket
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from moonmind.workflows.speckit_celery import models

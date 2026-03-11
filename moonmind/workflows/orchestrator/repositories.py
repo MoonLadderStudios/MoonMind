@@ -410,9 +410,7 @@ class OrchestratorRepository:
             insert_values["finished_at"] = finished_at
             update_values["finished_at"] = finished_at
 
-        insert_stmt = pg_insert(db_models.SpecWorkflowTaskState).values(
-            insert_values
-        )
+        insert_stmt = pg_insert(db_models.SpecWorkflowTaskState).values(insert_values)
         conflict_cols = (
             db_models.SpecWorkflowTaskState.orchestrator_run_id,
             db_models.SpecWorkflowTaskState.plan_step,
