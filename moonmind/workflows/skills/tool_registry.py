@@ -171,9 +171,7 @@ def load_registry_snapshot_from_artifact(
 
     skills = parse_tool_registry(payload)
     digest = _digest_registry_doc(_canonical_registry_doc(skills))
-    return ToolRegistrySnapshot(
-        digest=digest, artifact_ref=artifact_ref, skills=skills
-    )
+    return ToolRegistrySnapshot(digest=digest, artifact_ref=artifact_ref, skills=skills)
 
 
 __all__ = [

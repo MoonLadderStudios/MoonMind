@@ -11,9 +11,7 @@ from moonmind.config.settings import settings
 from .artifact_store import ArtifactStore
 from .contracts import StageExecutionDecision
 from .tool_registry import ToolRegistryError, ToolRegistrySnapshot
-from .tool_registry import (
-    create_registry_snapshot as create_contract_registry_snapshot,
-)
+from .tool_registry import create_registry_snapshot as create_contract_registry_snapshot
 from .tool_registry import (
     load_registry_snapshot_from_artifact as load_contract_registry_snapshot_from_artifact,
 )
