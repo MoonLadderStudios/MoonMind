@@ -1,0 +1,1 @@
+../../.agents/skills/skills/speckit-constitution/SKILL.md

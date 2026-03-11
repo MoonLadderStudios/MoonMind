@@ -14,7 +14,6 @@ from sqlalchemy.orm import selectinload
 
 from api_service.db import models as db_models
 from moonmind.schemas.workflow_models import OrchestratorTaskStepInputModel
-from moonmind.workflows.speckit_celery import models as workflow_models
 
 _TASK_STEP_FIELD_UNSET = object()
 
@@ -30,11 +29,11 @@ def _to_enum(value: Any, enum_cls):
 
 
 _PLAN_STATUS_TO_WORKFLOW_STATUS = {
-    db_models.OrchestratorPlanStepStatus.PENDING: workflow_models.SpecWorkflowTaskStatus.QUEUED,
-    db_models.OrchestratorPlanStepStatus.IN_PROGRESS: workflow_models.SpecWorkflowTaskStatus.RUNNING,
-    db_models.OrchestratorPlanStepStatus.SUCCEEDED: workflow_models.SpecWorkflowTaskStatus.SUCCEEDED,
-    db_models.OrchestratorPlanStepStatus.FAILED: workflow_models.SpecWorkflowTaskStatus.FAILED,
-    db_models.OrchestratorPlanStepStatus.SKIPPED: workflow_models.SpecWorkflowTaskStatus.SKIPPED,
+    db_models.OrchestratorPlanStepStatus.PENDING: db_models.SpecWorkflowTaskStatus.QUEUED,
+    db_models.OrchestratorPlanStepStatus.IN_PROGRESS: db_models.SpecWorkflowTaskStatus.RUNNING,
+    db_models.OrchestratorPlanStepStatus.SUCCEEDED: db_models.SpecWorkflowTaskStatus.SUCCEEDED,
+    db_models.OrchestratorPlanStepStatus.FAILED: db_models.SpecWorkflowTaskStatus.FAILED,
+    db_models.OrchestratorPlanStepStatus.SKIPPED: db_models.SpecWorkflowTaskStatus.SKIPPED,
 }
 
 

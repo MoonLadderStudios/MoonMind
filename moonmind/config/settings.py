@@ -49,6 +49,66 @@ class DatabaseSettings(BaseSettings):
     )
 
 
+class CelerySettings(BaseSettings):
+    """Celery broker and worker defaults used by queue-backed workflows."""
+
+    broker_url: str = Field(
+        "amqp://guest:guest@rabbitmq:5672//",
+        env="CELERY_BROKER_URL",
+    )
+    result_backend: Optional[str] = Field(
+        None,
+        env="CELERY_RESULT_BACKEND",
+    )
+    default_queue: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE", "CELERY_DEFAULT_QUEUE"),
+    )
+    default_exchange: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_EXCHANGE", "CELERY_DEFAULT_EXCHANGE"
+        ),
+    )
+    default_routing_key: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices(
+            "WORKFLOW_DEFAULT_ROUTING_KEY", "CELERY_DEFAULT_ROUTING_KEY"
+        ),
+    )
+    task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
+    result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
+    accept_content: tuple[str, ...] = Field(("json",), env="CELERY_ACCEPT_CONTENT")
+    task_acks_late: bool = Field(True, env="CELERY_TASK_ACKS_LATE")
+    task_acks_on_failure_or_timeout: bool = Field(
+        True, env="CELERY_TASK_ACKS_ON_FAILURE_OR_TIMEOUT"
+    )
+    task_reject_on_worker_lost: bool = Field(
+        True, env="CELERY_TASK_REJECT_ON_WORKER_LOST"
+    )
+    worker_prefetch_multiplier: int = Field(1, env="CELERY_WORKER_PREFETCH_MULTIPLIER")
+    imports: tuple[str, ...] = Field((), env="CELERY_IMPORTS")
+    result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
+    result_expires: int = Field(7 * 24 * 60 * 60, env="CELERY_RESULT_EXPIRES")
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("accept_content", "imports", mode="before")
+    @classmethod
+    def _split_csv(cls, value):
+        if isinstance(value, str):
+            items = [item.strip() for item in value.split(",") if item.strip()]
+            return tuple(items)
+        if isinstance(value, (list, tuple)):
+            return tuple(value)
+        return value
+
+
 class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
 
@@ -1730,6 +1790,7 @@ class AppSettings(BaseSettings):
 
     # Sub-settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    celery: CelerySettings = Field(default_factory=CelerySettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
@@ -2063,6 +2124,16 @@ class AppSettings(BaseSettings):
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
         """Populate derived Celery defaults after settings load."""
         super().model_post_init(__context)
+
+        if not self.celery.result_backend:
+            db = self.database
+            self.celery.result_backend = "db+postgresql://{}:{}@{}:{}/{}".format(
+                db.POSTGRES_USER,
+                db.POSTGRES_PASSWORD,
+                db.POSTGRES_HOST,
+                db.POSTGRES_PORT,
+                db.POSTGRES_DB,
+            )
 
         if self.worker_enable_task_proposals is not None:
             self.spec_workflow.enable_task_proposals = self.worker_enable_task_proposals

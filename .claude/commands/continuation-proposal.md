@@ -1,0 +1,1 @@
+../../.agents/skills/skills/continuation-proposal/SKILL.md

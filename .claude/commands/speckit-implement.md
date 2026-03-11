@@ -1,0 +1,1 @@
+../../.agents/skills/skills/speckit-implement/SKILL.md
