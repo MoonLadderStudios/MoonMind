@@ -76,8 +76,8 @@ As a release owner, I want refreshed `015` tasks to require runtime code changes
 ### Functional Requirements
 
 - **FR-001** (`DOC-REQ-001`): `specs/015-skills-workflow` artifacts MUST reference current runtime stage names (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`).
-- **FR-002** (`DOC-REQ-005`): Spec Automation phase metadata normalization MUST expose `selectedSkill`, `adapterId`, and `executionPath` when available.
-- **FR-003** (`DOC-REQ-006`): Legacy Speckit phase metadata without explicit skill fields MUST default to `selectedSkill=speckit`, `adapterId=speckit`, and `executionPath=skill`.
+- **FR-002** (`DOC-REQ-005`): Spec Automation phase metadata normalization MUST expose `selectedTool`, `adapterId`, and `executionPath` when available.
+- **FR-003** (`DOC-REQ-006`): Legacy Speckit phase metadata without explicit skill fields MUST default to `selectedTool=speckit`, `adapterId=speckit`, and `executionPath=skill`.
 - **FR-004** (`DOC-REQ-005`): API response schemas for Spec Automation phase details MUST include adapter metadata for skills-first observability.
 - **FR-005** (`DOC-REQ-002`, `DOC-REQ-003`): Documentation contracts in `015` MUST reflect shared skills runtime layout (`skills_active`, `.agents/skills`, `.gemini/skills`) and current auth startup path.
 - **FR-006** (`DOC-REQ-004`): `015` runtime assumptions MUST align with current strategy where Speckit verification is conditioned on configured stage skills.

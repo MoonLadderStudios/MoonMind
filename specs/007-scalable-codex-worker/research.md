@@ -25,7 +25,7 @@
 
 ### 4. Skills-First Metadata in Workflow Tasks
 
-- **Decision**: Keep skills-first metadata attached to task payloads (`selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`) for discover/submit/publish stages.
+- **Decision**: Keep skills-first metadata attached to task payloads (`selectedTool`, `executionPath`, `usedTools`, `usedFallback`, `shadowModeRequested`) for discover/submit/publish stages.
 - **Rationale**: This preserves compatibility while satisfying umbrella telemetry needs.
 - **Impact**: API consumers retain existing fields and gain explicit stage-path diagnostics.
 

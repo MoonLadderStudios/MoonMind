@@ -43,7 +43,7 @@
 
 ### Implementation for User Story 1
 
-- [X] T008 [US1] Implement backward-compatible stage metadata normalization (`selectedSkill`, `adapterId`, `executionPath`) in `moonmind/workflows/speckit_celery/models.py` (`DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T008 [US1] Implement backward-compatible stage metadata normalization (`selectedTool`, `adapterId`, `executionPath`) in `moonmind/workflows/speckit_celery/models.py` (`DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`).
 - [X] T009 [US1] Project adapter-aware phase fields through API schema and serializer code in `moonmind/schemas/workflow_models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-007`).
 - [X] T010 [US1] Align stage/metadata documentation contracts in `specs/015-skills-workflow/contracts/skills-stage-contract.md` and `specs/015-skills-workflow/contracts/spec-automation-api.openapi.yaml` (`DOC-REQ-001`, `DOC-REQ-005`).
 

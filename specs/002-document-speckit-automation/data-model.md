@@ -29,18 +29,18 @@ No schema changes are required for 015 alignment.
 
 `SpecAutomationTaskState` now exposes normalized derived metadata from `metadata`:
 
-- `selectedSkill`
+- `selectedTool`
 - `executionPath` (`skill | direct_fallback | direct_only`)
-- `usedSkills`
+- `usedTools`
 - `usedFallback`
 - `shadowModeRequested`
 
 Derivation rules:
 
 1. Use explicit metadata values when present.
-2. If absent and phase starts with `speckit_`, default `selectedSkill=speckit`.
-3. If `selectedSkill=speckit` and execution path is missing, default `executionPath=skill`.
-4. Infer `usedSkills` and `usedFallback` from `executionPath` when possible.
+2. If absent and phase starts with `speckit_`, default `selectedTool=speckit`.
+3. If `selectedTool=speckit` and execution path is missing, default `executionPath=skill`.
+4. Infer `usedTools` and `usedFallback` from `executionPath` when possible.
 
 ## SpecAutomationArtifact
 

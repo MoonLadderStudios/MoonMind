@@ -203,7 +203,7 @@ def test_configured_stage_skills_require_speckit(mock_settings):
 
 def test_contract_registry_helpers_roundtrip_snapshot():
     store = InMemoryArtifactStore()
-    skills = registry.parse_skill_registry(
+    skills = registry.parse_tool_registry(
         {
             "skills": [
                 {
@@ -225,7 +225,7 @@ def test_contract_registry_helpers_roundtrip_snapshot():
                         }
                     },
                     "executor": {
-                        "activity_type": "mm.skill.execute",
+                        "activity_type": "mm.tool.execute",
                         "selector": {"mode": "by_capability"},
                     },
                     "requirements": {"capabilities": ["sandbox"]},
@@ -240,7 +240,7 @@ def test_contract_registry_helpers_roundtrip_snapshot():
             ]
         }
     )
-    registry.validate_skill_registry(skills)
+    registry.validate_tool_registry(skills)
 
     snapshot = registry.create_registry_snapshot(skills=skills, artifact_store=store)
     loaded = registry.load_registry_snapshot_from_artifact(
@@ -251,4 +251,4 @@ def test_contract_registry_helpers_roundtrip_snapshot():
     assert loaded.digest == snapshot.digest
     assert loaded.get_skill(
         name="repo.run_tests", version="1.0.0"
-    ).executor.activity_type == ("mm.skill.execute")
+    ).executor.activity_type == ("mm.tool.execute")

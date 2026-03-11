@@ -112,9 +112,9 @@ Execution behavior:
 
 Worker event payloads for claim/start/complete/fail include:
 
-- `selectedSkill` (string)
+- `selectedTool` (string)
 - `executionPath` (`skill|direct_fallback|direct_only`)
-- `usedSkills` (bool)
+- `usedTools` (bool)
 - `usedFallback` (bool)
 - `shadowModeRequested` (bool)
 
