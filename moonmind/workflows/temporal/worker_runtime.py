@@ -80,7 +80,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         async def _auto_skill_handler(inputs, context):
             runtime_info = inputs.get("runtime", {})
-            target_runtime = runtime_info.get("mode", inputs.get("targetRuntime", "codex"))
+            target_runtime = runtime_info.get(
+                "mode", inputs.get("targetRuntime", "codex")
+            )
             model = runtime_info.get("model", inputs.get("model", ""))
             effort = runtime_info.get("effort", inputs.get("effort", ""))
             instructions = inputs.get("instructions", "")

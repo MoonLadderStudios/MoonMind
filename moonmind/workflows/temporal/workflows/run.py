@@ -407,7 +407,8 @@ class MoonMindRunWorkflow:
                             if outputs and isinstance(outputs[0], dict):
                                 self._logs_ref = outputs[0].get("artifact_ref")
                         elif (
-                            hasattr(result, "output_artifacts") and result.output_artifacts
+                            hasattr(result, "output_artifacts")
+                            and result.output_artifacts
                         ):
                             self._logs_ref = getattr(
                                 result.output_artifacts[0], "artifact_ref", None
