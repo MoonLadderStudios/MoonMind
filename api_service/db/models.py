@@ -2046,12 +2046,12 @@ class SpecWorkflowRun(Base):
     )
     codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
         "CodexAuthVolume",
-        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",
+        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",  # noqa: F821
         foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
     )
     codex_shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
         "CodexWorkerShard",
-        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",
+        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",  # noqa: F821
         foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
     )
 

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+import api_service.db.models as models
 from api_service.db.models import (
     OrchestratorPlanOrigin,
     OrchestratorPlanStep,

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
+from api_service.db import models as workflow_models
 from api_service.db.models import (
     Base,
     OrchestratorActionPlan,
