@@ -239,6 +239,13 @@ class TestSpecWorkflowSettings:
             "MOONMIND_CODEX_EFFORT",
             "MOONMIND_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
+            "AGENT_JOB_ARTIFACT_ROOT",
+            "AGENT_JOB_ARTIFACT_MAX_BYTES",
+            "AGENT_JOB_ATTACHMENT_ENABLED",
+            "AGENT_JOB_ATTACHMENT_MAX_COUNT",
+            "AGENT_JOB_ATTACHMENT_MAX_BYTES",
+            "AGENT_JOB_ATTACHMENT_TOTAL_BYTES",
+            "AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
             "WORKFLOW_GITHUB_REPOSITORY",
             "SPEC_WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
@@ -285,7 +292,7 @@ class TestSpecWorkflowSettings:
         """Attachment-related settings should expose stable defaults."""
 
         settings = SpecWorkflowSettings(_env_file=None)
-        assert settings.agent_job_attachment_enabled is True
+        assert settings.agent_job_attachment_enabled is False
         assert settings.agent_job_attachment_max_count == 10
         assert settings.agent_job_attachment_max_bytes == 10 * 1024 * 1024
         assert settings.agent_job_attachment_total_bytes == 25 * 1024 * 1024

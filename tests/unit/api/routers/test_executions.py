@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from api_service.api.routers.executions import (
     _get_service,
     _serialize_execution,
+    get_temporal_client,
     router,
 )
 from api_service.auth_providers import get_current_user
@@ -42,6 +43,11 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNa
     for dependency in user_dependencies:
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
     return mock_user
+
+
+def _override_temporal_client_dependency(app: FastAPI) -> None:
+    # Avoid real Temporal network connections in unit tests.
+    app.dependency_overrides[get_temporal_client] = lambda: AsyncMock()
 
 
 def _build_execution_record(
@@ -117,6 +123,7 @@ def _build_execution_record(
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: service
     user = _override_user_dependencies(app, is_superuser=False)
@@ -130,6 +137,7 @@ def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
 def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_user_dependencies(app, is_superuser=True)
@@ -143,6 +151,7 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
 def test_list_executions_passes_temporal_filters_for_admin() -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     mock_service.list_executions.return_value = SimpleNamespace(
         items=[],
@@ -185,6 +194,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
 def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_user_dependencies(app, is_superuser=False)
@@ -200,6 +210,7 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
 def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     mock_service.list_executions.return_value = SimpleNamespace(
         items=[],
@@ -221,6 +232,7 @@ def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> Non
 def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     mock_service.list_executions.return_value = SimpleNamespace(
         items=[],
@@ -242,6 +254,7 @@ def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None
 def test_create_task_shaped_execution_rejects_invalid_required_capabilities() -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_user_dependencies(app, is_superuser=False)
@@ -589,6 +602,7 @@ def test_describe_execution_includes_actions_and_debug_fields(
 ) -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     mock_service.describe_execution.return_value = _build_execution_record(
         state=MoonMindWorkflowState.AWAITING_EXTERNAL
@@ -618,6 +632,7 @@ def test_describe_execution_disables_actions_when_feature_flag_off(
 ) -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
     mock_service.describe_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
@@ -635,32 +650,35 @@ def test_describe_execution_disables_actions_when_feature_flag_off(
     assert body["debugFields"] is None
 
 
-def test_action_endpoints_reject_requests_when_actions_disabled(
+def test_action_endpoints_still_work_when_actions_are_ui_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = FastAPI()
     app.include_router(router)
+    _override_temporal_client_dependency(app)
     mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    mock_service.update_execution.return_value = {
+        "accepted": True,
+        "applied": "immediate",
+        "message": "Update accepted.",
+    }
+    mock_service.signal_execution.return_value = _build_execution_record()
+    mock_service.cancel_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", False)
 
     with TestClient(app) as test_client:
-        # Test update endpoint
         update_response = test_client.post(
             "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
         )
-        assert update_response.status_code == 403
-        assert update_response.json()["detail"]["code"] == "actions_disabled"
+        assert update_response.status_code == 200
 
-        # Test signal endpoint
         signal_response = test_client.post(
             "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
         )
-        assert signal_response.status_code == 403
-        assert signal_response.json()["detail"]["code"] == "actions_disabled"
+        assert signal_response.status_code == 202
 
-        # Test cancel endpoint
         cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
-        assert cancel_response.status_code == 403
-        assert cancel_response.json()["detail"]["code"] == "actions_disabled"
+        assert cancel_response.status_code == 202

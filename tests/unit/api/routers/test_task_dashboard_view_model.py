@@ -216,7 +216,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_compat["backgroundRefetchMs"] == config["pollIntervalsMs"]["list"]
     assert config["system"]["taskResolution"] == "/api/tasks/{taskId}/resolution"
     attachment_policy = config["system"]["attachmentPolicy"]
-    assert attachment_policy["enabled"] is True
+    assert attachment_policy["enabled"] is False
     assert attachment_policy["maxCount"] >= 1
     assert attachment_policy["maxBytes"] >= 1
     assert attachment_policy["totalBytes"] >= attachment_policy["maxBytes"]
