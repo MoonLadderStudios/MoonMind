@@ -47,7 +47,7 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNa
 
 def _override_temporal_client_dependency(app: FastAPI) -> None:
     # Avoid real Temporal network connections in unit tests.
-    app.dependency_overrides[get_temporal_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_temporal_client] = AsyncMock
 
 
 def _build_execution_record(
