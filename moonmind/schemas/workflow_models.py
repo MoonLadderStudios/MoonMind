@@ -10,7 +10,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from api_service.db.models import (
+from api_service.db.enums import (
     CodexAuthVolumeStatus,
     CodexCredentialStatus,
     CodexPreflightStatus,
@@ -40,13 +40,14 @@ def _validate_repository_slug(value: str) -> str:
     """Ensure repository strings avoid traversal sequences like ``../``."""
 
     if not _REPOSITORY_SLUG_PATTERN.fullmatch(value):
-        raise ValueError("Repository must be in the form 'owner/repo'.")
+        raise ValueError(f"Repository must be in the form 'owner/repo', got: {value!r}")
 
     owner, repo = value.split("/", 1)
     for segment in (owner, repo):
         if segment in {".", ".."} or ".." in segment:
             raise ValueError(
-                "Repository segments cannot contain path traversal tokens."
+                f"Repository segment {segment!r} contains path traversal tokens "
+                "('.' or '..'). Both the owner and repo parts must be plain names."
             )
 
     return value

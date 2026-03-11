@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
-from .skill_plan_contracts import ARTIFACT_REF_PREFIX, ArtifactRef
+from .tool_plan_contracts import ARTIFACT_REF_PREFIX, ArtifactRef
 
 
 class ArtifactStoreError(RuntimeError):

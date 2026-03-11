@@ -17,7 +17,7 @@
 Unsupported skill adapter error payload/log fields include:
 
 - `code`: `skill_adapter_not_registered`
-- `selectedSkill`: requested skill name
+- `selectedTool`: requested skill name
 - `stageName`: workflow stage
 - `message`: actionable instruction to register adapter or select supported skill
 

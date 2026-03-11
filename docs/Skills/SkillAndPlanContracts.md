@@ -97,7 +97,8 @@ A Skill is not a workflow. Workflows interpret Plans and invoke Skills as Activi
 
 ---
 
-### 4.2 SkillDefinition schema (registry entry)
+### 4.2 ToolDefinition schema (registry entry)
+* **Agent Skill** — A specific type of Tool backed by a markdown document in `.agents/skills`.
 
 Skills are declared in a registry (YAML or JSON). Example:
 
@@ -123,7 +124,7 @@ outputs:
       diff_artifact: { type: string }       # artifact_ref (optional)
 executor:
   # See §11 decision: hybrid model
-  activity_type: "mm.skill.execute"
+  activity_type: "mm.tool.execute"
   selector:
     mode: "by_capability"
 requirements:
@@ -153,7 +154,7 @@ security:
 
 ---
 
-### 4.3 SkillInvocation schema
+### 4.3 Step schema
 
 A Plan node references a Skill with pinned version and inputs.
 
@@ -182,7 +183,7 @@ A Plan node references a Skill with pinned version and inputs.
 
 ---
 
-### 4.4 SkillResult schema
+### 4.4 ToolResult schema
 
 Skill execution returns a structured result:
 
@@ -210,7 +211,7 @@ Skill execution returns a structured result:
 
 ---
 
-### 4.5 Error model (SkillFailure)
+### 4.5 Error model (ToolFailure)
 
 All failures normalize to:
 
@@ -242,7 +243,7 @@ All failures normalize to:
 
 #### Retry semantics
 
-* Activity retry policy is derived from SkillDefinition defaults.
+* Activity retry policy is derived from ToolDefinition defaults.
 * `non_retryable_error_codes` stop retries immediately.
 * `retryable` is informative; the actual retry decision is policy-driven.
 
@@ -265,7 +266,7 @@ All failures normalize to:
 
 ### 5.3 Worker capability model
 
-Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). SkillDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
+Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). ToolDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
 
 ---
 
@@ -273,7 +274,7 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). S
 
 ### 6.1 Definition
 
-A **Plan** is a DAG of SkillInvocations with explicit dependencies and policy.
+A **Plan** is a DAG of Steps with explicit dependencies and policy.
 
 ### 6.2 Plan schema (DAG-first)
 
@@ -402,13 +403,13 @@ Planning is expressed as one or more skills (e.g., `plan.generate`) executed as 
 
 **Inputs**
 
-* `SkillInvocation` node
+* `Step` node
 * pinned `registry_snapshot`
 
 **Resolution**
 
-* Resolve `SkillDefinition` from snapshot.
-* Derive Activity Type and routing target (task queue) from SkillDefinition + worker capabilities.
+* Resolve `ToolDefinition` from snapshot.
+* Derive Activity Type and routing target (task queue) from ToolDefinition + worker capabilities.
 
 **Invocation payload**
 
@@ -419,7 +420,7 @@ Planning is expressed as one or more skills (e.g., `plan.generate`) executed as 
 
 **Result**
 
-* `SkillResult` recorded by Temporal as the activity result (small)
+* `ToolResult` recorded by Temporal as the activity result (small)
 * large outputs written as artifacts and referenced
 
 ---
@@ -452,8 +453,8 @@ Progress is represented as a small structured object:
 
 ### 10.3 Intermediate outputs
 
-* Each node completion produces a `SkillResult`.
-* If `SkillResult` is small, store inline in interpreter state.
+* Each node completion produces a `ToolResult`.
+* If `ToolResult` is small, store inline in interpreter state.
 * If large, store as artifact and keep only `artifact_ref`.
 * Nodes may reference previous outputs via `ref` pointers (resolved deterministically).
 
@@ -549,7 +550,7 @@ Reserve fields without enabling them:
 * `plan.validate(plan_artifact_ref, registry_snapshot_ref)` → returns either:
 
   * `validated_plan_ref` (could be the same ref) or
-  * a `SkillFailure` error.
+  * a `ToolFailure` error.
 
 **v1 rule**
 
@@ -557,13 +558,13 @@ Reserve fields without enabling them:
 
 ---
 
-### Q4) Should `mm.skill.execute` be the only Activity Type, or should there be per-skill activity types?
+### Q4) Should `mm.tool.execute` be the only Activity Type, or should there be per-skill activity types?
 
 **Decision (recommended): Hybrid model (dispatcher + curated activity types).**
 
 **Why**
 
-* A single dispatcher Activity Type (`mm.skill.execute`) is flexible and keeps catalogs small.
+* A single dispatcher Activity Type (`mm.tool.execute`) is flexible and keeps catalogs small.
 * But some boundaries benefit from explicit types for routing/isolation/least-privilege:
 
   * `artifact.read/write`
@@ -573,7 +574,7 @@ Reserve fields without enabling them:
 
 **Implementation**
 
-* Default: Skills bind to `mm.skill.execute`.
+* Default: Skills bind to `mm.tool.execute`.
 * Exception: Skills may bind directly to a curated Activity Type if they require special worker isolation or credentials.
 
 **Rule**
@@ -586,7 +587,7 @@ Reserve fields without enabling them:
 
 ### A) Skill registry spec
 
-* SkillDefinition schema (required fields, validation)
+* ToolDefinition schema (required fields, validation)
 * Static snapshot mechanism (digest + artifact ref)
 * Capability requirements and policy defaults
 * Activity type binding rules (hybrid model)
@@ -620,5 +621,5 @@ Reserve fields without enabling them:
    * schedule nodes
    * track results
    * enforce policy
-5. Implement `mm.skill.execute` dispatcher activity in worker fleet.
+5. Implement `mm.tool.execute` dispatcher activity in worker fleet.
 6. Implement progress query + optional progress artifact output.
