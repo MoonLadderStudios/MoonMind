@@ -48,6 +48,31 @@ from sqlalchemy_utils import EncryptedType
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
 )
+from api_service.db.enums import (
+    CodexAuthVolumeStatus,
+    CodexCredentialStatus,
+    CodexPreflightStatus,
+    CodexWorkerShardStatus,
+    GitHubCredentialStatus,
+    OrchestratorApprovalRequirement,
+    OrchestratorPlanOrigin,
+    OrchestratorPlanStep,
+    OrchestratorPlanStepStatus,
+    OrchestratorRunArtifactType,
+    OrchestratorRunPriority,
+    OrchestratorRunStatus,
+    OrchestratorTaskState,
+    OrchestratorTaskStepStatus,
+    SpecAutomationArtifactType,
+    SpecAutomationPhase,
+    SpecAutomationRunStatus,
+    SpecAutomationTaskStatus,
+    SpecWorkflowRunPhase,
+    SpecWorkflowRunStatus,
+    SpecWorkflowTaskName,
+    SpecWorkflowTaskStatus,
+    WorkflowArtifactType,
+)
 
 
 class Base(DeclarativeBase):
@@ -397,9 +422,17 @@ __all__ = [
     "SpecWorkflowTaskState",
     "SpecWorkflowTaskStatus",
     "SpecWorkflowTaskName",
+    "SpecAutomationRunStatus",
+    "SpecAutomationPhase",
+    "SpecAutomationTaskStatus",
+    "SpecAutomationArtifactType",
     "WorkflowArtifact",
     "WorkflowArtifactType",
     "WorkflowCredentialAudit",
+    "CodexAuthVolume",
+    "CodexWorkerShard",
+    "CodexAuthVolumeStatus",
+    "CodexWorkerShardStatus",
     "CodexCredentialStatus",
     "GitHubCredentialStatus",
     "CodexPreflightStatus",
@@ -434,22 +467,10 @@ class ApproverRoleListType(TypeDecorator):
         return list(value)
 
 
-class OrchestratorRunStatus(str, enum.Enum):
-    """Lifecycle states tracked for orchestrator runs."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    AWAITING_APPROVAL = "awaiting_approval"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    ROLLED_BACK = "rolled_back"
-
-
-class OrchestratorRunPriority(str, enum.Enum):
-    """Execution priority for orchestrator runs."""
-
-    NORMAL = "normal"
-    HIGH = "high"
+# ---------------------------------------------------------------------------
+# Enums are defined in api_service.db.enums and imported above.
+# Kept reference here for backward compatibility.
+# ---------------------------------------------------------------------------
 
 
 class TaskTemplateScopeType(str, enum.Enum):
@@ -665,107 +686,6 @@ class TaskStepTemplateRecent(Base):
     )
 
 
-class OrchestratorPlanStep(str, enum.Enum):
-    """Supported steps inside an orchestrator ActionPlan."""
-
-    ANALYZE = "analyze"
-    PATCH = "patch"
-    BUILD = "build"
-    RESTART = "restart"
-    VERIFY = "verify"
-    ROLLBACK = "rollback"
-
-
-class OrchestratorPlanStepStatus(str, enum.Enum):
-    """Statuses describing plan step execution progress."""
-
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
-class SpecWorkflowRunStatus(str, enum.Enum):
-    """Lifecycle states tracked for Spec workflow runs."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    NO_WORK = "no_work"
-    CANCELLED = "cancelled"
-    RETRYING = "retrying"
-
-
-class SpecWorkflowRunPhase(str, enum.Enum):
-    """High-level phase executed by the Spec workflow chain."""
-
-    DISCOVER = "discover"
-    SUBMIT = "submit"
-    APPLY = "apply"
-    PUBLISH = "publish"
-    COMPLETE = "complete"
-
-
-class SpecWorkflowTaskStatus(str, enum.Enum):
-    """Execution state tracked for each workflow task."""
-
-    QUEUED = "queued"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
-class SpecWorkflowTaskName(str, enum.Enum):
-    """Supported Celery task identifiers for the chain."""
-
-    DISCOVER = "discover"
-    SUBMIT = "submit"
-    APPLY = "apply"
-    PUBLISH = "publish"
-    FINALIZE = "finalize"
-    RETRY_HOOK = "retry-hook"
-
-
-class CodexPreflightStatus(str, enum.Enum):
-    """Codex login verification result stored on a run."""
-
-    PENDING = "pending"
-    PASSED = "passed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
-class CodexCredentialStatus(str, enum.Enum):
-    """Result of Codex credential validation."""
-
-    VALID = "valid"
-    INVALID = "invalid"
-    EXPIRES_SOON = "expires_soon"
-
-
-class GitHubCredentialStatus(str, enum.Enum):
-    """Result of GitHub credential validation."""
-
-    VALID = "valid"
-    INVALID = "invalid"
-    SCOPE_MISSING = "scope_missing"
-
-
-class WorkflowArtifactType(str, enum.Enum):
-    """Artifacts captured while the Spec workflow executes."""
-
-    CODEX_LOGS = "codex_logs"
-    CODEX_PATCH = "codex_patch"
-    GH_PUSH_LOG = "gh_push_log"
-    GH_PR_RESPONSE = "gh_pr_response"
-    APPLY_OUTPUT = "apply_output"
-    PR_PAYLOAD = "pr_payload"
-    RETRY_CONTEXT = "retry_context"
-
-
 class TemporalArtifactStorageBackend(str, enum.Enum):
     """Supported backing stores for Temporal artifact bytes."""
 
@@ -813,53 +733,6 @@ class TemporalArtifactUploadMode(str, enum.Enum):
 
     SINGLE_PUT = "single_put"
     MULTIPART = "multipart"
-
-
-class OrchestratorPlanOrigin(str, enum.Enum):
-    """Source responsible for generating an ActionPlan."""
-
-    OPERATOR = "operator"
-    LLM = "llm"
-    SYSTEM = "system"
-
-
-class OrchestratorApprovalRequirement(str, enum.Enum):
-    """Approval enforcement options for protected services."""
-
-    NONE = "none"
-    PRE_RUN = "pre-run"
-    PRE_VERIFY = "pre-verify"
-
-
-class OrchestratorRunArtifactType(str, enum.Enum):
-    """Classifications for artifacts stored per orchestrator run."""
-
-    PATCH_DIFF = "patch_diff"
-    BUILD_LOG = "build_log"
-    VERIFY_LOG = "verify_log"
-    ROLLBACK_LOG = "rollback_log"
-    METRICS = "metrics"
-    PLAN_SNAPSHOT = "plan_snapshot"
-
-
-class OrchestratorTaskState(str, enum.Enum):
-    """Celery state transitions recorded for orchestrator steps."""
-
-    PENDING = "PENDING"
-    STARTED = "STARTED"
-    RETRY = "RETRY"
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-
-
-class OrchestratorTaskStepStatus(str, enum.Enum):
-    """Status values persisted for orchestrator task runtime steps."""
-
-    QUEUED = "queued"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
 
 
 class TemporalWorkflowType(str, enum.Enum):
@@ -1923,6 +1796,107 @@ class TemporalArtifactPin(Base):
     artifact: Mapped[TemporalArtifact] = relationship(
         "TemporalArtifact",
         back_populates="pins",
+    )
+
+
+class CodexAuthVolume(Base):
+    """Codex auth volume metadata used for shard routing and preflight checks."""
+
+    __tablename__ = "codex_auth_volumes"
+    __table_args__ = (
+        UniqueConstraint("worker_affinity", name="uq_codex_auth_volumes_worker_affinity"),
+    )
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    worker_affinity: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[CodexAuthVolumeStatus] = mapped_column(
+        Enum(
+            CodexAuthVolumeStatus,
+            name="codexauthvolumestatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=CodexAuthVolumeStatus.NEEDS_AUTH,
+        server_default=CodexAuthVolumeStatus.NEEDS_AUTH.value,
+    )
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
+        "CodexWorkerShard",
+        back_populates="volume",
+        uselist=False,
+        foreign_keys=lambda: [CodexWorkerShard.volume_name],
+    )
+    workflow_runs: Mapped[list["SpecWorkflowRun"]] = relationship(
+        "SpecWorkflowRun",
+        back_populates="codex_auth_volume",
+        foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
+    )
+
+
+class CodexWorkerShard(Base):
+    """Queue shard routing metadata for Codex workers."""
+
+    __tablename__ = "codex_worker_shards"
+    __table_args__ = (
+        UniqueConstraint("volume_name", name="uq_codex_worker_shards_volume_name"),
+    )
+
+    queue_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    volume_name: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("codex_auth_volumes.name", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[CodexWorkerShardStatus] = mapped_column(
+        Enum(
+            CodexWorkerShardStatus,
+            name="codexworkershardstatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=CodexWorkerShardStatus.ACTIVE,
+        server_default=CodexWorkerShardStatus.ACTIVE.value,
+    )
+    hash_modulo: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default=text("3")
+    )
+    worker_hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    volume: Mapped[CodexAuthVolume] = relationship(
+        "CodexAuthVolume",
+        back_populates="shard",
+        foreign_keys=lambda: [CodexWorkerShard.volume_name],
+    )
+    workflow_runs: Mapped[list["SpecWorkflowRun"]] = relationship(
+        "SpecWorkflowRun",
+        back_populates="codex_shard",
+        foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
     )
 
 

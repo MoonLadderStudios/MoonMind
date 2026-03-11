@@ -1,5 +1,4 @@
-"""Skill registry loading, validation, and snapshotting helpers."""
-
+"""Registry helpers for tool definitions and pinned registry snapshots."""
 from __future__ import annotations
 
 import hashlib

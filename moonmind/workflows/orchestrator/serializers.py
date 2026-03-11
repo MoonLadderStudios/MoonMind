@@ -18,7 +18,6 @@ from moonmind.schemas.workflow_models import (
     OrchestratorTaskStepSkillModel,
     OrchestratorTaskStepStatus,
 )
-from moonmind.workflows.speckit_celery import models as workflow_models
 
 if TYPE_CHECKING:  # pragma: no cover - import used for type checking only
     from moonmind.schemas.workflow_models import OrchestratorApprovalStatus
@@ -82,7 +81,7 @@ def _convert_artifacts(
 
 
 def _convert_task_states(
-    states: Iterable[workflow_models.SpecWorkflowTaskState],
+    states: Iterable[db_models.SpecWorkflowTaskState],
 ) -> list[OrchestratorPlanStepStateModel]:
     serialized: list[OrchestratorPlanStepStateModel] = []
     for state in states:

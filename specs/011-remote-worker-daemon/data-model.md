@@ -31,9 +31,9 @@ Validation rules:
 
 Execution metadata emitted in worker events.
 
-- `selectedSkill` (str)
+- `selectedTool` (str)
 - `executionPath` (`skill` | `direct_fallback` | `direct_only`)
-- `usedSkills` (bool)
+- `usedTools` (bool)
 - `usedFallback` (bool)
 - `shadowModeRequested` (bool)
 

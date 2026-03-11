@@ -1,4 +1,4 @@
-"""Contracts for skills, artifacts, and DAG plans.
+"""Contracts for tools, artifacts, and DAG plans.
 
 These models implement the runtime contracts described in
 ``docs/Skills/SkillAndPlanContracts.md``.
@@ -19,6 +19,8 @@ SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 EXPLICIT_BINDING_REASONS = frozenset(
     {"stronger_isolation", "specialized_credentials", "clearer_routing"}
 )
+_LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
+_DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
 OBSERVABILITY_OUTCOMES = frozenset({"succeeded", "failed", "cancelled", "partial"})
 SKILL_FAILURE_CODES = frozenset(
     {
@@ -197,7 +199,11 @@ class ToolExecutorBinding:
     def __post_init__(self) -> None:
         _ensure_non_empty(self.activity_type, field_name="executor.activity_type")
         _ensure_non_empty(self.selector_mode, field_name="executor.selector.mode")
-        if self.activity_type == "mm.tool.execute":
+        if self.activity_type in (
+            _DEFAULT_ACTIVITY_TYPE,
+            _LEGACY_DEFAULT_ACTIVITY_TYPE,
+        ):
+            # Both the current and legacy default activity types are free bindings.
             if self.explicit_binding_reason is not None:
                 raise ContractValidationError(
                     "invalid_contract",

@@ -5,10 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from moonmind.config.settings import TemporalSettings, settings
-from moonmind.workflows.skills.tool_plan_contracts import (
-    ToolDefinition,
-    SkillPolicies,
-)
+from moonmind.workflows.skills.tool_plan_contracts import SkillPolicies, ToolDefinition
 
 WORKFLOW_FLEET = "workflow"
 ARTIFACTS_FLEET = "artifacts"

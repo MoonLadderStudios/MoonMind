@@ -1,5 +1,4 @@
-"""Activity-style skill dispatch and plan validation helpers."""
-
+"""Activity-style tool dispatch and plan validation helpers."""
 from __future__ import annotations
 
 import asyncio

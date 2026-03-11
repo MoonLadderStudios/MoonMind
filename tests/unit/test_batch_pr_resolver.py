@@ -393,7 +393,7 @@ def test_read_worker_token_prefers_env_over_file(
 
 
 # ---------------------------------------------------------------------------
-# SkillInvocation payload contract tests
+# Step payload contract tests
 # ---------------------------------------------------------------------------
 
 
@@ -419,7 +419,7 @@ def test_build_queue_request_skill_contract() -> None:
     task = req["payload"]["task"]
     skill = task["skill"]
 
-    # Correct fields per SkillInvocation contract
+    # Correct fields per Step contract
     assert skill.get("name") == "pr-resolver", "skill.name must be 'pr-resolver'"
     assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
 

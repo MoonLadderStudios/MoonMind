@@ -177,7 +177,7 @@ These values should come from the Temporal runtime/activity context for logging,
 * `ArtifactRef` — see `moonmind/workflows/temporal/artifacts.py` (`artifact_ref_v`, `artifact_id`, `sha256`, `size_bytes`, `content_type`, `encryption`)
 * `ExecutionRef` — see `moonmind/workflows/temporal/artifacts.py` (`namespace`, `workflow_id`, `run_id`, `link_type`, `label`, `created_by_activity_type`, `created_by_worker`)
 * `StageExecutionDecision` / `StageExecutionOutcome` — see `moonmind/workflows/skills/contracts.py`
-* `PlanDefinition`, `ToolDefinition`, `SkillPolicies` — see `moonmind/workflows/skills/skill_plan_contracts.py`
+* `PlanDefinition`, `ToolDefinition`, `SkillPolicies` — see `moonmind/workflows/skills/tool_plan_contracts.py`
 
 ---
 
@@ -240,9 +240,9 @@ Key constraints:
 Core Activities:
 
 * `plan.generate(inputs_ref, parameters) -> plan_ref`
-* `plan.validate(plan_ref, registry_snapshot_ref) -> validated_plan_ref | SkillFailure`
+* `plan.validate(plan_ref, registry_snapshot_ref) -> validated_plan_ref | ToolFailure`
 
-The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/skill_plan_contracts.py`): a DAG of `Step` nodes connected by `PlanEdge` dependencies. Each node references a `ToolDefinition` with declared inputs, outputs, and `SkillPolicies` (retries, timeouts, failure modes).
+The output of `plan.generate` is a `PlanDefinition` artifact (see `moonmind/workflows/skills/tool_plan_contracts.py`): a DAG of `Step` nodes connected by `PlanEdge` dependencies. Each node references a `ToolDefinition` with declared inputs, outputs, and `SkillPolicies` (retries, timeouts, failure modes).
 
 Worker queue: typically `mm.activity.llm` for LLM planners, but non-LLM planners may run on `mm.activity.sandbox` or `mm.activity.integrations` depending on implementation.
 
@@ -264,7 +264,7 @@ MoonMind uses a **hybrid activity binding model**:
 
 **Default path: registry-dispatched executor**
 
-* `mm.tool.execute(invocation_payload) -> SkillResult`
+* `mm.tool.execute(invocation_payload) -> ToolResult`
 
 Pros:
 

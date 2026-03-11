@@ -55,39 +55,36 @@ class CelerySettings(BaseSettings):
     broker_url: str = Field(
         "amqp://guest:guest@rabbitmq:5672//",
         env="CELERY_BROKER_URL",
-        description="AMQP URL for the Celery broker (RabbitMQ).",
     )
     result_backend: Optional[str] = Field(
         None,
         env="CELERY_RESULT_BACKEND",
-        description="Database URL used by Celery to persist task results.",
     )
     default_queue: str = Field(
         "moonmind.jobs",
         validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE", "CELERY_DEFAULT_QUEUE"),
-        description="Default queue name for workflow tasks.",
     )
     default_exchange: str = Field(
         "moonmind.jobs",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_EXCHANGE", "CELERY_DEFAULT_EXCHANGE"
         ),
-        description="Default exchange for workflow tasks.",
     )
     default_routing_key: str = Field(
         "moonmind.jobs",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_ROUTING_KEY", "CELERY_DEFAULT_ROUTING_KEY"
         ),
-        description="Default routing key used by the workflow queue.",
     )
     task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
     result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
     accept_content: tuple[str, ...] = Field(
         ("json",),
         env="CELERY_ACCEPT_CONTENT",
-        description="Accepted content types for Celery tasks.",
     )
+    task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
+    result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
+    accept_content: tuple[str, ...] = Field(("json",), env="CELERY_ACCEPT_CONTENT")
     task_acks_late: bool = Field(True, env="CELERY_TASK_ACKS_LATE")
     task_acks_on_failure_or_timeout: bool = Field(
         True, env="CELERY_TASK_ACKS_ON_FAILURE_OR_TIMEOUT"
@@ -96,11 +93,7 @@ class CelerySettings(BaseSettings):
         True, env="CELERY_TASK_REJECT_ON_WORKER_LOST"
     )
     worker_prefetch_multiplier: int = Field(1, env="CELERY_WORKER_PREFETCH_MULTIPLIER")
-    imports: tuple[str, ...] = Field(
-        (),
-        env="CELERY_IMPORTS",
-        description="Celery modules imported by the worker on startup.",
-    )
+    imports: tuple[str, ...] = Field((), env="CELERY_IMPORTS")
     result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
     result_expires: int = Field(7 * 24 * 60 * 60, env="CELERY_RESULT_EXPIRES")
 
@@ -114,7 +107,6 @@ class CelerySettings(BaseSettings):
     @field_validator("accept_content", "imports", mode="before")
     @classmethod
     def _split_csv(cls, value):
-        """Allow comma-delimited strings for tuple fields."""
         if isinstance(value, str):
             items = [item.strip() for item in value.split(",") if item.strip()]
             return tuple(items)
@@ -1824,6 +1816,7 @@ class AppSettings(BaseSettings):
 
     # Sub-settings
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    celery: CelerySettings = Field(default_factory=CelerySettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     google: GoogleSettings = Field(default_factory=GoogleSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)

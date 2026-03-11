@@ -223,6 +223,12 @@ class MoonMindRunWorkflow:
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
+        if plan_ref is None:
+            raise ValueError(
+                "plan_ref is required for execution stage: the planning stage must "
+                "produce a plan artifact reference before execution can proceed. "
+                "Ensure the planning activity returns a non-None 'plan_ref'."
+            )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 

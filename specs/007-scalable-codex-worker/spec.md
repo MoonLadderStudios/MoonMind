@@ -33,7 +33,7 @@ As a platform engineer, I want workflow stages to resolve through skills-first p
 
 **Acceptance Scenarios**:
 
-1. **Given** default settings, **When** workflow stages execute, **Then** they record `selectedSkill=speckit` and `executionPath=skill`.
+1. **Given** default settings, **When** workflow stages execute, **Then** they record `selectedTool=speckit` and `executionPath=skill`.
 2. **Given** a stage override skill that is allowlisted, **When** stage execution starts, **Then** selection logic uses the override.
 3. **Given** skill execution fallback is enabled and adapter execution fails, **When** the stage recovers through direct logic, **Then** metadata records `executionPath=direct_fallback`.
 
@@ -71,7 +71,7 @@ As a release owner, I want Codex workers to scale while preserving existing queu
 - **FR-004**: Worker startup MUST verify Speckit CLI capability for Codex and Gemini worker entrypoints.
 - **FR-005**: When `DEFAULT_EMBEDDING_PROVIDER=google`, worker startup MUST fail fast if neither `GOOGLE_API_KEY` nor `GEMINI_API_KEY` is available.
 - **FR-006**: Workflow stage routing MUST remain skills-first with Speckit default selection and allowlisted overrides.
-- **FR-007**: Workflow task payloads MUST include stage execution metadata (`selectedSkill`, `executionPath`, `usedSkills`, `usedFallback`, `shadowModeRequested`).
+- **FR-007**: Workflow task payloads MUST include stage execution metadata (`selectedTool`, `executionPath`, `usedTools`, `usedFallback`, `shadowModeRequested`).
 - **FR-008**: Codex preflight failures MUST persist failure metadata and transition runs to failed state without hanging.
 - **FR-009**: Compose/runtime docs MUST describe the fastest path for authenticated Codex workers plus Gemini embedding defaults.
 - **FR-010**: Implementation deliverables MUST include runtime code changes and validation tests; docs-only updates are insufficient.

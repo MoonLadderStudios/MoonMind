@@ -1,4 +1,4 @@
-"""Plan schema and DAG validation against pinned skill registry snapshots."""
+"""Plan schema and DAG validation against pinned tool registry snapshots."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any, Mapping
 
 from .tool_plan_contracts import (
     PlanDefinition,
-    ToolDefinition,
     Step,
+    ToolDefinition,
     parse_plan_definition,
 )
 from .tool_registry import ToolRegistrySnapshot

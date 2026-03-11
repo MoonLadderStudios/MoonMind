@@ -1,4 +1,4 @@
-"""Celery application configuration for the Spec Kit workflow."""
+"""Celery application configuration and compatibility exports for Spec Kit workflows."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from moonmind.workflows.speckit_celery.celeryconfig import (
     build_task_router,
     get_codex_shard_router,
 )
-
 CELERY_NAMESPACE = "moonmind.workflows.speckit_celery"
 _TASK_IMPORT = "moonmind.workflows.speckit_celery.tasks"
+_MODELS_MODULE = "moonmind.workflows.speckit_celery.models"
 _ORCHESTRATOR_EXPORTS = frozenset(
     {
         "TriggeredWorkflow",
@@ -24,8 +24,58 @@ _ORCHESTRATOR_EXPORTS = frozenset(
         "trigger_spec_workflow_run",
     }
 )
+_MODEL_EXPORTS = frozenset(
+    {
+        "CodexAuthVolume",
+        "CodexAuthVolumeStatus",
+        "CodexWorkerShard",
+        "CodexWorkerShardStatus",
+        "CredentialAuditResult",
+        "SpecAutomationAgentConfiguration",
+        "SpecAutomationArtifact",
+        "SpecAutomationArtifactType",
+        "SpecAutomationPhase",
+        "SpecAutomationRun",
+        "SpecAutomationRunStatus",
+        "SpecAutomationTaskState",
+        "SpecAutomationTaskStatus",
+        "SpecWorkflowRun",
+        "SpecWorkflowRunPhase",
+        "SpecWorkflowRunStatus",
+        "SpecWorkflowTaskName",
+        "SpecWorkflowTaskState",
+        "SpecWorkflowTaskStatus",
+        "WorkflowArtifact",
+        "WorkflowArtifactType",
+        "WorkflowCredentialAudit",
+    }
+)
 
 if TYPE_CHECKING:
+    from moonmind.workflows.speckit_celery.models import (
+        CodexAuthVolume,
+        CodexAuthVolumeStatus,
+        CodexWorkerShard,
+        CodexWorkerShardStatus,
+        CredentialAuditResult,
+        SpecAutomationAgentConfiguration,
+        SpecAutomationArtifact,
+        SpecAutomationArtifactType,
+        SpecAutomationPhase,
+        SpecAutomationRun,
+        SpecAutomationRunStatus,
+        SpecAutomationTaskState,
+        SpecAutomationTaskStatus,
+        SpecWorkflowRun,
+        SpecWorkflowRunPhase,
+        SpecWorkflowRunStatus,
+        SpecWorkflowTaskName,
+        SpecWorkflowTaskState,
+        SpecWorkflowTaskStatus,
+        WorkflowArtifact,
+        WorkflowArtifactType,
+        WorkflowCredentialAudit,
+    )
     from moonmind.workflows.speckit_celery.orchestrator import (
         TriggeredWorkflow,
         WorkflowConflictError,
@@ -46,14 +96,13 @@ def create_celery_app() -> Celery:
 
     app = Celery(CELERY_NAMESPACE)
     shard_router = get_codex_shard_router()
+    workflow_broker_url = getattr(settings.spec_workflow, "celery_broker_url", None)
+    workflow_result_backend = getattr(
+        settings.spec_workflow, "celery_result_backend", None
+    )
     app.conf.update(
-        broker_url=(
-            settings.spec_workflow.celery_broker_url or settings.celery.broker_url
-        ),
-        result_backend=(
-            settings.spec_workflow.celery_result_backend
-            or settings.celery.result_backend
-        ),
+        broker_url=(workflow_broker_url or settings.celery.broker_url),
+        result_backend=(workflow_result_backend or settings.celery.result_backend),
         task_default_queue=settings.celery.default_queue,
         task_default_exchange=settings.celery.default_exchange,
         task_default_routing_key=settings.celery.default_routing_key,
@@ -82,14 +131,38 @@ def __getattr__(name: str) -> Any:
     if name in _ORCHESTRATOR_EXPORTS:
         orchestrator = import_module("moonmind.workflows.speckit_celery.orchestrator")
         return getattr(orchestrator, name)
+    if name in _MODEL_EXPORTS:
+        models = import_module(_MODELS_MODULE)
+        return getattr(models, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-# Keep exports alphabetized for readability and easy scanning.
 __all__ = [
     "CELERY_NAMESPACE",
+    "CodexAuthVolume",
+    "CodexAuthVolumeStatus",
+    "CodexWorkerShard",
+    "CodexWorkerShardStatus",
+    "CredentialAuditResult",
+    "SpecAutomationAgentConfiguration",
+    "SpecAutomationArtifact",
+    "SpecAutomationArtifactType",
+    "SpecAutomationPhase",
+    "SpecAutomationRun",
+    "SpecAutomationRunStatus",
+    "SpecAutomationTaskState",
+    "SpecAutomationTaskStatus",
+    "SpecWorkflowRun",
+    "SpecWorkflowRunPhase",
+    "SpecWorkflowRunStatus",
+    "SpecWorkflowTaskName",
+    "SpecWorkflowTaskState",
+    "SpecWorkflowTaskStatus",
     "TriggeredWorkflow",
+    "WorkflowArtifact",
+    "WorkflowArtifactType",
     "WorkflowConflictError",
+    "WorkflowCredentialAudit",
     "WorkflowRetryError",
     "celery_app",
     "create_celery_app",
