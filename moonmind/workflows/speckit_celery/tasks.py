@@ -956,7 +956,6 @@ async def _poll_for_codex_diff(
     """Poll Codex for a diff until it is available or the timeout elapses."""
 
     deadline = time.monotonic() + max(timeout, poll_interval)
-    last_error: Exception | None = None
 
     while True:
         try:
@@ -968,7 +967,6 @@ async def _poll_for_codex_diff(
                 task_summary=task_summary,
             )
         except CodexDiffNotReadyError as exc:
-            last_error = exc
             if time.monotonic() >= deadline:
                 raise RuntimeError(
                     "Timed out while polling Codex for diff availability"
@@ -980,8 +978,6 @@ async def _poll_for_codex_diff(
             raise CodexDiffRetrievalError(
                 f"failed to poll for Codex diff: {exc}"
             ) from exc
-
-    raise RuntimeError("Unexpected Codex polling exit") from last_error
 
 
 def _write_apply_output(artifacts_dir: Path, diff: CodexDiffResult) -> Path:
