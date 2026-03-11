@@ -412,13 +412,14 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
 
 
 from unittest.mock import AsyncMock
+
+
 def make_client_adapter_mock():
     m = AsyncMock()
     handle = AsyncMock()
     handle.run_id = "mock-run-id"
     m.start_workflow.return_value = handle
     return m
-
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
+import pytest
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
 from api_service.core.sync import map_temporal_state_to_projection
@@ -11,8 +12,6 @@ from api_service.db.models import (
     TemporalWorkflowType,
 )
 
-
-import pytest
 
 @pytest.mark.asyncio
 async def test_map_temporal_state_to_projection_success():
@@ -34,6 +33,7 @@ async def test_map_temporal_state_to_projection_success():
         "paused": True,
         "step_count": 5,
     }
+
     async def mock_memo():
         return memo_data
 

@@ -336,9 +336,7 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     # patch.dict doesn't work for runpy'd modules because the function's __globals__
     # dict IS the module dict; we must mutate it in place via setitem.
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_http", fake_http)
-    created, errors = asyncio.run(
-        submit_jobs([submission])
-    )
+    created, errors = asyncio.run(submit_jobs([submission]))
 
     assert http_called == ["http://api:5000"]
     assert len(created) == 1
@@ -361,9 +359,7 @@ def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
     submission = _make_submission(module)
 
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
-    created, errors = asyncio.run(
-        submit_jobs([submission])
-    )
+    created, errors = asyncio.run(submit_jobs([submission]))
 
     assert db_called == [True]
     assert len(created) == 1
