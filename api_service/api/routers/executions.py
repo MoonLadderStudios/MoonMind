@@ -133,12 +133,44 @@ def _normalize_owner_type(record, search_attributes: dict[str, object]) -> str:
     return "system" if owner_id == "system" or not owner_id else "user"
 
 
+def _coerce_temporal_scalar(value: object | None) -> str:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            text = _coerce_temporal_scalar(item)
+            if text:
+                return text
+        return ""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_entry_value(value: object | None) -> str | None:
+    candidate = _coerce_temporal_scalar(value).lower()
+    if not candidate:
+        return None
+    if candidate in {"run", "manifest"}:
+        return candidate
+
+    # Some Temporal payloads surface keyword attributes as arrays; if those are
+    # later stringified we may see values like "['run']" or '["run"]'.
+    if candidate.startswith("[") and candidate.endswith("]"):
+        inner = candidate[1:-1].strip()
+        if inner:
+            first = inner.split(",", 1)[0].strip().strip("'\"")
+            if first in {"run", "manifest"}:
+                return first
+    return None
+
+
 def _resolve_execution_entry(record, search_attributes: dict[str, object]) -> str:
-    entry = str(
-        search_attributes.get("mm_entry") or getattr(record, "entry", "")
-    ).strip()
+    entry = _normalize_entry_value(search_attributes.get("mm_entry"))
     if entry:
-        return entry.lower()
+        return entry
+
+    entry = _normalize_entry_value(getattr(record, "entry", ""))
+    if entry:
+        return entry
 
     workflow_type = str(
         getattr(getattr(record, "workflow_type", None), "value", "")
