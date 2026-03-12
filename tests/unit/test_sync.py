@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import asyncio
 from unittest.mock import Mock
 
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
@@ -42,7 +43,12 @@ def test_map_temporal_state_to_projection_success():
         "mm_custom": MockSearchAttribute(b'{"key": "value"}'),
     }
 
-    result = map_temporal_state_to_projection(desc)
+    async def _memo() -> dict[str, object]:
+        return memo_data
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
 
     assert result["workflow_id"] == "mm:123"
     assert result["run_id"] == "run-123"

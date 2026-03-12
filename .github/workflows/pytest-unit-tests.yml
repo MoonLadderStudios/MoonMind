@@ -7,9 +7,6 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
 
-permissions:
-  contents: write
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -37,19 +34,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install -e .[tests]
-        python -m pip install pre-commit readmeai~=0.6.0
-    - name: Run pre-commit
-      id: pre_commit
-      run: pre-commit run --all-files
-      continue-on-error: true
-    - name: Commit changes
-      id: auto_commit
-      uses: stefanzweifel/git-auto-commit-action@v7
-      with:
-        commit_message: "style: auto-fixes from pre-commit"
-    - name: Fail if pre-commit failed and no changes were auto-fixed
-      if: steps.pre_commit.outcome == 'failure' && steps.auto_commit.outputs.changes_detected == 'false'
-      run: exit 1
+        python -m pip install readmeai~=0.6.0
     - name: Set up Node.js
       uses: actions/setup-node@v6
       with:
