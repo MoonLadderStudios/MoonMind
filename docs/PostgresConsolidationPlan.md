@@ -108,7 +108,7 @@ Identify and update all services that depended on the old database containers. T
         condition: service_healthy
 ```
 
-#### B. API Core Services (`api`, `init-db`, `scheduler`, `codex-worker`, `gemini-worker`, `claude-worker`, `orchestrator`)
+#### B. API Core Services (`api`, `init-db`, `codex-worker`, `gemini-worker`, `claude-worker`, `orchestrator`)
 - **Change Dependencies**: Update `depends_on` from `api-db` to `postgres`.
 - **Change Database References**: 
   - `POSTGRES_HOST` can remain `moonmind-api-db` because of our network alias.
@@ -120,7 +120,7 @@ Identify and update all services that depended on the old database containers. T
       # init-db:
       #   condition: service_completed_successfully
 ```
-*Apply `depends_on: postgres` to `init-db` and `scheduler` respectively.*
+*Apply `depends_on: postgres` to `init-db` respectively.*
 
 #### C. Temporal Services (`temporal`, `temporal-visibility-rehearsal`)
 - **Change Dependencies**: Update `depends_on` from `temporal-db` to `postgres`.

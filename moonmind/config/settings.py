@@ -1045,32 +1045,6 @@ class SpecWorkflowSettings(BaseSettings):
         description="Hard timeout for non-container worker stage commands.",
         ge=1,
     )
-    scheduler_poll_interval_ms: int = Field(
-        2000,
-        env="MOONMIND_SCHEDULER_POLL_INTERVAL_MS",
-        description="Polling interval in milliseconds for the recurring scheduler daemon.",
-        ge=250,
-    )
-    scheduler_batch_size: int = Field(
-        50,
-        env="MOONMIND_SCHEDULER_BATCH_SIZE",
-        description="Max due definitions or pending runs processed by scheduler per tick.",
-        ge=1,
-        le=500,
-    )
-    scheduler_max_backfill: int = Field(
-        3,
-        env="MOONMIND_SCHEDULER_MAX_BACKFILL",
-        description="Global ceiling for recurring catchup backfill occurrences per tick.",
-        ge=1,
-        le=100,
-    )
-    scheduler_lock_timeout_seconds: Optional[int] = Field(
-        None,
-        env="MOONMIND_SCHEDULER_LOCK_TIMEOUT_SECONDS",
-        description="Optional lock timeout (seconds) used by scheduler DB operations.",
-        ge=1,
-    )
 
     model_config = SettingsConfigDict(
         env_prefix="",
