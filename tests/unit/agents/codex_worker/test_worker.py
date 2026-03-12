@@ -6626,7 +6626,7 @@ async def test_jules_worker_multiplexes_inflight_jobs_without_llm_execution(
     assert len(queue.failed) == 0
     assert handler.calls == []
 
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
     second_tick = await worker.run_once()
     assert second_tick is True
     assert len(queue.completed) == 2
@@ -6843,7 +6843,7 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     assert first_tick is True
     assert _FakeJulesClient.create_calls == 0
 
-    await asyncio.sleep(0.01)
+    await asyncio.sleep(0)
     second_tick = await worker.run_once()
     assert second_tick is True
     assert len(queue.completed) == 1

@@ -424,7 +424,7 @@ def test_plan_interpreter_fail_fast_records_cancelled_in_flight_nodes():
         if invocation.id == "n1":
             await asyncio.sleep(0)
             return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
-        await asyncio.sleep(30)
+        await asyncio.sleep(0.5)  # reduced: needs to be in-flight when n1 fails; cancel happens near-instantly
         return SkillResult(
             status="SUCCEEDED",
             outputs={"files_changed": 2},

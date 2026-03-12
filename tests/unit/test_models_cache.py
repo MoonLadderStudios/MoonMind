@@ -1,531 +1,349 @@
-import asyncio
-import logging
-import time
-import unittest
+from threading import Lock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-from moonmind.config import settings  # To mock API keys
-from moonmind.config.settings import (  # Import AppSettings class for patching
-    AppSettings,
-)
+import pytest
+
+from moonmind.config import settings
+from moonmind.config.settings import AppSettings
 from moonmind.models_cache import (
     ModelCache,
     force_refresh_model_cache,
     refresh_model_cache_for_user,
 )
 
-# Configure basic logging for tests to see warnings/errors if needed
-logging.basicConfig(level=logging.INFO)
 
-# IsProviderEnabledMockError removed
-# ThreadConstructorCalledError removed as it's no longer used
+# ---------------------------------------------------------------------------
+# Shared fixtures (function-scoped by default, auto-applied to all tests)
+# ---------------------------------------------------------------------------
 
 
-class TestModelCache(unittest.TestCase):
-    def setUp(self):
-        from threading import Lock  # Ensure Lock is imported if not already
+@pytest.fixture(autouse=True)
+def _reset_model_cache_singleton():
+    """Reset the ModelCache singleton before and after each test."""
+    ModelCache._lock = Lock()
+    ModelCache._instance = None
+    yield
+    ModelCache._instance = None
 
-        # from moonmind.models_cache import ModelCache # ModelCache is already imported in this file
-        # Mock ModelCache.__init__ to do nothing - THIS PATCH IS NOW REMOVED/COMMENTED
-        # def mock_model_cache_init(self_instance, *args, **kwargs):
-        #     # print("DEBUG: Mocked ModelCache.__init__ called, truly doing nothing now.") # Optional
-        #     pass
-        # self.model_cache_init_patch = patch('moonmind.models_cache.ModelCache.__init__', side_effect=mock_model_cache_init)
-        # self.mocked_init = self.model_cache_init_patch.start()
 
-        ModelCache._lock = Lock()  # Reset class-level lock
-        ModelCache._instance = None  # Force re-creation for each test
+@pytest.fixture()
+def provider_settings(monkeypatch):
+    """Patch all provider settings to known test values via monkeypatch (auto-reverted)."""
+    monkeypatch.setattr(settings.google, "google_api_key", "fake_google_key_for_test")
+    monkeypatch.setattr(settings.google, "google_enabled", True)
+    monkeypatch.setattr(settings.openai, "openai_api_key", "fake_openai_key_for_test")
+    monkeypatch.setattr(settings.openai, "openai_enabled", True)
+    monkeypatch.setattr(settings.ollama, "ollama_enabled", True)
+    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "fake_anthropic_key_for_test")
+    monkeypatch.setattr(settings.anthropic, "anthropic_enabled", True)
+    monkeypatch.setattr(settings.anthropic, "anthropic_chat_model", "claude-test-cache-model")
 
-        # Store original settings values to restore in tearDown
-        self.original_google_api_key = settings.google.google_api_key
-        self.original_google_enabled = settings.google.google_enabled
-        self.original_openai_api_key = settings.openai.openai_api_key
-        self.original_openai_enabled = settings.openai.openai_enabled
-        self.original_ollama_enabled = settings.ollama.ollama_enabled
-        self.original_anthropic_api_key = settings.anthropic.anthropic_api_key
-        self.original_anthropic_enabled = settings.anthropic.anthropic_enabled
-        self.original_anthropic_chat_model = settings.anthropic.anthropic_chat_model
-        self.original_refresh_interval = settings.model_cache_refresh_interval_seconds
 
-        # Set default settings for tests (providers enabled with fake keys)
-        settings.google.google_api_key = "fake_google_key_for_test"
-        settings.google.google_enabled = True
-        settings.openai.openai_api_key = "fake_openai_key_for_test"
-        settings.openai.openai_enabled = True
-        settings.ollama.ollama_enabled = True
-        settings.anthropic.anthropic_api_key = "fake_anthropic_key_for_test"
-        settings.anthropic.anthropic_enabled = True
-        settings.anthropic.anthropic_chat_model = "claude-test-cache-model"
+@pytest.fixture()
+def model_mocks(provider_settings):
+    """
+    Start all provider-listing patches and return mock objects.
+    The ``provider_settings`` fixture is applied first so settings are consistent.
+    """
+    google_model = MagicMock(name="gemini-pro-raw")
+    google_model.name = "models/gemini-pro"
+    google_model.input_token_limit = 8192
+    google_model.supported_generation_methods = ["generateContent"]
 
-        # Mock the factory functions for listing models from providers
-        # Corrected patch targets to where they are used (in moonmind.models_cache)
-        self.mock_google_models_patch = patch(
-            "moonmind.models_cache.list_google_models"
-        )
-        self.mock_openai_models_patch = patch(
-            "moonmind.models_cache.list_openai_models"
-        )
-        self.mock_ollama_models_patch = patch(
-            "moonmind.models_cache.list_ollama_models", new_callable=AsyncMock
-        )
-        # Anthropic doesn't have a list function, its model is added directly if enabled
-        # So, no direct patch for a list_anthropic_models needed here. We'll check settings.
+    openai_model = MagicMock(name="gpt-3.5-turbo-raw")
+    openai_model.id = "gpt-3.5-turbo"
+    import time
+    openai_model.created = int(time.time()) - 1000
+    openai_model.owned_by = "openai"
 
-        self.mock_list_google_models = self.mock_google_models_patch.start()
-        self.mock_list_openai_models = self.mock_openai_models_patch.start()
-        self.mock_list_ollama_models = self.mock_ollama_models_patch.start()
+    ollama_model = {"name": "test-ollama-model", "details": {"parameter_size": "7B"}}
 
-        # Define default mock return data for provider model lists
-        self.google_model_raw_1 = MagicMock(name="gemini-pro-raw")
-        self.google_model_raw_1.name = "models/gemini-pro"
-        self.google_model_raw_1.input_token_limit = 8192
-        self.google_model_raw_1.supported_generation_methods = ["generateContent"]
-        self.mock_list_google_models.return_value = [self.google_model_raw_1]
+    def _is_provider_enabled(provider_name):
+        provider_name = provider_name.lower()
+        if provider_name == "google":
+            return settings.google.google_enabled and bool(settings.google.google_api_key)
+        elif provider_name == "openai":
+            return settings.openai.openai_enabled and bool(settings.openai.openai_api_key)
+        elif provider_name == "ollama":
+            return settings.ollama.ollama_enabled
+        elif provider_name == "anthropic":
+            return settings.anthropic.anthropic_enabled and bool(settings.anthropic.anthropic_api_key)
+        return False
 
-        self.openai_model_raw_1 = MagicMock(name="gpt-3.5-turbo-raw")
-        self.openai_model_raw_1.id = "gpt-3.5-turbo"
-        self.openai_model_raw_1.created = int(time.time()) - 1000
-        self.openai_model_raw_1.owned_by = "openai"  # Expected by parsing logic
-        # The context window is likely derived by ModelCache from the ID.
-        self.mock_list_openai_models.return_value = [self.openai_model_raw_1]
+    with (
+        patch("moonmind.models_cache.list_google_models", return_value=[google_model]) as mock_google,
+        patch("moonmind.models_cache.list_openai_models", return_value=[openai_model]) as mock_openai,
+        patch("moonmind.models_cache.list_ollama_models", new_callable=AsyncMock) as mock_ollama,
+        patch.object(AppSettings, "is_provider_enabled", side_effect=_is_provider_enabled),
+        patch("moonmind.models_cache.Thread") as mock_thread_class,
+        patch("moonmind.models_cache.ModelCache._periodic_refresh", return_value=None),
+    ):
+        mock_ollama.return_value = [ollama_model]
+        mock_thread_instance = MagicMock()
+        mock_thread_class.return_value = mock_thread_instance
 
-        self.ollama_model_raw_1 = {
-            "name": "test-ollama-model",
-            "details": {"parameter_size": "7B"},
+        yield {
+            "google": mock_google,
+            "openai": mock_openai,
+            "ollama": mock_ollama,
+            "thread_class": mock_thread_class,
+            "thread_instance": mock_thread_instance,
+            "google_model_raw": google_model,
+            "openai_model_raw": openai_model,
+            "ollama_model_raw": ollama_model,
         }
-        self.mock_list_ollama_models.return_value = [self.ollama_model_raw_1]
 
-        # Remove redundant assignments for ollama_model_raw_1
 
-        # Patch AppSettings.is_provider_enabled to always return False
-        self.mock_is_provider_enabled_patch = patch.object(
-            AppSettings, "is_provider_enabled"
-        )  # Target AppSettings class
-        self.mock_is_provider_enabled_method = (
-            self.mock_is_provider_enabled_patch.start()
-        )
-        # self.mock_is_provider_enabled_method.side_effect = lambda *args: False # Always return False
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
-        # New side_effect for is_provider_enabled
-        def actual_side_effect_is_provider_enabled(provider_name_arg):
-            # Access the global 'settings' which might be patched by individual tests
-            provider_name = provider_name_arg.lower()  # Ensure consistent casing
-            if provider_name == "google":
-                return settings.google.google_enabled and bool(
-                    settings.google.google_api_key
-                )
-            elif provider_name == "openai":
-                return settings.openai.openai_enabled and bool(
-                    settings.openai.openai_api_key
-                )
-            elif provider_name == "ollama":
-                return settings.ollama.ollama_enabled
-            elif provider_name == "anthropic":
-                return settings.anthropic.anthropic_enabled and bool(
-                    settings.anthropic.anthropic_api_key
-                )
-            return False
 
-        self.mock_is_provider_enabled_method.side_effect = (
-            actual_side_effect_is_provider_enabled
-        )
-        # Prevent actual thread creation for most tests by mocking threading.Thread
-        self.thread_patch = patch("moonmind.models_cache.Thread")
-        mock_thread_class = self.thread_patch.start()
-        self.mock_thread_class = mock_thread_class  # Store for assertion
-        # Revert to returning an instance
-        self.mock_thread_instance = MagicMock()
-        self.mock_thread_instance.start = (
-            MagicMock()
-        )  # This is the one asserted in test_singleton_behavior
-        mock_thread_class.return_value = self.mock_thread_instance
-        mock_thread_class.side_effect = (
-            None  # Ensure no side effect like raising an error
-        )
-        # Patch ModelCache._periodic_refresh - but don't use autospec to avoid signature issues
-        self.periodic_refresh_patch = patch(
-            "moonmind.models_cache.ModelCache._periodic_refresh"
-        )
-        self.mock_periodic_refresh = self.periodic_refresh_patch.start()
-        # Just make it do nothing - don't try to simulate behavior
-        self.mock_periodic_refresh.return_value = None
+def test_singleton_behavior(model_mocks):
+    m = model_mocks
+    cache1 = ModelCache(refresh_interval_seconds=1000)
+    m["thread_class"].assert_called_once()
+    m["thread_instance"].start.assert_called_once()
 
-        # Store original periodic_refresh for use in tests that need real functionality
-        self._original_periodic_refresh = ModelCache._periodic_refresh
+    cache2 = ModelCache(refresh_interval_seconds=1000)
+    assert cache1 is cache2
 
-        # Patch threading.Thread.start to do nothing - REMOVED/COMMENTED OUT
-        # self.thread_start_patch = patch('threading.Thread.start', MagicMock())
-        # self.mock_thread_start_method = self.thread_start_patch.start()
 
-    def tearDown(self):
-        # patch.stopall() will stop all patches created by unittest.mock.patch
-        # This includes those started in setUp.
-        patch.stopall()
+def test_default_refresh_interval_from_settings(model_mocks, monkeypatch):
+    monkeypatch.setattr(settings, "model_cache_refresh_interval_seconds", 43200)
+    cache = ModelCache()
+    assert cache.refresh_interval_seconds == 43200
 
-        # Restore original settings values
-        settings.google.google_api_key = self.original_google_api_key
-        settings.google.google_enabled = self.original_google_enabled
-        settings.openai.openai_api_key = self.original_openai_api_key
-        settings.openai.openai_enabled = self.original_openai_enabled
-        settings.ollama.ollama_enabled = self.original_ollama_enabled
-        settings.anthropic.anthropic_api_key = self.original_anthropic_api_key
-        settings.anthropic.anthropic_enabled = self.original_anthropic_enabled
-        settings.anthropic.anthropic_chat_model = self.original_anthropic_chat_model
-        settings.model_cache_refresh_interval_seconds = self.original_refresh_interval
 
-        ModelCache._instance = None
+def test_override_refresh_interval_via_patched_settings(model_mocks, monkeypatch):
+    monkeypatch.setattr(settings, "model_cache_refresh_interval_seconds", 100)
+    cache = ModelCache()
+    assert cache.refresh_interval_seconds == 100
 
-    def test_singleton_behavior(self):
-        # The 'with patch' block for 'builtins.hasattr' and mock_hasattr definitions are removed.
-        cache1 = ModelCache(refresh_interval_seconds=1000)
-        # The assertions for thread class and instance start calls are kept as per original intent,
-        # but they are expected to fail if __init__ is fully mocked to do nothing.
-        self.mock_thread_class.assert_called_once()
-        self.mock_thread_instance.start.assert_called_once()
 
-        cache2 = ModelCache(
-            refresh_interval_seconds=1000
-        )  # Should use existing instance
-        self.assertIs(cache1, cache2)
+def test_override_refresh_interval_via_constructor_argument(model_mocks, monkeypatch):
+    monkeypatch.setattr(settings, "model_cache_refresh_interval_seconds", 9999)
+    cache = ModelCache(refresh_interval_seconds=50)
+    assert cache.refresh_interval_seconds == 50
 
-    def test_default_refresh_interval_from_settings(self):
-        with patch.object(settings, "model_cache_refresh_interval_seconds", 43200):
-            cache = ModelCache()
-            self.assertEqual(cache.refresh_interval_seconds, 43200)
 
-    def test_override_refresh_interval_via_patched_settings(self):
-        test_interval = 100
-        with patch.object(
-            settings, "model_cache_refresh_interval_seconds", test_interval
-        ):
-            cache = ModelCache()
-            self.assertEqual(cache.refresh_interval_seconds, test_interval)
+def test_initial_refresh_populates_data(model_mocks):
+    m = model_mocks
+    cache = ModelCache(refresh_interval_seconds=36000)
+    cache.refresh_models_sync()
 
-    def test_override_refresh_interval_via_constructor_argument(self):
-        constructor_interval = 50
-        with patch.object(settings, "model_cache_refresh_interval_seconds", 9999):
-            cache = ModelCache(refresh_interval_seconds=constructor_interval)
-            self.assertEqual(cache.refresh_interval_seconds, constructor_interval)
+    m["google"].assert_called_once()
+    m["openai"].assert_called_once()
+    m["ollama"].assert_called_once()
 
-    def test_initial_refresh_populates_data(self):
-        cache = ModelCache(refresh_interval_seconds=36000)
-        cache.refresh_models_sync()
+    assert len(cache.models_data) == 4
+    assert cache.model_to_provider["models/gemini-pro"] == "Google"
+    assert cache.model_to_provider["gpt-3.5-turbo"] == "OpenAI"
+    assert cache.model_to_provider["test-ollama-model"] == "Ollama"
+    assert cache.model_to_provider["claude-test-cache-model"] == "Anthropic"
 
-        self.mock_list_google_models.assert_called_once()
-        self.mock_list_openai_models.assert_called_once()
-        self.mock_list_ollama_models.assert_called_once()
-        # Anthropic models are added based on settings, not a list function call for this test's purpose
+    gemini = next(m for m in cache.models_data if m["id"] == "models/gemini-pro")
+    assert gemini["owned_by"] == "Google"
+    assert gemini["context_window"] == 8192
 
-        self.assertEqual(len(cache.models_data), 4)  # Google, OpenAI, Ollama, Anthropic
-        self.assertIn("models/gemini-pro", cache.model_to_provider)
-        self.assertEqual(cache.model_to_provider["models/gemini-pro"], "Google")
-        self.assertIn("gpt-3.5-turbo", cache.model_to_provider)
-        self.assertEqual(cache.model_to_provider["gpt-3.5-turbo"], "OpenAI")
-        self.assertIn("test-ollama-model", cache.model_to_provider)
-        self.assertEqual(cache.model_to_provider["test-ollama-model"], "Ollama")
-        self.assertIn("claude-test-cache-model", cache.model_to_provider)
-        self.assertEqual(
-            cache.model_to_provider["claude-test-cache-model"], "Anthropic"
-        )
+    openai_data = next(m for m in cache.models_data if m["id"] == "gpt-3.5-turbo")
+    assert openai_data["owned_by"] == "OpenAI"
+    assert openai_data["context_window"] == 4096
 
-        gemini_model_data = next(
-            m for m in cache.models_data if m["id"] == "models/gemini-pro"
-        )
-        self.assertEqual(gemini_model_data["owned_by"], "Google")
-        self.assertEqual(gemini_model_data["context_window"], 8192)
+    ollama_data = next(m for m in cache.models_data if m["id"] == "test-ollama-model")
+    assert ollama_data["owned_by"] == "Ollama"
 
-        openai_model_data = next(
-            m for m in cache.models_data if m["id"] == "gpt-3.5-turbo"
-        )
-        self.assertEqual(openai_model_data["owned_by"], "OpenAI")
-        self.assertEqual(openai_model_data["context_window"], 4096)
+    anthropic_data = next(m for m in cache.models_data if m["id"] == "claude-test-cache-model")
+    assert anthropic_data["owned_by"] == "Anthropic"
+    assert anthropic_data["context_window"] == 200000
 
-        ollama_model_data = next(
-            m for m in cache.models_data if m["id"] == "test-ollama-model"
-        )
-        self.assertEqual(ollama_model_data["owned_by"], "Ollama")
 
-        anthropic_model_data = next(
-            m for m in cache.models_data if m["id"] == "claude-test-cache-model"
-        )
-        self.assertEqual(anthropic_model_data["owned_by"], "Anthropic")
-        # Default context window for Claude 3 models is 200000, this might vary based on specific model name in settings
-        self.assertEqual(anthropic_model_data["context_window"], 200000)
+def test_get_all_models_after_refresh(model_mocks):
+    cache = ModelCache(refresh_interval_seconds=36000)
+    cache.refresh_models_sync()
 
-    def test_get_all_models_after_refresh(self):
-        cache = ModelCache(refresh_interval_seconds=36000)
-        cache.refresh_models_sync()
+    models = cache.get_all_models()
+    assert len(models) == 4
+    assert any(m["id"] == "models/gemini-pro" for m in models)
+    assert any(m["id"] == "gpt-3.5-turbo" for m in models)
+    assert any(m["id"] == "test-ollama-model" for m in models)
+    assert any(m["id"] == "claude-test-cache-model" for m in models)
 
-        models = cache.get_all_models()
-        self.assertEqual(len(models), 4)  # Expected 4 models now
-        self.assertTrue(any(m["id"] == "models/gemini-pro" for m in models))
-        self.assertTrue(any(m["id"] == "gpt-3.5-turbo" for m in models))
-        self.assertTrue(any(m["id"] == "test-ollama-model" for m in models))
-        self.assertTrue(any(m["id"] == "claude-test-cache-model" for m in models))
 
-    def test_get_model_provider(self):
-        cache = ModelCache(refresh_interval_seconds=36000)
-        cache.refresh_models_sync()
+def test_get_model_provider(model_mocks):
+    cache = ModelCache(refresh_interval_seconds=36000)
+    cache.refresh_models_sync()
 
-        self.assertEqual(cache.get_model_provider("models/gemini-pro"), "Google")
-        self.assertEqual(cache.get_model_provider("gpt-3.5-turbo"), "OpenAI")
-        self.assertEqual(cache.get_model_provider("test-ollama-model"), "Ollama")
-        self.assertEqual(
-            cache.get_model_provider("claude-test-cache-model"), "Anthropic"
-        )
-        self.assertIsNone(cache.get_model_provider("non-existent-model"))
+    assert cache.get_model_provider("models/gemini-pro") == "Google"
+    assert cache.get_model_provider("gpt-3.5-turbo") == "OpenAI"
+    assert cache.get_model_provider("test-ollama-model") == "Ollama"
+    assert cache.get_model_provider("claude-test-cache-model") == "Anthropic"
+    assert cache.get_model_provider("non-existent-model") is None
 
-    @patch("time.time")
-    def test_cache_refresh_logic_manual_trigger(self, mock_time):
-        mock_time.return_value = 1000.0
 
+def test_cache_refresh_logic_manual_trigger(model_mocks):
+    m = model_mocks
+    with patch("time.time", return_value=1000.0):
         cache = ModelCache(refresh_interval_seconds=3600)
         cache.refresh_models_sync()
 
-        self.mock_list_google_models.assert_called_once()
-        self.mock_list_openai_models.assert_called_once()
-        self.mock_list_ollama_models.assert_called_once()
+        m["google"].assert_called_once()
+        m["openai"].assert_called_once()
+        m["ollama"].assert_called_once()
 
-        self.mock_list_google_models.reset_mock()
-        self.mock_list_openai_models.reset_mock()
-        self.mock_list_ollama_models.reset_mock()
+        m["google"].reset_mock()
+        m["openai"].reset_mock()
+        m["ollama"].reset_mock()
 
         cache.refresh_models_sync()
-        self.mock_list_google_models.assert_called_once()
-        self.mock_list_openai_models.assert_called_once()
-        self.mock_list_ollama_models.assert_called_once()
-        self.assertEqual(cache.last_refresh_time, 1000.0)
+        m["google"].assert_called_once()
+        m["openai"].assert_called_once()
+        m["ollama"].assert_called_once()
+        assert cache.last_refresh_time == 1000.0
 
-    @patch("time.time")
-    def test_cache_refresh_logic_stale_get_all_models(self, mock_time):
-        initial_time = 1000.0
-        refresh_interval = 60
 
-        mock_time.return_value = initial_time
+def test_cache_refresh_logic_stale_get_all_models(model_mocks):
+    m = model_mocks
+    initial_time = 1000.0
+    refresh_interval = 60
+
+    with patch("time.time", return_value=initial_time):
         cache = ModelCache(refresh_interval_seconds=refresh_interval)
         cache.refresh_models_sync()
+        assert cache.last_refresh_time == initial_time
 
-        self.mock_list_google_models.assert_called_once()
-        self.mock_list_openai_models.assert_called_once()
-        self.mock_list_ollama_models.assert_called_once()
-        self.assertEqual(cache.last_refresh_time, initial_time)
+        m["google"].reset_mock()
+        m["openai"].reset_mock()
+        m["ollama"].reset_mock()
 
-        self.mock_list_google_models.reset_mock()
-        self.mock_list_openai_models.reset_mock()
-        self.mock_list_ollama_models.reset_mock()
-
-        mock_time.return_value = initial_time + refresh_interval + 1
-
+    with patch("time.time", return_value=initial_time + refresh_interval + 1):
         cache.get_all_models()
 
-        self.mock_list_google_models.assert_called_once()
-        self.mock_list_openai_models.assert_called_once()
-        self.mock_list_ollama_models.assert_called_once()
-        self.assertEqual(cache.last_refresh_time, initial_time + refresh_interval + 1)
+        m["google"].assert_called_once()
+        m["openai"].assert_called_once()
+        m["ollama"].assert_called_once()
+        assert cache.last_refresh_time == initial_time + refresh_interval + 1
 
-    def test_error_handling_google_fetch_fails(self):
-        # Values that should be seen by ModelCache
-        fake_google_key = "fake_google_key_for_test"
-        fake_openai_key = "fake_openai_key_for_test"
 
-        # Patch the settings object that ModelCache will import and use.
-        # This ensures that when ModelCache accesses settings.google.google_api_key,
-        # it gets the value we've patched, bypassing potential pydantic-settings reloading issues.
-        with (
-            patch.object(settings.google, "google_api_key", fake_google_key),
-            patch.object(settings.openai, "openai_api_key", fake_openai_key),
-            patch.object(settings.google, "google_enabled", True),
-            patch.object(settings.openai, "openai_enabled", True),
-            patch.object(settings.ollama, "ollama_enabled", True),
-            patch.object(settings.anthropic, "anthropic_enabled", True),
-            patch.object(
-                settings.anthropic, "anthropic_api_key", "fake_anthropic_key_for_test"
-            ),
-        ):
-            # Ensure that the AppSettings.is_provider_enabled mock also uses these consistent values.
-            # The mock 'actual_side_effect_is_provider_enabled' already reads from the global 'settings'
-            # object, which we are patching here. So, this should be consistent.
+def test_error_handling_google_fetch_fails(model_mocks, monkeypatch):
+    m = model_mocks
+    m["google"].side_effect = Exception("Google API Error")
 
-            self.mock_list_google_models.side_effect = Exception("Google API Error")
-            self.mock_list_openai_models.return_value = [self.openai_model_raw_1]
-            self.mock_list_ollama_models.return_value = [self.ollama_model_raw_1]
+    ModelCache._instance = None
+    cache = ModelCache(refresh_interval_seconds=36000)
 
-            # Ensure a fresh cache instance for the test
-            ModelCache._instance = None
-            cache = ModelCache(refresh_interval_seconds=36000)
+    with patch.object(cache, "logger") as mock_logger:
+        cache.refresh_models_sync()
 
-            with patch.object(cache, "logger") as mock_logger:
-                cache.refresh_models_sync()
+    assert any(m["id"] == "gpt-3.5-turbo" for m in cache.models_data)
+    assert any(m["id"] == "test-ollama-model" for m in cache.models_data)
+    assert any(m["id"] == "claude-test-cache-model" for m in cache.models_data)
+    assert len(cache.models_data) == 3
+    assert cache.get_model_provider("models/gemini-pro") is None
+    assert cache.get_model_provider("gpt-3.5-turbo") == "OpenAI"
+    assert cache.get_model_provider("test-ollama-model") == "Ollama"
+    assert any(
+        "Error fetching Google models: Google API Error" in str(arg)
+        for arg_list in mock_logger.exception.call_args_list
+        for arg in arg_list[0]
+    )
 
-            # Debug: Check what models were actually loaded
-            # print(f"Cache models data: {cache.models_data}")
-            # print(f"Cache model_to_provider: {cache.model_to_provider}")
-            # for call_args in mock_logger.warning.call_args_list:
-            #    print(f"Cache warning: {call_args}")
-            # for call_args in mock_logger.exception.call_args_list:
-            #    print(f"Cache exception: {call_args}")
 
-            self.assertTrue(any(m["id"] == "gpt-3.5-turbo" for m in cache.models_data))
-            self.assertTrue(
-                any(m["id"] == "test-ollama-model" for m in cache.models_data)
-            )
-            self.assertTrue(
-                any(m["id"] == "claude-test-cache-model" for m in cache.models_data)
-            )  # Anthropic model
-            self.assertEqual(len(cache.models_data), 3)  # OpenAI, Ollama, Anthropic
-            self.assertIsNone(cache.get_model_provider("models/gemini-pro"))
-            self.assertEqual(cache.get_model_provider("gpt-3.5-turbo"), "OpenAI")
-            self.assertEqual(cache.get_model_provider("test-ollama-model"), "Ollama")
-            # Check that the specific error for Google was logged
-            self.assertTrue(
-                any(
-                    "Error fetching Google models: Google API Error" in str(arg)
-                    for arg_list in mock_logger.exception.call_args_list
-                    for arg in arg_list[0]
-                )
-            )
+def test_missing_api_keys_skips_providers(model_mocks, monkeypatch):
+    monkeypatch.setattr(settings.google, "google_api_key", None)
+    monkeypatch.setattr(settings.openai, "openai_api_key", None)
+    monkeypatch.setattr(settings.anthropic, "anthropic_api_key", None)
 
-    def test_missing_api_keys_skips_providers(self):
-        settings.google.google_api_key = None
-        settings.openai.openai_api_key = None
-        settings.anthropic.anthropic_api_key = None  # Ensure Anthropic is also skipped
-        # Ollama enabled status is controlled by settings.ollama.ollama_enabled, which is True in setUp
+    cache = ModelCache(refresh_interval_seconds=36000)
+    with patch.object(cache, "logger") as mock_logger:
+        cache.refresh_models_sync()
 
-        cache = ModelCache(refresh_interval_seconds=36000)
-        with patch.object(cache, "logger") as mock_logger:
-            cache.refresh_models_sync()
+    assert len(cache.models_data) == 1
+    assert any(m["id"] == "test-ollama-model" for m in cache.models_data)
+    assert len(cache.model_to_provider) == 1
+    assert cache.get_model_provider("test-ollama-model") == "Ollama"
 
-        self.assertEqual(
-            len(cache.models_data), 1
-        )  # Only Ollama model should be loaded
-        self.assertTrue(any(m["id"] == "test-ollama-model" for m in cache.models_data))
-        self.assertEqual(len(cache.model_to_provider), 1)
-        self.assertEqual(cache.get_model_provider("test-ollama-model"), "Ollama")
+    warnings_logged = [str(args[0]) for args, kwargs in mock_logger.warning.call_args_list]
+    assert any("Google API key not set." in w for w in warnings_logged)
+    assert any("OpenAI API key not set." in w for w in warnings_logged)
 
-        warnings_logged = [
-            str(args[0]) for args, kwargs in mock_logger.warning.call_args_list
-        ]
-        self.assertTrue(any("Google API key not set." in w for w in warnings_logged))
-        self.assertTrue(any("OpenAI API key not set." in w for w in warnings_logged))
 
-    def test_force_refresh_model_cache_function(self):
-        # Import the global model_cache and use it directly for the test
+def test_force_refresh_model_cache_function(model_mocks):
+    m = model_mocks
+    cache = ModelCache(refresh_interval_seconds=36000)
+    cache.refresh_models_sync()
 
-        # Since we reset _instance in setUp, create a new instance
-        # which will become the singleton
-        cache = ModelCache(refresh_interval_seconds=36000)
+    m["google"].assert_called_once()
+    m["openai"].assert_called_once()
+    m["ollama"].assert_called_once()
 
-        # After creating the first instance post-reset, it should be the singleton
-        # and the global cache should refer to the same instance if re-imported
-        # However, the global_cache variable was set at module import time
-        # So we need to test with the newly created cache instance
+    cache._refresh_in_progress = False
+    force_refresh_model_cache()
+
+    assert m["google"].call_count == 2
+    assert m["openai"].call_count == 2
+    assert m["ollama"].call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_model_cache_for_user_does_not_mutate_singleton_keys(model_mocks):
+    from unittest.mock import AsyncMock
+    m = model_mocks
+    cache = ModelCache(refresh_interval_seconds=36000)
+    cache.google_api_key = "global_google_key"
+    cache.openai_api_key = "global_openai_key"
+
+    with patch(
+        "api_service.api.routers.chat.get_user_api_key",
+        new=AsyncMock(side_effect=["user_google_key", "user_openai_key"]),
+    ):
+        user_models = await refresh_model_cache_for_user(
+            user=MagicMock(), db_session=MagicMock()
+        )
+
+    assert isinstance(user_models, list)
+    assert cache.google_api_key == "global_google_key"
+    assert cache.openai_api_key == "global_openai_key"
+    m["google"].assert_called_with(api_key="user_google_key")
+    m["openai"].assert_called_with(api_key="user_openai_key")
+
+
+
+def test_periodic_refresh_thread_execution(provider_settings):
+    """Verify Thread is created with the correct target and the refresh produces data."""
+    with (
+        patch("moonmind.models_cache.list_google_models") as mock_google,
+        patch("moonmind.models_cache.list_openai_models") as mock_openai,
+        patch("moonmind.models_cache.list_ollama_models", new_callable=AsyncMock) as mock_ollama,
+        patch.object(AppSettings, "is_provider_enabled", return_value=True),
+        patch("moonmind.models_cache.Thread") as mock_thread_ctor,
+    ):
+        google_model = MagicMock()
+        google_model.name = "models/gemini-pro"
+        google_model.input_token_limit = 8192
+        google_model.supported_generation_methods = ["generateContent"]
+
+        openai_model = MagicMock()
+        openai_model.id = "gpt-3.5-turbo"
+        import time
+        openai_model.created = int(time.time()) - 1000
+        openai_model.owned_by = "openai"
+
+        mock_google.return_value = [google_model]
+        mock_openai.return_value = [openai_model]
+        mock_ollama.return_value = [{"name": "test-ollama-model", "details": {"parameter_size": "7B"}}]
+
+        mock_thread_instance = Mock()
+        mock_thread_ctor.return_value = mock_thread_instance
+
+        cache = ModelCache(refresh_interval_seconds=1)
+
+        mock_thread_ctor.assert_called_once_with(target=cache._periodic_refresh, daemon=True)
+        mock_thread_instance.start.assert_called_once()
 
         cache.refresh_models_sync()
 
-        self.mock_list_google_models.assert_called_once()
-        self.mock_list_openai_models.assert_called_once()
-        self.mock_list_ollama_models.assert_called_once()
-
-        # Ensure the refresh_in_progress flag is reset
-        cache._refresh_in_progress = False
-
-        # Test the force refresh function with the cache instance
-        force_refresh_model_cache()
-
-        self.assertEqual(self.mock_list_google_models.call_count, 2)
-        self.assertEqual(self.mock_list_openai_models.call_count, 2)
-        self.assertEqual(self.mock_list_ollama_models.call_count, 2)
-
-    def test_refresh_model_cache_for_user_does_not_mutate_singleton_keys(self):
-        cache = ModelCache(refresh_interval_seconds=36000)
-        cache.google_api_key = "global_google_key"
-        cache.openai_api_key = "global_openai_key"
-
-        with patch(
-            "api_service.api.routers.chat.get_user_api_key",
-            new=AsyncMock(side_effect=["user_google_key", "user_openai_key"]),
-        ):
-            user_models = asyncio.run(
-                refresh_model_cache_for_user(user=MagicMock(), db_session=MagicMock())
-            )
-
-        self.assertIsInstance(user_models, list)
-        self.assertEqual(cache.google_api_key, "global_google_key")
-        self.assertEqual(cache.openai_api_key, "global_openai_key")
-        self.mock_list_google_models.assert_called_with(api_key="user_google_key")
-        self.mock_list_openai_models.assert_called_with(api_key="user_openai_key")
-
-    def test_periodic_refresh_thread_execution(self):
-        # This test verifies that the periodic refresh thread executes at least the initial refresh
-        # Instead of trying to test real threading behavior with mocks,
-        # we'll test that the thread creation and periodic refresh method work correctly
-
-        # Reset mock call counts before starting the test
-        self.mock_list_google_models.reset_mock()
-        self.mock_list_openai_models.reset_mock()
-        self.mock_list_ollama_models.reset_mock()
-
-        # Stop the global Thread mock from setUp for this specific test.
-        self.thread_patch.stop()
-        # Also stop the periodic_refresh mock to allow real method execution
-        self.periodic_refresh_patch.stop()  # This should restore the original method to ModelCache
-
-        # Create a mock for the Thread constructor to capture what gets passed to it
-        with patch("moonmind.models_cache.Thread") as mock_thread_constructor:
-            mock_thread_instance = Mock()
-            mock_thread_constructor.return_value = mock_thread_instance
-
-            try:
-                refresh_interval = 1  # Short interval for faster test
-
-                # Create cache, this should create a Thread instance
-                # The ModelCache.__init__ will use the original _periodic_refresh now
-                cache = ModelCache(refresh_interval_seconds=refresh_interval)
-
-                # Verify that a Thread was created with the correct target
-                # The target should be the bound method of the 'cache' instance
-                mock_thread_constructor.assert_called_once_with(
-                    target=cache._periodic_refresh, daemon=True
-                )
-                # Verify that start() was called on the thread
-                mock_thread_instance.start.assert_called_once()
-
-                # Now, to test the refresh logic directly without the thread,
-                # we call the (now original) _periodic_refresh method on the instance.
-                # No need to reassign it if self.periodic_refresh_patch.stop() worked.
-
-                # Let's ensure the instance has the original method.
-                # If periodic_refresh_patch.stop() worked, cache._periodic_refresh is the original.
-                # We can call it directly to test its internal logic.
-                # For this test, we want to simulate what the thread would do,
-                # which includes an initial synchronous refresh.
-
-                # The _periodic_refresh method itself calls refresh_models_sync.
-                # We can call refresh_models_sync directly on the cache instance
-                # as the _periodic_refresh method's first action is to call it.
-                cache.refresh_models_sync()
-
-                # Verify the refresh happened with our mocks
-                self.assertEqual(
-                    self.mock_list_google_models.call_count, 1, "Google fetch"
-                )
-                self.assertEqual(
-                    self.mock_list_openai_models.call_count, 1, "OpenAI fetch"
-                )
-                self.assertEqual(
-                    self.mock_list_ollama_models.call_count, 1, "Ollama fetch"
-                )
-                self.assertGreater(
-                    cache.last_refresh_time, 0, "Last refresh time should be set"
-                )
-
-            finally:
-                # Patches are managed by setUp and tearDown (with patch.stopall).
-                # No need to restart them here.
-                # If self.thread_patch was stopped, it will be stopped by tearDown's patch.stopall()
-                # or re-patched in the next test's setUp.
-                pass
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert mock_google.call_count == 1
+        assert mock_openai.call_count == 1
+        assert mock_ollama.call_count == 1
+        assert cache.last_refresh_time > 0

@@ -78,7 +78,7 @@ fi
 
 PYTEST_PARALLEL_ARGS=()
 if [[ "$USE_XDIST" == "1" ]] && "$PYTHON_BIN" -c "import xdist" >/dev/null 2>&1; then
-    PYTEST_PARALLEL_ARGS=(-n auto --dist loadscope)
+    PYTEST_PARALLEL_ARGS=(-n auto --dist load)
 elif [[ "$USE_XDIST" == "1" ]]; then
     echo "Warning: pytest-xdist is not installed; running unit tests without parallel workers." >&2
 fi
@@ -88,7 +88,7 @@ if [[ ${#PYTEST_TARGETS[@]} -eq 0 ]]; then
 fi
 
 if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then
-    "$PYTHON_BIN" -m pytest -q "${PYTEST_PARALLEL_ARGS[@]}" "${PYTEST_TARGETS[@]}"
+    "$PYTHON_BIN" -m pytest -q ${PYTEST_PARALLEL_ARGS[@]+"${PYTEST_PARALLEL_ARGS[@]}"} "${PYTEST_TARGETS[@]}"
 fi
 
 if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then

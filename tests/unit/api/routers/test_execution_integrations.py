@@ -21,8 +21,48 @@ from moonmind.workflows.temporal.client import WorkflowStartResult
 CURRENT_USER_DEP = get_current_user()
 
 
+# ---------------------------------------------------------------------------
+# Module-scoped shared database fixture
+# Creates the engine + schema ONCE per module instead of once per test.
+# Each test uses a unique idempotency key to avoid cross-test data conflicts.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def _module_db(tmp_path_factory):
+    """Create a single SQLite engine and schema for the entire module.
+
+    Uses asyncio.run() because the project uses a custom pytest hook (not
+    pytest-asyncio), which doesn't support module-scoped async fixtures.
+    """
+    import asyncio
+
+    tmp = tmp_path_factory.mktemp("integration_db")
+    db_url = f"sqlite+aiosqlite:///{tmp}/shared.db"
+
+    async def _setup():
+        engine = create_async_engine(db_url, future=True)
+        session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        return engine, session_maker
+
+    async def _teardown(engine):
+        await engine.dispose()
+
+    engine, session_maker = asyncio.run(_setup())
+
+    _orig = (db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker)
+    db_base.DATABASE_URL = db_url
+    db_base.engine = engine
+    db_base.async_session_maker = session_maker
+    yield
+    db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = _orig
+    asyncio.run(_teardown(engine))
+
+
 @pytest.fixture(autouse=True)
-def _reset_dependency_overrides():
+def _reset_dependency_overrides(_module_db):  # noqa: PT004 — depends on _module_db
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
@@ -65,6 +105,11 @@ def _stub_temporal_adapter(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
 async def _create_monitored_execution(
     client: AsyncClient,
     *,
@@ -96,263 +141,158 @@ async def _create_monitored_execution(
     return workflow_id, callback_key
 
 
-@pytest.mark.asyncio
-async def test_callback_rejects_missing_configured_token(tmp_path, monkeypatch):
-    original_db_url = db_base.DATABASE_URL
-    original_engine = db_base.engine
-    original_session_maker = db_base.async_session_maker
-
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/execution_integrations.db"
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    shared_user_id = uuid4()
+def _shared_client(shared_user_id):
+    """Return an async ASGI context manager with auth override applied."""
     app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
         id=shared_user_id, is_superuser=False
     )
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_missing_configured_token(monkeypatch):
+    shared_user_id = uuid4()
     monkeypatch.setattr(settings.jules, "jules_callback_token", "callback-secret")
 
-    try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            _workflow_id, callback_key = await _create_monitored_execution(client)
-            response = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
-                json={
-                    "eventType": "completed",
-                    "normalizedStatus": "succeeded",
-                },
-            )
+    async with _shared_client(shared_user_id) as client:
+        _workflow_id, callback_key = await _create_monitored_execution(
+            client, execution_suffix=f"missing-token-{uuid4().hex[:8]}"
+        )
+        response = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key}",
+            json={
+                "eventType": "completed",
+                "normalizedStatus": "succeeded",
+            },
+        )
 
-        assert response.status_code == 401
-        assert response.json()["detail"]["code"] == "integration_callback_unauthorized"
-    finally:
-        db_base.DATABASE_URL = original_db_url
-        db_base.engine = original_engine
-        db_base.async_session_maker = original_session_maker
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "integration_callback_unauthorized"
 
 
 @pytest.mark.asyncio
-async def test_callback_accepts_matching_bearer_token(tmp_path, monkeypatch):
-    original_db_url = db_base.DATABASE_URL
-    original_engine = db_base.engine
-    original_session_maker = db_base.async_session_maker
-
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_auth.db"
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+async def test_callback_accepts_matching_bearer_token(monkeypatch):
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
     monkeypatch.setattr(settings.jules, "jules_callback_token", "callback-secret")
 
-    try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            _workflow_id, callback_key = await _create_monitored_execution(client)
-            response = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
-                headers={"Authorization": "Bearer callback-secret"},
-                json={
-                    "eventType": "completed",
-                    "providerEventId": "evt-1",
-                    "normalizedStatus": "succeeded",
-                },
-            )
+    async with _shared_client(shared_user_id) as client:
+        _workflow_id, callback_key = await _create_monitored_execution(
+            client, execution_suffix=f"auth-{uuid4().hex[:8]}"
+        )
+        response = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key}",
+            headers={"Authorization": "Bearer callback-secret"},
+            json={
+                "eventType": "completed",
+                "providerEventId": "evt-1",
+                "normalizedStatus": "succeeded",
+            },
+        )
 
-        assert response.status_code == 202
-        assert response.json()["integration"]["normalizedStatus"] == "succeeded"
-    finally:
-        db_base.DATABASE_URL = original_db_url
-        db_base.engine = original_engine
-        db_base.async_session_maker = original_session_maker
+    assert response.status_code == 202
+    assert response.json()["integration"]["normalizedStatus"] == "succeeded"
 
 
 @pytest.mark.asyncio
-async def test_callback_rejects_payload_over_limit(tmp_path, monkeypatch):
-    original_db_url = db_base.DATABASE_URL
-    original_engine = db_base.engine
-    original_session_maker = db_base.async_session_maker
-
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_size.db"
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+async def test_callback_rejects_payload_over_limit(monkeypatch):
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
     monkeypatch.setattr(settings.jules, "jules_callback_token", None)
     monkeypatch.setattr(settings.jules, "jules_callback_max_payload_bytes", 32)
 
-    try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            _workflow_id, callback_key = await _create_monitored_execution(client)
-            response = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
-                json={
-                    "eventType": "completed",
-                    "providerSummary": {"message": "x" * 128},
-                },
-            )
-
-        assert response.status_code == 413
-        assert (
-            response.json()["detail"]["code"]
-            == "integration_callback_payload_too_large"
+    async with _shared_client(shared_user_id) as client:
+        _workflow_id, callback_key = await _create_monitored_execution(
+            client, execution_suffix=f"size-{uuid4().hex[:8]}"
         )
-    finally:
-        db_base.DATABASE_URL = original_db_url
-        db_base.engine = original_engine
-        db_base.async_session_maker = original_session_maker
+        response = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key}",
+            json={
+                "eventType": "completed",
+                "providerSummary": {"message": "x" * 128},
+            },
+        )
+
+    assert response.status_code == 413
+    assert (
+        response.json()["detail"]["code"]
+        == "integration_callback_payload_too_large"
+    )
 
 
 @pytest.mark.asyncio
-async def test_callback_rejects_rate_limited_bursts(tmp_path, monkeypatch):
-    original_db_url = db_base.DATABASE_URL
-    original_engine = db_base.engine
-    original_session_maker = db_base.async_session_maker
-
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_rate_limit.db"
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+async def test_callback_rejects_rate_limited_bursts(monkeypatch):
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
     monkeypatch.setattr(settings.jules, "jules_callback_token", None)
     monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_per_window", 1)
     monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_window_seconds", 60)
 
-    try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            _workflow_id, callback_key = await _create_monitored_execution(client)
-            first = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
-                json={
-                    "eventType": "progress",
-                    "providerEventId": "evt-rate-1",
-                    "normalizedStatus": "running",
-                },
-            )
-            second = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
-                json={
-                    "eventType": "progress",
-                    "providerEventId": "evt-rate-2",
-                    "normalizedStatus": "running",
-                },
-            )
+    async with _shared_client(shared_user_id) as client:
+        _workflow_id, callback_key = await _create_monitored_execution(
+            client, execution_suffix=f"rate-limit-{uuid4().hex[:8]}"
+        )
+        first = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key}",
+            json={
+                "eventType": "progress",
+                "providerEventId": "evt-rate-1",
+                "normalizedStatus": "running",
+            },
+        )
+        second = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key}",
+            json={
+                "eventType": "progress",
+                "providerEventId": "evt-rate-2",
+                "normalizedStatus": "running",
+            },
+        )
 
-        assert first.status_code == 202
-        assert second.status_code == 429
-        assert second.json()["detail"]["code"] == "integration_callback_rate_limited"
-    finally:
-        db_base.DATABASE_URL = original_db_url
-        db_base.engine = original_engine
-        db_base.async_session_maker = original_session_maker
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert second.json()["detail"]["code"] == "integration_callback_rate_limited"
 
 
 @pytest.mark.asyncio
-async def test_callback_rate_limit_applies_across_callback_keys(tmp_path, monkeypatch):
-    original_db_url = db_base.DATABASE_URL
-    original_engine = db_base.engine
-    original_session_maker = db_base.async_session_maker
-
-    db_url = (
-        f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_shared_rate_limit.db"
-    )
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
+async def test_callback_rate_limit_applies_across_callback_keys(monkeypatch):
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
     monkeypatch.setattr(settings.jules, "jules_callback_token", None)
     monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_per_window", 1)
     monkeypatch.setattr(settings.jules, "jules_callback_rate_limit_window_seconds", 60)
 
-    try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            _workflow_id, callback_key_one = await _create_monitored_execution(
-                client,
-                execution_suffix="one",
-            )
-            _workflow_id, callback_key_two = await _create_monitored_execution(
-                client,
-                execution_suffix="two",
-            )
-            first = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key_one}",
-                json={
-                    "eventType": "progress",
-                    "providerEventId": "evt-shared-1",
-                    "normalizedStatus": "running",
-                },
-            )
-            second = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key_two}",
-                json={
-                    "eventType": "progress",
-                    "providerEventId": "evt-shared-2",
-                    "normalizedStatus": "running",
-                },
-            )
+    async with _shared_client(shared_user_id) as client:
+        suffix = uuid4().hex[:8]
+        _workflow_id, callback_key_one = await _create_monitored_execution(
+            client,
+            execution_suffix=f"shared-one-{suffix}",
+        )
+        _workflow_id, callback_key_two = await _create_monitored_execution(
+            client,
+            execution_suffix=f"shared-two-{suffix}",
+        )
+        first = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key_one}",
+            json={
+                "eventType": "progress",
+                "providerEventId": "evt-shared-1",
+                "normalizedStatus": "running",
+            },
+        )
+        second = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key_two}",
+            json={
+                "eventType": "progress",
+                "providerEventId": "evt-shared-2",
+                "normalizedStatus": "running",
+            },
+        )
 
-        assert first.status_code == 202
-        assert second.status_code == 429
-        assert second.json()["detail"]["code"] == "integration_callback_rate_limited"
-    finally:
-        db_base.DATABASE_URL = original_db_url
-        db_base.engine = original_engine
-        db_base.async_session_maker = original_session_maker
+    assert first.status_code == 202
+    assert second.status_code == 429
+    assert second.json()["detail"]["code"] == "integration_callback_rate_limited"
 
 
 def test_callback_rate_limiter_evicts_idle_buckets(monkeypatch):
@@ -374,23 +314,7 @@ def test_callback_rate_limiter_evicts_idle_buckets(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
-    original_db_url = db_base.DATABASE_URL
-    original_engine = db_base.engine
-    original_session_maker = db_base.async_session_maker
-
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/execution_integrations_artifact.db"
-    db_base.DATABASE_URL = db_url
-    db_base.engine = create_async_engine(db_url, future=True)
-    db_base.async_session_maker = sessionmaker(
-        db_base.engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with db_base.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
     monkeypatch.setattr(settings.jules, "jules_callback_token", None)
     monkeypatch.setattr(settings.jules, "jules_callback_artifact_capture_enabled", True)
     monkeypatch.setattr(settings.spec_workflow, "temporal_artifact_backend", "local_fs")
@@ -400,28 +324,21 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
         str(tmp_path / "artifacts"),
     )
 
-    try:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            _workflow_id, callback_key = await _create_monitored_execution(client)
-            response = await client.post(
-                f"/api/integrations/jules/callbacks/{callback_key}",
-                json={
-                    "eventType": "completed",
-                    "providerEventId": "evt-artifact",
-                    "normalizedStatus": "succeeded",
-                },
-            )
-
-        assert response.status_code == 202
-        assert any(
-            str(ref).startswith("art_")
-            for ref in response.json().get("artifactRefs", [])
+    async with _shared_client(shared_user_id) as client:
+        _workflow_id, callback_key = await _create_monitored_execution(
+            client, execution_suffix=f"artifact-{uuid4().hex[:8]}"
         )
-    finally:
-        db_base.DATABASE_URL = original_db_url
-        db_base.engine = original_engine
-        db_base.async_session_maker = original_session_maker
+        response = await client.post(
+            f"/api/integrations/jules/callbacks/{callback_key}",
+            json={
+                "eventType": "completed",
+                "providerEventId": "evt-artifact",
+                "normalizedStatus": "succeeded",
+            },
+        )
+
+    assert response.status_code == 202
+    assert any(
+        str(ref).startswith("art_")
+        for ref in response.json().get("artifactRefs", [])
+    )

@@ -9,8 +9,13 @@ from api_service.api.dependencies import (  # Moved import
 )
 from api_service.main import app  # Assuming your FastAPI app instance is here
 
-# Create a TestClient instance
-client = TestClient(app)
+
+@pytest.fixture(scope="module")
+def client():
+    """Module-scoped TestClient: boots the full FastAPI app once for this module."""
+    with TestClient(app) as c:
+        yield c
+
 
 
 @pytest.fixture
@@ -68,7 +73,7 @@ def mock_dependencies():
 
 
 def test_load_confluence_documents_by_page_id(
-    mock_confluence_indexer, mock_dependencies
+    client, mock_confluence_indexer, mock_dependencies
 ):
     response = client.post("/v1/documents/confluence/load", json={"page_id": "12345"})
     assert response.status_code == 200
@@ -91,7 +96,7 @@ def test_load_confluence_documents_by_page_id(
 
 
 def test_load_confluence_documents_by_space_and_title(
-    mock_confluence_indexer, mock_dependencies
+    client, mock_confluence_indexer, mock_dependencies
 ):
     response = client.post(
         "/v1/documents/confluence/load",
@@ -115,7 +120,7 @@ def test_load_confluence_documents_by_space_and_title(
 
 
 def test_load_confluence_documents_by_cql_query(
-    mock_confluence_indexer, mock_dependencies
+    client, mock_confluence_indexer, mock_dependencies
 ):
     response = client.post(
         "/v1/documents/confluence/load", json={"cql_query": "label = 'test-label'"}
@@ -138,7 +143,7 @@ def test_load_confluence_documents_by_cql_query(
 
 
 def test_load_confluence_documents_by_space_key(
-    mock_confluence_indexer, mock_dependencies
+    client, mock_confluence_indexer, mock_dependencies
 ):
     response = client.post(
         "/v1/documents/confluence/load",
@@ -162,7 +167,7 @@ def test_load_confluence_documents_by_space_key(
     assert call_args["cql_query"] is None
 
 
-def test_load_confluence_documents_confluence_disabled(mock_dependencies):
+def test_load_confluence_documents_confluence_disabled(client, mock_dependencies):
     # Override confluence_enabled for this specific test
     mock_dependencies.confluence.confluence_enabled = False
     response = client.post("/v1/documents/confluence/load", json={"page_id": "12345"})
@@ -171,7 +176,7 @@ def test_load_confluence_documents_confluence_disabled(mock_dependencies):
 
 
 def test_load_confluence_documents_indexer_exception(
-    mock_confluence_indexer, mock_dependencies
+    client, mock_confluence_indexer, mock_dependencies
 ):
     mock_confluence_indexer.index.side_effect = Exception("Indexer failed miserably")
     response = client.post("/v1/documents/confluence/load", json={"page_id": "12345"})
@@ -180,7 +185,7 @@ def test_load_confluence_documents_indexer_exception(
 
 
 # Tests for Pydantic validation errors (handled by FastAPI automatically, but good to be aware)
-def test_load_confluence_invalid_payload_no_identifiers(mock_dependencies):
+def test_load_confluence_invalid_payload_no_identifiers(client, mock_dependencies):
     response = client.post(
         "/v1/documents/confluence/load",
         json={},  # Missing any identifiers
@@ -190,7 +195,7 @@ def test_load_confluence_invalid_payload_no_identifiers(mock_dependencies):
     assert "A loading method must be specified" in response.text
 
 
-def test_load_confluence_invalid_payload_multiple_identifiers(mock_dependencies):
+def test_load_confluence_invalid_payload_multiple_identifiers(client, mock_dependencies):
     response = client.post(
         "/v1/documents/confluence/load",
         json={"page_id": "123", "cql_query": "label='test'"},  # Multiple identifiers
@@ -199,7 +204,7 @@ def test_load_confluence_invalid_payload_multiple_identifiers(mock_dependencies)
     assert "Only one loading method can be specified" in response.text
 
 
-def test_load_confluence_page_title_without_space_key(mock_dependencies):
+def test_load_confluence_page_title_without_space_key(client, mock_dependencies):
     response = client.post(
         "/v1/documents/confluence/load",
         json={"page_title": "My Page"},  # page_title without space_key

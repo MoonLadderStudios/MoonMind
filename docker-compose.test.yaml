@@ -24,6 +24,7 @@ services:
     environment:
       - PYTHONPATH=/app
       - TEST_TYPE=unit
+      - MOONMIND_FORCE_LOCAL_TESTS=1
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
       - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://minio:9000}
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
@@ -32,7 +33,9 @@ services:
     volumes:
       - ./:/app
     working_dir: /app
-    command: ["bash", "-c", "pytest -s /app/tests/$${TEST_TYPE}"]
+    # Run through test_unit.sh so xdist, flags, and env setup are identical to CI.
+    # Pass --python-only to skip Node/dashboard tests (node may not be in this image).
+    command: ["bash", "-lc", "/app/tools/test_unit.sh --python-only"]
     depends_on:
       - minio
     networks:

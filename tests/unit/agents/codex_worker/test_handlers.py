@@ -980,12 +980,12 @@ async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
 
         async def read(self, _size: int) -> bytes:
             if not self._chunks:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0)
                 return b""
             value = self._chunks.pop(0)
             if self._trigger_cancel and not self._chunks:
                 cancel_event.set()
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0)
             return value
 
     class FakeProcess:
@@ -997,7 +997,7 @@ async def test_run_command_streaming_flushes_pending_candidate_on_cancellation(
             self.stderr = FakeReader([])
 
         async def wait(self) -> int:
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0)
             return self.returncode
 
         def terminate(self) -> None:
@@ -1049,12 +1049,12 @@ async def test_run_command_git_diff_logs_sensitive_summary_on_cancellation(
 
         async def read(self, _size: int) -> bytes:
             if not self._chunks:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0)
                 return b""
             value = self._chunks.pop(0)
             if self._trigger_cancel and not self._chunks:
                 cancel_event.set()
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0)
             return value
 
     class FakeProcess:
@@ -1067,7 +1067,7 @@ async def test_run_command_git_diff_logs_sensitive_summary_on_cancellation(
             self.stderr = FakeReader([])
 
         async def wait(self) -> int:
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0)
             return self.returncode
 
         def terminate(self) -> None:
