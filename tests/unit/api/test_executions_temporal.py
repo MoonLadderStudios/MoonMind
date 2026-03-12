@@ -68,7 +68,7 @@ async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
             mock_wf.memo = {"waiting_reason": "external_completion"}
             mock_wf.search_attributes = {
                 "mm_state": b'"awaiting_external"',
-                "mm_entry": b'"run"',
+                "mm_entry": b'["run"]',
             }
             mock_wf.start_time = datetime.now(UTC)
             mock_wf.close_time = None
@@ -91,6 +91,7 @@ async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         item = data["items"][0]
         assert item["workflowId"] == "mm:wf-1"
         assert item["state"] == "awaiting_external"
+        assert item["entry"] == "run"
         assert item["waitingReason"] == "external_completion"
 
 
