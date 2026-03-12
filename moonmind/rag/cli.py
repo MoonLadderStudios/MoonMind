@@ -122,7 +122,7 @@ def run_overlay_clean(*, run_id: str | None) -> None:
 
 
 def _build_budget_config(
-    cli_budgets: Mapping[str, int] | None = None
+    cli_budgets: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
     budget: dict[str, int] = dict(cli_budgets or {})
     tokens_raw = os.getenv("RAG_QUERY_TOKEN_BUDGET")

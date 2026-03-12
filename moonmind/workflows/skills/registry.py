@@ -1,4 +1,4 @@
-"""Policy resolution for skills-first workflow stage execution."""
+"""Policy resolution for workflow stage execution and registry compatibility."""
 
 from __future__ import annotations
 
@@ -10,16 +10,17 @@ from moonmind.config.settings import settings
 
 from .artifact_store import ArtifactStore
 from .contracts import StageExecutionDecision
-from .skill_registry import SkillRegistryError, SkillRegistrySnapshot
-from .skill_registry import (
-    create_registry_snapshot as create_contract_registry_snapshot,
-)
-from .skill_registry import (
+from .tool_registry import ToolRegistryError, ToolRegistrySnapshot
+from .tool_registry import create_registry_snapshot as create_contract_registry_snapshot
+from .tool_registry import (
     load_registry_snapshot_from_artifact as load_contract_registry_snapshot_from_artifact,
 )
-from .skill_registry import load_skill_registry as load_contract_skill_registry
-from .skill_registry import parse_skill_registry as parse_contract_skill_registry
-from .skill_registry import validate_skill_registry as validate_contract_skill_registry
+from .tool_registry import load_tool_registry as load_contract_tool_registry
+from .tool_registry import parse_tool_registry as parse_contract_tool_registry
+from .tool_registry import validate_tool_registry as validate_contract_tool_registry
+
+SkillRegistryError = ToolRegistryError
+SkillRegistrySnapshot = ToolRegistrySnapshot
 
 _SPECKIT_ADAPTER_ID = "speckit"
 _SKILL_ADAPTERS: dict[str, str] = {
@@ -68,7 +69,7 @@ def resolve_stage_execution(
     run_id: str,
     context: Mapping[str, Any],
 ) -> StageExecutionDecision:
-    """Resolve whether a stage should run through skills policy or direct mode."""
+    """Resolve whether a stage should run through the skill path or direct mode."""
 
     cfg = settings.spec_workflow
     selected_skill = _select_stage_skill(stage_name, context)
@@ -93,7 +94,7 @@ def resolve_stage_execution(
 
 
 def get_stage_adapter(skill_name: str) -> Optional[str]:
-    """Return the adapter id for a configured skill name."""
+    """Return the adapter id for a configured stage skill."""
 
     normalized = str(skill_name or "").strip()
     if not normalized:
@@ -102,13 +103,13 @@ def get_stage_adapter(skill_name: str) -> Optional[str]:
 
 
 def skill_requires_speckit(skill_name: str) -> bool:
-    """Return whether the provided skill uses the Speckit adapter."""
+    """Return whether the provided stage skill uses the Speckit adapter."""
 
     return get_stage_adapter(skill_name) == _SPECKIT_ADAPTER_ID
 
 
 def configured_stage_skills() -> tuple[str, ...]:
-    """Return the configured stage skills in deterministic order."""
+    """Return configured stage skills in deterministic order."""
 
     cfg = settings.spec_workflow
     raw_values = (
@@ -131,29 +132,47 @@ def configured_stage_skills_require_speckit() -> bool:
     )
 
 
-def load_skill_registry(path: Path) -> tuple[Any, ...]:
-    """Load contract skill definitions from YAML/JSON registry file."""
+def load_tool_registry(path: Path) -> tuple[Any, ...]:
+    """Load tool definitions from a YAML/JSON registry file."""
 
-    return load_contract_skill_registry(path)
+    return load_contract_tool_registry(path)
+
+
+def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Parse untrusted tool registry payload."""
+
+    return parse_contract_tool_registry(payload)
+
+
+def validate_tool_registry(skills: tuple[Any, ...]) -> None:
+    """Validate parsed tool definitions."""
+
+    validate_contract_tool_registry(skills)
+
+
+def load_skill_registry(path: Path) -> tuple[Any, ...]:
+    """Compatibility wrapper for legacy skill-named callers."""
+
+    return load_tool_registry(path)
 
 
 def parse_skill_registry(payload: Mapping[str, Any]) -> tuple[Any, ...]:
-    """Parse untrusted registry payload into validated skill definitions."""
+    """Compatibility wrapper for legacy skill-named callers."""
 
-    return parse_contract_skill_registry(payload)
+    return parse_tool_registry(payload)
 
 
 def validate_skill_registry(skills: tuple[Any, ...]) -> None:
-    """Validate contract skill definitions."""
+    """Compatibility wrapper for legacy skill-named callers."""
 
-    validate_contract_skill_registry(skills)
+    validate_tool_registry(skills)
 
 
 def create_registry_snapshot(
     *,
     skills: tuple[Any, ...],
     artifact_store: ArtifactStore,
-) -> SkillRegistrySnapshot:
+) -> ToolRegistrySnapshot:
     """Create immutable registry snapshot artifact for plan pinning."""
 
     return create_contract_registry_snapshot(
@@ -165,7 +184,7 @@ def load_registry_snapshot_from_artifact(
     *,
     artifact_ref: str,
     artifact_store: ArtifactStore,
-) -> SkillRegistrySnapshot:
+) -> ToolRegistrySnapshot:
     """Load registry snapshot from immutable artifact storage."""
 
     return load_contract_registry_snapshot_from_artifact(
@@ -175,6 +194,8 @@ def load_registry_snapshot_from_artifact(
 
 
 __all__ = [
+    "ToolRegistryError",
+    "ToolRegistrySnapshot",
     "SkillRegistryError",
     "SkillRegistrySnapshot",
     "configured_stage_skills",
@@ -183,8 +204,11 @@ __all__ = [
     "get_stage_adapter",
     "load_registry_snapshot_from_artifact",
     "load_skill_registry",
+    "load_tool_registry",
     "parse_skill_registry",
+    "parse_tool_registry",
     "resolve_stage_execution",
     "skill_requires_speckit",
     "validate_skill_registry",
+    "validate_tool_registry",
 ]

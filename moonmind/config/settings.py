@@ -1804,7 +1804,7 @@ class TaskProposalSettings(BaseSettings):
         if invalid:
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
-                "task_proposals.severity_vocabulary must be subset of: " f"{allowed}"
+                f"task_proposals.severity_vocabulary must be subset of: {allowed}"
             )
         ordered = tuple(
             token for token in _ALLOWED_PROPOSAL_SEVERITIES if token in normalized

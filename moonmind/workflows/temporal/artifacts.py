@@ -877,7 +877,7 @@ class TemporalArtifactService:
 
     @staticmethod
     def _coerce_execution_ref(
-        link: dict[str, Any] | ExecutionRef | None
+        link: dict[str, Any] | ExecutionRef | None,
     ) -> ExecutionRef | None:
         if link is None:
             return None

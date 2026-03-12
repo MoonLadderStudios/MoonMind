@@ -219,11 +219,7 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 
     task_context = tmp_path / "task_context.json"
     task_context.write_text(
-        (
-            "{"
-            '"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low"}'
-            "}"
-        ),
+        ('{"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low"}}'),
         encoding="utf-8",
     )
     args = type(
@@ -297,7 +293,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     with patch.object(httpx, "AsyncClient", FakeAsyncClient):
         submission = _make_submission(module)
-        created, errors = asyncio.get_event_loop().run_until_complete(
+        created, errors = asyncio.run(
             submit_jobs_via_http(
                 [submission],
                 moonmind_url="http://api:5000",
@@ -336,9 +332,7 @@ def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
     # patch.dict doesn't work for runpy'd modules because the function's __globals__
     # dict IS the module dict; we must mutate it in place via setitem.
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_http", fake_http)
-    created, errors = asyncio.get_event_loop().run_until_complete(
-        submit_jobs([submission])
-    )
+    created, errors = asyncio.run(submit_jobs([submission]))
 
     assert http_called == ["http://api:5000"]
     assert len(created) == 1
@@ -361,9 +355,7 @@ def test_submit_jobs_falls_back_when_no_url(monkeypatch: Any) -> None:
     submission = _make_submission(module)
 
     monkeypatch.setitem(submit_jobs.__globals__, "_submit_jobs_via_db", fake_db)
-    created, errors = asyncio.get_event_loop().run_until_complete(
-        submit_jobs([submission])
-    )
+    created, errors = asyncio.run(submit_jobs([submission]))
 
     assert db_called == [True]
     assert len(created) == 1

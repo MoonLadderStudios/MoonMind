@@ -62,7 +62,7 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
 
   ```python
   @workflow.defn
-  async def RunPlanWorkflow(ctx, plan_ref: ArtifactRef):
+  async def RunPlanWorkflow(ctx, plan_ref: ArtifactRef):  # iterates over ready Steps and calls ToolDefinitions.
       plan = await activities.load_plan(plan_ref)           # Activity reads/validates plan artifact
       validate_plan_structure(plan)                        # cheap checks in workflow
       ready = find_ready_nodes(plan)

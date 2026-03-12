@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -80,21 +81,37 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
 
 
 @pytest.mark.asyncio
-async def test_run_execution_stage_extracts_logs_ref_from_activity_result(
+async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
-    captured: dict[str, object] = {}
+    captured: list[tuple[str, dict[str, object]]] = []
 
     async def fake_execute_activity(
         activity_type: str,
         payload: dict[str, object],
         **_kwargs: object,
-    ) -> dict[str, str | int]:
-        captured["activity_type"] = activity_type
-        captured["payload"] = payload
-        return {"diagnostics_ref": "art_logs_1", "exit_code": 0}
+    ) -> object:
+        captured.append((activity_type, payload))
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "metadata": {
+                        "registry_snapshot": {"artifact_ref": "art_registry_1"}
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST"},
+                    "nodes": [
+                        {
+                            "id": "step-1",
+                            "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                            "inputs": {"repo_ref": "git:org/repo#branch"},
+                            "options": {},
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+        return {"status": "SUCCEEDED", "outputs": {}}
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -128,8 +145,7 @@ async def test_run_execution_stage_extracts_logs_ref_from_activity_result(
         plan_ref="art_plan_1",
     )
 
-    assert captured["activity_type"] == "sandbox.run_command"
-    payload = captured["payload"]
-    assert isinstance(payload, dict)
-    assert payload["cmd"] == "echo executing"
-    assert workflow._logs_ref == "art_logs_1"
+    assert captured[0][0] == "artifact.read"
+    assert captured[0][1]["artifact_ref"] == "art_plan_1"
+    assert captured[1][0] == "mm.skill.execute"
+    assert captured[1][1]["registry_snapshot_ref"] == "art_registry_1"

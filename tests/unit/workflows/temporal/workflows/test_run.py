@@ -1,3 +1,4 @@
+import json
 import unittest
 from typing import Any, Dict
 
@@ -24,6 +25,8 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
+ARTIFACT_READ_CALLS: list[Dict[str, Any]] = []
+SKILL_EXECUTE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_STATUS_CALLS: list[Dict[str, Any]] = []
@@ -84,6 +87,34 @@ async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"plan_ref": "artifact://plan/123"}
 
 
+@activity.defn(name="artifact.read")
+async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
+    ARTIFACT_READ_CALLS.append(args)
+    payload = {
+        "metadata": {
+            "registry_snapshot": {
+                "artifact_ref": "artifact://registry/123",
+            }
+        },
+        "policy": {"failure_mode": "FAIL_FAST"},
+        "nodes": [
+            {
+                "id": "step-1",
+                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                "inputs": {"repo_ref": "git:moonmind"},
+                "options": {},
+            }
+        ],
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
+@activity.defn(name="mm.skill.execute")
+async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
+    SKILL_EXECUTE_CALLS.append(args)
+    return {"status": "SUCCEEDED", "outputs": {}}
+
+
 @activity.defn(name="sandbox.run_command")
 async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
     SANDBOX_COMMAND_CALLS.append(args)
@@ -107,6 +138,8 @@ async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
 class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         PLAN_GENERATE_CALLS.clear()
+        ARTIFACT_READ_CALLS.clear()
+        SKILL_EXECUTE_CALLS.clear()
         SANDBOX_COMMAND_CALLS.clear()
         INTEGRATION_START_CALLS.clear()
         INTEGRATION_STATUS_CALLS.clear()
@@ -114,23 +147,32 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
     async def test_moonmind_run_workflow(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
             await _register_test_search_attributes(env)
-            async with Worker(
-                env.client,
-                task_queue=LLM_TASK_QUEUE,
-                activities=[mock_plan_generate],
-            ), Worker(
-                env.client,
-                task_queue=SANDBOX_TASK_QUEUE,
-                activities=[mock_sandbox_command],
-            ), Worker(
-                env.client,
-                task_queue=INTEGRATIONS_TASK_QUEUE,
-                activities=[mock_integration_start, mock_integration_status],
-            ), Worker(
-                env.client,
-                task_queue="test-task-queue",
-                workflows=[MoonMindRunWorkflow],
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[
+                        mock_plan_generate,
+                        mock_artifact_read,
+                        mock_skill_execute,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=SANDBOX_TASK_QUEUE,
+                    activities=[mock_sandbox_command],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                    activities=[mock_integration_start, mock_integration_status],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
             ):
                 request = {
                     "workflowType": "MoonMind.Run",
@@ -154,7 +196,8 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 result = await handle.result()
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
-                self.assertEqual(SANDBOX_COMMAND_CALLS[0]["principal"], "trusted-owner")
+                self.assertEqual(ARTIFACT_READ_CALLS[0]["principal"], "trusted-owner")
+                self.assertEqual(SKILL_EXECUTE_CALLS[0]["principal"], "trusted-owner")
                 self.assertEqual(
                     INTEGRATION_START_CALLS[0]["principal"], "trusted-owner"
                 )
@@ -162,19 +205,27 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
     async def test_moonmind_run_workflow_ignores_untrusted_owner_payload(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:
             await _register_test_search_attributes(env)
-            async with Worker(
-                env.client,
-                task_queue=LLM_TASK_QUEUE,
-                activities=[mock_plan_generate],
-            ), Worker(
-                env.client,
-                task_queue=SANDBOX_TASK_QUEUE,
-                activities=[mock_sandbox_command],
-            ), Worker(
-                env.client,
-                task_queue="test-task-queue",
-                workflows=[MoonMindRunWorkflow],
-                workflow_runner=UnsandboxedWorkflowRunner(),
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[
+                        mock_plan_generate,
+                        mock_artifact_read,
+                        mock_skill_execute,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=SANDBOX_TASK_QUEUE,
+                    activities=[mock_sandbox_command],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
             ):
                 result = await env.client.execute_workflow(
                     MoonMindRunWorkflow.run,
@@ -190,7 +241,8 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(PLAN_GENERATE_CALLS[0]["principal"], "trusted-owner")
-        self.assertEqual(SANDBOX_COMMAND_CALLS[0]["principal"], "trusted-owner")
+        self.assertEqual(ARTIFACT_READ_CALLS[0]["principal"], "trusted-owner")
+        self.assertEqual(SKILL_EXECUTE_CALLS[0]["principal"], "trusted-owner")
 
     async def test_moonmind_run_workflow_validation_error(self) -> None:
         async with await WorkflowEnvironment.start_time_skipping() as env:

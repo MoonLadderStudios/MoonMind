@@ -165,7 +165,7 @@ def test_download_artifact_success(client: tuple[TestClient, AsyncMock]) -> None
 
 
 def test_upload_artifact_too_large_maps_413(
-    client: tuple[TestClient, AsyncMock]
+    client: tuple[TestClient, AsyncMock],
 ) -> None:
     """Size validation errors should map to HTTP 413."""
 

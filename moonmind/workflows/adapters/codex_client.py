@@ -114,8 +114,7 @@ class CodexClient:
                 encoding="utf-8",
             )
             description = (
-                "Simulated Codex patch for "
-                f"{task_identifier}: {task_summary.strip()}"
+                f"Simulated Codex patch for {task_identifier}: {task_summary.strip()}"
             )
             return CodexDiffResult(
                 patch_path=patch_path,

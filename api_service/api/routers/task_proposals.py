@@ -47,7 +47,7 @@ async def _get_service(
 
 
 def _build_task_preview(
-    task_request: dict[str, object]
+    task_request: dict[str, object],
 ) -> TaskProposalTaskPreview | None:
     payload = task_request.get("payload") if isinstance(task_request, dict) else None
     if not isinstance(payload, dict):

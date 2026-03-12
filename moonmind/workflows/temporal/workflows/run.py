@@ -1,9 +1,10 @@
 import asyncio
+import json
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
-from temporalio import workflow
+from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
@@ -89,9 +90,15 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
-        workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
-            input_payload
-        )
+        try:
+            workflow_type, parameters, input_ref, plan_ref = (
+                self._initialize_from_payload(input_payload)
+            )
+        except ValueError as exc:
+            raise exceptions.ApplicationError(
+                str(exc),
+                non_retryable=True,
+            ) from exc
         workflow.logger.info(
             "Starting MoonMind.Run workflow",
             extra={"workflow_type": workflow_type},
@@ -215,13 +222,15 @@ class MoonMindRunWorkflow:
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
+        if plan_ref is None:
+            raise ValueError(
+                "plan_ref is required for execution stage: the planning stage must "
+                "produce a plan artifact reference before execution can proceed. "
+                "Ensure the planning activity returns a non-None 'plan_ref'."
+            )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
-        if not plan_ref:
-            raise ValueError("plan_ref is required for execution stage")
-
-        # 1. Read the plan from plan_ref
         plan_payload = await workflow.execute_activity(
             "artifact.read",
             {
@@ -232,43 +241,57 @@ class MoonMindRunWorkflow:
             task_queue=LLM_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
         )
-
-        import json
-
         plan_dict = (
-            json.loads(
-                plan_payload
+            json.loads(plan_payload.decode("utf-8"))
+            if isinstance(plan_payload, bytes)
+            else (
+                json.loads(plan_payload)
                 if isinstance(plan_payload, str)
-                else plan_payload.decode("utf-8")
+                else plan_payload
             )
-            if isinstance(plan_payload, (str, bytes))
-            else plan_payload
+        )
+        if not isinstance(plan_dict, Mapping):
+            raise ValueError("plan_ref must resolve to a JSON object")
+
+        nodes = plan_dict.get("nodes")
+        if not isinstance(nodes, list):
+            raise ValueError("plan payload must include a nodes array")
+
+        registry_snapshot_ref = (
+            plan_dict.get("metadata", {})
+            .get("registry_snapshot", {})
+            .get("artifact_ref")
+        )
+        failure_mode = (
+            str(plan_dict.get("policy", {}).get("failure_mode") or "FAIL_FAST")
+            .strip()
+            .upper()
         )
 
-        nodes = plan_dict.get("nodes", [])
-
-        # 2 & 3. Dispatch each node
         for node in nodes:
-            skill = node.get("skill", {})
-            skill_name = skill.get("name", "auto")
-            skill_version = skill.get("version", "1.0")
+            if not isinstance(node, Mapping):
+                raise ValueError("plan nodes must be objects")
+            skill = node.get("skill")
+            if not isinstance(skill, Mapping):
+                raise ValueError("plan node skill definition is required")
 
             invocation_payload = {
                 "id": node.get("id"),
-                "skill": {"name": skill_name, "version": skill_version},
+                "skill": {
+                    "name": skill.get("name"),
+                    "version": skill.get("version"),
+                },
                 "inputs": node.get("inputs", {}),
                 "options": node.get("options", {}),
             }
 
             try:
-                skill_result = await workflow.execute_activity(
+                await workflow.execute_activity(
                     "mm.skill.execute",
                     {
                         "invocation_payload": invocation_payload,
                         "principal": self._principal(),
-                        "registry_snapshot_ref": plan_dict.get("metadata", {})
-                        .get("registry_snapshot", {})
-                        .get("artifact_ref"),
+                        "registry_snapshot_ref": registry_snapshot_ref,
                         "context": {
                             "workflow_id": workflow.info().workflow_id,
                             "run_id": workflow.info().run_id,
@@ -279,11 +302,7 @@ class MoonMindRunWorkflow:
                     task_queue=LLM_TASK_QUEUE,
                     retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
                 )
-            except Exception as exc:
-                workflow.logger.error(f"Skill execution failed: {exc}")
-                failure_mode = plan_dict.get("policy", {}).get(
-                    "failure_mode", "FAIL_FAST"
-                )
+            except Exception:
                 if failure_mode == "FAIL_FAST":
                     raise
 
@@ -426,8 +445,9 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise ValueError(
-                "Trusted owner metadata is required in Temporal search attributes"
+            raise exceptions.ApplicationError(
+                "Trusted owner metadata is required in Temporal search attributes",
+                non_retryable=True,
             )
         return owner_type, owner_id
 

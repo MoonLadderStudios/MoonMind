@@ -393,10 +393,16 @@ class SpecAutomationTaskState(Base):
                 return value.strip() or None
             return None
 
-        selected_skill = _coerce_str(metadata.get("selectedSkill"))
+        selected_skill = _coerce_str(
+            metadata.get("selectedTool") or metadata.get("selectedSkill")
+        )
         adapter_id = _coerce_str(metadata.get("adapterId"))
         execution_path = _coerce_str(metadata.get("executionPath"))
-        used_skills = metadata.get("usedSkills")
+        used_skills = (
+            metadata.get("usedTools")
+            if "usedTools" in metadata
+            else metadata.get("usedSkills")
+        )
         used_fallback = metadata.get("usedFallback")
         shadow_mode_requested = metadata.get("shadowModeRequested")
 
@@ -432,10 +438,10 @@ class SpecAutomationTaskState(Base):
             return None
 
         return {
-            "selectedSkill": selected_skill,
+            "selectedTool": selected_skill,
             "adapterId": adapter_id,
             "executionPath": execution_path,
-            "usedSkills": used_skills_bool,
+            "usedTools": used_skills_bool,
             "usedFallback": used_fallback_bool,
             "shadowModeRequested": shadow_mode_bool,
         }

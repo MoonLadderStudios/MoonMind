@@ -1025,11 +1025,11 @@ class CodexWorkerConfig:
             ) from exc
         if step_log_max_bytes < _MIN_STEP_LOG_MAX_BYTES:
             raise ValueError(
-                "MOONMIND_STEP_LOG_MAX_BYTES must be >= " f"{_MIN_STEP_LOG_MAX_BYTES}"
+                f"MOONMIND_STEP_LOG_MAX_BYTES must be >= {_MIN_STEP_LOG_MAX_BYTES}"
             )
         if step_log_max_bytes > _MAX_STEP_LOG_MAX_BYTES:
             raise ValueError(
-                "MOONMIND_STEP_LOG_MAX_BYTES must be <= " f"{_MAX_STEP_LOG_MAX_BYTES}"
+                f"MOONMIND_STEP_LOG_MAX_BYTES must be <= {_MAX_STEP_LOG_MAX_BYTES}"
             )
 
         return cls(
@@ -8933,20 +8933,23 @@ class CodexWorker:
                     "effectiveSkill": step.effective_skill_id,
                 },
             )
-            step_result, timeout_error, timeout_reason, attempt_duration_seconds = (
-                await self._run_codex_step_attempt(
-                    job_id=job_id,
-                    canonical_payload=canonical_payload,
-                    source_payload=source_payload,
-                    runtime_model=runtime_model,
-                    runtime_effort=runtime_effort,
-                    step=step,
-                    total_steps=total_steps,
-                    self_heal_config=self_heal_config,
-                    cancel_event=cancel_event,
-                    output_callback=base_callback,
-                    attempt_started_monotonic=attempt_started_monotonic,
-                )
+            (
+                step_result,
+                timeout_error,
+                timeout_reason,
+                attempt_duration_seconds,
+            ) = await self._run_codex_step_attempt(
+                job_id=job_id,
+                canonical_payload=canonical_payload,
+                source_payload=source_payload,
+                runtime_model=runtime_model,
+                runtime_effort=runtime_effort,
+                step=step,
+                total_steps=total_steps,
+                self_heal_config=self_heal_config,
+                cancel_event=cancel_event,
+                output_callback=base_callback,
+                attempt_started_monotonic=attempt_started_monotonic,
             )
             if step_result.succeeded:
                 metrics.record_step_duration(

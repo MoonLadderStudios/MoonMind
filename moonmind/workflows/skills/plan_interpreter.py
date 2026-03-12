@@ -9,9 +9,13 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from .artifact_store import ArtifactStore
 from .plan_validation import PlanValidationError, ValidatedPlan, validate_plan
-from .skill_plan_contracts import SkillFailure, SkillInvocation, SkillResult
-from .skill_registry import SkillRegistrySnapshot
+from .tool_plan_contracts import Step, ToolFailure, ToolResult
+from .tool_registry import ToolRegistrySnapshot
 
+SkillFailure = ToolFailure
+SkillInvocation = Step
+SkillResult = ToolResult
+SkillRegistrySnapshot = ToolRegistrySnapshot
 SkillExecutor = Callable[[SkillInvocation], SkillResult | Awaitable[SkillResult]]
 
 

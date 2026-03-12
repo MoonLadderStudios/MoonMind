@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .skill_plan_contracts import (
+from .tool_plan_contracts import (
     ARTIFACT_REF_PREFIX,
     REGISTRY_DIGEST_PREFIX,
     SUPPORTED_FAILURE_MODES,
@@ -17,18 +17,26 @@ from .skill_plan_contracts import (
     PlanMetadata,
     PlanPolicy,
     PlanRegistrySnapshot,
-    SkillDefinition,
-    SkillExecutorBinding,
-    SkillFailure,
-    SkillInvocation,
     SkillPolicies,
     SkillPolicyRetries,
     SkillPolicyTimeouts,
-    SkillResult,
+    Step,
+    ToolDefinition,
+    ToolExecutorBinding,
+    ToolFailure,
+    ToolResult,
     parse_plan_definition,
-    parse_skill_definition,
-    parse_skill_invocation,
+    parse_step,
+    parse_tool_definition,
 )
+
+SkillDefinition = ToolDefinition
+SkillExecutorBinding = ToolExecutorBinding
+SkillFailure = ToolFailure
+SkillInvocation = Step
+SkillResult = ToolResult
+parse_skill_definition = parse_tool_definition
+parse_skill_invocation = parse_step
 
 
 @dataclass(frozen=True, slots=True)

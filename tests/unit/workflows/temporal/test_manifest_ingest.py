@@ -565,15 +565,16 @@ async def test_manifest_activities_compile_plan_and_write_summary(
                 requested_by={"type": "user", "id": "user-1"},
                 execution_policy={"failurePolicy": "fail_fast", "maxConcurrency": 2},
             )
-            summary_ref, run_index_ref = (
-                await manifest_activities.manifest_write_summary(
-                    principal="user-1",
-                    workflow_id="mm:manifest-1",
-                    state="executing",
-                    phase="executing",
-                    manifest_ref=completed.artifact_id,
-                    plan_ref=compile_result.plan_ref.artifact_id,
-                )
+            (
+                summary_ref,
+                run_index_ref,
+            ) = await manifest_activities.manifest_write_summary(
+                principal="user-1",
+                workflow_id="mm:manifest-1",
+                state="executing",
+                phase="executing",
+                manifest_ref=completed.artifact_id,
+                plan_ref=compile_result.plan_ref.artifact_id,
             )
             _summary_artifact, summary_payload = await artifact_service.read(
                 artifact_id=summary_ref.artifact_id,

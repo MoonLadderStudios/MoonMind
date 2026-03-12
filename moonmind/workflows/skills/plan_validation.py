@@ -1,4 +1,4 @@
-"""Plan schema and DAG validation against pinned skill registry snapshots."""
+"""Plan schema and DAG validation against pinned tool registry snapshots."""
 
 from __future__ import annotations
 

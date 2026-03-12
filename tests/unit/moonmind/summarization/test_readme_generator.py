@@ -9,7 +9,6 @@ from moonmind.summarization.readme_generator import ReadmeAiGenerator
 
 
 class TestReadmeAiGenerator(unittest.IsolatedAsyncioTestCase):
-
     def test_init(self):
         """Test the initialization of ReadmeAiGenerator with and without config."""
         # Default initialization

@@ -8,16 +8,21 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: pytest-unit-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - name: Check out code
       uses: actions/checkout@v6
       with:
-        ref: ${{ github.head_ref || github.ref }}
+        fetch-depth: 1
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
@@ -37,24 +42,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         python -m pip install -e .[tests]
-        python -m pip install pre-commit readmeai~=0.6.0
-    - name: Run pre-commit
-      id: pre_commit
-      run: pre-commit run --all-files
-      continue-on-error: true
-    - name: Commit changes
-      id: auto_commit
-      uses: stefanzweifel/git-auto-commit-action@v7
-      with:
-        commit_message: "style: auto-fixes from pre-commit"
-    - name: Fail if pre-commit failed and no changes were auto-fixed
-      if: steps.pre_commit.outcome == 'failure' && steps.auto_commit.outputs.changes_detected == 'false'
-      run: exit 1
-    - name: Set up Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '20'
-        cache: 'npm'
+    - name: Verify Node.js runtime
+      run: |
+        node --version
+        npm --version
     - name: Install Node dependencies
       run: npm ci
     - name: Verify dashboard CSS build is in sync
@@ -63,8 +54,9 @@ jobs:
         git diff --exit-code -- api_service/static/task_dashboard/dashboard.css
     - name: Run pytest unit tests
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
+        set -euo pipefail
         ./tools/test_unit.sh
 
 
