@@ -1,56 +1,102 @@
-# Temporal Transition Plan
+# Temporal Remaining Work
 
-Based on the provided documentation, MoonMind currently has a **"Temporal-shaped staging implementation"** but has not yet fully transitioned to a real Temporal-backed execution system.
+This is the canonical Temporal migration backlog. Do not create or use a separate
+`TemporalMigrationPlan.md`; that content is merged here.
 
-While substantial foundational work is complete—including Docker Compose services, UI plumbing, worker topologies, activity handlers, and an execution API—the local database currently acts as the authority rather than Temporal itself.
+## Priority 0: Remove Active Placeholders and Dummy Paths
 
-Here is a deep dive into the major work remaining to achieve a fully Temporal-based workflow execution system:
+- [ ] Replace `_dummy_planner` in `moonmind/workflows/temporal/worker_runtime.py`
+      with a real planner implementation/wiring.
+  - Current placeholder output still emits `reg:sha256:dummy` and
+    `art:sha256:dummy`, which causes downstream `artifact.read` failures.
+  - Remove dummy plan node defaults (`dummy-node`, `dummy.skill`) from runtime paths.
+- [ ] Add fail-fast behavior for planner wiring.
+  - If planner dependency is missing, startup/configuration should fail before run
+    execution, rather than generating placeholder refs.
+- [ ] Add a regression unit test that proves `plan.generate` in real runtime
+      cannot return placeholder registry snapshot refs.
 
-## 1. Core Runtime and Workflow Definitions
+## Priority 1: Worker Runtime and Fleet Completeness
 
-Currently, workers can start but default to idling (e.g., `sleep infinity`), and state transitions are managed by an application-level state machine. The following must be built:
+- [ ] Validate each Temporal fleet (`workflow`, `artifacts`, `llm`, `sandbox`,
+      `integrations`) boots as an active polling worker with expected
+      workflows/activities registered.
+- [ ] Keep worker launch defaults pointed to
+      `python -m moonmind.workflows.temporal.worker_runtime` in compose/runtime
+      for Temporal worker services.
+- [ ] Add/maintain startup diagnostics proving queue bindings and registered
+      activity types per fleet.
+- [ ] Harden generic runtime execution behavior in `_auto_skill_handler`:
+  - Validate runtime mode explicitly and fail for unsupported values.
+  - Keep model/effort passthrough exact (no silent compatibility transforms).
+  - Remove implicit placeholder defaults that can mask malformed input payloads.
 
-* **Real Temporal Worker Runtime:** Implement a long-running worker process that actively connects to the Temporal Server, registers workflows/activities, and polls configured task queues instead of idling.
-* **`MoonMind.Run` Workflow:** Create the actual Temporal workflow definition to own the standard task execution lifecycle (initializing, planning, executing, awaiting_external, finalizing) and handle terminal outcomes.
-* **`MoonMind.ManifestIngest` Workflow:** Implement a dedicated Temporal workflow for manifest ingest that can orchestrate child runs, emit durable statuses, and compile manifests.
+## Priority 2: Temporal as Source of Truth
 
-## 2. Shifting the Source of Truth to Temporal
+- [ ] Keep `TemporalExecutionService` operations Temporal-authoritative for create,
+      list, detail, signal/update, and cancel.
+- [ ] Maintain projection sync as a read model only (idempotent rehydrate from
+      Temporal describe/list data).
+- [ ] Ensure no new code path mutates local DB state as workflow authority.
 
-Currently, MoonMind generates execution IDs and manages state via local DB records. This architecture must be inverted so Temporal acts as the absolute authority:
+## Priority 3: Artifact System Completion
 
-* **Temporal Client Layer:** Introduce a client layer to talk directly to the Temporal Server for starts, lists, signals, and cancellations. It must retrieve real Temporal `workflowId` and `runId` values rather than generating local IDs first.
-* **Temporal-Authoritative Execution Service:** Refactor the `TemporalExecutionService` to act as an adapter over Temporal. Operations like list, describe, update, and cancel must query or mutate real Temporal workflows.
-* **Projection Sync:** Convert local execution tables into read-only projections and compatibility caches. These local records must be downstream mirrors constructed idempotently from Temporal state, memo fields, and search attributes.
+- [ ] Enforce strict artifact reference validity end-to-end.
+  - Planning output must include resolvable artifact refs only.
+  - `artifact.read` call sites must receive persisted refs, never placeholders.
+- [ ] Preserve the artifact link contract for execution-scoped writes
+      (`namespace`, `workflow_id`, `run_id`, `link_type`).
+- [ ] Ensure run/manifest flows always persist and expose expected refs
+      (`input`, `plan`, `summary`, `logs`, manifest/node outputs) for Mission Control.
+- [ ] Keep `ArtifactRef` v1 usage consistent in API and UI projection payloads.
 
-## 3. Handling Side Effects, Actions, and Integrations
+## Priority 4: Mission Control Cutover
 
-The system must safely handle large payloads, operator actions, and external integrations without breaking workflow durability:
+- [ ] Keep list/detail views sourced from Temporal-authoritative state and
+      projection cache only.
+- [ ] Ensure run actions (pause/resume/approve/cancel/rerun variants) map to
+      workflow signals/updates, not local-only state flips.
+- [ ] Enable Temporal dashboard submit/actions flags by default only after
+      end-to-end acceptance criteria are met.
+- [ ] Keep `/tasks` default routing on Temporal execution list and remove stale
+      legacy-first navigation paths after cutover completion.
 
-* **Move Actions to Updates/Signals:** Mission Control UI actions (Pause, Resume, Approve, Rerun, Cancel, etc.) must be mapped to real Temporal update and signal handlers with workflow-side validation.
-* **Artifact Wiring:** Activity handlers must be invoked by real workflows. To keep workflow histories compact, large outputs (like instructions, test outputs, or plan outputs) must be stored in the artifact backend, passing only reference links into the workflow history.
-* **Integration Polling & Callbacks:** Integration monitoring must be moved into the workflow layer using durable waiting states, activities, and timers, rather than relying on local record mutations.
+## Priority 5: Integrations and External Wait States
 
-## 4. Mission Control (UI) and Production Routing
+- [ ] Keep callback correlation and resume behavior durable through Temporal
+      signals and workflow waiting state.
+- [ ] Confirm integration polling backoff and terminal state handling produce
+      correct user-visible waiting reason / final status projection.
 
-The frontend is scaffolded but needs to be wired to authoritative backend data:
+## Priority 6: Test and Release Gate
 
-* **List and Detail Authority:** APIs must provide fully authoritative Temporal data (status, state, waiting reasons, artifact refs) to the Mission Control dashboard without relying on local DB approximations.
-* **Enable UI Actions & Submission:** Once the backend is stable, the `actionsEnabled` and `submitEnabled` feature flags (under the `temporalDashboard` feature) must be turned on to allow users to create and act on Temporal-backed tasks natively.
-* **Production Routing Policy:** Define deterministic, maintainable backend routing policies to resolve whether a task runs on the legacy queue, orchestrator, or Temporal.
+- [ ] Unit tests for:
+  - planner wiring failure mode (no dummy fallback in production path),
+  - artifact read failure surfacing for invalid refs,
+  - worker binding/registration by fleet,
+  - signal/update action routing and validation.
+- [ ] End-to-end test for Temporal run lifecycle:
+  - submit run, generate/resolve plan, execute activities, persist artifact refs,
+    perform at least one operator action, verify final status in API/UI model.
+- [ ] Local bring-up docs remain accurate for compose services and worker startup.
 
-## 5. Testing and Developer Experience
+## Merged Migration Tasks (from former `TemporalMigrationPlan.md`)
 
-To ensure stability and usability for engineering teams:
+- [ ] Launch polling workers by default.
+- [ ] Complete and harden `MoonMind.Run`.
+- [ ] Complete and harden `MoonMind.ManifestIngest`.
+- [ ] Keep Temporal client layer authoritative for start/list/describe.
+- [ ] Maintain Temporal-authoritative execution service.
+- [ ] Maintain DB projection sync from Temporal.
+- [ ] Keep UI actions mapped to workflow signals/updates.
+- [ ] Keep large outputs externalized via artifact storage.
+- [ ] Keep integrations modeled as durable workflow wait states.
+- [ ] Keep list/detail APIs consistent with Temporal visibility/projections.
+- [ ] Finalize dashboard feature flag rollout.
+- [ ] Maintain local bring-up and full E2E acceptance path.
 
-* **Local Bring-up Path:** Document a standardized, reproducible local development path with properly configured Docker Compose defaults.
-* **End-to-End Acceptance Test:** Write a comprehensive E2E test that proves the real user path—creating a task, letting an activity execute, validating artifact linkage, fetching details, and performing an operator action.
+## Documentation Follow-up
 
-**Release Gate:** The switchover will only be considered complete when real workers poll queues by default, a task can be fully created and operated on via Mission Control using Temporal, artifacts link properly, and the E2E acceptance test passes.
-
-## 6. UI Acceptance Criteria
-
-The following conditions must be met to consider the UI fully migrated to Temporal:
-1. **Primary Navigation**: The legacy "Tasks" and "Orchestrator" dashboard navigation links are removed from `task_dashboard.html`. The "Temporal" view is visible and serves as the primary task management interface.
-2. **Default Routing**: Visiting the root `/tasks` path automatically directs users to the Temporal execution list (`/tasks/list?source=temporal`) rather than the legacy queue.
-3. **Task Submission Defaults**: New task submissions from the UI must durably create a Temporal workflow via `POST /api/executions` under the hood, completely skipping legacy `/api/queue/jobs` logic.
-4. **Action Buttons Enabled**: All run operation buttons (Pause, Resume, Approve, Cancel) in the Temporal detail view function accurately by invoking backend Temporal signals.
+- [ ] Update `docs/Temporal/TemporalAgentExecution.md` where it still describes
+      execution-stage stubs that no longer match the current workflow
+      implementation.
