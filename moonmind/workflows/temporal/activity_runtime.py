@@ -1275,6 +1275,34 @@ class TemporalJulesActivities:
         return tuple(output_refs)
 
 
+def _build_activity_wrapper(
+    func: Callable[..., Any],
+) -> Callable[[Any, Any], Awaitable[Any]]:
+    params = list(inspect.signature(func).parameters.values())
+    non_self_params = params[1:] if params else []
+    accepts_positional_request = bool(non_self_params) and non_self_params[0].kind in {
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    }
+    accepts_request_keyword = any(param.name == "request" for param in non_self_params)
+    accepts_var_kwargs = any(
+        param.kind is inspect.Parameter.VAR_KEYWORD for param in non_self_params
+    )
+
+    async def _wrapper(self, request=None):
+        if accepts_positional_request:
+            return await func(self, request)
+        if isinstance(request, Mapping):
+            return await func(self, **request)
+        if request is None:
+            return await func(self)
+        if accepts_request_keyword or accepts_var_kwargs:
+            return await func(self, request=request)
+        return await func(self, request)
+
+    return _wrapper
+
+
 def build_activity_bindings(
     catalog: TemporalActivityCatalog,
     *,
@@ -1327,14 +1355,7 @@ def build_activity_bindings(
             )
 
         if not hasattr(func, "__temporal_activity_definition"):
-
-            def make_wrapper(f):
-                async def _wrapper(self, request=None):
-                    return await f(self, request)
-
-                return _wrapper
-
-            _wrapper = make_wrapper(func)
+            _wrapper = _build_activity_wrapper(func)
 
             _wrapper.__name__ = func.__name__
             _wrapper.__qualname__ = func.__qualname__
@@ -1372,13 +1393,7 @@ def build_activity_bindings(
             if not hasattr(func, "__temporal_activity_definition"):
                 from temporalio import activity
 
-                def make_wrapper(f):
-                    async def _wrapper(self, request=None):
-                        return await f(self, request)
-
-                    return _wrapper
-
-                _wrapper = make_wrapper(func)
+                _wrapper = _build_activity_wrapper(func)
 
                 _wrapper.__name__ = func.__name__
                 _wrapper.__qualname__ = func.__qualname__

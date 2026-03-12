@@ -44,6 +44,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    build_artifact_ref,
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
@@ -658,6 +659,142 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                 binding.handler.__name__ == "artifact_lifecycle_sweep"
                 for binding in bindings
             )
+
+
+async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="application/json",
+            )
+            stored = await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="user-1",
+                payload=b'{"ok": true}',
+                content_type="application/json",
+            )
+            catalog = build_default_activity_catalog()
+
+            bindings = build_activity_bindings(
+                catalog,
+                artifact_activities=TemporalArtifactActivities(service),
+                fleets=(ARTIFACTS_FLEET,),
+            )
+            artifact_read_handler = next(
+                binding.handler
+                for binding in bindings
+                if binding.activity_type == "artifact.read"
+            )
+
+            payload = await artifact_read_handler(
+                {
+                    "artifact_ref": build_artifact_ref(stored),
+                    "principal": "user-1",
+                }
+            )
+
+            assert payload == b'{"ok": true}'
+
+
+async def test_build_activity_bindings_artifact_read_accepts_serialized_ref_mapping(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="application/json",
+            )
+            stored = await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="user-1",
+                payload=b'{"ok": true}',
+                content_type="application/json",
+            )
+            catalog = build_default_activity_catalog()
+            bindings = build_activity_bindings(
+                catalog,
+                artifact_activities=TemporalArtifactActivities(service),
+                fleets=(ARTIFACTS_FLEET,),
+            )
+            artifact_read_handler = next(
+                binding.handler
+                for binding in bindings
+                if binding.activity_type == "artifact.read"
+            )
+            serialized_ref = {
+                "artifact_id": stored.artifact_id,
+                "artifact_ref_v": 1,
+                "sha256": stored.sha256,
+                "size_bytes": stored.size_bytes,
+                "content_type": stored.content_type,
+                "encryption": stored.encryption,
+            }
+
+            payload = await artifact_read_handler(
+                {
+                    "artifact_ref": serialized_ref,
+                    "principal": "user-1",
+                }
+            )
+
+            assert payload == b'{"ok": true}'
+
+
+async def test_build_activity_bindings_injected_skill_handler_uses_request_mapping(
+    tmp_path: Path,
+):
+    class _KeywordOnlySkillActivities:
+        async def mm_skill_execute(
+            self,
+            *,
+            invocation_payload: Mapping[str, object],
+            principal: str,
+        ) -> dict[str, object]:
+            return {
+                "invocationId": invocation_payload.get("id"),
+                "principal": principal,
+            }
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            catalog = build_default_activity_catalog()
+            bindings = build_activity_bindings(
+                catalog,
+                artifact_activities=TemporalArtifactActivities(service),
+                skill_activities=_KeywordOnlySkillActivities(),
+                fleets=(ARTIFACTS_FLEET,),
+            )
+            skill_handler = next(
+                binding.handler
+                for binding in bindings
+                if binding.activity_type == "mm.skill.execute"
+            )
+
+            result = await skill_handler(
+                {
+                    "invocation_payload": {"id": "node-1"},
+                    "principal": "user-1",
+                }
+            )
+
+            assert result["invocationId"] == "node-1"
+            assert result["principal"] == "user-1"
 
 
 async def test_build_activity_bindings_requires_selected_family_implementation(

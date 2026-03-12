@@ -10,7 +10,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 import boto3
@@ -1849,6 +1849,27 @@ class TemporalArtifactActivities:
     def __init__(self, service: TemporalArtifactService) -> None:
         self._service = service
 
+    @staticmethod
+    def _normalize_activity_artifact_id(
+        artifact_ref: ArtifactRef | Mapping[str, Any] | str,
+    ) -> str:
+        if isinstance(artifact_ref, ArtifactRef):
+            return artifact_ref.artifact_id
+        if isinstance(artifact_ref, Mapping):
+            raw_artifact_id = artifact_ref.get("artifact_id") or artifact_ref.get(
+                "artifactId"
+            )
+            normalized = str(raw_artifact_id or "").strip()
+            if not normalized:
+                raise TemporalArtifactValidationError(
+                    "artifact_ref.artifact_id is required"
+                )
+            return normalized
+        normalized = str(artifact_ref or "").strip()
+        if not normalized:
+            raise TemporalArtifactValidationError("artifact_ref is required")
+        return normalized
+
     async def artifact_create(
         self, *, principal: str, **kwargs: Any
     ) -> tuple[ArtifactRef, ArtifactUploadDescriptor]:
@@ -1858,11 +1879,11 @@ class TemporalArtifactActivities:
     async def artifact_read(
         self,
         *,
-        artifact_ref: ArtifactRef,
+        artifact_ref: ArtifactRef | Mapping[str, Any] | str,
         principal: str,
     ) -> bytes:
         _artifact, payload = await self._service.read(
-            artifact_id=artifact_ref.artifact_id,
+            artifact_id=self._normalize_activity_artifact_id(artifact_ref),
             principal=principal,
         )
         return payload
