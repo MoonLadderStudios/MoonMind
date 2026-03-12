@@ -1,11 +1,11 @@
 # Implementation Plan: Activity Catalog and Worker Topology
 
-**Branch**: `047-activity-worker-topology` | **Date**: 2026-03-06 | **Spec**: `specs/047-activity-worker-topology/spec.md`  
-**Input**: Feature specification from `/specs/047-activity-worker-topology/spec.md`
+**Branch**: `060-activity-worker-topology` | **Date**: 2026-03-06 | **Spec**: `specs/060-activity-worker-topology/spec.md`  
+**Input**: Feature specification from `/specs/060-activity-worker-topology/spec.md`
 
 ## Summary
 
-Fully implement the canonical Temporal activity catalog and worker topology described in `docs/Temporal/ActivityCatalogAndWorkerTopology.md` using the existing Temporal catalog/runtime/artifact foundations as the seed implementation. The plan expands the current partial helpers into a runtime-complete system: stable activity contracts, capability-based routing, dedicated worker fleet entrypoints and Docker Compose services, artifact-backed payload discipline, explicit sandbox and integration execution boundaries, structured observability, and automated validation for routing, retry/idempotency, and security invariants.
+Maintain the canonical activity catalog/topology implementation and apply the 2026-03-12 runtime alignment delta from `docs/Temporal/WorkflowArtifactSystemDesign.md` and `docs/Temporal/TemporalAgentExecution.md`. The required delta focuses on execution-stage correctness: artifact reads must route on the artifact fleet, execution-stage node dispatch must be catalog-routed (`resolve_skill` when registry metadata is available), and workflow progress must remain visible through memo updates while honoring plan failure/edge semantics.
 
 ## Technical Context
 
@@ -34,7 +34,7 @@ Fully implement the canonical Temporal activity catalog and worker topology desc
 - **VII. Modular and Extensible Architecture**: PASS. The feature extends existing temporal, skills, adapter, and compose boundaries instead of introducing a parallel runtime model.
 - **VIII. Self-Healing by Default**: PASS. Idempotency keys, bounded retries, heartbeats, and artifact-backed diagnostics keep retries and operator recovery safe.
 - **IX. Facilitate Continuous Improvement**: PASS. Structured summaries, metrics, and diagnostics artifacts are explicit design outputs for operational feedback loops.
-- **X. Spec-Driven Development Is the Source of Truth**: PASS. `DOC-REQ-001` through `DOC-REQ-018` remain mapped to implementation surfaces and validation strategy in this plan package.
+- **X. Spec-Driven Development Is the Source of Truth**: PASS. `DOC-REQ-001` through `DOC-REQ-024` remain mapped to implementation surfaces and validation strategy in this plan package.
 
 ### Post-Design Re-Check
 
@@ -47,7 +47,7 @@ Fully implement the canonical Temporal activity catalog and worker topology desc
 ### Documentation (this feature)
 
 ```text
-specs/047-activity-worker-topology/
+specs/060-activity-worker-topology/
 ├── plan.md
 ├── research.md
 ├── data-model.md
@@ -62,6 +62,8 @@ specs/047-activity-worker-topology/
 
 ```text
 docs/Temporal/ActivityCatalogAndWorkerTopology.md
+docs/Temporal/WorkflowArtifactSystemDesign.md
+docs/Temporal/TemporalAgentExecution.md
 
 docker-compose.yaml
 services/temporal/
@@ -113,7 +115,7 @@ tests/
 
 ## Phase 0 - Research Summary
 
-Research outcomes in `specs/047-activity-worker-topology/research.md` establish:
+Research outcomes in `specs/060-activity-worker-topology/research.md` establish:
 
 1. Current `activity_catalog.py`, `activity_runtime.py`, and artifact services are the seed implementation and must be extended, not bypassed.
 2. v1 queue topology remains fixed to `mm.workflow` plus four activity queues, with one shared LLM queue for all providers.
@@ -134,6 +136,15 @@ Research outcomes in `specs/047-activity-worker-topology/research.md` establish:
 - **Traceability**: `contracts/requirements-traceability.md` maps every `DOC-REQ-*` to FRs, planned implementation surfaces, and validation strategy.
 - **Traceability Gate**: `tests/unit/specs/test_doc_req_traceability.py` keeps `DOC-REQ-*` mappings from drifting away from the spec package as runtime work lands.
 - **Execution Guide**: `quickstart.md` defines runtime-mode implementation and validation flow, including compose startup expectations and repository-standard test commands.
+
+## Phase 1.5 - March 2026 Runtime Alignment Delta
+
+- Route `artifact.read` in `MoonMind.Run` through the catalog-defined artifact queue (`mm.activity.artifacts`) to enforce the artifact activity boundary.
+- Remove execution-stage queue constant duplication by deriving activity task queue/timeout/retry behavior from `TemporalActivityCatalog` route metadata.
+- Parse plan artifacts via validated plan contracts, then honor plan edges and failure policy when dispatching nodes.
+- Resolve node routing with `resolve_skill` when pinned registry snapshot data is available, and fail clearly if a referenced skill is absent from the snapshot.
+- Update workflow memo summary on each node boundary so dashboard/operator views show active execution progress.
+- Extend workflow unit coverage to prove artifact queue routing and registry-aware node routing behavior.
 
 ## Implementation Strategy
 
@@ -204,8 +215,10 @@ Research outcomes in `specs/047-activity-worker-topology/research.md` establish:
 
 - Every `DOC-REQ-*` row must remain mapped to FRs, planned implementation surfaces, and validation strategy in `contracts/requirements-traceability.md`.
 - The v1 queue topology must remain `mm.workflow`, `mm.activity.artifacts`, `mm.activity.llm`, `mm.activity.sandbox`, and `mm.activity.integrations`, with provider-specific LLM queues deferred.
+- `MoonMind.Run` execution stage must route `artifact.read` on the artifact queue and must not hardcode non-artifact queues for artifact operations.
 - Activities must not upsert Search Attributes or Memo fields directly; workflow code remains the only visibility owner.
 - Capability routing must stay per activity invocation and must reject unsupported or unjustified explicit bindings instead of silently falling back.
+- Execution-stage skill dispatch must derive queue/timeouts from activity catalog routing (`resolve_skill` when registry metadata is available).
 - Each user story's independent test must appear in that story's task group rather than being deferred only to later hardening or final-polish phases.
 - Planning is invalid if it permits docs-only completion for this feature.
 

@@ -7,6 +7,14 @@ from typing import Any, Optional, TypedDict
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 
+from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
+from moonmind.workflows.skills.skill_registry import parse_skill_registry
+from moonmind.workflows.temporal.activity_catalog import (
+    INTEGRATIONS_TASK_QUEUE,
+    TemporalActivityRoute,
+    build_default_activity_catalog,
+)
+
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=5),
     backoff_coefficient=2.0,
@@ -14,9 +22,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_attempts=5,
 )
 
-INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
-LLM_TASK_QUEUE = "mm.activity.llm"
-SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
+DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
 
 class RunWorkflowInput(TypedDict, total=False):
@@ -87,6 +93,95 @@ class MoonMindRunWorkflow:
         self._step_count = 0
         self._max_wait_cycles = 100
         self._max_steps = 100
+
+    def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
+        return RetryPolicy(
+            initial_interval=timedelta(seconds=5),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
+            maximum_attempts=route.retries.max_attempts,
+            non_retryable_error_types=list(route.retries.non_retryable_error_codes),
+        )
+
+    def _execute_kwargs_for_route(self, route: TemporalActivityRoute) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "task_queue": route.task_queue,
+            "start_to_close_timeout": timedelta(
+                seconds=route.timeouts.start_to_close_seconds
+            ),
+            "schedule_to_close_timeout": timedelta(
+                seconds=route.timeouts.schedule_to_close_seconds
+            ),
+            "retry_policy": self._retry_policy_for_route(route),
+        }
+        if route.timeouts.heartbeat_timeout_seconds is not None:
+            kwargs["heartbeat_timeout"] = timedelta(
+                seconds=route.timeouts.heartbeat_timeout_seconds
+            )
+        return kwargs
+
+    def _decode_json_payload(
+        self,
+        payload: Any,
+        *,
+        error_message: str,
+    ) -> dict[str, Any]:
+        decoded: Any
+        if isinstance(payload, bytes):
+            decoded = json.loads(payload.decode("utf-8"))
+        elif isinstance(payload, str):
+            decoded = json.loads(payload)
+        else:
+            decoded = payload
+        if not isinstance(decoded, Mapping):
+            raise ValueError(error_message)
+        return self._json_mapping(decoded, path="activity_payload")
+
+    def _ordered_plan_node_payloads(
+        self,
+        *,
+        nodes: tuple[Any, ...],
+        edges: tuple[Any, ...],
+    ) -> list[dict[str, Any]]:
+        payload_by_id = {node.id: node.to_payload() for node in nodes}
+        node_order = {node.id: index for index, node in enumerate(nodes)}
+        dependencies = {node_id: set() for node_id in payload_by_id}
+        dependents = {node_id: set() for node_id in payload_by_id}
+
+        for edge in edges:
+            from_node = str(getattr(edge, "from_node", "") or "").strip()
+            to_node = str(getattr(edge, "to_node", "") or "").strip()
+            if from_node not in payload_by_id or to_node not in payload_by_id:
+                raise ValueError(
+                    "plan edges must reference nodes defined in plan.nodes"
+                )
+            if from_node == to_node:
+                raise ValueError("plan edges cannot include self-dependencies")
+            dependencies[to_node].add(from_node)
+            dependents[from_node].add(to_node)
+
+        ready = sorted(
+            [node_id for node_id, deps in dependencies.items() if not deps],
+            key=lambda node_id: node_order[node_id],
+        )
+        ordered_node_ids: list[str] = []
+
+        while ready:
+            node_id = ready.pop(0)
+            ordered_node_ids.append(node_id)
+            for dependent in sorted(
+                dependents[node_id], key=lambda candidate: node_order[candidate]
+            ):
+                dependencies[dependent].discard(node_id)
+                if not dependencies[dependent]:
+                    ready.append(dependent)
+            ready.sort(key=lambda candidate: node_order[candidate])
+
+        if len(ordered_node_ids) != len(payload_by_id):
+            raise ValueError(
+                "plan edges contain at least one cycle; execution order is undefined"
+            )
+        return [payload_by_id[node_id] for node_id in ordered_node_ids]
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
@@ -192,6 +287,7 @@ class MoonMindRunWorkflow:
         if plan_ref:
             return plan_ref
 
+        plan_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.generate")
         plan_result = await workflow.execute_activity(
             "plan.generate",
             {
@@ -205,9 +301,7 @@ class MoonMindRunWorkflow:
                     "link_type": "plan",
                 },
             },
-            start_to_close_timeout=timedelta(minutes=15),
-            task_queue=LLM_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            **self._execute_kwargs_for_route(plan_route),
         )
         resolved_plan_ref = (
             plan_result.get("plan_ref")
@@ -231,59 +325,80 @@ class MoonMindRunWorkflow:
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
         self._step_count += 1
 
+        artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await workflow.execute_activity(
             "artifact.read",
             {
                 "principal": self._principal(),
                 "artifact_ref": plan_ref,
             },
-            start_to_close_timeout=timedelta(minutes=5),
-            task_queue=LLM_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            **self._execute_kwargs_for_route(artifact_read_route),
         )
-        plan_dict = (
-            json.loads(plan_payload.decode("utf-8"))
-            if isinstance(plan_payload, bytes)
-            else (
-                json.loads(plan_payload)
-                if isinstance(plan_payload, str)
-                else plan_payload
+        plan_dict = self._decode_json_payload(
+            plan_payload,
+            error_message="plan_ref must resolve to a JSON object",
+        )
+        plan_definition = parse_plan_definition(plan_dict)
+        ordered_nodes = self._ordered_plan_node_payloads(
+            nodes=plan_definition.nodes,
+            edges=plan_definition.edges,
+        )
+
+        registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
+        failure_mode = plan_definition.policy.failure_mode
+        skill_definitions_by_key: dict[tuple[str, str], Any] = {}
+
+        if registry_snapshot_ref:
+            registry_payload = await workflow.execute_activity(
+                "artifact.read",
+                {
+                    "principal": self._principal(),
+                    "artifact_ref": registry_snapshot_ref,
+                },
+                **self._execute_kwargs_for_route(artifact_read_route),
             )
-        )
-        if not isinstance(plan_dict, Mapping):
-            raise ValueError("plan_ref must resolve to a JSON object")
+            registry_document = self._decode_json_payload(
+                registry_payload,
+                error_message=(
+                    "registry_snapshot_ref must resolve to a JSON object payload"
+                ),
+            )
+            skill_definitions = parse_skill_registry(registry_document)
+            skill_definitions_by_key = {
+                definition.key: definition for definition in skill_definitions
+            }
 
-        nodes = plan_dict.get("nodes")
-        if not isinstance(nodes, list):
-            raise ValueError("plan payload must include a nodes array")
-
-        registry_snapshot_ref = (
-            plan_dict.get("metadata", {})
-            .get("registry_snapshot", {})
-            .get("artifact_ref")
-        )
-        failure_mode = (
-            str(plan_dict.get("policy", {}).get("failure_mode") or "FAIL_FAST")
-            .strip()
-            .upper()
-        )
-
-        for node in nodes:
-            if not isinstance(node, Mapping):
-                raise ValueError("plan nodes must be objects")
+        for index, node in enumerate(ordered_nodes, start=1):
             skill = node.get("skill")
             if not isinstance(skill, Mapping):
                 raise ValueError("plan node skill definition is required")
-
+            skill_name = str(skill.get("name") or "").strip()
+            skill_version = str(skill.get("version") or "").strip()
+            if not skill_name or not skill_version:
+                raise ValueError("plan node skill name/version is required")
             invocation_payload = {
                 "id": node.get("id"),
-                "skill": {
-                    "name": skill.get("name"),
-                    "version": skill.get("version"),
-                },
+                "skill": {"name": skill_name, "version": skill_version},
                 "inputs": node.get("inputs", {}),
                 "options": node.get("options", {}),
             }
+            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
+            if skill_definitions_by_key:
+                skill_key = (skill_name, skill_version)
+                if skill_key not in skill_definitions_by_key:
+                    raise ValueError(
+                        "Skill "
+                        f"'{skill_name}:{skill_version}' was not found in pinned "
+                        "registry snapshot"
+                    )
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
+                    skill_definitions_by_key[skill_key]
+                )
+
+            self._summary = (
+                f"Executing plan step {index}/{len(ordered_nodes)}: {skill_name}"
+            )
+            self._update_memo()
 
             try:
                 await workflow.execute_activity(
@@ -295,16 +410,16 @@ class MoonMindRunWorkflow:
                         "context": {
                             "workflow_id": workflow.info().workflow_id,
                             "run_id": workflow.info().run_id,
-                            "node_id": node.get("id", "unknown"),
+                            "node_id": str(node.get("id") or "unknown"),
                         },
                     },
-                    start_to_close_timeout=timedelta(minutes=30),
-                    task_queue=LLM_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    **self._execute_kwargs_for_route(route),
                 )
             except Exception:
                 if failure_mode == "FAIL_FAST":
                     raise
+        self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
+        self._update_memo()
 
         if self._integration:
             await self._run_integration_stage(parameters=parameters, plan_ref=plan_ref)

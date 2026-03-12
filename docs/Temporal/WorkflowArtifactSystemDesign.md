@@ -1,7 +1,7 @@
 # Workflow Artifact System Design
 Status: Draft
 Owners: MoonMind Platform
-Last updated: 2026-03-05
+Last updated: 2026-03-12
 
 ## 1. Context
 
@@ -99,6 +99,24 @@ A minimal reference to a Temporal **Workflow Execution**:
 3) Activity returns small results (new `ArtifactRef`s, summaries, statuses) to workflow
 
 Compatibility APIs may resolve those artifacts back into task-oriented detail payloads, but the artifact linkage remains execution-centric at the Temporal layer.
+
+### 5.3 Temporal routing contract
+
+Artifact operations are not "general worker" calls. They are a dedicated Activity family with a dedicated queue boundary.
+
+- All `artifact.*` Activities, including `artifact.read`, must execute on the artifacts fleet and task queue: `mm.activity.artifacts`.
+- Workflows must not hardcode `mm.activity.llm` or any other non-artifact queue when scheduling `artifact.*` Activities.
+- Queue selection for artifact operations should come from the Temporal activity catalog / worker topology configuration, not duplicated queue constants inside workflow logic.
+
+This matters most in mixed stages such as `MoonMind.Run` execution:
+
+1. A workflow may call `plan.generate` on the LLM fleet.
+2. Once a plan artifact exists, the workflow must call `artifact.read(plan_ref)` on the artifacts fleet to retrieve the plan bytes.
+3. After the plan payload is decoded into node invocations, the workflow may schedule `mm.skill.execute` or other capability-routed Activities on their respective fleets.
+
+The read step stays on the artifact boundary even when the artifact content is consumed by a later LLM or sandbox step. Artifact storage access is an IO concern, not an LLM concern.
+
+Any implementation that routes `artifact.read` to an LLM queue violates the intended Temporal design, even if the receiving worker can otherwise continue execution.
 
 ---
 

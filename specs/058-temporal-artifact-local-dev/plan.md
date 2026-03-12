@@ -1,11 +1,11 @@
 # Implementation Plan: Temporal Local Artifact System
 
-**Branch**: `045-temporal-artifact-local-dev` | **Date**: 2026-03-05 | **Spec**: `specs/045-temporal-artifact-local-dev/spec.md`  
-**Input**: Feature specification from `/specs/045-temporal-artifact-local-dev/spec.md`
+**Branch**: `058-temporal-artifact-local-dev` | **Date**: 2026-03-05 | **Spec**: `specs/058-temporal-artifact-local-dev/spec.md`  
+**Input**: Feature specification from `/specs/058-temporal-artifact-local-dev/spec.md`
 
 ## Summary
 
-Implement the runtime local/dev artifact system for Temporal with MinIO as the default blob backend, Postgres as metadata index, and activity-bounded artifact IO. The plan upgrades the current local filesystem artifact implementation to MinIO-first behavior, aligns auth behavior with `AUTH_PROVIDER` mode, preserves immutable `ArtifactRef` semantics, and adds validation coverage for create/upload/complete/read/list/link/pin/delete, preview safety, and lifecycle cleanup.
+Implement the runtime local/dev artifact system for Temporal with MinIO as the default blob backend, Postgres as metadata index, and activity-bounded artifact IO. The plan upgrades the current local filesystem artifact implementation to MinIO-first behavior, aligns auth behavior with `AUTH_PROVIDER` mode, preserves immutable `ArtifactRef` semantics, and adds validation coverage for create/upload/complete/read/list/link/pin/delete, preview safety, lifecycle cleanup, and artifact-family queue routing discipline from the updated routing contract.
 
 ## Technical Context
 
@@ -34,7 +34,7 @@ Implement the runtime local/dev artifact system for Temporal with MinIO as the d
 - **VII. Modular and Extensible Architecture**: PASS. Changes stay in temporal artifact service/router/schema/config boundaries.
 - **VIII. Self-Healing by Default**: PASS. Lifecycle cleanup and delete semantics are idempotent and retry-safe by design.
 - **IX. Facilitate Continuous Improvement**: PASS. Artifact operations are auditable and can emit structured summaries/metrics for follow-up.
-- **X. Spec-Driven Development**: PASS. `DOC-REQ-001` through `DOC-REQ-015` are traced in plan outputs and validation strategy.
+- **X. Spec-Driven Development**: PASS. `DOC-REQ-001` through `DOC-REQ-016` are traced in plan outputs and validation strategy.
 
 ### Post-Design Re-Check
 
@@ -47,7 +47,7 @@ Implement the runtime local/dev artifact system for Temporal with MinIO as the d
 ### Documentation (this feature)
 
 ```text
-specs/045-temporal-artifact-local-dev/
+specs/058-temporal-artifact-local-dev/
 ├── plan.md
 ├── research.md
 ├── data-model.md
@@ -88,7 +88,7 @@ tests/
 
 ## Phase 0 - Research Summary
 
-Research outcomes in `specs/045-temporal-artifact-local-dev/research.md` establish:
+Research outcomes in `specs/058-temporal-artifact-local-dev/research.md` establish:
 
 1. MinIO must be the default local/dev blob backend; local filesystem storage is dev fallback only when explicitly selected.
 2. Artifact metadata/indexing remains in Postgres; blob bytes stay in object storage only.
@@ -105,6 +105,12 @@ Research outcomes in `specs/045-temporal-artifact-local-dev/research.md` establi
 - `contracts/requirements-traceability.md`: complete `DOC-REQ-*` mapping to FRs, implementation surfaces, and validation strategy.
 - `quickstart.md`: deterministic runtime validation steps and mode-aware scope checks.
 
+## Phase 1.5 - Routing Contract Delta
+
+- Align execution-path artifact IO with the updated routing contract in `docs/Temporal/WorkflowArtifactSystemDesign.md` §5.3.
+- Ensure workflow execution paths route `artifact.read` and other `artifact.*` activity calls on `mm.activity.artifacts` through catalog/topology routing metadata.
+- Add/keep workflow tests that fail if artifact reads are routed to non-artifact queues.
+
 ## Runtime-vs-Docs Mode Alignment Gate
 
 - Selected orchestration mode for this feature: **runtime implementation mode**.
@@ -119,15 +125,15 @@ Research outcomes in `specs/045-temporal-artifact-local-dev/research.md` establi
 
 - Runtime mode must keep both production runtime implementation tasks and validation tasks in `tasks.md`; docs-only task sets are invalid.
 - Every `DOC-REQ-*` row must map to at least one FR, one planned implementation surface, and one planned validation strategy in `contracts/requirements-traceability.md`.
-- `DOC-REQ-001` through `DOC-REQ-015` must keep explicit implementation + validation task coverage in the `DOC-REQ Coverage Matrix` in `tasks.md`.
+- `DOC-REQ-001` through `DOC-REQ-016` must keep explicit implementation + validation task coverage in the `DOC-REQ Coverage Matrix` in `tasks.md`.
 - Cross-artifact language for runtime scope, validation expectations, and traceability must remain deterministic across `spec.md`, `plan.md`, and `tasks.md`.
 
 ## Prompt B Remediation Application (Step 12/16)
 
 ### Completed CRITICAL/HIGH remediations
 
-- Runtime-mode scope is now explicitly represented and deterministic in `tasks.md` with production runtime task coverage (`T001-T012`, `T017-T021`, `T025-T029`, `T033-T037`) and validation task coverage (`T013-T016`, `T022-T024`, `T030-T032`, `T039-T041`).
-- `DOC-REQ-*` mapping remains complete from `DOC-REQ-001` through `DOC-REQ-015`, and each requirement is represented with implementation + validation task coverage in the `DOC-REQ Coverage Matrix`.
+- Runtime-mode scope is now explicitly represented and deterministic in `tasks.md` with production runtime task coverage (`T001-T012`, `T017-T021`, `T025-T029`, `T033-T037`, `T044`) and validation task coverage (`T013-T016`, `T022-T024`, `T030-T032`, `T039-T041`, `T045`).
+- `DOC-REQ-*` mapping remains complete from `DOC-REQ-001` through `DOC-REQ-016`, and each requirement is represented with implementation + validation task coverage in the `DOC-REQ Coverage Matrix`.
 - Prompt B scope controls now explicitly require deterministic cross-artifact updates so scope gates stay aligned during downstream task execution.
 
 ### Completed MEDIUM/LOW remediations

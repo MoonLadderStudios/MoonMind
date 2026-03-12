@@ -1,6 +1,6 @@
 # Tasks: Temporal Local Artifact System
 
-**Input**: Design documents from `/specs/045-temporal-artifact-local-dev/`  
+**Input**: Design documents from `/specs/058-temporal-artifact-local-dev/`  
 **Prerequisites**: `plan.md` (required), `spec.md` (required), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`  
 **Tests**: Tests are required because the feature specification mandates runtime validation coverage (`FR-002`).  
 **Organization**: Tasks are grouped by user story to preserve independent implementation and validation.
@@ -13,9 +13,9 @@
 
 ## Prompt B Scope Controls (Step 12/16)
 
-- Runtime implementation tasks are explicitly represented in `T001-T012`, `T017-T021`, `T025-T029`, and `T033-T037`.
-- Runtime validation tasks are explicitly represented in `T013-T016`, `T022-T024`, `T030-T032`, and `T039-T041`.
-- `DOC-REQ-001` through `DOC-REQ-015` implementation + validation coverage is enforced by the per-task tags and the `DOC-REQ Coverage Matrix` in this file, with persistent requirement mapping in `specs/045-temporal-artifact-local-dev/contracts/requirements-traceability.md`.
+- Runtime implementation tasks are explicitly represented in `T001-T012`, `T017-T021`, `T025-T029`, `T033-T037`, and `T044`.
+- Runtime validation tasks are explicitly represented in `T013-T016`, `T022-T024`, `T030-T032`, `T039-T041`, and `T045`.
+- `DOC-REQ-001` through `DOC-REQ-016` implementation + validation coverage is enforced by the per-task tags and the `DOC-REQ Coverage Matrix` in this file, with persistent requirement mapping in `specs/058-temporal-artifact-local-dev/contracts/requirements-traceability.md`.
 - Deterministic updates across `spec.md`, `plan.md`, and `tasks.md` are required for this remediation step.
 
 ## Phase 1: Setup (Shared Infrastructure)
@@ -125,12 +125,14 @@
 
 **Purpose**: Finalize traceability, run repository-standard validation, and enforce runtime gates.
 
-- [X] T038 [P] Sync artifact API and traceability docs to final runtime behavior in `specs/045-temporal-artifact-local-dev/contracts/temporal-artifacts.openapi.yaml` and `specs/045-temporal-artifact-local-dev/contracts/requirements-traceability.md` (DOC-REQ-014, DOC-REQ-015).
-- [X] T039 Run artifact-focused unit/contract/integration regression through `tools/test_unit.sh` covering `tests/unit/workflows/temporal/`, `tests/unit/api/routers/`, `tests/contract/`, and `tests/integration/temporal/` (DOC-REQ-001 through DOC-REQ-015 validation sweep).
+- [X] T038 [P] Sync artifact API and traceability docs to final runtime behavior in `specs/058-temporal-artifact-local-dev/contracts/temporal-artifacts.openapi.yaml` and `specs/058-temporal-artifact-local-dev/contracts/requirements-traceability.md` (DOC-REQ-014, DOC-REQ-015).
+- [X] T039 Run artifact-focused unit/contract/integration regression through `tools/test_unit.sh` covering `tests/unit/workflows/temporal/`, `tests/unit/api/routers/`, `tests/contract/`, and `tests/integration/temporal/` (DOC-REQ-001 through DOC-REQ-016 validation sweep).
 - [X] T040 Run full repository unit validation via `tools/test_unit.sh` and resolve runtime regressions in `tests/unit/` and `tests/integration/` paths (DOC-REQ-015).
 - [X] T041 Execute runtime scope gates with `.specify/scripts/bash/validate-implementation-scope.sh` and validate both `--check tasks --mode runtime` and `--check diff --base-ref origin/main --mode runtime` (DOC-REQ-015).
-- [X] T042 [P] Record final runtime verification steps and expected outcomes in `specs/045-temporal-artifact-local-dev/quickstart.md` (DOC-REQ-015).
-- [X] T043 [P] Finalize DOC-REQ evidence links and implementation/test mapping in `specs/045-temporal-artifact-local-dev/contracts/requirements-traceability.md` (DOC-REQ-001 through DOC-REQ-015).
+- [X] T042 [P] Record final runtime verification steps and expected outcomes in `specs/058-temporal-artifact-local-dev/quickstart.md` (DOC-REQ-015).
+- [X] T043 [P] Finalize DOC-REQ evidence links and implementation/test mapping in `specs/058-temporal-artifact-local-dev/contracts/requirements-traceability.md` (DOC-REQ-001 through DOC-REQ-016).
+- [X] T044 Implement catalog-derived routing for execution-path `artifact.*` activity calls so `artifact.read` is consumed on the artifact queue in `moonmind/workflows/temporal/workflows/run.py` (DOC-REQ-016).
+- [X] T045 Add regression tests that fail when `artifact.read` is routed to non-artifact queues in `tests/unit/workflows/temporal/workflows/test_run.py` and `tests/unit/workflows/temporal/test_run_artifacts.py` (DOC-REQ-016).
 
 ---
 
@@ -236,7 +238,7 @@ Task T032: tests/contract/test_temporal_artifact_lifecycle_api.py
 
 ## Task Summary
 
-- Total tasks: **43**
+- Total tasks: **45**
 - Story task count: **US1 = 9**, **US2 = 8**, **US3 = 8**
 - Parallelizable tasks (`[P]`): **17**
 - Suggested MVP scope: **through Phase 3 (US1)**
@@ -261,5 +263,6 @@ Task T032: tests/contract/test_temporal_artifact_lifecycle_api.py
 | DOC-REQ-013 | T005, T006, T033, T034, T035, T036 | T030, T031 |
 | DOC-REQ-014 | T007, T017, T018, T020, T029, T036 | T014, T016, T032 |
 | DOC-REQ-015 | T012, T021, T028, T034 | T013, T039, T040, T041 |
+| DOC-REQ-016 | T044 | T045 |
 
 Coverage rule: do not close implementation until every `DOC-REQ-*` row keeps both implementation and validation coverage.

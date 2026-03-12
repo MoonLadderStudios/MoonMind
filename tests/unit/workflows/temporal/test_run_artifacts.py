@@ -95,12 +95,44 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     ) -> object:
         captured.append((activity_type, payload))
         if activity_type == "artifact.read":
+            if payload.get("artifact_ref") == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                                "description": "Run tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.skill.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 3},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
             return json.dumps(
                 {
+                    "plan_version": "1.0",
                     "metadata": {
-                        "registry_snapshot": {"artifact_ref": "art_registry_1"}
+                        "title": "Test Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
                     },
-                    "policy": {"failure_mode": "FAIL_FAST"},
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
                     "nodes": [
                         {
                             "id": "step-1",
@@ -109,6 +141,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
                             "options": {},
                         }
                     ],
+                    "edges": [],
                 }
             ).encode("utf-8")
         return {"status": "SUCCEEDED", "outputs": {}}
@@ -147,5 +180,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
 
     assert captured[0][0] == "artifact.read"
     assert captured[0][1]["artifact_ref"] == "art_plan_1"
-    assert captured[1][0] == "mm.skill.execute"
-    assert captured[1][1]["registry_snapshot_ref"] == "art_registry_1"
+    assert captured[1][0] == "artifact.read"
+    assert captured[1][1]["artifact_ref"] == "artifact://registry/1"
+    assert captured[2][0] == "mm.skill.execute"
+    assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"

@@ -292,6 +292,7 @@ skill dispatch.
 
 **Acceptance criteria:**
 - [ ] `_run_execution_stage` reads and parses the plan artifact
+- [ ] `artifact.read(plan_ref)` is routed through the artifact activity family (`mm.activity.artifacts`) rather than a hardcoded LLM queue
 - [ ] Each plan node is dispatched as an `mm.skill.execute` activity call
 - [ ] Activity routing uses `TemporalActivityCatalog.resolve_skill()` for correct
       task queue and timeout selection

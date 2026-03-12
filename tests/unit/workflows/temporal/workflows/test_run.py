@@ -18,6 +18,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.activity_catalog import (
+    ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_TASK_QUEUE,
     LLM_TASK_QUEUE,
     SANDBOX_TASK_QUEUE,
@@ -90,9 +91,39 @@ async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
 @activity.defn(name="artifact.read")
 async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
     ARTIFACT_READ_CALLS.append(args)
+    artifact_ref = args.get("artifact_ref")
+    if artifact_ref == "artifact://registry/123":
+        payload = {
+            "skills": [
+                {
+                    "name": "repo.run_tests",
+                    "version": "1.0.0",
+                    "description": "Run repository test suite",
+                    "inputs": {"schema": {"type": "object"}},
+                    "outputs": {"schema": {"type": "object"}},
+                    "executor": {
+                        "activity_type": "mm.skill.execute",
+                        "selector": {"mode": "by_capability"},
+                    },
+                    "requirements": {"capabilities": ["sandbox"]},
+                    "policies": {
+                        "timeouts": {
+                            "start_to_close_seconds": 1800,
+                            "schedule_to_close_seconds": 3600,
+                        },
+                        "retries": {"max_attempts": 3},
+                    },
+                }
+            ]
+        }
+        return json.dumps(payload).encode("utf-8")
     payload = {
+        "plan_version": "1.0",
         "metadata": {
+            "title": "Test plan",
+            "created_at": "2026-03-12T00:00:00Z",
             "registry_snapshot": {
+                "digest": "reg:sha256:" + ("a" * 64),
                 "artifact_ref": "artifact://registry/123",
             }
         },
@@ -153,14 +184,17 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     task_queue=LLM_TASK_QUEUE,
                     activities=[
                         mock_plan_generate,
-                        mock_artifact_read,
-                        mock_skill_execute,
                     ],
                 ),
                 Worker(
                     env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[mock_artifact_read],
+                ),
+                Worker(
+                    env.client,
                     task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command],
+                    activities=[mock_sandbox_command, mock_skill_execute],
                 ),
                 Worker(
                     env.client,
@@ -211,14 +245,17 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     task_queue=LLM_TASK_QUEUE,
                     activities=[
                         mock_plan_generate,
-                        mock_artifact_read,
-                        mock_skill_execute,
                     ],
                 ),
                 Worker(
                     env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[mock_artifact_read],
+                ),
+                Worker(
+                    env.client,
                     task_queue=SANDBOX_TASK_QUEUE,
-                    activities=[mock_sandbox_command],
+                    activities=[mock_sandbox_command, mock_skill_execute],
                 ),
                 Worker(
                     env.client,

@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-03-05  
-**Feature**: [spec.md](/work/agent_jobs/b38431ef-3705-4553-98ba-479119da0de6/repo/specs/047-activity-worker-topology/spec.md)
+**Feature**: [spec.md](/work/agent_jobs/b38431ef-3705-4553-98ba-479119da0de6/repo/specs/060-activity-worker-topology/spec.md)
 
 ## Content Quality
 

@@ -103,9 +103,9 @@ Expected result: runtime scope gates pass with production runtime changes and va
 
 Before `/speckit.tasks`, ensure these artifacts exist:
 
-- `specs/045-temporal-artifact-local-dev/plan.md`
-- `specs/045-temporal-artifact-local-dev/research.md`
-- `specs/045-temporal-artifact-local-dev/data-model.md`
-- `specs/045-temporal-artifact-local-dev/quickstart.md`
-- `specs/045-temporal-artifact-local-dev/contracts/temporal-artifacts.openapi.yaml`
-- `specs/045-temporal-artifact-local-dev/contracts/requirements-traceability.md`
+- `specs/058-temporal-artifact-local-dev/plan.md`
+- `specs/058-temporal-artifact-local-dev/research.md`
+- `specs/058-temporal-artifact-local-dev/data-model.md`
+- `specs/058-temporal-artifact-local-dev/quickstart.md`
+- `specs/058-temporal-artifact-local-dev/contracts/temporal-artifacts.openapi.yaml`
+- `specs/058-temporal-artifact-local-dev/contracts/requirements-traceability.md`

@@ -1793,6 +1793,17 @@
     return `${url}${separator}summary=true`;
   }
 
+  function withTemporalSourceFlag(url) {
+    if (!url || typeof url !== "string") {
+      return url;
+    }
+    if (/[?&]source=/.test(url)) {
+      return url;
+    }
+    const separator = url.includes("?") ? "&" : "?";
+    return `${url}${separator}source=temporal`;
+  }
+
   function sanitizeExternalHttpUrl(candidate) {
     const raw = String(candidate || "").trim();
     if (!raw) {
@@ -3087,6 +3098,7 @@
       temporalWaitingReason,
       toTemporalRows,
       uploadTemporalArtifactContent,
+      withTemporalSourceFlag,
     };
     window.__queueLayoutTest = {
       queueFieldDefinitions,
@@ -3418,7 +3430,9 @@
           source: "temporal-active",
           call: () =>
             fetchJson(
-              `${temporalSourceConfig.list || "/api/executions"}?pageSize=${ACTIVE_TEMPORAL_FETCH_LIMIT}`,
+              withTemporalSourceFlag(
+                `${temporalSourceConfig.list || "/api/executions"}?pageSize=${ACTIVE_TEMPORAL_FETCH_LIMIT}`,
+              ),
             ),
           transform: (payload) =>
             toTemporalRows(payload?.items || []).filter((row) => {
@@ -4052,7 +4066,9 @@
           params.set("integration", filterState.integration);
         }
         const temporalListEndpoint = temporalSourceConfig.list || "/api/executions";
-        const payload = await fetchJson(`${temporalListEndpoint}?${params.toString()}`);
+        const payload = await fetchJson(
+          withTemporalSourceFlag(`${temporalListEndpoint}?${params.toString()}`),
+        );
         if (!pageActive) {
           return;
         }
@@ -4108,7 +4124,9 @@
       if (includeTemporalInMixed) {
         requests.push(
           fetchJson(
-            `${temporalSourceConfig.list || "/api/executions"}?pageSize=${paginationState.limit}`,
+            withTemporalSourceFlag(
+              `${temporalSourceConfig.list || "/api/executions"}?pageSize=${paginationState.limit}`,
+            ),
           ).catch(() => ({ items: [] })),
         );
       }
@@ -8995,9 +9013,11 @@
 
   async function fetchTemporalDetailData(workflowId) {
     const execution = await fetchJson(
-      endpoint(
-        temporalSourceConfig.detail || "/api/executions/{workflowId}",
-        { workflowId },
+      withTemporalSourceFlag(
+        endpoint(
+          temporalSourceConfig.detail || "/api/executions/{workflowId}",
+          { workflowId },
+        ),
       ),
     );
     const latestWorkflowId = String(pick(execution, "workflowId") || workflowId).trim();
@@ -10473,9 +10493,11 @@
       if (temporalDetailEnabled) {
         try {
           await fetchJson(
-            endpoint(
-              temporalSourceConfig.detail || "/api/executions/{workflowId}",
-              { workflowId: candidateTaskId },
+            withTemporalSourceFlag(
+              endpoint(
+                temporalSourceConfig.detail || "/api/executions/{workflowId}",
+                { workflowId: candidateTaskId },
+              ),
             ),
           );
           await renderTemporalDetailPage(candidateTaskId);

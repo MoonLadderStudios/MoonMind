@@ -2,7 +2,7 @@
 
 ## 1. Confirm runtime-mode scope
 
-- Read `specs/047-activity-worker-topology/spec.md`.
+- Read `specs/060-activity-worker-topology/spec.md`.
 - Treat this feature as runtime implementation mode: production code and automated validation tests are required.
 - Do not treat docs/spec updates alone as completion.
 
@@ -98,9 +98,9 @@ Notes:
 
 Before running `/speckit.tasks`, ensure these artifacts exist:
 
-- `specs/047-activity-worker-topology/plan.md`
-- `specs/047-activity-worker-topology/research.md`
-- `specs/047-activity-worker-topology/data-model.md`
-- `specs/047-activity-worker-topology/quickstart.md`
-- `specs/047-activity-worker-topology/contracts/temporal-activity-worker-contract.md`
-- `specs/047-activity-worker-topology/contracts/requirements-traceability.md`
+- `specs/060-activity-worker-topology/plan.md`
+- `specs/060-activity-worker-topology/research.md`
+- `specs/060-activity-worker-topology/data-model.md`
+- `specs/060-activity-worker-topology/quickstart.md`
+- `specs/060-activity-worker-topology/contracts/temporal-activity-worker-contract.md`
+- `specs/060-activity-worker-topology/contracts/requirements-traceability.md`

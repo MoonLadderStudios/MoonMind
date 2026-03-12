@@ -1,6 +1,6 @@
 # Tasks: Activity Catalog and Worker Topology
 
-**Input**: Design documents from `/specs/047-activity-worker-topology/`
+**Input**: Design documents from `/specs/060-activity-worker-topology/`
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
 
 **Tests**: Validation is required for this runtime-mode feature. Include unit, contract, and compose-backed Temporal verification tasks.
@@ -114,7 +114,19 @@
 - [X] T029 [P] Reconcile final Temporal exports and service wiring in `moonmind/workflows/temporal/__init__.py` and `moonmind/workflows/temporal/service.py` for `DOC-REQ-001`, `DOC-REQ-015`, and `DOC-REQ-018`
 - [X] T030 Run repository-standard unit acceptance with `./tools/test_unit.sh`, including `tests/unit/specs/test_doc_req_traceability.py`, for `DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-012`, `DOC-REQ-015`, `DOC-REQ-016`, and `DOC-REQ-018`
 - [X] T031 Run compose-backed topology verification against `tests/integration/temporal/test_activity_worker_topology.py`, `tests/integration/temporal/test_temporal_artifact_lifecycle.py`, and `tests/integration/temporal/test_temporal_artifact_auth_preview.py` for `DOC-REQ-001`, `DOC-REQ-004`, `DOC-REQ-007`, `DOC-REQ-008`, `DOC-REQ-010`, `DOC-REQ-011`, `DOC-REQ-013`, `DOC-REQ-014`, `DOC-REQ-015`, and `DOC-REQ-018`
-- [X] T032 Run the runtime scope gate with `.specify/scripts/bash/validate-implementation-scope.sh` using `specs/047-activity-worker-topology/tasks.md` for `DOC-REQ-018`
+- [X] T032 Run the runtime scope gate with `.specify/scripts/bash/validate-implementation-scope.sh` using `specs/060-activity-worker-topology/tasks.md` for `DOC-REQ-018`
+
+---
+
+## Phase 7: Runtime Alignment Delta (Workflow Artifact + Execution Contracts)
+
+**Purpose**: Apply the execution-stage corrections required by the updated artifact-routing and Temporal execution design docs.
+
+- [X] T033 [US1] Route `MoonMind.Run` plan and artifact reads via catalog-derived activity routes in `moonmind/workflows/temporal/workflows/run.py`, ensuring `artifact.read` stays on `mm.activity.artifacts` for `DOC-REQ-019` and `DOC-REQ-020`
+- [X] T034 [US2] Replace execution-stage stub behavior with validated plan parsing, DAG-respecting node dispatch, and failure-mode handling in `moonmind/workflows/temporal/workflows/run.py` for `DOC-REQ-021` and `DOC-REQ-023`
+- [X] T035 [US2] Apply registry-aware `resolve_skill` routing and per-step memo progress updates in `moonmind/workflows/temporal/workflows/run.py` for `DOC-REQ-022` and `DOC-REQ-024`
+- [X] T036 [P] [US2] Extend workflow execution tests for artifact-queue routing and registry-based dispatch in `tests/unit/workflows/temporal/workflows/test_run.py` and `tests/unit/workflows/temporal/test_run_artifacts.py` for `DOC-REQ-019`, `DOC-REQ-020`, `DOC-REQ-021`, `DOC-REQ-022`, `DOC-REQ-023`, and `DOC-REQ-024`
+- [X] T037 Run targeted unit validation with `./tools/test_unit.sh --python-only --no-xdist tests/unit/workflows/temporal/workflows/test_run.py tests/unit/workflows/temporal/test_run_artifacts.py` for `DOC-REQ-021`, `DOC-REQ-022`, `DOC-REQ-023`, and `DOC-REQ-024`
 
 ---
 
@@ -128,6 +140,7 @@
 - **Phase 4: User Story 2** depends on Phase 2 and can proceed in parallel with User Story 1 once the foundational catalog and envelope work is in place.
 - **Phase 5: User Story 3** depends on the runtime surfaces from User Story 1 and User Story 2 because it hardens those families for retries, observability, and least-privilege operation.
 - **Phase 6: Polish** depends on the desired user stories being complete.
+- **Phase 7: Runtime Alignment Delta** depends on Phase 6 outputs and closes doc-driven execution-stage gaps before release.
 
 ### User Story Dependencies
 
@@ -150,6 +163,7 @@
 - `T014`, `T015`, and `T016` can run in parallel within User Story 2.
 - `T022`, `T023`, and `T024` can run in parallel within User Story 3.
 - `T030` and `T031` can run in parallel once implementation is complete.
+- `T034`, `T035`, and `T036` can run in parallel once `T033` lands.
 
 ---
 
@@ -210,6 +224,6 @@ Task: "Add compose-backed heartbeat, failure-injection, and restricted-preview r
 
 - All tasks follow the required checklist format with sequential IDs.
 - Runtime implementation mode is preserved: production file changes and automated validation are both explicit.
-- Every `DOC-REQ-001` through `DOC-REQ-018` appears in implementation and validation tasks for traceability.
+- Every `DOC-REQ-001` through `DOC-REQ-024` appears in implementation and validation tasks for traceability.
 - The User Story 1 task set now owns the first compose-backed routing proof instead of deferring it to later hardening.
 - Suggested MVP scope: User Story 1.

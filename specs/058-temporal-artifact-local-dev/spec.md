@@ -1,6 +1,6 @@
 # Feature Specification: Temporal Local Artifact System
 
-**Feature Branch**: `045-temporal-artifact-local-dev`  
+**Feature Branch**: `058-temporal-artifact-local-dev`  
 **Created**: 2026-03-05  
 **Status**: Draft  
 **Input**: User description: "Implement the local dev version of the artifact system described in docs\Temporal\WorkflowArtifactSystemDesign.md to work with the new Temporal system being added. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."  
@@ -25,6 +25,7 @@
 | DOC-REQ-013 | `docs/Temporal/WorkflowArtifactSystemDesign.md` §13.1-§13.4 | Retention classes, default link-type mappings, and idempotent lifecycle cleanup (soft-delete then hard-delete/tombstone) MUST be implemented. |
 | DOC-REQ-014 | `docs/Temporal/WorkflowArtifactSystemDesign.md` §14 "Artifact API contract (REST)" | Artifact API contract MUST cover create/presign/complete/get/list/link/pin/delete behavior with defined request/response constraints. |
 | DOC-REQ-015 | `docs/Temporal/WorkflowArtifactSystemDesign.md` §15.2, §16 "Deliverables checklist" | Artifact IO side effects MUST run in activities, and the delivery MUST include runtime-ready API, reference format, and lifecycle controls. |
+| DOC-REQ-016 | `docs/Temporal/WorkflowArtifactSystemDesign.md` §5.3 "Temporal routing contract" | All `artifact.*` activities (including `artifact.read`) MUST run on `mm.activity.artifacts`, and queue selection for artifact operations MUST come from the activity catalog/topology configuration rather than duplicated queue constants in workflow logic. |
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -79,6 +80,7 @@ As a platform maintainer, I can rely on retention classes and lifecycle cleanup 
 - What happens when an artifact is soft-deleted and a download presign is requested afterward?
 - How are authorization checks enforced when an artifact link references an execution that no longer has visible permissions for the caller?
 - What happens when lifecycle cleanup retries deletion of objects that were already physically removed?
+- What happens if workflow execution routes `artifact.read` to a non-artifact queue; does execution fail fast with explicit routing diagnostics?
 
 ## Requirements *(mandatory)*
 
@@ -100,6 +102,7 @@ As a platform maintainer, I can rely on retention classes and lifecycle cleanup 
 - **FR-014**: Retention classes and default link-type mappings MUST be enforced, and lifecycle cleanup MUST implement idempotent expiration handling with soft-delete and later hard-delete/tombstone behavior. (Maps: DOC-REQ-013)
 - **FR-015**: Artifact API behavior MUST cover create, complete, get, presign download/upload-part, execution list, link, pin/unpin, and delete semantics with consistent request/response validation. (Maps: DOC-REQ-014)
 - **FR-016**: All artifact byte side effects (read, write, preview generation, execution linking side effects) MUST execute through activity boundaries rather than direct workflow logic. (Maps: DOC-REQ-015)
+- **FR-017**: Workflow execution paths that invoke `artifact.*` activities MUST route those calls through catalog-derived artifact queue bindings (`mm.activity.artifacts` in v1) and MUST avoid hardcoded non-artifact queue constants for artifact IO. (Maps: DOC-REQ-016)
 
 ### Key Entities *(include if feature involves data)*
 
@@ -115,19 +118,20 @@ As a platform maintainer, I can rely on retention classes and lifecycle cleanup 
 ### Measurable Outcomes
 
 - **SC-001**: In default local/dev deployment, at least 95% of artifact create/upload/complete/read/list integration test runs pass on first attempt.
-- **SC-002**: 100% of source requirements (`DOC-REQ-001` through `DOC-REQ-015`) are mapped to one or more functional requirements and covered by validation scope.
+- **SC-002**: 100% of source requirements (`DOC-REQ-001` through `DOC-REQ-016`) are mapped to one or more functional requirements and covered by validation scope.
 - **SC-003**: For test artifacts exceeding direct-upload threshold, multipart upload and completion succeed in at least 95% of validation runs without manual intervention.
 - **SC-004**: Authorization tests confirm correct mode behavior with zero unauthorized artifact downloads in authenticated mode test cases.
 - **SC-005**: Lifecycle cleanup validation shows expired non-pinned artifacts transition to deleted state idempotently across at least two consecutive cleanup runs.
+- **SC-006**: Workflow execution tests confirm `artifact.read` remains consumable on `mm.activity.artifacts` and does not stall on non-artifact queue routing.
 
 ## Prompt B Remediation Status (Step 12/16)
 
 ### CRITICAL/HIGH remediation status
 
 - Runtime-mode coverage is explicit and deterministic in `tasks.md`:
-  - Production runtime code tasks: `T001-T012`, `T017-T021`, `T025-T029`, `T033-T037`.
-  - Validation tasks: `T013-T016`, `T022-T024`, `T030-T032`, `T039-T041`.
-- `DOC-REQ-001` through `DOC-REQ-015` keep implementation + validation traceability through:
+  - Production runtime code tasks: `T001-T012`, `T017-T021`, `T025-T029`, `T033-T037`, `T044`.
+  - Validation tasks: `T013-T016`, `T022-T024`, `T030-T032`, `T039-T041`, `T045`.
+- `DOC-REQ-001` through `DOC-REQ-016` keep implementation + validation traceability through:
   - requirement-to-FR mapping in this spec,
   - requirement strategy mapping in `contracts/requirements-traceability.md`,
   - implementation/validation task mapping in the `DOC-REQ Coverage Matrix` in `tasks.md`.

@@ -236,3 +236,18 @@ const helpers = loadTemporalHelpers();
     "/tasks/temporal",
   );
 })();
+
+(function testTemporalSourceFlagPreservesExistingQueryState() {
+  assert.strictEqual(
+    helpers.withTemporalSourceFlag("/api/executions/mm%3Awf-1"),
+    "/api/executions/mm%3Awf-1?source=temporal",
+  );
+  assert.strictEqual(
+    helpers.withTemporalSourceFlag("/api/executions?pageSize=25"),
+    "/api/executions?pageSize=25&source=temporal",
+  );
+  assert.strictEqual(
+    helpers.withTemporalSourceFlag("/api/executions/mm%3Awf-1?source=temporal"),
+    "/api/executions/mm%3Awf-1?source=temporal",
+  );
+})();

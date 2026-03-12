@@ -33,4 +33,4 @@
 
 - Validation iteration 1: All checklist items pass.
 - Runtime-intent guard satisfied: spec explicitly requires production runtime code changes plus validation tests.
-- Document-backed completeness gate satisfied: DOC-REQ-001 through DOC-REQ-015 each map to one or more functional requirements.
+- Document-backed completeness gate satisfied: DOC-REQ-001 through DOC-REQ-016 each map to one or more functional requirements.

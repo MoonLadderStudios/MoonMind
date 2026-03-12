@@ -1,9 +1,9 @@
 # Feature Specification: Activity Catalog and Worker Topology
 
-**Feature Branch**: `047-activity-worker-topology`  
+**Feature Branch**: `060-activity-worker-topology`  
 **Created**: 2026-03-05  
 **Status**: Draft  
-**Input**: User description: "Fully implement the Activity Catalog and Worker Topology system described in docs/Temporal/ActivityCatalogAndWorkerTopology.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests. Preserve all user-provided constraints."
+**Input**: User description: "Update this feature and runtime implementation using docs/Temporal/WorkflowArtifactSystemDesign.md and docs/Temporal/TemporalAgentExecution.md as authoritative requirements, while preserving runtime-mode deliverables and validation tests."
 
 ## Source Document Requirements
 
@@ -27,6 +27,12 @@
 | DOC-REQ-016 | `docs/Temporal/ActivityCatalogAndWorkerTopology.md` §13, Appendix A (lines 570-595, 611-645) | The v1 implementation sequence and MVP catalog must include the baseline worker fleets and the initial artifact, planning, skill, sandbox, integration, and lifecycle activity types listed in the appendix. |
 | DOC-REQ-017 | `docs/Temporal/ActivityCatalogAndWorkerTopology.md` §3, §14 (lines 71-75, 603-607) | Activities must not update Search Attributes or Memo fields directly; workflows own visibility updates, and the documented queue/priority decisions are fixed for v1 unless an explicit future change is made. |
 | DOC-REQ-018 | Task objective runtime scope guard | Delivery must include production runtime code changes that implement the Activity Catalog and Worker Topology contracts, plus automated validation tests; docs-only completion is not acceptable. |
+| DOC-REQ-019 | `docs/Temporal/WorkflowArtifactSystemDesign.md` §5.3 (Temporal routing contract) | All `artifact.*` activities, including `artifact.read`, must execute on `mm.activity.artifacts`; workflows must not route artifact operations to non-artifact queues. |
+| DOC-REQ-020 | `docs/Temporal/WorkflowArtifactSystemDesign.md` §5.3 (Temporal routing contract) | Queue selection for artifact operations must come from the activity catalog/worker topology configuration rather than duplicated queue constants in workflow logic. |
+| DOC-REQ-021 | `docs/Temporal/TemporalAgentExecution.md` §2.5, §5 Task 1 | `_run_execution_stage` must read the plan artifact and dispatch each plan node through `mm.skill.execute` instead of using an execution stub. |
+| DOC-REQ-022 | `docs/Temporal/TemporalAgentExecution.md` §5 Task 1 | Skill activity dispatch in execution stage must resolve routing/timeouts through `TemporalActivityCatalog.resolve_skill()` when registry metadata is available. |
+| DOC-REQ-023 | `docs/Temporal/TemporalAgentExecution.md` §5 Task 1 | Plan execution must honor plan-level failure policy (`FAIL_FAST` vs `CONTINUE`) and respect dependency edges when determining node execution order. |
+| DOC-REQ-024 | `docs/Temporal/TemporalAgentExecution.md` §5 Task 1 | Workflow execution progress should be visible through memo updates during plan-node execution so operators can see active progress instead of stale summaries. |
 
 Each `DOC-REQ-*` listed above maps to at least one functional requirement below.
 
@@ -36,6 +42,11 @@ Each `DOC-REQ-*` listed above maps to at least one functional requirement below.
 
 - Q: For this feature, does the implementation scope stop at Appendix A's suggested MVP list, or does it cover the full canonical activity system described across Sections 6-8 of the source document? → A: The feature scope follows the full canonical system described in the source document because the task objective requires fully implementing the Activity Catalog and Worker Topology; Appendix A is the minimum seed catalog, not the delivery ceiling.
 - Q: What qualifies as a valid curated explicit skill-to-activity binding instead of the default `mm.skill.execute` path? → A: The registry may use an explicit activity binding only when it declares a concrete operational reason: stronger isolation, specialized credentials, or clearer routing; otherwise the default path remains `mm.skill.execute`.
+
+### Session 2026-03-12
+
+- Q: Which queue must handle `artifact.read(plan_ref)` inside `MoonMind.Run`? → A: The operation must route through the artifact activity family queue (`mm.activity.artifacts`) via catalog-resolved routing; routing to `mm.activity.llm` is non-compliant.
+- Q: How should workflow node dispatch pick queue/timeout once plan nodes are decoded? → A: Use activity-catalog resolution (`resolve_skill` with pinned registry definitions where available) and honor plan DAG edges and failure mode.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -94,6 +105,7 @@ As an operator, I can monitor, retry, and recover activity execution safely beca
 - Workflow visibility needs updating after an activity result, but the activity itself must not write Search Attributes or Memo fields.
 - Local one-click mode uses disabled end-user auth while object storage still must remain private on the internal network.
 - A skill is mapped to a curated explicit activity type without a registry-declared operational reason and must be rejected instead of bypassing the default dispatcher.
+- A plan artifact exists but registry snapshot data is missing or does not contain a referenced skill node; execution must fail clearly instead of hanging on an unresolved queue route.
 
 ## Requirements *(mandatory)*
 
@@ -119,6 +131,11 @@ As an operator, I can monitor, retry, and recover activity execution safely beca
 - **FR-018**: The system MUST emit structured activity logs, fleet metrics, and trace correlation data, and MUST write large log streams to artifacts referenced from results or summaries. (DOC-REQ-014)
 - **FR-019**: The system MUST provide validation coverage for activity contract correctness, routing to the proper fleet, load-sensitive behavior, failure injection scenarios, and traceability between catalog changes, contracts, and runtime tests. (DOC-REQ-015)
 - **FR-020**: The implementation MUST include every activity type listed in Appendix A as the minimum v1 seed catalog, and this feature's full-delivery scope MUST also satisfy the broader canonical family contracts defined above where they extend beyond that appendix list. (DOC-REQ-016)
+- **FR-021**: `MoonMind.Run` MUST execute `artifact.read` and other artifact-family calls on the artifact fleet queue resolved from catalog topology (`mm.activity.artifacts` in v1), never by hardcoding the LLM queue for artifact IO. (DOC-REQ-019, DOC-REQ-020)
+- **FR-022**: `_run_execution_stage` MUST deserialize a plan artifact and dispatch each decoded node through `mm.skill.execute` rather than using a command stub. (DOC-REQ-021)
+- **FR-023**: For each dispatched node, queue and timeout/retry policy MUST come from catalog routing metadata, using `resolve_skill` with registry-backed definitions when available and failing clearly on missing registry entries. (DOC-REQ-022)
+- **FR-024**: Plan-node execution ordering MUST respect plan dependency edges and MUST apply plan failure policy semantics (`FAIL_FAST` vs `CONTINUE`) during node execution. (DOC-REQ-023)
+- **FR-025**: Workflow memo summaries MUST be updated during node execution so operators can observe live execution progress without waiting for finalization. (DOC-REQ-024)
 
 ### Key Entities *(include if feature involves data)*
 
@@ -150,3 +167,5 @@ As an operator, I can monitor, retry, and recover activity execution safely beca
 - **SC-004**: Automated security and topology validation shows each fleet only receives the privileges and secret scope documented for its role, with no sandbox access to provider-only credentials.
 - **SC-005**: Automated observability tests confirm activity logs and summaries always include workflow/run/activity/correlation identifiers and artifact-backed log references where output is large.
 - **SC-006**: Release acceptance for this feature includes production runtime implementation changes plus validation test coverage for catalog contracts, worker routing, and failure behavior, with no docs-only path accepted as complete.
+- **SC-007**: Workflow execution tests confirm `artifact.read(plan_ref)` is consumed from `mm.activity.artifacts` and no execution stalls waiting on a non-artifact queue route.
+- **SC-008**: Workflow execution tests confirm node dispatch uses catalog-resolved routing policies and updates memo summary per step while honoring plan failure mode and dependency edges.
