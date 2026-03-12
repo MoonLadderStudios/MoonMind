@@ -7,9 +7,14 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
 
+concurrency:
+  group: pytest-unit-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
     - name: Check out code
       uses: actions/checkout@v6
@@ -51,21 +56,72 @@ jobs:
       run: |
         set -euo pipefail
 
-        ./tools/test_unit.sh --python-only --no-xdist tests/unit/workflows > /tmp/unit-workflows.log 2>&1 &
-        pid_workflows=$!
+        declare -A SHARD_PIDS=()
+        declare -a SHARD_NAMES=()
 
-        ./tools/test_unit.sh --python-only --no-xdist \
+        start_shard() {
+          local shard_name="$1"
+          shift
+          (
+            set +e
+            local started ended shard_status
+            started="$(date +%s)"
+            echo "[${shard_name}] started at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            ./tools/test_unit.sh --python-only --no-xdist "$@" \
+              2>&1 | sed -u "s/^/[${shard_name}] /"
+            shard_status="${PIPESTATUS[0]}"
+            ended="$(date +%s)"
+            echo "[${shard_name}] completed in $((ended - started))s with exit ${shard_status}"
+            exit "${shard_status}"
+          ) &
+          SHARD_PIDS["${shard_name}"]=$!
+          SHARD_NAMES+=("${shard_name}")
+        }
+
+        # Emit a periodic heartbeat so long-running shards are visibly active.
+        (
+          while true; do
+            sleep 60
+            echo "[heartbeat] unit shards still running at $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          done
+        ) &
+        heartbeat_pid=$!
+        trap 'kill "${heartbeat_pid}" 2>/dev/null || true' EXIT
+
+        start_shard workflows-core \
+          tests/unit/workflows/adapters \
+          tests/unit/workflows/agent_queue \
+          tests/unit/workflows/orchestrator \
+          tests/unit/workflows/recurring_tasks \
+          tests/unit/workflows/task_proposals \
+          tests/unit/workflows/tasks \
+          tests/unit/workflows/test_celeryconfig.py \
+          tests/unit/workflows/test_services.py \
+          tests/unit/workflows/test_skill_plan_runtime.py \
+          tests/unit/workflows/test_skills_materializer.py \
+          tests/unit/workflows/test_skills_registry.py \
+          tests/unit/workflows/test_skills_resolver.py \
+          tests/unit/workflows/test_skills_runner.py \
+          tests/unit/workflows/test_spec_automation_env.py \
+          tests/unit/workflows/test_storage.py \
+          tests/unit/workflows/test_task_payload_templates.py \
+          tests/unit/workflows/test_tasks.py \
+          tests/unit/workflows/test_worker_entrypoints.py \
+          tests/unit/workflows/test_workspace_links.py
+
+        start_shard workflows-temporal \
+          tests/unit/workflows/temporal
+
+        start_shard api \
           tests/unit/api \
           tests/unit/api_service \
           tests/unit/auth \
           tests/unit/config \
           tests/unit/planning \
           tests/unit/services \
-          tests/unit/specs \
-          > /tmp/unit-api.log 2>&1 &
-        pid_api=$!
+          tests/unit/specs
 
-        ./tools/test_unit.sh --python-only --no-xdist \
+        start_shard misc \
           tests/unit/agents \
           tests/unit/celery_worker \
           tests/unit/claude \
@@ -78,18 +134,18 @@ jobs:
           tests/unit/test_batch_pr_resolver.py \
           tests/unit/test_models_cache.py \
           tests/unit/test_pr_resolver_tools.py \
-          tests/unit/test_sync.py \
-          > /tmp/unit-misc.log 2>&1 &
-        pid_misc=$!
+          tests/unit/test_sync.py
 
         status=0
-        wait "$pid_workflows" || status=$?
-        wait "$pid_api" || status=$?
-        wait "$pid_misc" || status=$?
+        for shard_name in "${SHARD_NAMES[@]}"; do
+          shard_status=0
+          wait "${SHARD_PIDS[${shard_name}]}" || shard_status=$?
+          if [[ "${shard_status}" -ne 0 ]]; then
+            status="${shard_status}"
+          fi
+        done
 
-        cat /tmp/unit-workflows.log
-        cat /tmp/unit-api.log
-        cat /tmp/unit-misc.log
+        kill "${heartbeat_pid}" 2>/dev/null || true
 
         if [[ "$status" -ne 0 ]]; then
           exit "$status"
