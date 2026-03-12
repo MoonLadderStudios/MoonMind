@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
-from temporalio import workflow
+from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 
 DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
@@ -90,9 +90,15 @@ class MoonMindRunWorkflow:
 
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
-        workflow_type, parameters, input_ref, plan_ref = self._initialize_from_payload(
-            input_payload
-        )
+        try:
+            workflow_type, parameters, input_ref, plan_ref = (
+                self._initialize_from_payload(input_payload)
+            )
+        except ValueError as exc:
+            raise exceptions.ApplicationError(
+                str(exc),
+                non_retryable=True,
+            ) from exc
         workflow.logger.info(
             "Starting MoonMind.Run workflow",
             extra={"workflow_type": workflow_type},
@@ -439,8 +445,9 @@ class MoonMindRunWorkflow:
             search_attributes, OWNER_ID_SEARCH_ATTRIBUTE
         )
         if not owner_type or not owner_id:
-            raise ValueError(
-                "Trusted owner metadata is required in Temporal search attributes"
+            raise exceptions.ApplicationError(
+                "Trusted owner metadata is required in Temporal search attributes",
+                non_retryable=True,
             )
         return owner_type, owner_id
 

@@ -340,8 +340,13 @@ class TemporalExecutionService:
                 memo=memo,
                 search_attributes=search_attributes,
             )
-            if start_result.run_id != record.run_id:
-                record.run_id = start_result.run_id
+            start_run_id = getattr(start_result, "run_id", None)
+            if (
+                isinstance(start_run_id, str)
+                and start_run_id.strip()
+                and start_run_id != record.run_id
+            ):
+                record.run_id = start_run_id
                 await self._session.commit()
                 await self._session.refresh(record)
         except Exception as exc:

@@ -76,12 +76,14 @@ class ToolActivityDispatcher:
         )
         activity_type = definition.executor.activity_type
 
-        if activity_type == "mm.skill.execute":
+        if activity_type in {"mm.tool.execute", "mm.skill.execute"}:
             handler = self._skill_handlers.get(invocation.skill_key)
             if handler is None:
                 raise ToolDispatchError(
                     "skill_handler_not_registered",
-                    f"No mm.skill.execute handler registered for {invocation.skill_name}:{invocation.skill_version}",
+                    "No "
+                    f"{activity_type} handler registered for "
+                    f"{invocation.skill_name}:{invocation.skill_version}",
                 )
             result = handler(invocation.inputs, context)
         else:
