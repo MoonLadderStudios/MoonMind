@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.executions import (
     _get_service,
+    get_temporal_client,
     _serialize_execution,
     router,
 )
@@ -117,12 +118,19 @@ def _build_execution_record(
     )
 
 
+def _override_temporal_client(app: FastAPI) -> AsyncMock:
+    client = AsyncMock()
+    app.dependency_overrides[get_temporal_client] = lambda: client
+    return client
+
+
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: service
+    _override_temporal_client(app)
     user = _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
@@ -136,6 +144,7 @@ def _client_with_service() -> Iterator[tuple[TestClient, AsyncMock]]:
     app.include_router(router)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
 
     with TestClient(app) as test_client:
@@ -154,6 +163,7 @@ def test_list_executions_passes_temporal_filters_for_admin() -> None:
         count=0,
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
 
     owner_id = uuid4()
@@ -191,6 +201,7 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     app.include_router(router)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
@@ -211,6 +222,7 @@ def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> Non
         count=0,
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     mock_user = _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
@@ -232,6 +244,7 @@ def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None
         count=0,
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     mock_user = _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
@@ -248,6 +261,7 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
     app.include_router(router)
     mock_service = AsyncMock()
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
 
     with TestClient(app) as test_client:
@@ -598,6 +612,7 @@ def test_describe_execution_includes_actions_and_debug_fields(
         state=MoonMindWorkflowState.AWAITING_EXTERNAL
     )
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", True)
@@ -625,6 +640,7 @@ def test_describe_execution_disables_actions_when_feature_flag_off(
     mock_service = AsyncMock()
     mock_service.describe_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", False)
     monkeypatch.setattr(settings.temporal_dashboard, "debug_fields_enabled", False)
@@ -645,7 +661,9 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", False)
 

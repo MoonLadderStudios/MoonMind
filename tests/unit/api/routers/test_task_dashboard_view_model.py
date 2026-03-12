@@ -281,14 +281,15 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
     monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
     monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
+    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "codex")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
     monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
 
     assert config["system"]["defaultRepository"] == "Octo/Repo"
-    assert config["system"]["defaultTaskModel"] == "gemini-2.5-pro"
-    assert config["system"]["defaultTaskEffort"] == ""
+    assert config["system"]["defaultTaskModel"] == "gpt-test-codex"
+    assert config["system"]["defaultTaskEffort"] == "medium"
     assert config["system"]["defaultTaskModelByRuntime"]["codex"] == "gpt-test-codex"
     assert config["system"]["defaultTaskModelByRuntime"]["gemini"] == "gemini-2.5-pro"
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"

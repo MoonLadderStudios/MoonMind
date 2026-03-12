@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
+from importlib import import_module
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
-from moonmind.workflows.speckit_celery import celery_app  # noqa: F401
-from moonmind.workflows.speckit_celery.orchestrator import (  # noqa: F401
-    TriggeredWorkflow,
-    WorkflowConflictError,
-    WorkflowRetryError,
-    retry_spec_workflow_run,
-    trigger_spec_workflow_run,
-)
 from moonmind.workflows.speckit_celery.repositories import (
     SpecAutomationRepository,
     SpecWorkflowRepository,
@@ -86,6 +80,21 @@ def get_temporal_artifact_service(session: AsyncSession) -> TemporalArtifactServ
     """Factory helper returning Temporal artifact service for one session."""
 
     return TemporalArtifactService(get_temporal_artifact_repository(session))
+
+
+def __getattr__(name: str):
+    if name == "celery_app":
+        return import_module("moonmind.workflows.speckit_celery").celery_app
+    if name in {
+        "TriggeredWorkflow",
+        "WorkflowConflictError",
+        "WorkflowRetryError",
+        "retry_spec_workflow_run",
+        "trigger_spec_workflow_run",
+    }:
+        module = import_module("moonmind.workflows.speckit_celery.orchestrator")
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = sorted(
