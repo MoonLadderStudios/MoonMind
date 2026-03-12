@@ -2497,7 +2497,19 @@
 
   const shouldUseTemporalSubmit = (runtimeMode, options = {}) => {
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
-    return normalizedMode !== ORCHESTRATOR_RUNTIME;
+    const temporalSubmitEnabled = Boolean(options.temporalSubmitEnabled);
+    const isEditMode = Boolean(options.isEditMode);
+    const preferQueueSubmit = Boolean(options.preferQueueSubmit);
+    if (!temporalSubmitEnabled) {
+      return false;
+    }
+    if (normalizedMode === ORCHESTRATOR_RUNTIME) {
+      return false;
+    }
+    if (isEditMode || preferQueueSubmit) {
+      return false;
+    }
+    return true;
   };
 
   const determineSubmitDestination = (runtimeMode, endpoints = {}, options = {}) => {
