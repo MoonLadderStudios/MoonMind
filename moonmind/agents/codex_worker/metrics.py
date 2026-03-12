@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping
 
-from moonmind.workflows.speckit_celery.tasks import _MetricsEmitter
+from moonmind.utils.metrics import _MetricsEmitter
 
 
 class WorkerMetrics:

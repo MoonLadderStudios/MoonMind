@@ -1,4 +1,8 @@
-"""SQLAlchemy models for Spec Kit Celery workflow persistence."""
+"""SQLAlchemy models for Spec Automation workflow persistence.
+
+This module was formerly part of moonmind.workflows.speckit_celery.models
+and has been moved here as part of the Celery removal.
+"""
 
 from __future__ import annotations
 
@@ -58,7 +62,7 @@ class CodexAuthVolumeStatus(str, enum.Enum):
 
 
 class CodexWorkerShardStatus(str, enum.Enum):
-    """Lifecycle states for Codex-focused Celery workers."""
+    """Lifecycle states for Codex-focused workers."""
 
     ACTIVE = "active"
     DRAINING = "draining"
@@ -132,7 +136,7 @@ class CodexAuthVolume(Base):
 
 
 class CodexWorkerShard(Base):
-    """Celery worker dedicated to Codex tasks and its routing metadata."""
+    """Worker dedicated to Codex tasks and its routing metadata."""
 
     __tablename__ = "codex_worker_shards"
     __table_args__ = (
@@ -549,6 +553,10 @@ __all__ = [
     "WorkflowArtifact",
     "WorkflowArtifactType",
     "CredentialAuditResult",
+    "CodexAuthVolume",
+    "CodexAuthVolumeStatus",
+    "CodexWorkerShard",
+    "CodexWorkerShardStatus",
     "SpecAutomationRun",
     "SpecAutomationRunStatus",
     "SpecAutomationPhase",

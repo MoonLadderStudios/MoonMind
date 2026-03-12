@@ -21,8 +21,9 @@ from moonmind.schemas.workflow_models import (
     SpecAutomationPhaseState,
     SpecAutomationRunDetail,
 )
-from moonmind.workflows import SpecAutomationRepository, get_spec_automation_repository
-from moonmind.workflows.speckit_celery import models
+from moonmind.workflows import get_spec_automation_repository
+from moonmind.workflows.spec_automation import models
+from moonmind.workflows.spec_automation.repositories import SpecAutomationRepository
 
 router = APIRouter(prefix="/api/spec-automation", tags=["SpecAutomation"])
 

@@ -14,7 +14,7 @@ from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from moonmind.workflows.speckit_celery import models
+from moonmind.workflows.spec_automation import models
 
 _UNSET: object = object()
 _DEFAULT_ARTIFACT_RETENTION = timedelta(days=7)

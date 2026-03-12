@@ -84,7 +84,7 @@ from moonmind.workflows.skills.workspace_links import (
     SkillWorkspaceError,
     ensure_shared_skill_links,
 )
-from moonmind.workflows.speckit_celery.workspace import generate_branch_name
+from moonmind.workflows.spec_automation.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
 

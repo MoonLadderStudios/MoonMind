@@ -58,10 +58,6 @@ def resolve_worker_queue(
         if legacy:
             return legacy
 
-    celery_default = (env_map.get("CELERY_DEFAULT_QUEUE") or "").strip()
-    if celery_default:
-        return celery_default
-
     return default_queue.strip() or "moonmind.jobs"
 
 
@@ -184,3 +180,23 @@ def inspect_claude_home_for_auth_mode(
         return normalized_home, "not_writable_for_oauth"
 
     return normalized_home, None
+
+
+__all__ = [
+    "ALLOWED_CLAUDE_CLI_AUTH_MODES",
+    "ALLOWED_GEMINI_CLI_AUTH_MODES",
+    "ALLOWED_WORKER_RUNTIMES",
+    "ClaudeHomeValidationIssue",
+    "GeminiHomeValidationIssue",
+    "format_invalid_claude_cli_auth_mode_error",
+    "format_invalid_gemini_cli_auth_mode_error",
+    "inspect_claude_home_for_auth_mode",
+    "inspect_gemini_home_for_auth_mode",
+    "is_invalid_claude_cli_auth_mode",
+    "is_invalid_gemini_cli_auth_mode",
+    "resolve_claude_cli_auth_mode",
+    "resolve_gemini_cli_auth_mode",
+    "resolve_worker_queue",
+    "resolve_worker_runtime",
+    "summarize_untrusted_auth_mode_value",
+]

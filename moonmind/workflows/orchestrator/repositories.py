@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from api_service.db import models as db_models
 from moonmind.schemas.workflow_models import OrchestratorTaskStepInputModel
-from moonmind.workflows.speckit_celery import models as workflow_models
+from moonmind.workflows.spec_automation import models as workflow_models
 
 _TASK_STEP_FIELD_UNSET = object()
 

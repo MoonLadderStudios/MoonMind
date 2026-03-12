@@ -8,11 +8,6 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
-if TYPE_CHECKING:
-    from moonmind.workflows.speckit_celery.models import (
-        CodexAuthVolume,
-        CodexWorkerShard,
-    )
 
 from fastapi_users.db import SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
@@ -2240,7 +2235,7 @@ def _register_workflow_model_dependencies() -> None:
     if TYPE_CHECKING:
         return
 
-    import_module("moonmind.workflows.speckit_celery.models")
+    import_module("moonmind.workflows.spec_automation.models")
     import_module("moonmind.workflows.agent_queue.models")
 
 

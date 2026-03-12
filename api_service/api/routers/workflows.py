@@ -31,7 +31,6 @@ from moonmind.schemas.workflow_models import (
     WorkflowTaskStateListResponse,
 )
 from moonmind.workflows import (
-    SpecWorkflowRepository,
     TriggeredWorkflow,
     WorkflowConflictError,
     WorkflowRetryError,
@@ -39,14 +38,19 @@ from moonmind.workflows import (
     retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
-from moonmind.workflows.speckit_celery import models
-from moonmind.workflows.speckit_celery.celeryconfig import get_codex_shard_router
-from moonmind.workflows.speckit_celery.serializers import (
+from moonmind.workflows.spec_automation.repositories import SpecWorkflowRepository
+from moonmind.workflows.spec_automation import models
+from moonmind.workflows.spec_automation.preflight import run_codex_preflight_check
+from moonmind.workflows.spec_automation.repositories import (
+    CodexShardHealth,
+    PaginatedSpecWorkflowRuns,
+)
+from moonmind.workflows.spec_automation.router import get_codex_shard_router
+from moonmind.workflows.spec_automation.serializers import (
     serialize_artifact_collection,
     serialize_run,
     serialize_task_collection,
 )
-from moonmind.workflows.speckit_celery.tasks import run_codex_preflight_check
 
 logger = logging.getLogger(__name__)
 

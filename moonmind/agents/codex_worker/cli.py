@@ -10,7 +10,7 @@ import re
 import subprocess
 from typing import Mapping, Sequence
 
-from celery_worker.runtime_mode import (
+from moonmind.agents.codex_worker.runtime_mode import (
     format_invalid_claude_cli_auth_mode_error,
     format_invalid_gemini_cli_auth_mode_error,
     inspect_claude_home_for_auth_mode,
