@@ -3,6 +3,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+RUN_PYTHON_TESTS=1
+RUN_DASHBOARD_TESTS=1
+USE_XDIST=1
+PYTEST_TARGETS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --python-only)
+            RUN_DASHBOARD_TESTS=0
+            shift
+            ;;
+        --dashboard-only)
+            RUN_PYTHON_TESTS=0
+            shift
+            ;;
+        --no-xdist)
+            USE_XDIST=0
+            shift
+            ;;
+        --)
+            shift
+            while [[ $# -gt 0 ]]; do
+                PYTEST_TARGETS+=("$1")
+                shift
+            done
+            ;;
+        *)
+            PYTEST_TARGETS+=("$1")
+            shift
+            ;;
+    esac
+done
+
 is_wsl() {
     if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
         return 0
@@ -44,14 +77,21 @@ else
 fi
 
 PYTEST_PARALLEL_ARGS=()
-if "$PYTHON_BIN" -c "import xdist" >/dev/null 2>&1; then
+if [[ "$USE_XDIST" == "1" ]] && "$PYTHON_BIN" -c "import xdist" >/dev/null 2>&1; then
     PYTEST_PARALLEL_ARGS=(-n auto --dist loadscope)
-else
+elif [[ "$USE_XDIST" == "1" ]]; then
     echo "Warning: pytest-xdist is not installed; running unit tests without parallel workers." >&2
 fi
 
-"$PYTHON_BIN" -m pytest -q "${PYTEST_PARALLEL_ARGS[@]}" tests/unit
+if [[ ${#PYTEST_TARGETS[@]} -eq 0 ]]; then
+    PYTEST_TARGETS=(tests/unit)
+fi
 
+if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then
+    "$PYTHON_BIN" -m pytest -q "${PYTEST_PARALLEL_ARGS[@]}" "${PYTEST_TARGETS[@]}"
+fi
+
+if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
 if command -v node >/dev/null 2>&1; then
     for test_file in \
         tests/task_dashboard/test_queue_layouts.js \
@@ -65,4 +105,5 @@ if command -v node >/dev/null 2>&1; then
 else
     echo "Error: node is required to run dashboard runtime tests." >&2
     exit 127
+fi
 fi

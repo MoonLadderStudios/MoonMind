@@ -65,7 +65,53 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        ./tools/test_unit.sh
+        set -euo pipefail
+
+        ./tools/test_unit.sh --python-only --no-xdist tests/unit/workflows > /tmp/unit-workflows.log 2>&1 &
+        pid_workflows=$!
+
+        ./tools/test_unit.sh --python-only --no-xdist \
+          tests/unit/api \
+          tests/unit/api_service \
+          tests/unit/auth \
+          tests/unit/config \
+          tests/unit/planning \
+          tests/unit/services \
+          tests/unit/specs \
+          > /tmp/unit-api.log 2>&1 &
+        pid_api=$!
+
+        ./tools/test_unit.sh --python-only --no-xdist \
+          tests/unit/agents \
+          tests/unit/celery_worker \
+          tests/unit/claude \
+          tests/unit/factories \
+          tests/unit/indexers \
+          tests/unit/jules \
+          tests/unit/manifest \
+          tests/unit/mcp \
+          tests/unit/moonmind \
+          tests/unit/test_batch_pr_resolver.py \
+          tests/unit/test_models_cache.py \
+          tests/unit/test_pr_resolver_tools.py \
+          tests/unit/test_sync.py \
+          > /tmp/unit-misc.log 2>&1 &
+        pid_misc=$!
+
+        status=0
+        wait "$pid_workflows" || status=$?
+        wait "$pid_api" || status=$?
+        wait "$pid_misc" || status=$?
+
+        cat /tmp/unit-workflows.log
+        cat /tmp/unit-api.log
+        cat /tmp/unit-misc.log
+
+        if [[ "$status" -ne 0 ]]; then
+          exit "$status"
+        fi
+
+        ./tools/test_unit.sh --dashboard-only
 
 
   # integration:
