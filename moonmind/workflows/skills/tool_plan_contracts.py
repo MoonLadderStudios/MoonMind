@@ -19,8 +19,8 @@ SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 EXPLICIT_BINDING_REASONS = frozenset(
     {"stronger_isolation", "specialized_credentials", "clearer_routing"}
 )
-_LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
-_DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
+_LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
+_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
 OBSERVABILITY_OUTCOMES = frozenset({"succeeded", "failed", "cancelled", "partial"})
 SKILL_FAILURE_CODES = frozenset(
     {

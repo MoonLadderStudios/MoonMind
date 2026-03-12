@@ -42,6 +42,9 @@ from moonmind.workflows.recurring_tasks.cron import (
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_SCHEDULER_MAX_BACKFILL = 3
+_DEFAULT_SCHEDULER_BATCH_SIZE = 50
+
 
 class RecurringTaskValidationError(ValueError):
     """Raised when recurring task inputs are invalid."""
@@ -362,7 +365,7 @@ class RecurringTasksService:
         policy_payload = _json_object(policy, field_name="policy")
         _normalize_policy(
             policy_payload,
-            global_max_backfill=3,
+            global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
         )
         scope = _normalize_scope_type(scope_type)
 
@@ -443,7 +446,7 @@ class RecurringTasksService:
             normalized_policy_payload = _json_object(policy, field_name="policy")
             _normalize_policy(
                 normalized_policy_payload,
-                global_max_backfill=3,
+                global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
             )
             definition.policy = normalized_policy_payload
         if scope_ref is not None:
@@ -626,10 +629,10 @@ class RecurringTasksService:
         max_backfill: int | None = None,
     ) -> int:
         reference_now = _coerce_utc(now or datetime.now(UTC))
-        batch = max(1, int(batch_size or 50))
+        batch = max(1, int(batch_size or _DEFAULT_SCHEDULER_BATCH_SIZE))
         global_backfill = max(
             1,
-            int(max_backfill or 3),
+            int(max_backfill or _DEFAULT_SCHEDULER_MAX_BACKFILL),
         )
 
         stmt: Select[tuple[RecurringTaskDefinition]] = (
