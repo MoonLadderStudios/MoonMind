@@ -203,9 +203,9 @@ MoonMind will standardize on Temporal-native scheduling mechanisms (Schedules) f
 * No cron/beat-style external schedulers for Temporal-driven workflows.
 * Scheduling definitions are managed as Temporal Schedule objects and controlled via Temporal CLI/automation.
 
-Existing non-Temporal schedulers may remain for flows that have not yet migrated.
+The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules and Timers are now the authoritative mechanism for all recurring and time-based workflow starts.
 
-(Details live in a separate “Scheduling” system doc.)
+(Details live in a separate "Scheduling" system doc.)
 
 ---
 

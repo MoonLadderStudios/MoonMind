@@ -1,4 +1,4 @@
-"""Service layer for recurring task definitions and scheduler dispatch."""
+"""Service layer for recurring task definitions and Temporal-driven dispatch."""
 
 from __future__ import annotations
 
@@ -258,7 +258,7 @@ def _coerce_utc(value: datetime) -> datetime:
 
 
 class RecurringTasksService:
-    """CRUD and scheduler helpers for recurring definitions."""
+    """CRUD and dispatch helpers for recurring definitions."""
 
     def __init__(
         self,
@@ -362,9 +362,7 @@ class RecurringTasksService:
         policy_payload = _json_object(policy, field_name="policy")
         _normalize_policy(
             policy_payload,
-            global_max_backfill=max(
-                1, int(settings.spec_workflow.scheduler_max_backfill)
-            ),
+            global_max_backfill=3,
         )
         scope = _normalize_scope_type(scope_type)
 
@@ -445,9 +443,7 @@ class RecurringTasksService:
             normalized_policy_payload = _json_object(policy, field_name="policy")
             _normalize_policy(
                 normalized_policy_payload,
-                global_max_backfill=max(
-                    1, int(settings.spec_workflow.scheduler_max_backfill)
-                ),
+                global_max_backfill=3,
             )
             definition.policy = normalized_policy_payload
         if scope_ref is not None:
@@ -630,10 +626,10 @@ class RecurringTasksService:
         max_backfill: int | None = None,
     ) -> int:
         reference_now = _coerce_utc(now or datetime.now(UTC))
-        batch = max(1, int(batch_size or settings.spec_workflow.scheduler_batch_size))
+        batch = max(1, int(batch_size or 50))
         global_backfill = max(
             1,
-            int(max_backfill or settings.spec_workflow.scheduler_max_backfill),
+            int(max_backfill or 3),
         )
 
         stmt: Select[tuple[RecurringTaskDefinition]] = (
@@ -1256,7 +1252,7 @@ class RecurringTasksService:
         batch_size: int | None = None,
     ) -> int:
         reference_now = _coerce_utc(now or datetime.now(UTC))
-        batch = max(1, int(batch_size or settings.spec_workflow.scheduler_batch_size))
+        batch = max(1, int(batch_size or 50))
 
         stmt: Select[tuple[RecurringTaskRun]] = (
             select(RecurringTaskRun)
@@ -1288,7 +1284,7 @@ class RecurringTasksService:
         if not pending_runs:
             return dispatched
 
-        max_backfill = max(1, int(settings.spec_workflow.scheduler_max_backfill))
+        max_backfill = 3
 
         definition_ids = list(
             {r.definition_id for r in pending_runs if r.definition_id}

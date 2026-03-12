@@ -1,3 +1,6 @@
+> [!NOTE]
+> **Archived spec.** The `moonmind-scheduler` daemon described in this spec has been removed. Temporal Schedules and Timers are now the authoritative mechanism for all recurring workflow starts. This document is retained for historical reference only.
+
 # Implementation Plan: Task Recurring Schedules System
 
 **Branch**: `041-task-recurring-schedules` | **Date**: 2026-02-24 | **Spec**: `specs/041-task-recurring-schedules/spec.md`  

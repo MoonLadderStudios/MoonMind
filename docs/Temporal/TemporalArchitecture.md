@@ -125,7 +125,6 @@ MoonMind currently contains:
 - Postgres
 - Qdrant
 - runtime workers
-- scheduler
 - Celery + RabbitMQ stack
 - `mm-orchestrator`
 - Temporal foundation services in Compose
@@ -420,7 +419,7 @@ For Temporal-managed flows:
 - prefer callback-first integration patterns
 - use timer-based polling only as a fallback when callbacks are unavailable
 
-Existing non-Temporal scheduler paths may remain until the corresponding flow is migrated.
+The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules and Timers are now the authoritative mechanism for all recurring and time-based workflow starts.
 
 ## 16. Reliability and security
 
