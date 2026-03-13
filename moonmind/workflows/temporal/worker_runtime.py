@@ -96,6 +96,37 @@ def _build_auto_runtime_command(
     return command
 
 
+def _resolve_gemini_command_env() -> dict[str, str | None]:
+    raw_mode = str(os.environ.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip()
+    auth_mode = raw_mode.lower() if raw_mode else "api_key"
+    if auth_mode not in {"api_key", "oauth"}:
+        raise RuntimeError(
+            "MOONMIND_GEMINI_CLI_AUTH_MODE must be one of: api_key, oauth"
+        )
+
+    if auth_mode == "oauth":
+        gemini_home = str(
+            os.environ.get("GEMINI_CLI_HOME") or os.environ.get("GEMINI_HOME") or ""
+        ).strip()
+        if not gemini_home:
+            raise RuntimeError(
+                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth requires GEMINI_CLI_HOME or GEMINI_HOME"
+            )
+        return {
+            "GEMINI_HOME": gemini_home,
+            "GEMINI_CLI_HOME": gemini_home,
+            "GEMINI_API_KEY": None,
+            "GOOGLE_API_KEY": None,
+        }
+
+    # api_key mode: Gemini CLI expects GEMINI_API_KEY for API-key auth.
+    gemini_api_key = str(os.environ.get("GEMINI_API_KEY", "")).strip()
+    google_api_key = str(os.environ.get("GOOGLE_API_KEY", "")).strip()
+    if not gemini_api_key and google_api_key:
+        return {"GEMINI_API_KEY": google_api_key}
+    return {}
+
+
 def _resolve_task_tool(task_payload: Mapping[str, Any]) -> tuple[str, str, dict[str, Any]]:
     tool_payload = _coerce_mapping(task_payload.get("tool"))
     skill_payload = _coerce_mapping(task_payload.get("skill"))
@@ -336,13 +367,16 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 model=model if isinstance(model, str) else None,
                 effort=effort if isinstance(effort, str) else None,
             )
-            command_env: dict[str, str] | None = None
+            command_env: dict[str, str | None] | None = None
             if target_runtime == "gemini":
-                # Gemini CLI expects GEMINI_API_KEY for API-key auth.
-                gemini_api_key = str(os.environ.get("GEMINI_API_KEY", "")).strip()
-                google_api_key = str(os.environ.get("GOOGLE_API_KEY", "")).strip()
-                if not gemini_api_key and google_api_key:
-                    command_env = {"GEMINI_API_KEY": google_api_key}
+                try:
+                    command_env = _resolve_gemini_command_env()
+                except RuntimeError as exc:
+                    return SkillResult(
+                        status="FAILED",
+                        outputs={"error": str(exc)},
+                        progress={"details": "Invalid Gemini CLI auth mode configuration"},
+                    )
 
             try:
                 request_payload: dict[str, Any] = {

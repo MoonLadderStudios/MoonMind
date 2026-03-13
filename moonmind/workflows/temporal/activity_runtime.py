@@ -969,7 +969,7 @@ class TemporalSandboxActivities:
         workspace_ref: str | Path | None = None,
         cmd: str | Sequence[str] | None = None,
         principal: str | None = None,
-        env: Mapping[str, str] | None = None,
+        env: Mapping[str, str | None] | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
         timeout_seconds: float | None = None,
         heartbeat: HeartbeatCallback | None = None,
@@ -1009,7 +1009,12 @@ class TemporalSandboxActivities:
 
         merged_env = os.environ.copy()
         if env:
-            merged_env.update({str(key): str(value) for key, value in env.items()})
+            for key, value in env.items():
+                env_key = str(key)
+                if value is None:
+                    merged_env.pop(env_key, None)
+                    continue
+                merged_env[env_key] = str(value)
 
         process = await asyncio.create_subprocess_exec(
             *command,

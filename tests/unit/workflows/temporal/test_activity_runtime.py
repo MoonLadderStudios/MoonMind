@@ -1014,6 +1014,25 @@ async def test_build_activity_bindings_does_not_mutate_sandbox_method_signatures
             assert result.exit_code == 0
 
 
+async def test_sandbox_run_command_env_allows_unsetting_parent_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MM_TEMP_ENV_UNSET_TEST", "present")
+    sandbox_activities = TemporalSandboxActivities(workspace_root=tmp_path)
+    workspace = tmp_path / "temporal_sandbox" / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    result = await sandbox_activities.sandbox_run_command(
+        workspace_ref=workspace,
+        cmd=("bash", "-lc", '[ -z "${MM_TEMP_ENV_UNSET_TEST+x}" ]'),
+        principal="user-1",
+        env={"MM_TEMP_ENV_UNSET_TEST": None},
+    )
+
+    assert result.exit_code == 0
+
+
 async def test_build_activity_bindings_requires_selected_family_implementation(
     tmp_path: Path,
 ):

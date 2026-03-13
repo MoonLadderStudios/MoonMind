@@ -350,6 +350,9 @@ services:
       - TEMPORAL_WORKER_FLEET=sandbox
       - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
       - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
+      - MOONMIND_GEMINI_CLI_AUTH_MODE=${MOONMIND_GEMINI_CLI_AUTH_MODE:-api_key}
+      - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
     env_file:
       - .env
@@ -357,6 +360,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - agent_workspaces:/work/agent_jobs
     entrypoint:
       - /bin/sh
@@ -367,6 +371,8 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
       agent-workspaces-init:
+        condition: service_completed_successfully
+      gemini-auth-init:
         condition: service_completed_successfully
     networks:
       - local-network
