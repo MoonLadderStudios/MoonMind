@@ -771,6 +771,9 @@
         if (!skipAutoRefresh && !isAutoRefreshActive()) {
           return;
         }
+        if (!skipAutoRefresh && window.getSelection && window.getSelection().toString().trim().length > 0) {
+          return;
+        }
         if (document.visibilityState === "hidden") {
           return;
         }
