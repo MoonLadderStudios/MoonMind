@@ -216,7 +216,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 ):
                     raise RuntimeError("repoRef must be a non-empty string when provided")
                 if checkout_revision is not None and (
-                    not isinstance(checkout_revision, str) or not checkout_revision
+                    not isinstance(checkout_revision, str)
+                    or not checkout_revision.strip()
                 ):
                     raise RuntimeError("branch must be a non-empty string when provided")
                 if workspace_ref is not None and (
