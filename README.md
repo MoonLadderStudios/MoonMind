@@ -9,9 +9,9 @@ Supports Claude Code, Codex, Gemini CLI, Jules, and any agent with an MCP or API
 ## Why MoonMind?
 
 ### Bring Your Own Agent
-Use your own API key, OAuth login, or entire agent runtime with MoonMind.
+Use your own API key, OAuth subscription, or entire agent runtime with MoonMind.
 
-- **More than just an API key:** We support OAuth login with Anthropic (Claude Code), Google (Gemini CLI), and OpenAI (Codex CLI), with more providers coming soon.
+- **More than just an API key:** We support OAuth login and will try to maintain support for leading providers that allow it.
 - **Universal agent support:** Point MoonMind at any agent's MCP or API and it will manage it — even runtimes it wasn't built for.
 - **Cloud agent orchestration:** MoonMind orchestrates cloud agents like Jules and Codex Cloud. Even with only "black box" access, it provides significant value by tracking status, providing context, answering clarifying questions, and following up on open PRs.
 
