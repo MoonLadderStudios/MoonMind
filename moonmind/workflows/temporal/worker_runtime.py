@@ -6,6 +6,7 @@ import os
 import re
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Mapping
 
 from temporalio.client import Client
@@ -36,13 +37,29 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
+from moonmind.workflows.spec_automation.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_AUTO_SKILL_RUNTIMES = frozenset({"codex", "gemini", "claude", "jules"})
+_SUPPORTED_PUBLISH_MODES = frozenset({"none", "branch", "pr"})
+_DEFAULT_GEMINI_ALLOWED_TOOLS = (
+    "activate_skill",
+    "run_shell_command",
+    "replace",
+    "write_file",
+    "web_fetch",
+)
+_FULL_UUID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
+)
 _TOOL_ERROR_PATTERNS = (
     re.compile(r'Error executing tool .*?: Tool ".*?" not found', re.IGNORECASE),
     re.compile(r'Tool ".*?" not found', re.IGNORECASE),
+)
+_GITHUB_PR_URL_PATTERN = re.compile(
+    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
+    re.IGNORECASE,
 )
 
 
@@ -70,10 +87,29 @@ def _build_auto_runtime_command(
     instructions: str,
     model: str | None,
     effort: str | None,
+    workspace_path: str | None = None,
+    gemini_allowed_tools: tuple[str, ...] = (),
 ) -> list[str]:
     if runtime_mode == "gemini":
         # Gemini CLI uses --prompt for one-shot non-interactive execution.
         command = ["gemini", "--prompt", instructions]
+        include_directories: list[str] = []
+        if workspace_path:
+            include_directories.append(workspace_path)
+            workspace = Path(workspace_path)
+            candidate_paths = (
+                workspace / ".agents" / "skills",
+                workspace / ".gemini" / "skills",
+                workspace / "skills_active",
+                workspace.parent / "skills_active",
+            )
+            for candidate in candidate_paths:
+                if candidate.exists():
+                    include_directories.append(str(candidate))
+        for include_dir in dict.fromkeys(include_directories):
+            command.extend(["--include-directories", include_dir])
+        if gemini_allowed_tools:
+            command.extend(["--allowed-tools", ",".join(gemini_allowed_tools)])
         if model:
             command.extend(["--model", model])
         return command
@@ -191,6 +227,113 @@ def _detect_cli_tool_error(stdout_tail: Any, stderr_tail: Any) -> str | None:
     return None
 
 
+def _extract_pull_request_url(stdout_tail: Any, stderr_tail: Any) -> str | None:
+    candidates: list[str] = []
+    if isinstance(stderr_tail, str) and stderr_tail.strip():
+        candidates.append(stderr_tail)
+    if isinstance(stdout_tail, str) and stdout_tail.strip():
+        candidates.append(stdout_tail)
+    if not candidates:
+        return None
+    combined = "\n".join(candidates)
+    match = _GITHUB_PR_URL_PATTERN.search(combined)
+    if match is None:
+        return None
+    return match.group(0)
+
+
+def _normalize_publish_mode(raw_mode: Any) -> str:
+    if raw_mode is None:
+        return ""
+    if not isinstance(raw_mode, str):
+        raise RuntimeError("publishMode must be a string when provided")
+    normalized = raw_mode.strip().lower()
+    if not normalized:
+        return ""
+    if normalized not in _SUPPORTED_PUBLISH_MODES:
+        raise RuntimeError("publishMode must be one of: none, branch, pr")
+    return normalized
+
+
+def _normalize_repository_ref(raw_value: Any) -> str | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, str):
+        raise RuntimeError("repository must be a string when provided")
+    normalized = raw_value.strip()
+    if not normalized:
+        return None
+    if any(character.isspace() for character in normalized):
+        raise RuntimeError("repository must not contain whitespace")
+    return normalized
+
+
+def _normalize_branch_value(field_name: str, raw_value: Any) -> str | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, str):
+        raise RuntimeError(f"{field_name} must be a string when provided")
+    normalized = raw_value.strip()
+    return normalized or None
+
+
+def _derive_branch_suffix_from_instruction(instructions: str) -> str | None:
+    tokens = re.findall(r"[A-Za-z0-9]+", instructions.lower())
+    if not tokens:
+        return None
+    return "-".join(tokens[:4])
+
+
+def _resolve_gemini_allowed_tools() -> tuple[str, ...]:
+    raw = str(os.environ.get("MOONMIND_GEMINI_ALLOWED_TOOLS", "")).strip()
+    if not raw:
+        return _DEFAULT_GEMINI_ALLOWED_TOOLS
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    return values or _DEFAULT_GEMINI_ALLOWED_TOOLS
+
+
+def _branch_generation_key(*, workflow_id: str, node_id: str) -> str:
+    match = _FULL_UUID_PATTERN.search(workflow_id)
+    if match is not None:
+        return match.group(0)
+    return f"{workflow_id}-{node_id}"
+
+
+def _compose_auto_runtime_instructions(
+    *,
+    instructions: str,
+    publish_mode: str,
+    repository: str | None,
+    workspace_path: str | None,
+    starting_branch: str | None,
+    working_branch: str | None,
+) -> str:
+    details: list[str] = []
+    if repository:
+        details.append(f"- Repository: {repository}")
+    if workspace_path:
+        details.append(f"- Workspace: {workspace_path}")
+    if starting_branch:
+        details.append(f"- Starting branch: {starting_branch}")
+    if working_branch:
+        details.append(f"- Working branch: {working_branch}")
+
+    if publish_mode == "pr":
+        details.append(
+            "- Publish mode: pr. Commit and push changes, open a GitHub pull request, "
+            "and print the final PR URL."
+        )
+    elif publish_mode == "branch":
+        details.append(
+            "- Publish mode: branch. Commit and push changes to the working branch, "
+            "and print the branch name."
+        )
+
+    if not details:
+        return instructions.strip()
+    return f"{instructions.strip()}\n\nRUNTIME CONTEXT:\n" + "\n".join(details)
+
+
 def _build_runtime_planner():
     def _runtime_planner(
         inputs: Any,
@@ -214,21 +357,29 @@ def _build_runtime_planner():
         if not node_inputs and inline_tool_inputs:
             node_inputs = dict(inline_tool_inputs)
 
-        if not node_inputs and tool_name == "auto":
+        if not node_inputs:
             instructions = task_payload.get("instructions")
             if instructions is None:
                 instructions = input_payload.get("instructions")
             if instructions is None:
                 instructions = parameter_payload.get("instructions")
+
             if not isinstance(instructions, str) or not instructions.strip():
-                raise RuntimeError(
-                    "auto tool requires non-empty instructions in task.instructions, "
-                    "inputs.instructions, or parameters.instructions"
+                if tool_name == "auto":
+                    raise RuntimeError(
+                        "auto tool requires non-empty instructions in task.instructions, "
+                        "inputs.instructions, or parameters.instructions"
+                    )
+                instructions = (
+                    f"Execute the '{tool_name}' skill for this repository and report "
+                    "the result."
                 )
 
             runtime_payload = _coerce_mapping(task_payload.get("runtime"))
             runtime_mode = _normalize_runtime_mode(
-                runtime_payload.get("mode", parameter_payload.get("targetRuntime"))
+                runtime_payload.get("mode")
+                or parameter_payload.get("targetRuntime")
+                or settings.spec_workflow.default_task_runtime
             )
             runtime_node: dict[str, Any] = {"mode": runtime_mode}
 
@@ -252,10 +403,21 @@ def _build_runtime_planner():
                 "instructions": instructions,
                 "runtime": runtime_node,
             }
+            publish_payload = _coerce_mapping(task_payload.get("publish"))
+            publish_mode = publish_payload.get("mode", parameter_payload.get("publishMode"))
+            normalized_publish_mode = _normalize_publish_mode(publish_mode)
+            if normalized_publish_mode:
+                node_inputs["publishMode"] = normalized_publish_mode
 
-            repository = parameter_payload.get("repository")
-            if isinstance(repository, str) and repository.strip():
-                node_inputs["repo"] = repository.strip()
+            repository = _normalize_repository_ref(
+                task_payload.get("repository")
+                or input_payload.get("repository")
+                or parameter_payload.get("repository")
+                or parameter_payload.get("repo")
+            )
+            if repository:
+                node_inputs["repository"] = repository
+                node_inputs["repo"] = repository
 
             repo_ref = task_payload.get("repoRef")
             if isinstance(repo_ref, str) and repo_ref.strip():
@@ -264,6 +426,22 @@ def _build_runtime_planner():
             branch = task_payload.get("branch")
             if isinstance(branch, str) and branch.strip():
                 node_inputs["branch"] = branch.strip()
+
+            task_git_payload = _coerce_mapping(task_payload.get("git"))
+            if not task_git_payload:
+                task_git_payload = _coerce_mapping(input_payload.get("git"))
+            starting_branch = _normalize_branch_value(
+                "task.git.startingBranch",
+                task_git_payload.get("startingBranch"),
+            )
+            new_branch = _normalize_branch_value(
+                "task.git.newBranch",
+                task_git_payload.get("newBranch"),
+            )
+            if starting_branch:
+                node_inputs["startingBranch"] = starting_branch
+            if new_branch:
+                node_inputs["newBranch"] = new_branch
 
         if not node_inputs and isinstance(input_payload.get("inputs"), Mapping):
             node_inputs = dict(input_payload["inputs"])
@@ -322,12 +500,20 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             payload = _coerce_mapping(inputs)
             context_payload = _coerce_mapping(context)
             runtime_payload = _coerce_mapping(payload.get("runtime"))
+            publish_payload = _coerce_mapping(payload.get("publish"))
+            git_payload = _coerce_mapping(payload.get("git"))
             model = runtime_payload.get("model", payload.get("model"))
             effort = runtime_payload.get("effort", payload.get("effort"))
             instructions = payload.get("instructions")
             repo_ref = payload.get("repoRef")
+            repository = payload.get("repository", payload.get("repo"))
             checkout_revision = payload.get("branch")
             workspace_ref = payload.get("workspaceRef")
+            starting_branch = payload.get("startingBranch", git_payload.get("startingBranch"))
+            new_branch = payload.get("newBranch", git_payload.get("newBranch"))
+            publish_mode = _normalize_publish_mode(
+                publish_payload.get("mode", payload.get("publishMode"))
+            )
 
             try:
                 target_runtime = _normalize_runtime_mode(
@@ -343,11 +529,17 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     not isinstance(repo_ref, str) or not repo_ref.strip()
                 ):
                     raise RuntimeError("repoRef must be a non-empty string when provided")
+                repository = _normalize_repository_ref(repository)
                 if checkout_revision is not None and (
                     not isinstance(checkout_revision, str)
                     or not checkout_revision.strip()
                 ):
                     raise RuntimeError("branch must be a non-empty string when provided")
+                checkout_revision = _normalize_branch_value("branch", checkout_revision)
+                starting_branch = _normalize_branch_value(
+                    "startingBranch", starting_branch
+                )
+                new_branch = _normalize_branch_value("newBranch", new_branch)
                 if workspace_ref is not None and (
                     not isinstance(workspace_ref, str) or not workspace_ref.strip()
                 ):
@@ -366,27 +558,133 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             node_id = str(context_payload.get("node_id") or "unknown")
 
             workspace_path = workspace_ref.strip() if isinstance(workspace_ref, str) else None
-            if workspace_path is None and isinstance(repo_ref, str):
+            checkout_repo_ref = (
+                repo_ref.strip()
+                if isinstance(repo_ref, str) and repo_ref.strip()
+                else repository
+            )
+            checkout_target = starting_branch or checkout_revision
+            if workspace_path is None and checkout_repo_ref:
                 try:
                     workspace_path = await sandbox_activities.sandbox_checkout_repo(
-                        repo_ref=repo_ref.strip(),
+                        repo_ref=checkout_repo_ref,
                         idempotency_key=f"auto-{workflow_id}-{node_id}",
-                        checkout_revision=checkout_revision,
+                        checkout_revision=checkout_target,
                     )
                 except Exception as exc:
                     return SkillResult(
                         status="FAILED",
                         outputs={"error": str(exc)},
                         progress={
-                            "details": "Failed to checkout repoRef in auto tool handler"
+                            "details": (
+                                "Failed to checkout repository context in auto tool handler"
+                            )
                         },
                     )
 
+            if publish_mode in {"branch", "pr"} and new_branch is None:
+                branch_suffix = _derive_branch_suffix_from_instruction(instructions)
+                new_branch = generate_branch_name(
+                    _branch_generation_key(workflow_id=workflow_id, node_id=node_id),
+                    prefix="task",
+                    suffix=branch_suffix,
+                )
+
+            if publish_mode == "pr" and workspace_path is None:
+                return SkillResult(
+                    status="FAILED",
+                    outputs={
+                        "error": (
+                            "publishMode 'pr' requires workspaceRef, repoRef, or repository to "
+                            "point at a writable repository checkout"
+                        )
+                    },
+                    progress={
+                        "details": "Missing workspace context for PR publish mode"
+                    },
+                )
+
+            async def _run_git_command(
+                command: list[str],
+                *,
+                timeout_seconds: int = 120,
+            ) -> Any:
+                return await sandbox_activities.sandbox_run_command(
+                    {
+                        "workspace_ref": workspace_path,
+                        "cmd": command,
+                        "principal": principal,
+                        "timeout_seconds": timeout_seconds,
+                    }
+                )
+
+            if workspace_path and (starting_branch or new_branch):
+                if starting_branch:
+                    checkout_starting = await _run_git_command(
+                        ["git", "checkout", starting_branch]
+                    )
+                    if checkout_starting.exit_code != 0:
+                        checkout_starting = await _run_git_command(
+                            [
+                                "git",
+                                "checkout",
+                                "-B",
+                                starting_branch,
+                                f"origin/{starting_branch}",
+                            ]
+                        )
+                        if checkout_starting.exit_code != 0:
+                            return SkillResult(
+                                status="FAILED",
+                                outputs={
+                                    "error": (
+                                        "failed to checkout starting branch "
+                                        f"'{starting_branch}': "
+                                        f"{checkout_starting.stderr_tail or checkout_starting.stdout_tail}"
+                                    )
+                                },
+                                progress={
+                                    "details": "Failed to prepare workspace branch context"
+                                },
+                            )
+                if new_branch:
+                    branch_base = starting_branch or "HEAD"
+                    checkout_working = await _run_git_command(
+                        ["git", "checkout", "-B", new_branch, branch_base]
+                    )
+                    if checkout_working.exit_code != 0:
+                        return SkillResult(
+                            status="FAILED",
+                            outputs={
+                                "error": (
+                                    f"failed to checkout working branch '{new_branch}': "
+                                    f"{checkout_working.stderr_tail or checkout_working.stdout_tail}"
+                                )
+                            },
+                            progress={
+                                "details": "Failed to prepare workspace branch context"
+                            },
+                        )
+
+            gemini_allowed_tools: tuple[str, ...] = ()
+            if target_runtime == "gemini":
+                gemini_allowed_tools = _resolve_gemini_allowed_tools()
+
+            command_instructions = _compose_auto_runtime_instructions(
+                instructions=instructions,
+                publish_mode=publish_mode,
+                repository=repository,
+                workspace_path=workspace_path,
+                starting_branch=starting_branch,
+                working_branch=new_branch,
+            )
             cmd = _build_auto_runtime_command(
                 runtime_mode=target_runtime,
-                instructions=instructions,
+                instructions=command_instructions,
                 model=model if isinstance(model, str) else None,
                 effort=effort if isinstance(effort, str) else None,
+                workspace_path=workspace_path,
+                gemini_allowed_tools=gemini_allowed_tools,
             )
             command_env: dict[str, str | None] | None = None
             if target_runtime == "gemini":
@@ -425,6 +723,17 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 "stdout_tail": sandbox_result.stdout_tail,
                 "stderr_tail": sandbox_result.stderr_tail,
             }
+            if new_branch:
+                outputs["working_branch"] = new_branch
+            if starting_branch:
+                outputs["starting_branch"] = starting_branch
+            if repository:
+                outputs["repository"] = repository
+            pull_request_url = _extract_pull_request_url(
+                sandbox_result.stdout_tail, sandbox_result.stderr_tail
+            )
+            if pull_request_url:
+                outputs["pull_request_url"] = pull_request_url
 
             output_artifacts = []
             if sandbox_result.diagnostics_ref:
@@ -445,6 +754,16 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 progress_details = (
                     f"Generic LLM handler via {target_runtime} reported tool failure"
                 )
+            elif result_status == "SUCCEEDED" and publish_mode == "pr":
+                if pull_request_url is None:
+                    result_status = "FAILED"
+                    outputs["error"] = (
+                        "publishMode 'pr' requires command output to include a "
+                        "GitHub pull request URL"
+                    )
+                    progress_details = (
+                        f"Generic LLM handler via {target_runtime} did not report a PR URL"
+                    )
 
             return SkillResult(
                 status=result_status,
@@ -458,6 +777,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             version="1.0",
             handler=_auto_skill_handler,
         )
+        dispatcher.register_default_skill_handler(handler=_auto_skill_handler)
         planner = _build_runtime_planner()
         if not callable(planner):
             raise RuntimeError(

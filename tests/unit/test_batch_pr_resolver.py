@@ -239,6 +239,50 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     assert runtime.effort == "high"
 
 
+def test_resolve_runtime_selection_defaults_to_gemini_without_inheritance():
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": None,
+            "runtime_model": None,
+            "runtime_effort": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "gemini"
+    assert runtime.model is None
+    assert runtime.effort is None
+
+
+def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
+    module = _load_module()
+    resolve_runtime_selection = module["_resolve_runtime_selection"]
+
+    monkeypatch.setenv("MOONMIND_DEFAULT_TASK_RUNTIME", "claude")
+
+    args = type(
+        "Args",
+        (),
+        {
+            "task_context_path": None,
+            "runtime_mode": None,
+            "runtime_model": None,
+            "runtime_effort": None,
+        },
+    )()
+
+    runtime = resolve_runtime_selection(args)
+    assert runtime.mode == "claude"
+    assert runtime.model is None
+    assert runtime.effort is None
+
+
 # ---------------------------------------------------------------------------
 # HTTP submission path tests
 # ---------------------------------------------------------------------------

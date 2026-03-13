@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -61,6 +62,7 @@ PlanGenerator = Callable[
 ]
 JulesClientFactory = Callable[[], JulesClient]
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
+_GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class TemporalActivityRuntimeError(RuntimeError):
@@ -341,42 +343,98 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     return text[-max_chars:]
 
 
-def _default_skill_registry_payload() -> dict[str, Any]:
+def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
+    description = (
+        "Execute generic runtime CLI instructions."
+        if name == "auto"
+        else f"Execute '{name}' via the generic runtime CLI handler."
+    )
+    return {
+        "name": name,
+        "version": version,
+        "description": description,
+        "inputs": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "instructions": {"type": "string"},
+                    "runtime": {"type": "object"},
+                },
+                "additionalProperties": True,
+            }
+        },
+        "outputs": {
+            "schema": {
+                "type": "object",
+                "additionalProperties": True,
+            }
+        },
+        "executor": {
+            "activity_type": "mm.tool.execute",
+            "selector": {"mode": "by_capability"},
+        },
+        "requirements": {"capabilities": ["sandbox"]},
+        "policies": {
+            "timeouts": {
+                "start_to_close_seconds": 900,
+                "schedule_to_close_seconds": 1200,
+            },
+            "retries": {"max_attempts": 1},
+        },
+    }
+
+
+def _iter_requested_registry_tools(
+    parameters: Mapping[str, Any] | None,
+) -> tuple[tuple[str, str], ...]:
+    selected: list[tuple[str, str]] = [("auto", "1.0")]
+    seen = {("auto", "1.0")}
+
+    if not isinstance(parameters, Mapping):
+        return tuple(selected)
+
+    task_payload = parameters.get("task")
+    if not isinstance(task_payload, Mapping):
+        return tuple(selected)
+
+    candidate_nodes: list[Mapping[str, Any]] = [task_payload]
+    steps = task_payload.get("steps")
+    if isinstance(steps, Sequence) and not isinstance(steps, (str, bytes, bytearray)):
+        for step in steps:
+            if isinstance(step, Mapping):
+                candidate_nodes.append(step)
+
+    for candidate in candidate_nodes:
+        tool_payload = candidate.get("tool")
+        skill_payload = candidate.get("skill")
+        selected_payload = tool_payload if isinstance(tool_payload, Mapping) else None
+        if selected_payload is None and isinstance(skill_payload, Mapping):
+            selected_payload = skill_payload
+        if selected_payload is None:
+            continue
+
+        tool_name = str(
+            selected_payload.get("name") or selected_payload.get("id") or ""
+        ).strip()
+        if not tool_name:
+            continue
+        tool_version = str(selected_payload.get("version") or "").strip() or "1.0"
+        key = (tool_name, tool_version)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(key)
+
+    return tuple(selected)
+
+
+def _default_skill_registry_payload(
+    *, parameters: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     return {
         "skills": [
-            {
-                "name": "auto",
-                "version": "1.0",
-                "description": "Execute generic runtime CLI instructions.",
-                "inputs": {
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "instructions": {"type": "string"},
-                            "runtime": {"type": "object"},
-                        },
-                        "additionalProperties": True,
-                    }
-                },
-                "outputs": {
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": True,
-                    }
-                },
-                "executor": {
-                    "activity_type": "mm.tool.execute",
-                    "selector": {"mode": "by_capability"},
-                },
-                "requirements": {"capabilities": ["sandbox"]},
-                "policies": {
-                    "timeouts": {
-                        "start_to_close_seconds": 900,
-                        "schedule_to_close_seconds": 1200,
-                    },
-                    "retries": {"max_attempts": 1},
-                },
-            }
+            _default_registry_skill_payload(name=name, version=version)
+            for name, version in _iter_requested_registry_tools(parameters)
         ]
     }
 
@@ -485,7 +543,7 @@ class TemporalPlanActivities:
                 artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
             )
         else:
-            registry_payload = _default_skill_registry_payload()
+            registry_payload = _default_skill_registry_payload(parameters=parameters)
             fallback_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal=principal,
@@ -871,8 +929,17 @@ class TemporalSandboxActivities:
             raise TemporalActivityRuntimeError(f"workspace does not exist: {workspace}")
         return workspace
 
-    def _resolve_checkout_source(self, repo_ref: str | Path) -> Path:
-        source = Path(str(repo_ref).removeprefix("file://")).expanduser().resolve()
+    def _resolve_checkout_source(self, repo_ref: str | Path) -> tuple[str, str | Path]:
+        normalized = str(repo_ref).strip()
+        if not normalized:
+            raise TemporalActivityRuntimeError("sandbox.checkout_repo repo_ref is required")
+
+        if normalized.startswith(("http://", "https://", "git@", "file://")):
+            return ("remote", normalized)
+        if _GITHUB_REPOSITORY_SLUG_PATTERN.fullmatch(normalized):
+            return ("remote", f"https://github.com/{normalized}.git")
+
+        source = Path(normalized).expanduser().resolve()
         if not source.exists() or not source.is_dir():
             raise TemporalActivityRuntimeError(
                 f"unsupported sandbox repo_ref '{repo_ref}'"
@@ -881,7 +948,7 @@ class TemporalSandboxActivities:
             raise TemporalActivityRuntimeError(
                 "sandbox.checkout_repo local sources must be under workspace_root"
             )
-        return source
+        return ("local", source)
 
     async def sandbox_checkout_repo(
         self,
@@ -890,15 +957,54 @@ class TemporalSandboxActivities:
         idempotency_key: str,
         checkout_revision: str | None = None,
     ) -> str:
-        source = self._resolve_checkout_source(repo_ref)
+        source_kind, source = self._resolve_checkout_source(repo_ref)
 
         workspace_id = hashlib.sha256(
-            f"{source}:{checkout_revision or ''}:{idempotency_key}".encode("utf-8")
+            f"{source_kind}:{source}:{checkout_revision or ''}:{idempotency_key}".encode(
+                "utf-8"
+            )
         ).hexdigest()[:16]
         workspace = (self._workspace_root / "temporal_sandbox" / workspace_id).resolve()
         workspace.parent.mkdir(parents=True, exist_ok=True)
+        if workspace.exists():
+            return str(workspace)
+
+        if source_kind == "local":
+            shutil.copytree(Path(source), workspace)
+            return str(workspace)
+
+        clone_result = await self.sandbox_run_command(
+            {
+                "workspace_ref": str(workspace.parent),
+                "cmd": ["git", "clone", str(source), str(workspace)],
+                "timeout_seconds": 600,
+            }
+        )
+        if clone_result.exit_code != 0:
+            raise TemporalActivityRuntimeError(
+                "sandbox.checkout_repo failed to clone repository: "
+                f"{clone_result.stderr_tail or clone_result.stdout_tail}"
+            )
+
+        if checkout_revision:
+            checkout_result = await self.sandbox_run_command(
+                {
+                    "workspace_ref": str(workspace),
+                    "cmd": ["git", "checkout", checkout_revision],
+                    "timeout_seconds": 120,
+                }
+            )
+            if checkout_result.exit_code != 0:
+                raise TemporalActivityRuntimeError(
+                    "sandbox.checkout_repo failed to checkout revision "
+                    f"'{checkout_revision}': "
+                    f"{checkout_result.stderr_tail or checkout_result.stdout_tail}"
+                )
+
         if not workspace.exists():
-            shutil.copytree(source, workspace)
+            raise TemporalActivityRuntimeError(
+                "sandbox.checkout_repo did not create a workspace directory"
+            )
         return str(workspace)
 
     async def sandbox_apply_patch(

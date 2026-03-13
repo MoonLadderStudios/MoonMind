@@ -285,8 +285,11 @@ def _load_parent_runtime_selection(
 
 def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     inherited = _load_parent_runtime_selection(args.task_context_path)
+    configured_default_mode = _normalize_runtime_mode(
+        os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
+    )
     runtime_mode = _normalize_runtime_mode(args.runtime_mode) or (
-        inherited.mode if inherited else "codex"
+        inherited.mode if inherited else (configured_default_mode or "gemini")
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
