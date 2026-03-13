@@ -944,10 +944,12 @@ class TemporalSandboxActivities:
 
         try:
             result = await self.sandbox_run_command(
-                workspace_ref=cwd,
-                cmd=command,
-                principal=principal,
-                timeout_seconds=timeout_seconds,
+                {
+                    "workspace_ref": str(cwd),
+                    "cmd": list(command),
+                    "principal": principal,
+                    "timeout_seconds": timeout_seconds,
+                },
                 heartbeat=heartbeat,
             )
         finally:
@@ -1125,11 +1127,13 @@ class TemporalSandboxActivities:
                 )
 
         result = await self.sandbox_run_command(
-            workspace_ref=workspace_ref,
-            cmd=command,
-            principal=principal,
-            execution_ref=execution_ref,
-            timeout_seconds=timeout_seconds,
+            {
+                "workspace_ref": str(workspace_ref),
+                "cmd": command,
+                "principal": principal,
+                "execution_ref": execution_ref,
+                "timeout_seconds": timeout_seconds,
+            },
             heartbeat=heartbeat,
         )
         return await _write_json_artifact(
@@ -1424,6 +1428,28 @@ def _build_activity_wrapper(
     return _wrapper
 
 
+def _bind_activity_handler(
+    implementation: Any,
+    *,
+    func: Callable[..., Any],
+    activity_type: str,
+) -> Any:
+    from temporalio import activity
+
+    definition = getattr(func, "__temporal_activity_definition", None)
+    if definition is not None:
+        definition_name = str(getattr(definition, "name", "") or "")
+        if definition_name == activity_type:
+            return func.__get__(implementation, type(implementation))
+
+    _wrapper = _build_activity_wrapper(func)
+    _wrapper.__name__ = func.__name__
+    _wrapper.__qualname__ = func.__qualname__
+    _wrapper.__doc__ = func.__doc__
+    decorated_func = activity.defn(name=activity_type)(_wrapper)
+    return decorated_func.__get__(implementation, type(implementation))
+
+
 def build_activity_bindings(
     catalog: TemporalActivityCatalog,
     *,
@@ -1466,26 +1492,17 @@ def build_activity_bindings(
                 f"{implementation_key.rstrip('s')} implementation"
             )
 
-        from temporalio import activity
-
         func = getattr(type(implementation), attr_name, None)
         if func is None:
             raise TemporalActivityRuntimeError(
                 f"Activity '{definition.activity_type}' requires handler "
                 f"'{attr_name}' on {type(implementation).__name__}"
             )
-
-        if not hasattr(func, "__temporal_activity_definition"):
-            _wrapper = _build_activity_wrapper(func)
-
-            _wrapper.__name__ = func.__name__
-            _wrapper.__qualname__ = func.__qualname__
-            _wrapper.__doc__ = func.__doc__
-
-            decorated_func = activity.defn(name=definition.activity_type)(_wrapper)
-            setattr(type(implementation), attr_name, decorated_func)
-
-        handler = getattr(implementation, attr_name)
+        handler = _bind_activity_handler(
+            implementation,
+            func=func,
+            activity_type=definition.activity_type,
+        )
 
         binding = TemporalActivityBinding(
             activity_type=definition.activity_type,
@@ -1523,29 +1540,11 @@ def build_activity_bindings(
                         f"'{resolved_attr_name}' on {type(skill_activities).__name__}"
                     )
 
-                from temporalio import activity
-
-                if resolved_attr_name != attr_name:
-                    # Create an alias activity definition with canonical name.
-                    _wrapper = _build_activity_wrapper(func)
-                    _wrapper.__name__ = func.__name__
-                    _wrapper.__qualname__ = func.__qualname__
-                    _wrapper.__doc__ = func.__doc__
-                    decorated_func = activity.defn(name=activity_type)(_wrapper)
-                    setattr(type(skill_activities), attr_name, decorated_func)
-                    handler = getattr(skill_activities, attr_name)
-                else:
-                    if not hasattr(func, "__temporal_activity_definition"):
-                        _wrapper = _build_activity_wrapper(func)
-
-                        _wrapper.__name__ = func.__name__
-                        _wrapper.__qualname__ = func.__qualname__
-                        _wrapper.__doc__ = func.__doc__
-
-                        decorated_func = activity.defn(name=activity_type)(_wrapper)
-                        setattr(type(skill_activities), attr_name, decorated_func)
-
-                    handler = getattr(skill_activities, attr_name)
+                handler = _bind_activity_handler(
+                    skill_activities,
+                    func=func,
+                    activity_type=activity_type,
+                )
                 bindings.append(
                     TemporalActivityBinding(
                         activity_type=activity_type,

@@ -1,5 +1,6 @@
 import json
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -328,4 +329,80 @@ async def test_auto_skill_handler_rejects_unsupported_runtime_mode(
 
     assert result.status == "FAILED"
     assert "unsupported" in result.outputs["error"]
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_auto_skill_handler_uses_request_mapping_and_gemini_prompt_command(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "sandbox"
+    mock_build_bindings.return_value = []
+    mock_sandbox_activities_cls.return_value.sandbox_run_command = AsyncMock(
+        return_value=SimpleNamespace(
+            exit_code=0,
+            stdout_tail="ok",
+            stderr_tail="",
+            diagnostics_ref=None,
+        )
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    register_kwargs = mock_dispatcher_cls.return_value.register_skill.call_args.kwargs
+    handler = register_kwargs["handler"]
+    with patch.dict(
+        "moonmind.workflows.temporal.worker_runtime.os.environ",
+        {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "google-test-key"},
+        clear=False,
+    ):
+        result = await handler(
+            {
+                "instructions": "Inspect failing tests",
+                "workspaceRef": "/tmp/workspace",
+                "runtime": {"mode": "gemini", "model": "gemini-3.1-pro-preview"},
+            },
+            {"workflow_id": "wf-1", "node_id": "node-1", "principal": "user-1"},
+        )
+
+    assert result.status == "SUCCEEDED"
+    mock_sandbox_activities_cls.return_value.sandbox_run_command.assert_awaited_once()
+    call_args, call_kwargs = (
+        mock_sandbox_activities_cls.return_value.sandbox_run_command.await_args
+    )
+    assert call_kwargs == {}
+    assert len(call_args) == 1
+    request_payload = call_args[0]
+    assert request_payload["workspace_ref"] == "/tmp/workspace"
+    assert request_payload["principal"] == "user-1"
+    assert request_payload["cmd"][:2] == ["gemini", "--prompt"]
+    assert request_payload["cmd"][2] == "Inspect failing tests"
+    assert request_payload["cmd"][3:] == ["--model", "gemini-3.1-pro-preview"]
+    assert request_payload["env"]["GEMINI_API_KEY"] == "google-test-key"
     await resources.aclose()

@@ -978,6 +978,42 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
             assert result.outputs["ok"] is True
 
 
+async def test_build_activity_bindings_does_not_mutate_sandbox_method_signatures(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            dispatcher = SkillActivityDispatcher()
+            sandbox_activities = TemporalSandboxActivities(
+                artifact_service=service,
+                workspace_root=tmp_path,
+            )
+            build_activity_bindings(
+                build_default_activity_catalog(),
+                artifact_activities=TemporalArtifactActivities(service),
+                skill_activities=TemporalSkillActivities(
+                    dispatcher=dispatcher,
+                    artifact_service=service,
+                ),
+                sandbox_activities=sandbox_activities,
+                fleets=(SANDBOX_FLEET,),
+            )
+
+            workspace = tmp_path / "temporal_sandbox" / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
+            result = await sandbox_activities.sandbox_run_command(
+                workspace_ref=workspace,
+                cmd=("bash", "-lc", "true"),
+                principal="user-1",
+            )
+
+            assert result.exit_code == 0
+
+
 async def test_build_activity_bindings_requires_selected_family_implementation(
     tmp_path: Path,
 ):

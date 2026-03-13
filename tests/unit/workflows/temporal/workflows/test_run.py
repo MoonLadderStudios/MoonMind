@@ -146,6 +146,16 @@ async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "SUCCEEDED", "outputs": {}}
 
 
+@activity.defn(name="mm.skill.execute")
+async def mock_skill_execute_failed(args: Dict[str, Any]) -> Dict[str, Any]:
+    SKILL_EXECUTE_CALLS.append(args)
+    return {
+        "status": "FAILED",
+        "outputs": {"error": "forced skill failure"},
+        "progress": {"details": "forced skill failure"},
+    }
+
+
 @activity.defn(name="sandbox.run_command")
 async def mock_sandbox_command(args: Dict[str, Any]) -> Dict[str, Any]:
     SANDBOX_COMMAND_CALLS.append(args)
@@ -329,5 +339,49 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     "Trusted owner metadata is required in Temporal search attributes",
+                    exc_info.exception.cause.message,
+                )
+
+    async def test_moonmind_run_workflow_fail_fast_surfaces_failed_skill_status(
+        self,
+    ) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=LLM_TASK_QUEUE,
+                    activities=[mock_plan_generate],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=ARTIFACTS_TASK_QUEUE,
+                    activities=[mock_artifact_read],
+                ),
+                Worker(
+                    env.client,
+                    task_queue=SANDBOX_TASK_QUEUE,
+                    activities=[mock_sandbox_command, mock_skill_execute_failed],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="test-task-queue",
+                    workflows=[MoonMindRunWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+            ):
+                with self.assertRaises(client.WorkflowFailureError) as exc_info:
+                    await env.client.execute_workflow(
+                        MoonMindRunWorkflow.run,
+                        {"workflowType": "MoonMind.Run"},
+                        id="test-workflow-id-failed-skill-status",
+                        task_queue="test-task-queue",
+                        search_attributes=_trusted_search_attributes(),
+                    )
+                self.assertIsInstance(
+                    exc_info.exception.cause, exceptions.ApplicationError
+                )
+                self.assertIn(
+                    "plan node execution returned status FAILED",
                     exc_info.exception.cause.message,
                 )

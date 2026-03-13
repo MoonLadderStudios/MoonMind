@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Any, Mapping
@@ -56,6 +57,43 @@ def _normalize_runtime_mode(raw_mode: Any) -> str:
             f"auto tool runtime.mode '{normalized}' is unsupported; expected one of: {supported}"
         )
     return normalized
+
+
+def _build_auto_runtime_command(
+    *,
+    runtime_mode: str,
+    instructions: str,
+    model: str | None,
+    effort: str | None,
+) -> list[str]:
+    if runtime_mode == "gemini":
+        # Gemini CLI uses --prompt for one-shot non-interactive execution.
+        command = ["gemini", "--prompt", instructions]
+        if model:
+            command.extend(["--model", model])
+        return command
+    if runtime_mode == "claude":
+        command = ["claude", "--print", instructions]
+        if model:
+            command.extend(["--model", model])
+        if effort:
+            command.extend(["--effort", effort])
+        return command
+    if runtime_mode == "codex":
+        command = ["codex", "exec", instructions]
+        if model:
+            command.extend(["--model", model])
+        if effort:
+            command.extend(["--effort", effort])
+        return command
+
+    # Keep legacy passthrough behavior for any remaining allowed runtime mode.
+    command = [runtime_mode, "run", "--instructions", instructions]
+    if model:
+        command.extend(["--model", model])
+    if effort:
+        command.extend(["--effort", effort])
+    return command
 
 
 def _resolve_task_tool(task_payload: Mapping[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -292,18 +330,31 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         },
                     )
 
-            cmd = [target_runtime, "run", "--instructions", instructions]
-            if model is not None:
-                cmd.extend(["--model", model])
-            if effort is not None:
-                cmd.extend(["--effort", effort])
+            cmd = _build_auto_runtime_command(
+                runtime_mode=target_runtime,
+                instructions=instructions,
+                model=model if isinstance(model, str) else None,
+                effort=effort if isinstance(effort, str) else None,
+            )
+            command_env: dict[str, str] | None = None
+            if target_runtime == "gemini":
+                # Gemini CLI expects GEMINI_API_KEY for API-key auth.
+                gemini_api_key = str(os.environ.get("GEMINI_API_KEY", "")).strip()
+                google_api_key = str(os.environ.get("GOOGLE_API_KEY", "")).strip()
+                if not gemini_api_key and google_api_key:
+                    command_env = {"GEMINI_API_KEY": google_api_key}
 
             try:
+                request_payload: dict[str, Any] = {
+                    "workspace_ref": workspace_path,
+                    "cmd": cmd,
+                    "principal": principal,
+                    "timeout_seconds": 900,
+                }
+                if command_env:
+                    request_payload["env"] = command_env
                 sandbox_result = await sandbox_activities.sandbox_run_command(
-                    workspace_ref=workspace_path,
-                    cmd=cmd,
-                    principal=principal,
-                    timeout_seconds=900,
+                    request_payload
                 )
             except Exception as exc:
                 return SkillResult(

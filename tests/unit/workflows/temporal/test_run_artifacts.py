@@ -290,3 +290,227 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
 
     assert captured[2][0] == "mm.tool.execute"
     assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "artifact.read":
+            if payload.get("artifact_ref") == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                                "description": "Run tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Test Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "step-1",
+                            "tool": {
+                                "type": "skill",
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {"repo_ref": "git:org/repo#branch"},
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {
+            "status": "FAILED",
+            "outputs": {"error": "gemini CLI command failed"},
+            "progress": {"details": "Failed to execute generic LLM handler"},
+        }
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    with pytest.raises(
+        ValueError,
+        match="plan node execution returned status FAILED",
+    ):
+        await workflow._run_execution_stage(
+            parameters={"repo": "MoonLadderStudios/MoonMind"},
+            plan_ref="art_plan_1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_continue_mode_keeps_running_after_failed_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    skill_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        nonlocal skill_calls
+        if activity_type == "artifact.read":
+            if payload.get("artifact_ref") == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                                "description": "Run tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Test Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "CONTINUE", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "step-1",
+                            "tool": {
+                                "type": "skill",
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {"repo_ref": "git:org/repo#branch"},
+                            "options": {},
+                        },
+                        {
+                            "id": "step-2",
+                            "tool": {
+                                "type": "skill",
+                                "name": "repo.run_tests",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {"repo_ref": "git:org/repo#branch"},
+                            "options": {},
+                        },
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        if activity_type == "mm.tool.execute":
+            skill_calls += 1
+            if skill_calls == 1:
+                return {
+                    "status": "FAILED",
+                    "outputs": {"error": "first step failed"},
+                    "progress": {"details": "intentional failure"},
+                }
+            return {"status": "SUCCEEDED", "outputs": {}}
+        return {"status": "SUCCEEDED", "outputs": {}}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind"},
+        plan_ref="art_plan_1",
+    )
+
+    assert skill_calls == 2
+
+
+def test_activity_result_failure_message_prefers_stderr_tail_over_progress_details() -> None:
+    workflow = MoonMindRunWorkflow()
+    message = workflow._activity_result_failure_message(
+        {
+            "status": "FAILED",
+            "outputs": {
+                "exit_code": 1,
+                "stderr_tail": "gemini quota exceeded",
+            },
+            "progress": {"details": "Executed generic LLM handler via gemini"},
+        }
+    )
+    assert message == "gemini quota exceeded"

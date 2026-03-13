@@ -207,15 +207,21 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
-        resolved_plan_ref = await self._run_planning_stage(
-            parameters=parameters,
-            input_ref=input_ref,
-            plan_ref=plan_ref,
-        )
-        await self._run_execution_stage(
-            parameters=parameters,
-            plan_ref=resolved_plan_ref,
-        )
+        try:
+            resolved_plan_ref = await self._run_planning_stage(
+                parameters=parameters,
+                input_ref=input_ref,
+                plan_ref=plan_ref,
+            )
+            await self._run_execution_stage(
+                parameters=parameters,
+                plan_ref=resolved_plan_ref,
+            )
+        except ValueError as exc:
+            raise exceptions.ApplicationError(
+                str(exc),
+                non_retryable=True,
+            ) from exc
 
         if self._cancel_requested:
             return {"status": "canceled"}
@@ -425,7 +431,7 @@ class MoonMindRunWorkflow:
             self._update_memo()
 
             try:
-                await workflow.execute_activity(
+                execution_result = await workflow.execute_activity(
                     route.activity_type,
                     {
                         "invocation_payload": invocation_payload,
@@ -442,6 +448,29 @@ class MoonMindRunWorkflow:
             except Exception:
                 if failure_mode == "FAIL_FAST":
                     raise
+                continue
+
+            result_status = self._activity_result_status(execution_result)
+            if result_status is None:
+                if failure_mode == "FAIL_FAST":
+                    raise ValueError(
+                        "plan node execution result is missing required status field"
+                    )
+                continue
+            if result_status != "SUCCEEDED":
+                failure_message = self._activity_result_failure_message(
+                    execution_result
+                )
+                if failure_mode == "FAIL_FAST":
+                    detail = (
+                        f" with error '{failure_message}'"
+                        if failure_message
+                        else ""
+                    )
+                    raise ValueError(
+                        f"plan node execution returned status {result_status}{detail}"
+                    )
+                continue
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -452,6 +481,32 @@ class MoonMindRunWorkflow:
         if isinstance(result, dict):
             return result.get(key)
         return getattr(result, key, None)
+
+    def _activity_result_status(self, result: Any) -> str | None:
+        raw_status = self._get_from_result(result, "status")
+        if raw_status is None:
+            return None
+        normalized = str(raw_status).strip().upper()
+        return normalized or None
+
+    def _activity_result_failure_message(self, result: Any) -> str:
+        outputs = self._get_from_result(result, "outputs")
+        if isinstance(outputs, Mapping):
+            error = outputs.get("error")
+            if isinstance(error, str) and error.strip():
+                return error.strip()
+            stderr_tail = outputs.get("stderr_tail")
+            if isinstance(stderr_tail, str) and stderr_tail.strip():
+                return stderr_tail.strip()
+            exit_code = outputs.get("exit_code")
+            if exit_code is not None:
+                return f"activity exited with code {exit_code}"
+        progress = self._get_from_result(result, "progress")
+        if isinstance(progress, Mapping):
+            details = progress.get("details")
+            if isinstance(details, str) and details.strip():
+                return details.strip()
+        return ""
 
     async def _run_integration_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
