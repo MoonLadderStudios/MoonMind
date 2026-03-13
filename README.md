@@ -1,157 +1,193 @@
 # MoonMind
 
-**MoonMind is a Dockerized agent orchestrator compatible with Claude Code, Gemini CLI, and Codex CLI. It is in the process of migrating to Temporal for durable execution.**
+**The Kubernetes of AI Agents**
 
-## What is MoonMind?
+MoonMind is an open-source orchestrator for automating the context assembly, scheduling, and reliable execution of AI agent workloads from a single pane of glass.
 
-MoonMind is an AI control plane you run yourself. It gives you:
+Supports Claude Code, Codex, Gemini CLI, Jules, and any agent with an MCP or API endpoint. Bring your own subscription, API key, or entire agent runtime.
 
-- **Model routing:** An OpenAI-compatible `/v1/chat/completions` and `/v1/models` API that fans out to Google Gemini, OpenAI, Anthropic, Ollama, and VLLM without redeploying. Models are discovered from all enabled providers and cached for fast listing and routing.
-- **Memory and retrieval:** A RAG pipeline powered by LlamaIndex, Qdrant, and configurable embeddings, with loaders for Confluence, GitHub, Google Drive, and more so agents and UIs can ground their reasoning in your real documents.
-- **Automation and orchestration:** A Celery-based automation layer and mm-orchestrator service that run skills-based workflows, execute task chains over RabbitMQ + PostgreSQL, emit StatsD metrics, and write artifacts under `var/artifacts/spec_workflows/<run_id>`.
+## Why MoonMind?
 
-MoonMind exposes all of this through:
+### Bring Your Own Agent
+Use your own API key, OAuth login, or entire agent runtime with MoonMind.
 
-- **OpenAI-compatible APIs** for drop-in use with tools and UIs like Open-WebUI.
-- **Model Context Protocol (MCP)** so external agents can treat MoonMind as a standardized model and tools backend.
-- **Apps and manifests** that describe higher-level workflows declaratively and can be invoked from CLIs, agents, or CI.
+- **More than just an API key:** We support OAuth login with Anthropic (Claude Code), Google (Gemini CLI), and OpenAI (Codex CLI), with more providers coming soon.
+- **Universal agent support:** Point MoonMind at any agent's MCP or API and it will manage it — even runtimes it wasn't built for.
+- **Cloud agent orchestration:** MoonMind orchestrates cloud agents like Jules and Codex Cloud. Even with only "black box" access, it provides significant value by tracking status, providing context, answering clarifying questions, and following up on open PRs.
 
-## Quick Start with Codex
+### Avoid Vendor Lock-In
+MoonMind abstracts away the agent runtime, making it easy to switch vendors without rewriting your workflows.
 
-**Prerequisites:**
+- Swap between proprietary and open-source model providers with a configuration change.
+- Mix and match models and providers: use a proprietary model for planning and an open-source model for implementation.
 
-*   **Docker:** Ensure Docker is installed and running on your system. You can download it from [Docker's official website](https://www.docker.com/products/docker-desktop).
-*   **Docker Compose:** Docker Compose is included with most Docker Desktop installations. If not, follow the [official installation guide](https://docs.docker.com/compose/install/).
-*   **Environment File:** Create a `.env` file in the root of the project by copying the `.env-template` file:
-    ```bash
-    cp .env-template .env
-    ```
-    For a fast Codex launch:
-    - `CODEX_ENV=prod`
-    - `CODEX_MODEL=gpt-5.3-codex`
-    - `GITHUB_TOKEN=<github_pat_with_repo_access>`
+### Self-Healing Reliable Execution
+Backed by [Temporal](https://temporal.io/) for durable execution — workflows survive crashes and restarts with deterministic replay. No work is ever lost.
 
-**Running MoonMind:**
+- Automatic stuck detection with soft and hard resets.
+- Failure classification (transient vs. deterministic) prevents retry loops on permanent failures.
+- Retry budgets with configurable attempt limits and timeouts.
+- Operator takeover when human judgment is needed.
 
-1.  **Open a terminal** in the root directory of the MoonMind project.
-2.  **Authenticate worker OAuth volumes (one-time per environment)** before running queue/Celery automation:
-    ```bash
-    ./tools/auth-codex-volume.sh
-    ./tools/auth-gemini-volume.sh
-    ./tools/auth-claude-volume.sh   # oauth mode only (skip for api_key mode)
-    ```
-    This persists Codex auth in `codex_auth_volume` and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
-    For Claude runtime, `MOONMIND_CLAUDE_CLI_AUTH_MODE=api_key` (the default) uses `ANTHROPIC_API_KEY` from `.env` with no volume login step. Set `MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth` and run `./tools/auth-claude-volume.sh` to persist browser-based OAuth credentials in `claude_auth_volume`.
-3.  **Start the services** using the following command:
-    ```bash
-    docker-compose up -d
-    ```
+### Three-Plane Memory Architecture
+Enhance your agents' context with your data and memories — even when using cloud agents like Jules or Codex Cloud.
 
-    Claude runtime is available only when `ANTHROPIC_API_KEY` (or legacy alias `CLAUDE_API_KEY`) is configured.
-    The `-d` flag runs the containers in detached mode, meaning they will run in the background.
-    To force-refresh remote images first, run:
-    ```bash
-    docker-compose pull && docker-compose up -d
-    ```
-    To build locally instead of pulling images, run:
-    ```bash
-    docker-compose up -d --build
-    ```
+- **Planning memory (Beads):** Git-native, repo-scoped planning context.
+- **Task history (Run Digests + Fix Patterns):** Structured summaries and procedural memory indexed in Qdrant.
+- **Long-term memory (Mem0):** Curated reusable knowledge — decisions, conventions, playbooks.
+- **RAG:** LlamaIndex + Qdrant with loaders for Confluence, GitHub, Google Drive, Jira, and local files.
+- **Graceful degradation:** Unavailable memory subsystems degrade quality, never block execution.
+- Two methods for external agent context: input injection and exposing callback URLs or MCP so agents can pull data securely.
 
-4.  **Accessing the UI:** Once the services are up and running (this might take a few minutes the first time as images are downloaded and built), you can access the Open-WebUI by navigating to `http://localhost:8080` in your web browser.
+### Single Pane of Glass
+Track the progress of all your tasks in Mission Control with real-time status, event timelines, artifact browsing, and live operator controls.
 
-5.  **Manage API Keys:** When `AUTH_PROVIDER` is left as `disabled` (the default for local setups), any provider keys you place in `.env` are copied to the default user profile on startup. Visit `http://localhost:8080/settings` to view or change these values.
-6.  **Initializing the Vector Database (Optional but Recommended):**
-    If you want to load initial data into the Qdrant vector database (e.g., from local files or other sources configured in `config.toml`), you can trigger the initialization process.
-    Set the `INIT_DATABASE` variable in your `.env` file to `true`:
-    ```env
-    INIT_DATABASE=true
-    ```
-    Then, restart your Docker Compose setup:
-    ```bash
-    docker-compose down && docker-compose up -d
-    ```
-    The `init-db` service will run, attempt to load data, and then exit. You can check its logs using `docker-compose logs init-db`. After initialization, you may want to set `INIT_DATABASE=false` again to prevent re-initialization on subsequent restarts.
+### Security
+- **Docker socket proxy** with whitelisted API endpoints — workers never get raw host access.
+- **Capability-based job routing:** Workers advertise capabilities; jobs go to the right worker automatically.
+- **Approval gates:** High-risk operations require operator approval before proceeding.
+- **File-level allowlists** restrict which files can be modified.
+- **Secret sanitization** ensures credentials never appear in logs or artifacts.
 
-**Stopping MoonMind:**
+### Scheduling
+- Set execution order and dependencies between tasks.
+- Schedule recurring tasks via Temporal Schedules.
+- Step-level task decomposition with artifact preservation between steps.
 
-To stop all running services, execute the following command in the project root:
+### Open Source
+MIT licensed and ready for personal or commercial use.
+
+### One-Click Deployment
+Run anywhere you can run Docker.
+
+## Quick Start
+
+### Prerequisites
+
+- **Docker** and **Docker Compose** installed and running ([Docker Desktop](https://www.docker.com/products/docker-desktop) includes both).
+- **Environment file:** Copy the template and configure your settings:
+  ```bash
+  cp .env-template .env
+  ```
+  At minimum, set:
+  - `GITHUB_TOKEN=<github_pat_with_repo_access>`
+  - API keys or OAuth for your chosen runtime(s)
+
+### Authenticate Agent Runtimes (One-Time)
+
+Before running workers, authenticate the runtimes you plan to use:
+
 ```bash
-docker-compose down
+./tools/auth-codex-volume.sh    # Codex CLI (OAuth)
+./tools/auth-gemini-volume.sh   # Gemini CLI (OAuth)
+./tools/auth-claude-volume.sh   # Claude Code (OAuth mode only — skip for API key mode)
 ```
 
-This setup uses the main `docker-compose.yaml` file, which is configured for a production-like deployment with the Qdrant vector store. For development purposes, or if you need to use a different configuration, you might use other specific compose files (for example `docker-compose.test.yaml`).
+This persists credentials in named Docker volumes so all subsequent runs reuse them.
 
-### Temporal Platform Foundation (Docker Compose)
+For Claude Code, the default auth mode is `MOONMIND_CLAUDE_CLI_AUTH_MODE=api_key`, which uses `ANTHROPIC_API_KEY` from `.env` with no volume login step. Set it to `oauth` to use browser-based OAuth instead.
 
-MoonMind now includes a self-hosted Temporal foundation in `docker-compose.yaml`:
-
-- `temporal-db` (PostgreSQL persistence + SQL visibility backend)
-- `temporal` (Temporal server via `temporalio/auto-setup`)
-- `temporal-namespace-init` (idempotent bootstrap for namespace and retention policy)
-- **Temporal Workers** (`temporal-worker-workflow`, `temporal-worker-artifacts`, `temporal-worker-llm`, `temporal-worker-sandbox`, `temporal-worker-integrations`) auto-start and begin polling.
-
-To bring up the entire Temporal foundation including all worker fleets:
+### Start MoonMind
 
 ```bash
 docker compose up -d
 ```
 
-Or to run just the Temporal-related services if you prefer:
+This brings up the full stack: API, Temporal, workers, PostgreSQL, Qdrant, MinIO, and the Mission Control UI.
 
+To build locally instead of pulling images:
 ```bash
-docker compose up -d temporal-db temporal temporal-namespace-init temporal-worker-workflow temporal-worker-artifacts temporal-worker-llm temporal-worker-sandbox temporal-worker-integrations
+docker compose up -d --build
 ```
 
-#### Running the End-to-End Test
+### Access the UI
 
-To validate your local Temporal setup, you can run the automated end-to-end test script. This will submit a task, wait for the worker execution to complete, and verify the artifacts and UI status:
+Once services are running, open **Mission Control** at `http://localhost:8080`.
 
+### Manage API Keys
+
+When `AUTH_PROVIDER` is `disabled` (the default for local setups), provider keys from `.env` are copied to the default user profile on startup. View or change them at `http://localhost:8080/settings`.
+
+### Initialize the Vector Database (Optional)
+
+To load initial data into Qdrant from configured sources:
+
+1. Set `INIT_DATABASE=true` in `.env`
+2. Restart: `docker compose down && docker compose up -d`
+3. Check logs: `docker compose logs init-db`
+4. Set `INIT_DATABASE=false` after initialization to prevent re-runs.
+
+### Stop MoonMind
+
+```bash
+docker compose down
+```
+
+## Architecture
+
+MoonMind uses a Temporal-first architecture with specialized worker fleets:
+
+- **API Service** (FastAPI): OpenAI-compatible `/v1/chat/completions` and `/v1/models` endpoints with multi-provider model routing (Gemini, OpenAI, Anthropic, Ollama, vLLM). Also serves the MCP endpoint.
+- **Temporal Server**: Durable execution engine with PostgreSQL persistence and SQL visibility.
+- **Temporal Workers**:
+  - `temporal-worker-workflow` — orchestration logic
+  - `temporal-worker-artifacts` — artifact storage and retrieval (MinIO/S3)
+  - `temporal-worker-llm` — LLM calls
+  - `temporal-worker-sandbox` — runtime CLI execution (Codex, Gemini, Claude)
+  - `temporal-worker-integrations` — external agent coordination
+- **Mission Control UI** (Open-WebUI): Task dashboard, real-time status, artifact browsing, operator controls.
+- **PostgreSQL**: Durable state for jobs, runs, and users.
+- **Qdrant**: Vector database for RAG and memory indexing.
+- **MinIO**: S3-compatible artifact storage.
+- **Docker Proxy**: Restricted Docker socket access for worker containers.
+
+All services run from a single `docker-compose.yaml`. A shared Docker image (`api_service/Dockerfile`) serves both the API and all workers, with runtime behavior selected via environment variables.
+
+### Optional Profiles
+
+```bash
+docker compose --profile ollama up -d       # Local LLM inference (GPU required)
+docker compose --profile vllm up -d         # vLLM OpenAI-compatible inference
+docker compose --profile openhands up -d    # OpenHands agent integration
+docker compose --profile keycloak up -d     # OIDC identity provider
+docker compose --profile temporal-ui up -d  # Temporal debugging UI (port 8088)
+```
+
+### Temporal Operations
+
+**Cleaning Temporal state** (reset between test runs):
+```bash
+./scripts/temporal_clean_state.sh
+```
+
+**End-to-end test:**
 ```bash
 python scripts/temporal_e2e_test.py
 ```
 
-#### Cleaning Temporal State
-
-If you need to reset the Temporal state between test runs, you can use the provided cleanup script:
-
-```bash
-./scripts/temporal_clean_state.sh
-```
-This script will stop Temporal services, remove the database volume, and restart the environment from a blank slate.
-
-Optional operator services:
-
-```bash
-docker compose --profile temporal-ui up -d temporal-ui
-docker compose --profile temporal-tools up -d temporal-admin-tools
-```
-
-Visibility schema rehearsal (required before upgrades):
-
+**Visibility schema rehearsal** (required before upgrades):
 ```bash
 TEMPORAL_SHARD_DECISION_ACK=acknowledged \
 docker compose --profile temporal-tools run --rm temporal-visibility-rehearsal
 ```
 
-Default foundation settings are provided in `.env-template`:
+Temporal gRPC is internal (`temporal:7233`) and not published on a host port. The UI is opt-in via the `temporal-ui` profile.
 
-- `TEMPORAL_NAMESPACE=moonmind`
-- `TEMPORAL_NUM_HISTORY_SHARDS=1`
-- `TEMPORAL_SHARD_DECISION_ACK=""` (set to `acknowledged` during upgrade rehearsal)
-- `TEMPORAL_RETENTION_MAX_STORAGE_GB=100`
-- `TEMPORAL_NAMESPACE_RETENTION_DAYS=36500`
-- `TEMPORAL_WORKER_VERSIONING_DEFAULT_BEHAVIOR=Auto-Upgrade`
+## Model Context Protocol (MCP)
 
-Temporal gRPC is internal (`temporal:7233`) and not published on a host port. The UI is opt-in via the `temporal-ui` profile (`http://localhost:${TEMPORAL_UI_HOST_PORT:-8088}`).
+MoonMind supports MCP as both a server and a client:
 
-### Private skills for worker jobs
+- **As a server:** The `/context` endpoint lets external agents route chat and tool calls through MoonMind, with optional RAG context injection.
+- **As a client:** MoonMind can consume external agents' MCP capabilities via its dynamic tool registry.
+- **Reverse MCP:** External agents receive scoped, ephemeral MCP sessions to read/write artifacts without direct storage access.
 
-MoonMind now supports run-scoped worker skills, including private skill definitions.
+MCP tools include queue management (`enqueue`, `claim`, `heartbeat`, `complete`, `fail`), artifact operations, and dynamically registered external agent capabilities.
 
-1. Add a private skill artifact in the local mirror:
+## Private Skills
 
-- Mirror root: `.agents/skills/local` (local-only, gitignored)
+MoonMind supports run-scoped worker skills, including private skill definitions:
+
+1. Add a private skill in the local mirror (`.agents/skills/local`, gitignored):
 
 ```text
 .agents/skills/local/
@@ -160,705 +196,122 @@ MoonMind now supports run-scoped worker skills, including private skill definiti
     ... (skill implementation files)
 ```
 
-`SKILL.md` must include frontmatter naming the skill, and the `name` must match the directory name.
+2. Configure in `.env`:
+   - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
+   - `WORKFLOW_SKILL_POLICY_MODE=permissive` (default) or `allowlist`
 
-```yaml
----
-name: my-private-scan
-description: Private project-specific scan helper skill
----
-```
-
-2. Point workers at private skills and choose policy mode:
-
-- For workflow workers, set in `.env`:
-
-  - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
-  - `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills` (shared mirror root; nested `.agents/skills/skills` is auto-detected for compatibility)
-  - `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR=true` (optional startup validation)
-  - `WORKFLOW_SKILL_POLICY_MODE=permissive` (legacy aliases: `SPEC_WORKFLOW_SKILL_POLICY_MODE`; default auto-accepts resolvable skills without allowlist maintenance)
-  - `WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (legacy aliases: `SPEC_WORKFLOW_ALLOWED_SKILLS`; only enforced when policy mode is `allowlist`)
-  - `WORKFLOW_DEFAULT_SKILL=my-private-scan` (legacy aliases: `SPEC_WORKFLOW_DEFAULT_SKILL`; optional)
-  - `WORKFLOW_DISCOVER_SKILL=my-private-scan` / `WORKFLOW_SUBMIT_SKILL=my-private-scan` / `WORKFLOW_PUBLISH_SKILL=my-private-scan` (legacy aliases: `SPEC_WORKFLOW_DISCOVER_SKILL` / `SPEC_WORKFLOW_SUBMIT_SKILL` / `SPEC_WORKFLOW_PUBLISH_SKILL`)
-
-3. Source private skills from external locations when needed.
-
-- Use local path sources:
-
-```text
-skill_sources:
-  my-private-scan:1.0.0: /absolute/path/to/my-private-scan
-```
-
-- Use private git sources:
-
+3. Skills can be sourced from local paths or private git repos:
 ```text
 skill_sources:
   my-private-scan:1.0.0: git+https://<token>@github.com/org/my-private-scan.git
 ```
 
-These mappings are consumed from workflow job context as `skill_selection` + `skill_sources` when your orchestration path submits runs through the workflow context payload.
-
-4. Enqueue `codex_skill` jobs with a `skillId` to route via worker selection metadata (must be allowlisted only when policy mode is `allowlist`):
-
-```json
-{
-  "type": "codex_skill",
-  "payload": {
-    "skillId": "my-private-scan"
-  }
-}
-```
-
-5. Validate the path after startup:
-
-- Start workers with `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR=true` (legacy alias: `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR`) and confirm startup logs show skill materialization success.
-- For run workspace checks, inspect `<run_root>/skills_active` and linked adapters:
-  - `<run_root>/.agents/skills -> ../skills_active`
-  - `<run_root>/.gemini/skills -> ../skills_active`
-
-## Automation & Orchestrator
-
-### Spec-driven Celery automation
-
-MoonMind ships with dedicated Celery workers for GitHub Spec Kit, Codex, and Gemini automation. The workers share configuration with the API service through `.env`. Populate the following variables (defaults are provided in `.env-template`):
-
-- `CELERY_BROKER_URL` – AMQP connection string for RabbitMQ (e.g., `amqp://moonmind:password@rabbitmq:5672//`).
-- `CELERY_RESULT_BACKEND` – SQLAlchemy URL for the PostgreSQL result backend (e.g., `db+postgresql://postgres:password@api-db:5432/moonmind`).
-- `CELERY_DEFAULT_QUEUE` – Default queue name for workflow tasks (`moonmind.jobs`).
-- `CELERY_DEFAULT_EXCHANGE` – Exchange used for the workflow queue (`moonmind.jobs`).
-- `CELERY_DEFAULT_ROUTING_KEY` – Routing key for workflow tasks (`moonmind.jobs`).
-- `WORKFLOW_CODEX_QUEUE` – Codex queue name (legacy alias: `SPEC_WORKFLOW_CODEX_QUEUE`; default `codex`).
-- `WORKFLOW_USE_SKILLS` – Enables skills-first stage routing (default `true`; legacy alias `SPEC_WORKFLOW_USE_SKILLS`).
-- `WORKFLOW_DEFAULT_SKILL` – Default skill for discover/submit/publish stages (default `speckit`; legacy alias `SPEC_WORKFLOW_DEFAULT_SKILL`).
-- `WORKFLOW_SKILL_POLICY_MODE` – Skill policy mode (`permissive` default, `allowlist` for strict enforcement; legacy alias `SPEC_WORKFLOW_SKILL_POLICY_MODE`).
-- `WORKFLOW_ALLOWED_SKILLS` – Comma-separated allowlist of selectable skills (legacy alias `SPEC_WORKFLOW_ALLOWED_SKILLS`; enforced when policy mode is `allowlist`).
-- `WORKFLOW_SKILLS_WORKSPACE_ROOT` – Run workspace subdirectory under `WORKFLOW_WORKSPACE_ROOT` used to create shared skill adapters (default `runs`).
-- `WORKFLOW_SKILLS_CACHE_ROOT` – Immutable local cache for verified skill artifacts. Use an absolute writable path outside checked-out repos (for example `/work/agent_jobs/skill_cache`).
-- `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT` – Local mirror root for skill source resolution (default `.agents/skills/local`; legacy alias `SPEC_SKILLS_LOCAL_MIRROR_ROOT`).
-- `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT` – Shared mirror root checked after the local mirror (default `.agents/skills`; nested `.agents/skills/skills` is still auto-detected for compatibility; legacy alias `SPEC_SKILLS_LEGACY_MIRROR_ROOT`).
-- `WORKFLOW_SKILLS_VERIFY_SIGNATURES` – Require signature metadata during materialization (legacy alias `SPEC_SKILLS_VERIFY_SIGNATURES`).
-- `WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR` – Enforce startup validation of local mirror contents (legacy alias `SPEC_SKILLS_VALIDATE_LOCAL_MIRROR`; default `false`).
-- `CODEX_VOLUME_NAME` – Docker volume that stores persistent Codex auth (default `codex_auth_volume`).
-- `CODEX_VOLUME_PATH` – In-container Codex auth path (default `/home/app/.codex`).
-- `ANTHROPIC_API_KEY` (or legacy alias `CLAUDE_API_KEY`) – Claude API key required for `claude` tasks.
-- `MOONMIND_DEFAULT_TASK_RUNTIME` – Fallback runtime for queue tasks that omit `targetRuntime` / `task.runtime.mode` (default `codex`).
-- `CODEX_ENV` and `CODEX_MODEL` – Required by credential validation before Codex phases execute.
-- `GITHUB_TOKEN` – Required for private repository clone/push/PR operations.
-
-During workflow execution, MoonMind materializes a per-run shared skill directory and links both adapters to the same active set:
-
-- `<run_root>/skills_active/`
+Per-run, MoonMind materializes a shared skill directory and links both CLI adapters:
 - `<run_root>/.agents/skills -> ../skills_active`
 - `<run_root>/.gemini/skills -> ../skills_active`
 
-**Gemini Automation:**
-
-The Gemini worker listens on the `gemini` queue and uses the `celery_worker.gemini_worker` entrypoint.
-
-- `GEMINI_CELERY_QUEUE` - Queue name for Gemini tasks (default: `gemini`).
-- `GEMINI_HOME` - Path to the persistent volume for Gemini CLI configuration.
-- `GEMINI_CLI_HOME` - Path the Gemini CLI reads/writes auth state from. Defaults to `GEMINI_HOME` (for compatibility with existing setups).
-- `MOONMIND_GEMINI_CLI_AUTH_MODE` - Gemini CLI auth mode for worker subprocesses:
-  - `api_key` (default): use `GEMINI_API_KEY` / `GOOGLE_API_KEY`.
-  - `oauth`: use cached login in `GEMINI_CLI_HOME` (defaults to `GEMINI_HOME`); worker subprocesses ignore API key env vars.
-
-To bootstrap Gemini OAuth into the shared volume:
-
-```bash
-./tools/auth-gemini-volume.sh
-```
-
-See [docs/GeminiCliWorkers.md](docs/GeminiCliWorkers.md) for detailed architecture and configuration.
-
-After configuring the environment, start the workers from the project root:
-
-```bash
-# Fastest path: one worker consumes both discovery (`speckit`) and Codex (`codex`) queues
-poetry run celery -A celery_worker.speckit_worker worker -Q speckit,codex --loglevel=info
-
-# Gemini Worker
-poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=info
-```
-
-The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. Preflight checks are runtime-aware: `codex` validates Codex auth, `claude` validates Claude runtime requirements (including `ANTHROPIC_API_KEY`), and `universal` validates both as configured.
-
-### Temporal Runtime Workers
-
-Task execution is Temporal-first. Runtime CLI execution (`codex`, `gemini`, `claude`) is handled by `temporal-worker-sandbox`, and orchestration is handled by the workflow/artifact/llm/integration Temporal worker fleets.
-
-Quick checks:
-
-```bash
-docker compose logs -f temporal-worker-sandbox temporal-worker-workflow
-curl http://localhost:5000/api/executions?source=temporal
-```
-
-The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:
-
-- Build args set defaults: `CODEX_CLI_VERSION=0.104.0` and `SPEC_KIT_VERSION=0.4.0`.
-- Override the pins when building the image:
-
-  ```bash
-  docker build \
-  --build-arg CODEX_CLI_VERSION=0.104.0 \
-    --build-arg SPEC_KIT_VERSION=0.4.1 \
-    -f api_service/Dockerfile .
-  ```
-
-Release notes should record the versions shipped with each published image so operators know when the automation toolchain changed.
-
-### mm-orchestrator service
-
-For longer-running, multi-step workflows, MoonMind provides an `orchestrator` service. It:
-
-- Listens on a dedicated Celery queue (`ORCHESTRATOR_CELERY_QUEUE`, default `orchestrator.run`).
-- Mounts `/workspace` and connects to a Docker host (`ORCHESTRATOR_DOCKER_HOST`) to patch, build, restart, and verify services based on an ActionPlan.
-- Emits StatsD metrics (`ORCHESTRATOR_STATSD_HOST` / `ORCHESTRATOR_STATSD_PORT`).
-- Stores run artifacts under `ORCHESTRATOR_ARTIFACT_ROOT` (default `var/artifacts/spec_workflows`) for later inspection.
-
-The orchestrator is designed to be driven by agents and CLIs: submit a Spec, get back a run id, and watch the system move through analyze → patch → build → restart → verify → rollback, with approvals enforced where required.
-
-## Development
-
-### Setting Up Pre-commit
-
-MoonMind relies on `pre-commit` to enforce formatting and linting. Install pre-commit and set up the hooks after cloning:
-
-```bash
-# Install pre-commit (if not already installed)
-pip install pre-commit
-
-# Install the git hooks
-pre-commit install
-```
-
-Attempting to commit with style violations will fail:
-
-```bash
-$ git commit -am "msg"
-isort....................................................................Failed
-```
-
-To manually run pre-commit checks on all files:
-```bash
-pre-commit run --all-files
-```
-
-**Note:** All test scripts (`test-unit.ps1`, `test-integration.ps1`, `test-e2e.ps1`) automatically run pre-commit checks before executing tests.
-
-### Claude auth reference guard
-
-Run the following before documentation-heavy changes:
-
-```bash
-./tools/check-no-claude-oauth-refs.sh
-```
-
-## Design Principles
-1. One-click deployment with smart defaults
-2. Powerful runtime configurability
-3. Modular and extensible architecture
-
-## Configuration
-Pydantic settings allow you to configure:
-- one embedding model, e.g. hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K
-- one vector store, e.g. Qdrant
-- multiple chat models, e.g. Google's `gemini-pro`, `gemini-1.5-flash-latest`, and OpenAI's `gpt-3.5-turbo`, `gpt-4o`.
-- multiple document loaders, e.g. Confluence, Google Drive, GitHub, etc.
-- API keys for the respective providers (e.g., `GOOGLE_API_KEY`, `OPENAI_API_KEY`).
-
-Document indexers and routes are available, but if documents have already been indexed into the vector store, then they can be used as long as the same embeddings model is used MoonMind.
-
-### Ollama Model Configuration
-
-If you are using the provided Ollama service for local LLM inference, you can control which model or models (chat and/or embedding) are loaded by default at startup.
-
-The following environment variables in your `.env` file are used:
-
-*   `OLLAMA_CHAT_MODEL`: Specifies the chat model. Defaults to `"devstral:24b"`.
-*   `OLLAMA_EMBEDDING_MODEL`: Specifies the embedding model. Defaults to `"hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K"`.
-*   `OLLAMA_MODES`: Determines which model(s) to load by default. This is a comma-separated string. Valid values are "chat", "embed", or "chat,embed". If not set, it defaults to "chat".
-
-**Launching with Specific Models:**
-
-You can specify which models to load at launch time using the `tools/ollama.ps1` script with its new switch parameters. This will override the `OLLAMA_MODES` value in your `.env` file for that specific run.
-
-*   `-LoadChatModel`: Use this switch to load the chat model specified by `OLLAMA_CHAT_MODEL`.
-*   `-LoadEmbeddingModel`: Use this switch to load the embedding model specified by `OLLAMA_EMBEDDING_MODEL`.
-
-If neither switch is provided, the script defaults to loading only the chat model (equivalent to `OLLAMA_MODES="chat"`).
-
-Examples:
-
-*   To launch Ollama and load only the configured chat model:
-    ```powershell
-    .\tools\ollama.ps1 -LoadChatModel
-    ```
-    (or simply `.\tools\ollama.ps1` as this is the default if no switches are passed)
-
-*   To launch Ollama and load only the configured embedding model:
-    ```powershell
-    .\tools\ollama.ps1 -LoadEmbeddingModel
-    ```
-
-*   To launch Ollama and load both the chat and embedding models:
-    ```powershell
-    .\tools\ollama.ps1 -LoadChatModel -LoadEmbeddingModel
-    ```
-
-The script will automatically attempt to pull the selected model(s) if not already available locally and then make them active within the Ollama server.
-
-**Note on Resource Usage:** Loading multiple models simultaneously (e.g., both chat and embedding) will consume more system resources (CPU, RAM, VRAM). Ensure your system has adequate resources if you choose to load multiple models.
-
 ## Document Loaders
 
-This section describes the available document loaders and how to use their respective API endpoints.
+MoonMind includes document loaders for populating the RAG vector database:
 
-### Confluence Loader
+### Confluence
+`POST /documents/confluence/load` — Load from a Confluence space or specific page IDs.
 
-The Confluence loader ingests documents from a specified Confluence space or specific page IDs.
+### GitHub Repository
+`POST /documents/github/load` — Ingest documents from a GitHub repository with optional branch and file extension filters.
 
-**Endpoint:** `POST /documents/confluence/load`
+### Google Drive
+`POST /documents/google_drive/load` — Load from a Google Drive folder or specific file IDs. Supports service account keys or Application Default Credentials.
 
-**Request Body:**
+See the API for full request/response schemas.
 
-*   `space_key` (string, mandatory): The key of the Confluence space to load documents from.
-*   `page_ids` (array of strings, optional, default: `null`): A list of specific Confluence page IDs to load. If provided, only these pages will be fetched.
-*   `max_num_results` (integer, optional, default: `100`): The maximum number of results to fetch per batch when loading by `space_key`.
+## Configuration
 
-**Example Request (Space Key):**
-```json
-{
-    "space_key": "MYSPACEKEY",
-    "max_num_results": 50
-}
-```
+MoonMind uses Pydantic settings configured via environment variables or `.env`.
 
-**Example Request (Page IDs):**
-```json
-{
-    "space_key": "ANYKEY", // Still required by model, but ignored if page_ids are present
-    "page_ids": ["12345", "67890"]
-}
-```
+### Model Providers
 
-**Success Response:**
-```json
-{
-    "status": "success",
-    "message": "Successfully loaded 75 nodes from Confluence space MYSPACEKEY.", // Or from X specified page IDs.
-    "total_nodes_indexed": 75
-}
-```
+| Provider | Key Variable | Default Model |
+|----------|-------------|---------------|
+| Google Gemini | `GOOGLE_API_KEY` | `gemini-3.1-pro` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-3.5-turbo` |
+| Anthropic | `ANTHROPIC_API_KEY` | — |
+| Ollama | `OLLAMA_BASE_URL` | `devstral:24b` |
+| vLLM | (profile) | Configurable |
 
-**Error Handling:**
-The endpoint returns appropriate HTTP status codes for errors such as Confluence being disabled, authentication issues, or space/page not found.
+The `/v1/models` endpoint returns a combined list from all enabled providers, cached and refreshed periodically.
 
+### Authentication Providers
 
-### GitHub Repository Loader
-
-This loader allows you to ingest documents directly from a GitHub repository.
-
-**Endpoint:** `POST /documents/github/load`
-
-**Request Body:**
-
-The request body should be a JSON object with the following fields:
-
-*   `repo` (string, mandatory): The full path to the repository in the format `"owner_username/repository_name"`.
-*   `branch` (string, optional, default: `"main"`): The specific branch of the repository to load documents from.
-*   `filter_extensions` (array of strings, optional, default: `null`): A list of file extensions to specifically include in the loading process (e.g., `[".py", ".md", ".java"]`). If omitted or `null`, all files encountered will be processed.
-*   `github_token` (string, optional, default: `null`): A GitHub Personal Access Token (PAT). This is required for accessing private repositories. It's also recommended for public repositories to avoid potential rate limiting by GitHub.
-
-**Security Note:** The `github_token` grants access to your GitHub repositories. Ensure it's handled securely. It's best practice to use a token with the minimum necessary permissions (e.g., read-only access to the specific repositories you intend to load).
-
-**Example Request:**
-
-```json
-{
-    "repo": "my-org/my-awesome-project",
-    "branch": "feature/new-docs",
-    "filter_extensions": [".md", ".txt"],
-    "github_token": "ghp_YourGitHubPersonalAccessTokenIfPrivateOrForRateLimits"
-}
-```
-
-**Success Response:**
-
-On successful loading, the API will return a JSON object similar to this:
-
-```json
-{
-    "status": "success",
-    "message": "Successfully loaded 153 nodes from GitHub repository my-org/my-awesome-project on branch feature/new-docs",
-    "total_nodes_indexed": 153,
-    "repository": "my-org/my-awesome-project",
-    "branch": "feature/new-docs"
-}
-```
-
-**Error Handling:**
-
-The endpoint will return appropriate HTTP status codes and error messages for issues such as:
-*   Invalid `repo` format.
-*   Missing or invalid `github_token` for private repositories.
-*   Repository not found or inaccessible.
-*   Other errors during document processing.
-
-
-### Google Drive Loader
-
-This loader enables you to ingest documents from Google Drive, either from a specified folder or by listing individual file IDs.
-
-**Endpoint:** `POST /documents/google_drive/load`
-
-**Request Body:**
-
-The request body should be a JSON object with the following fields:
-
-*   `folder_id` (string, optional): The ID of the Google Drive folder from which to load documents.
-*   `file_ids` (array of strings, optional): A list of specific Google Drive file IDs to load.
-    *   *Note: You must provide either `folder_id` or `file_ids`.*
-*   `recursive` (boolean, optional, default: `False`): This field is available in the request. The underlying LlamaIndex Google Drive reader, when given a `folder_id`, typically processes all files within that folder.
-*   `service_account_key_path` (string, optional, default: `null`): The server-side path to your Google Cloud service account JSON key file.
-
-**Authentication:**
-
-To access your Google Drive files, the application needs Google Cloud credentials:
-1.  **Service Account Key Path:** You can provide the full path to a service account key JSON file using the `service_account_key_path` field in your request. Ensure this file is accessible on the server where the application is running.
-2.  **Application Default Credentials (ADC):** If `service_account_key_path` is not provided in the request, the application will attempt to use ADC. This typically involves setting the `GOOGLE_APPLICATION_CREDENTIALS` environment variable on the server to point to your service account key file. Refer to Google Cloud documentation for details on setting up ADC.
-3.  **Default Server Configuration:** Alternatively, a default service account key path can be configured in the application's settings (`settings.google.google_account_file`) by the server administrator.
-
-**Example Requests:**
-
-*Loading from a folder (using ADC or a server-configured default key):*
-```json
-{
-    "folder_id": "1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345"
-}
-```
-
-*Loading specific files using a provided service account key path:*
-```json
-{
-    "file_ids": ["1_abcdefgHIJKLMNOPQRSTUVWXYZabcdefg", "1_anotherFileIDJKLMNOPQRSTUVW"],
-    "service_account_key_path": "/etc/gcp_keys/my_project_sa_key.json"
-}
-```
-
-**Success Response:**
-
-A successful response will include the number of nodes indexed:
-```json
-{
-    "status": "success",
-    "message": "Successfully loaded 75 nodes from Google Drive (folder ID 1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345).",
-    "total_nodes_indexed": 75,
-    "folder_id": "1aBcDeFgHiJkLmNoPqRsTuVwXyZ_12345",
-    "file_ids": null
-}
-```
-
-**Error Handling:**
-The API will return appropriate error messages for issues like missing `folder_id`/`file_ids`, authentication problems, or errors from the Google Drive API.
-
-
-## Microservices
-
-MoonMind uses a modular microservices architecture with the following containers:
-
-- **API**: A FastAPI service that provides:
-  - An OpenAI-compatible REST API for Retrieval-Augmented Generation
-  - A Model Context Protocol server for agent interactions
-- **UI**: An Open-WebUI container that provides a UI for Retrieval-Augmented Generation
-- **Qdrant**: A Qdrant container that provides a vector database
-- **Ollama**: An Ollama container that handles local LLM inference (optional)
-
-It is possible to run inference with Ollama, with third-party AI providers (like Google and OpenAI), or with a hybrid approach (e.g. local embedding models with cloud LLM inference).
-
-If using the default Ollama container, an NVIDIA GPU with appropriate drivers is required.
-
-The API container is powered by FastAPI and LangChain, employing Dependency Injection with abstract interfaces to enable modular service selection. It supports both OpenAI-compatible endpoints and the Model Context Protocol, making it versatile for different client applications and AI agents.
-
-## Apps
-
-Apps are orchestrated workflows built on top of MoonMind.
-
-An App can:
-
-- Declare its readers and defaults via a YAML manifest.
-- Use MoonMind’s retrieval layer to build a working context over your code and documents.
-- Dispatch long-running steps to the Spec Kit worker or mm-orchestrator over Celery queues.
-
-Apps can be invoked from:
-
-- the CLI,
-- agents via the Model Context Protocol (`/context`),
-- or CI pipelines that call MoonMind’s APIs.
-
-## Using MoonMind as an agent backend
-
-MoonMind is built to sit behind agent frameworks:
-
-- **Model Context Protocol:** The `/context` endpoint exposes a standard interface that tools like OpenHands can use to route chat and tool calls through MoonMind.
-- **Agent environments:** Sample configs and guides for running MoonMind from inside agent sandboxes like the Jules Agent and OpenHands (`OPENHANDS__*` settings) so agents can reuse your models, memory, and orchestrator queues.
-
-## Running the VLLM Service
-
-This project includes a Docker Compose configuration to run a VLLM (Very Large Language Model) service with GPU acceleration, providing an OpenAI-compatible API endpoint.
-
-### Prerequisites
-
-- NVIDIA GPU drivers installed on your host machine.
-- NVIDIA Container Toolkit installed to enable GPU access for Docker containers.
-- Docker and Docker Compose.
-
-### Setup
-
-1.  **Environment Configuration:**
-    You can customize the VLLM service by setting the following environment variables. Create a `.env` file in the root of the project (you can copy from `.env.vllm-template` if it exists or will be created) or set these variables in your shell environment:
-
-    - `VLLM_MODEL_NAME`: The Hugging Face model identifier to be used by VLLM.
-      (Default: `ByteDance-Seed/UI-TARS-1.5-7B`)
-    - `VLLM_DTYPE`: The data type for model weights (e.g., `float16`, `bfloat16`, `auto`).
-      (Default: `float16`)
-    - `VLLM_GPU_MEMORY_UTILIZATION`: Proportion of GPU memory to be used by VLLM (0.0 to 1.0).
-      (Default: `0.90`)
-
-    Example `.env` file content:
-    ```
-    VLLM_MODEL_NAME="mistralai/Mistral-7B-Instruct-v0.1"
-    VLLM_DTYPE="bfloat16"
-    VLLM_GPU_MEMORY_UTILIZATION="0.95"
-    ```
-
-2.  **Models Directory:**
-    The service uses a local `./models` directory to cache downloaded models. This directory is mounted into the container at `/root/.cache/huggingface/hub`. Ensure this directory exists or can be created by Docker.
-
-### Launching the Service
-
-To build (if necessary) and start the VLLM service, run:
-
-```bash
-docker-compose --profile vllm up -d
-```
-
-The VLLM OpenAI-compatible API will be available at `http://localhost:8000/v1`.
-
-### Accessing Logs
-
-To view the logs from the VLLM service:
-
-```bash
-docker-compose --profile vllm logs -f vllm
-```
-
-### Stopping the Service
-
-To stop the VLLM service:
-
-```bash
-docker-compose --profile vllm down
-```
-
-## Component Definitions
-
-TODO...
-
-Embedding model:
-Vector Store:
-Storage Context:
-Service Context:
-
-## Model Context Protocol Support
-
-MoonMind now supports the Model Context Protocol, allowing it to act as a server that OpenHands and other agents can make client requests to. This provides a standardized way for AI agents to communicate with language models through MoonMind.
-
-The Model Context Protocol is exposed via the `/context` endpoint, which accepts POST requests with messages and other parameters. For detailed information about the protocol implementation, see [Model Context Protocol Documentation](docs/model_context_protocol.md).
-
-### Example Client
-
-An example client is provided in `/examples/context_protocol_client.py` to demonstrate how to interact with the Model Context Protocol endpoint:
-
-If your environment does not provide a `python` binary, use `python3` for these commands.
-
-```bash
-# Run with default model (gemini-pro)
-python examples/context_protocol_client.py
-
-# Run with a specific model
-python examples/context_protocol_client.py gemini-pro-vision
-```
-
-## Model Endpoints
-
-### `/v1/models`
-
-This endpoint lists the available chat models from all configured providers. It now returns a combined list that can include models from Google, OpenAI, and potentially others in the future. The model list is cached in memory for improved performance after the initial fetch and is refreshed periodically (defaulting to every hour, but configurable).
-
-**Example Response Snippet:**
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "models/gemini-pro",
-      "object": "model",
-      "created": 1677609600,
-      "owned_by": "Google",
-      // ... other fields
-    },
-    {
-      "id": "gpt-3.5-turbo",
-      "object": "model",
-      "created": 1677609600,
-      "owned_by": "OpenAI",
-      // ... other fields
-    }
-  ]
-}
-```
-
-### `/v1/chat/completions`
-
-This endpoint now routes chat completion requests to the appropriate provider based on the `model` field in the request body. You can specify a model ID from Google (e.g., `"gemini-pro"`) or OpenAI (e.g., `"gpt-4o"`).
-
-**Example Request (OpenAI model):**
-```json
-{
-    "model": "gpt-4o",
-    "messages": [
-        {"role": "user", "content": "What is the capital of France?"}
-    ],
-    "max_tokens": 50
-}
-```
-
-## Environment Variables and Settings
-
-MoonMind uses Pydantic settings, which can be configured via environment variables or a `.env` file.
-
-Key settings related to model providers include:
-
-*   **Google:**
-    *   `GOOGLE_API_KEY`: Your Google API key for accessing Gemini models.
-*   `GOOGLE_CHAT_MODEL` (optional, default: `"gemini-3.1-pro"`): Default Google chat model to use if not specified in a request.
-*   **OpenAI:**
-    *   `OPENAI_API_KEY`: Your OpenAI API key.
-    *   `OPENAI_CHAT_MODEL` (optional, default: `"gpt-3.5-turbo"`): Default OpenAI chat model.
-
-The application will attempt to load these from environment variables. For local development, you can create a `.env` file in the project root:
-
-```env
-GOOGLE_API_KEY="your_google_api_key_here"
-# GOOGLE_CHAT_MODEL="gemini-3.1-pro" # Optional
-
-OPENAI_API_KEY="your_openai_api_key_here"
-# OPENAI_CHAT_MODEL="gpt-4o" # Optional
-```
-
-### Authentication providers
-
-MoonMind resolves secrets using pluggable providers. The `profile` provider
-reads values from the current user's stored profile while the `env` provider
-falls back to environment variables. The lookup order is **profile → env →
-error**.
-
-Example manifest snippet:
-
-```yaml
-auth:
-  github_token:
-    secretRef:
-      provider: profile
-      key: GITHUB_TOKEN
-```
-
-### Provider Key Precedence
-
-MoonMind checks user profile settings first when looking up API keys. If a key is not stored in the profile, the value from the environment is used. The default `disabled` auth mode automatically seeds the default profile with keys from `.env` so they can be managed via the UI.
+MoonMind resolves secrets using pluggable providers. Lookup order: **profile → environment → error**.
 
 | Auth mode | Key lookup order |
 |-----------|-----------------|
 | `disabled` | user profile → environment variable |
 | `keycloak` | user profile → environment variable |
 
-You can view or change keys at `http://localhost:8080/settings`.
+### Ollama Configuration
 
-## Roadmap: from RAG server to orchestration hub
+Control local inference models via environment variables:
 
-Today MoonMind supports:
+- `OLLAMA_CHAT_MODEL` — Chat model (default: `devstral:24b`)
+- `OLLAMA_EMBEDDING_MODEL` — Embedding model (default: `hf.co/qwen/gte-Qwen2-7B-instruct-GGUF:Q6_K`)
+- `OLLAMA_MODES` — Which models to load: `chat`, `embed`, or `chat,embed`
 
-- Multi-provider chat (Google Gemini, OpenAI, Anthropic, Ollama, VLLM) behind a single OpenAI-compatible API.
-- Retrieval-augmented chat over your own Confluence, GitHub, Google Drive, and other sources.
-- Celery-backed Spec Kit and Codex workflows plus an mm-orchestrator service for plan/patch/build/restart/verify loops.
+Launch with the `ollama` profile: `docker compose --profile ollama up -d`
 
-Planned evolution:
+### vLLM Configuration
 
-- **Richer memory tools** – long-lived project and user memories that Apps and agents can read/write, beyond vector search, to ground orchestrated workflows and approvals.
-- **Voice-driven orchestration** – a small voice gateway that turns spoken commands into orchestrator runs (e.g., “deploy the latest Spec to staging and run tests”) and streams status updates back.
+- `VLLM_MODEL_NAME` — HuggingFace model ID (default: `ByteDance-Seed/UI-TARS-1.5-7B`)
+- `VLLM_DTYPE` — Data type (default: `float16`)
+- `VLLM_GPU_MEMORY_UTILIZATION` — GPU memory fraction (default: `0.90`)
 
-The north star is for MoonMind to act as a single, self-hosted hub where chat, memory, and automation all meet.
+Launch with the `vllm` profile: `docker compose --profile vllm up -d`
 
-## Gemini
+## Development
 
-While LangChain's direct support for the newest Gemini models might vary, MoonMind integrates with Google's generative AI SDK, allowing usage of available Gemini models like `gemini-pro` and `gemini-1.5-flash-latest` when a `GOOGLE_API_KEY` is provided.
+### Pre-commit
 
-## Running Tests
-
-All test scripts now include automatic pre-commit checks (formatting and linting) before running tests. If formatting issues are detected, the script will fail and prompt you to fix them.
-
-### Unit Tests
-
-To run unit tests:
-```powershell
-.\tools\test-unit.ps1
+```bash
+pip install pre-commit
+pre-commit install
 ```
 
-This script will:
-1. Run `pre-commit` checks (black, isort, ruff)
-2. Build the test Docker container
-3. Execute all unit tests
+Run checks manually:
+```bash
+pre-commit run --all-files
+```
 
-### Confluence Integration Tests
+### Running Tests
 
-These tests verify the end-to-end functionality of loading documents from a real Confluence space into the Qdrant vector database and then querying Qdrant.
+All test scripts run pre-commit checks automatically before executing tests.
 
-**Prerequisites:**
-*   A running Confluence instance accessible with the credentials provided in the `.env` file.
-*   A running Qdrant instance, configured as specified in the `.env` file.
+**Unit tests:**
+```bash
+./tools/test_unit.sh
+```
 
-**Setup:**
-1.  Create a `.env` file in the root of the project if you haven't already.
-2.  Add the following environment variables to your `.env` file, replacing placeholder values with your actual Confluence and Qdrant details:
+**Integration tests:**
+```bash
+docker compose -f docker-compose.test.yaml run --rm orchestrator-tests
+```
 
-    ```env
-    CONFLUENCE_URL=https://your-confluence-domain.atlassian.net/wiki
-    CONFLUENCE_USERNAME=your_email@example.com
-    CONFLUENCE_API_KEY=your_confluence_api_token
-    TEST_CONFLUENCE_SPACE_KEY=YOUR_TEST_SPACE_KEY  # A space with a few test documents that the provided user can access
-
-    QDRANT_HOST=localhost
-    QDRANT_PORT=6333
-    QDRANT_COLLECTION_NAME=moonmind_documents # Ensure this matches your application's Qdrant collection name (default in tests)
-    ```
-    *Note: `QDRANT_HOST`, `QDRANT_PORT`, and `QDRANT_COLLECTION_NAME` should match the settings your application uses for the Qdrant instance being tested against. The default collection name in the integration test setup is `moonmind_documents`.*
-
-**Running the Tests:**
-To execute the Confluence integration tests, run the following command from the project root:
+**Confluence integration tests:**
 ```powershell
 .\tools\test-integration.ps1
 ```
-The tests will be skipped if the required Confluence environment variables (`CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_KEY`, `TEST_CONFLUENCE_SPACE_KEY`) are not found in the `.env` file.
+Requires Confluence credentials in `.env`. Tests are skipped if credentials are not configured.
 
-## Manifests
+## Design Principles
 
-Reader configurations can be validated using the `Manifest` schema. For example:
+1. One-click deployment with smart defaults
+2. Powerful runtime configurability
+3. Modular and extensible architecture
+4. Graceful degradation: unavailable subsystems degrade quality, never block execution
+5. Vendor-agnostic: swap providers without rewriting workflows
 
-```python
-from moonmind.schemas import Manifest
-manifest = Manifest.model_validate_yaml("samples/github_manifest.yaml")
-```
+## Roadmap
 
-The JSON Schema can be exported with `export_schema("manifest.schema.json")`.
+- **More agent runtimes** — including leading open-source options
+- **Richer memory tools** — long-lived project and user memories beyond vector search
+- **Voice-driven orchestration** — spoken commands to orchestrator runs with streamed status updates
