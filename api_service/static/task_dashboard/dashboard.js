@@ -1983,9 +1983,37 @@
     syncAutoRefreshControls();
   }
 
-  function renderQueueTable(rows) {
+  function renderQueueTable(rows, sortState) {
     if (rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
+    }
+
+    const activeSortField = sortState && sortState.field ? sortState.field : null;
+    const activeSortDir = sortState && sortState.direction === "asc" ? "asc" : "desc";
+
+    function sortIndicator(field) {
+      if (field !== activeSortField) {
+        return "";
+      }
+      return `<span class="sort-indicator" aria-hidden="true">${activeSortDir === "asc" ? "\u25b2" : "\u25bc"}</span>`;
+    }
+
+    function thClass(field) {
+      if (field !== activeSortField) {
+        return "sortable-header";
+      }
+      return `sortable-header sort-${activeSortDir}`;
+    }
+
+    function ariaSort(field) {
+      if (field !== activeSortField) {
+        return "none";
+      }
+      return activeSortDir === "asc" ? "ascending" : "descending";
+    }
+
+    function sortableTh(field, label) {
+      return `<th class="${thClass(field)}" data-sort-field="${escapeHtml(field)}" aria-sort="${ariaSort(field)}">${escapeHtml(label)}${sortIndicator(field)}</th>`;
     }
 
     const primaryFields = queueFieldDefinitions.filter(
@@ -1996,7 +2024,7 @@
     );
 
     const renderDefinitionHeader = (definition) =>
-      `<th data-field="${escapeHtml(definition.key)}">${escapeHtml(definition.label)}</th>`;
+      sortableTh(definition.key, definition.label);
     const primaryHeaders = primaryFields.map(renderDefinitionHeader).join("");
     const timelineHeaders = timelineFields.map(renderDefinitionHeader).join("");
 
@@ -2031,11 +2059,11 @@
       <table>
         <thead>
           <tr>
-            <th>Type</th>
-            <th>ID</th>
+            ${sortableTh("type", "Type")}
+            ${sortableTh("id", "ID")}
             ${primaryHeaders}
-            <th>Status</th>
-            <th>Title</th>
+            ${sortableTh("status", "Status")}
+            ${sortableTh("title", "Title")}
             ${timelineHeaders}
           </tr>
         </thead>
@@ -2105,7 +2133,7 @@
       .join("");
   }
 
-  function renderQueueLayouts(rows) {
+  function renderQueueLayouts(rows, sortState) {
     if (!rows || rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
     }
@@ -2118,13 +2146,13 @@
 
     return `
       <div class="queue-layouts">
-        <div ${tableAttributes}>${renderQueueTable(rows)}</div>
+        <div ${tableAttributes}>${renderQueueTable(rows, sortState)}</div>
         ${cardsHtml}
       </div>
     `;
   }
 
-  function renderActivePageContent(rows, errors = []) {
+  function renderActivePageContent(rows, errors = [], sortState) {
     const notices = (errors || [])
       .map(
         (source) =>
@@ -2134,7 +2162,10 @@
       )
       .join("");
     const normalizedRows = Array.isArray(rows) ? rows.slice() : [];
-    const layouts = renderQueueLayouts(sortRows(normalizedRows));
+    const sortedRows = sortState && sortState.field
+      ? sortRowsByColumn(normalizedRows, sortState.field, sortState.direction)
+      : sortRows(normalizedRows);
+    const layouts = renderQueueLayouts(sortedRows, sortState);
     return `${notices}${layouts}`;
   }
 
@@ -3193,6 +3224,7 @@
       renderProposalLayouts,
       renderProposalActionFeedback,
       sortRows,
+      sortRowsByColumn,
       rowOrderKey,
       buildRowOrderIndex,
       stabilizeRowsByPreviousOrder,
@@ -3442,6 +3474,54 @@
     });
   }
 
+  const TIMESTAMP_SORT_FIELDS = new Set(["createdAt", "startedAt", "finishedAt"]);
+
+  function sortRowsByColumn(rows, field, direction) {
+    const dir = direction === "asc" ? 1 : -1;
+    const copy = Array.isArray(rows) ? rows.slice() : [];
+    copy.sort((left, right) => {
+      let leftVal;
+      let rightVal;
+      if (TIMESTAMP_SORT_FIELDS.has(field)) {
+        leftVal = Date.parse(left[field] || 0) || 0;
+        rightVal = Date.parse(right[field] || 0) || 0;
+        if (leftVal !== rightVal) {
+          return dir * (leftVal - rightVal);
+        }
+      } else if (field === "type") {
+        leftVal = String(left.sourceLabel || "").toLowerCase();
+        rightVal = String(right.sourceLabel || "").toLowerCase();
+        const cmp = leftVal.localeCompare(rightVal);
+        if (cmp !== 0) {
+          return dir * cmp;
+        }
+      } else if (field === "status") {
+        leftVal = String(left.rawStatus || "").toLowerCase();
+        rightVal = String(right.rawStatus || "").toLowerCase();
+        const cmp = leftVal.localeCompare(rightVal);
+        if (cmp !== 0) {
+          return dir * cmp;
+        }
+      } else if (field === "finishOutcome") {
+        leftVal = String(left.finishOutcomeCode || "").toLowerCase();
+        rightVal = String(right.finishOutcomeCode || "").toLowerCase();
+        const cmp = leftVal.localeCompare(rightVal);
+        if (cmp !== 0) {
+          return dir * cmp;
+        }
+      } else {
+        leftVal = String(left[field] || "").toLowerCase();
+        rightVal = String(right[field] || "").toLowerCase();
+        const cmp = leftVal.localeCompare(rightVal);
+        if (cmp !== 0) {
+          return dir * cmp;
+        }
+      }
+      return String(left.id || "").localeCompare(String(right.id || ""));
+    });
+    return copy;
+  }
+
   function rowOrderKey(row) {
     const source = String(pick(row, "source") || "").trim().toLowerCase() || "unknown";
     const id = String(pick(row, "id") || "").trim();
@@ -3654,6 +3734,7 @@
       pageEnd: 0,
     };
     let stableListOrderIndex = new Map();
+    let columnSort = { field: null, direction: "desc" };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -3985,6 +4066,9 @@
         return;
       }
       const filteredRows = applyQueueFilters(rows);
+      const sortedFilteredRows = columnSort.field
+        ? sortRowsByColumn(filteredRows.slice(), columnSort.field, columnSort.direction)
+        : filteredRows;
       const telemetryHtml =
         filterState.source === "temporal" ? "" : renderTelemetrySummary(telemetryPayload);
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
@@ -3998,11 +4082,32 @@
         "Tasks List",
         subtitle,
         `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
-          filteredRows,
+          sortedFilteredRows,
+          columnSort.field ? columnSort : null,
         )}`,
         { showAutoRefreshControls: true },
       );
       attachFilterHandlers(rows);
+      attachColumnSortHandlers(rows);
+    }
+
+    function attachColumnSortHandlers(rows) {
+      const sortHeaders = root.querySelectorAll("[data-sort-field]");
+      sortHeaders.forEach((th) => {
+        th.addEventListener("click", () => {
+          const field = String(th.getAttribute("data-sort-field") || "").trim();
+          if (!field) {
+            return;
+          }
+          if (columnSort.field === field) {
+            columnSort.direction = columnSort.direction === "asc" ? "desc" : "asc";
+          } else {
+            columnSort.field = field;
+            columnSort.direction = "asc";
+          }
+          renderQueueList(rows);
+        });
+      });
     }
 
     function attachFilterHandlers(rows) {

@@ -116,6 +116,7 @@ const {
   renderProposalActionFeedback,
   filterProposalsByTag,
   sortRows,
+  sortRowsByColumn,
   rowOrderKey,
   buildRowOrderIndex,
   stabilizeRowsByPreviousOrder,
@@ -124,6 +125,7 @@ const {
   applyQueuePaginationToSearch,
   resetQueuePaginationState,
 } = helpers;
+
 
 function createProposalRow(overrides = {}) {
   return {
@@ -176,7 +178,7 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueTableUsesFieldDefinitions() {
   const html = renderQueueTable([createQueueRow()]);
-  assert(html.includes("<th>Type</th>"));
+  assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
   assert(html.includes('data-field="finishedAt"'));
   assert(html.includes("status-running"));
 })();
@@ -192,16 +194,118 @@ function createProposalRow(overrides = {}) {
 
 (function testQueueDefinitionOrderMatchesTableHeaders() {
   const html = renderQueueTable([createQueueRow()]);
-  const headerOrder = Array.from(html.matchAll(/<th data-field="([^"]+)"/g)).map(
+  // Dynamic definition-driven headers use data-sort-field via sortableTh
+  const headerOrder = Array.from(html.matchAll(/data-sort-field="([^"]+)"/g)).map(
     (match) => match[1],
   );
-  const expectedHeaderOrder = queueFieldDefinitions.map((definition) => definition.key);
-  assert.strictEqual(headerOrder.join(","), expectedHeaderOrder.join(","));
+  // Table order: type, id, primaryFields (non-timeline), status, title, timelineFields
+  const primaryFields = queueFieldDefinitions
+    .filter((d) => d.tableSection !== "timeline")
+    .map((d) => d.key);
+  const timelineFields = queueFieldDefinitions
+    .filter((d) => d.tableSection === "timeline")
+    .map((d) => d.key);
+  const expectedOrder = ["type", "id", ...primaryFields, "status", "title", ...timelineFields];
+  assert.strictEqual(headerOrder.join(","), expectedOrder.join(","));
 })();
 
 (function testRenderRowsTableDelegatesToQueueTable() {
   const html = renderRowsTable([createQueueRow()]);
-  assert(html.includes("<th>Type</th>"));
+  assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
+})();
+
+(function testRenderQueueTableWithSortStateAddsAriaSort() {
+  const sortState = { field: "title", direction: "asc" };
+  const html = renderQueueTable([createQueueRow()], sortState);
+  assert(html.includes('aria-sort="ascending"'), 'Expected ascending aria-sort on title column');
+  assert(html.includes('class="sortable-header sort-asc"'), 'Expected sort-asc class on title column');
+  assert(html.includes('\u25b2'), 'Expected ascending indicator \u25b2');
+  // Non-active columns should have aria-sort=none
+  assert(html.includes('aria-sort="none"'), 'Expected aria-sort=none on non-active columns');
+})();
+
+(function testRenderQueueTableWithDescSortStateAddsAriaSortDescending() {
+  const sortState = { field: "createdAt", direction: "desc" };
+  const html = renderQueueTable([createQueueRow()], sortState);
+  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on createdAt column');
+  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on createdAt column');
+  assert(html.includes('\u25bc'), 'Expected descending indicator \u25bc');
+})();
+
+(function testRenderQueueTableWithoutSortStateHasNoActiveClass() {
+  const html = renderQueueTable([createQueueRow()]);
+  assert(!html.includes('sort-asc'), 'No sort-asc without sortState');
+  assert(!html.includes('sort-desc'), 'No sort-desc without sortState');
+})();
+
+(function testSortRowsByColumnSortsTitleAscending() {
+  const rows = [
+    createQueueRow({ id: 'job-1', title: 'Zebra task' }),
+    createQueueRow({ id: 'job-2', title: 'Apple task' }),
+    createQueueRow({ id: 'job-3', title: 'Mango task' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'title', 'asc');
+  assert.strictEqual(sorted[0].title, 'Apple task');
+  assert.strictEqual(sorted[1].title, 'Mango task');
+  assert.strictEqual(sorted[2].title, 'Zebra task');
+})();
+
+(function testSortRowsByColumnSortsTitleDescending() {
+  const rows = [
+    createQueueRow({ id: 'job-1', title: 'Zebra task' }),
+    createQueueRow({ id: 'job-2', title: 'Apple task' }),
+    createQueueRow({ id: 'job-3', title: 'Mango task' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'title', 'desc');
+  assert.strictEqual(sorted[0].title, 'Zebra task');
+  assert.strictEqual(sorted[1].title, 'Mango task');
+  assert.strictEqual(sorted[2].title, 'Apple task');
+})();
+
+(function testSortRowsByColumnSortsCreatedAtAscending() {
+  const rows = [
+    createQueueRow({ id: 'job-a', createdAt: '2026-03-10T00:00:00Z' }),
+    createQueueRow({ id: 'job-b', createdAt: '2026-03-08T00:00:00Z' }),
+    createQueueRow({ id: 'job-c', createdAt: '2026-03-12T00:00:00Z' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'createdAt', 'asc');
+  assert.strictEqual(sorted[0].id, 'job-b');
+  assert.strictEqual(sorted[1].id, 'job-a');
+  assert.strictEqual(sorted[2].id, 'job-c');
+})();
+
+(function testSortRowsByColumnSortsCreatedAtDescending() {
+  const rows = [
+    createQueueRow({ id: 'job-a', createdAt: '2026-03-10T00:00:00Z' }),
+    createQueueRow({ id: 'job-b', createdAt: '2026-03-08T00:00:00Z' }),
+    createQueueRow({ id: 'job-c', createdAt: '2026-03-12T00:00:00Z' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'createdAt', 'desc');
+  assert.strictEqual(sorted[0].id, 'job-c');
+  assert.strictEqual(sorted[1].id, 'job-a');
+  assert.strictEqual(sorted[2].id, 'job-b');
+})();
+
+(function testSortRowsByColumnSortsByStatus() {
+  const rows = [
+    createQueueRow({ id: 'job-1', rawStatus: 'succeeded' }),
+    createQueueRow({ id: 'job-2', rawStatus: 'failed' }),
+    createQueueRow({ id: 'job-3', rawStatus: 'running' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'status', 'asc');
+  assert.strictEqual(sorted[0].rawStatus, 'failed');
+  assert.strictEqual(sorted[1].rawStatus, 'running');
+  assert.strictEqual(sorted[2].rawStatus, 'succeeded');
+})();
+
+(function testSortRowsByColumnDoesNotMutateOriginalArray() {
+  const rows = [
+    createQueueRow({ id: 'job-1', title: 'Zebra task' }),
+    createQueueRow({ id: 'job-2', title: 'Apple task' }),
+  ];
+  const originalOrder = rows.map((r) => r.id).join(',');
+  sortRowsByColumn(rows, 'title', 'asc');
+  assert.strictEqual(rows.map((r) => r.id).join(','), originalOrder, 'Original array should not be mutated');
 })();
 
 (function testToTemporalRowsNormalizesExecutionPayload() {
