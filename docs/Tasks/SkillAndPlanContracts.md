@@ -1,4 +1,4 @@
-# Skill and Plan Contracts
+# Tool and Plan Contracts (Skills as a Tool Subtype)
 
 MoonMind system design (Temporal-first)
 
@@ -15,18 +15,33 @@ Define what **execution** means in MoonMind using **Temporal’s** core model:
 * **Activities** perform side effects (LLM calls, filesystem, network, integrations).
 * MoonMind adds only what Temporal does not provide:
 
-  * **Skill** (capability contract)
-  * **Plan** (structured sequence/graph of skill invocations)
+  * **Tool** (capability contract)
+  * **Plan** (structured sequence/graph of tool invocations)
   * **Artifact** (large inputs/outputs stored outside workflow history)
 
 This document establishes:
 
-* Skill interface: schemas, validation, error model
+* Tool interface: schemas, validation, error model
 * Plan format: DAG-first, concurrency, dependency semantics
-* Plan production: planning is “just a skill”; plans are artifacts
+* Plan production: planning is “just a tool”; plans are artifacts
 * Determinism boundaries: orchestration in workflow, execution in activities
 * Progress & intermediate outputs conventions
-* Deliverables: skill registry spec, plan schema/examples/validation, execution semantics (plan → activity invocations)
+* Deliverables: tool registry spec, plan schema/examples/validation, execution semantics (plan -> activity invocations)
+
+### 1.1 Terminology policy (Temporal era)
+
+Canonical terminology for execution payloads is:
+
+* **task** (top-level user request)
+* **step** (plan node)
+* **tool** (executable capability)
+
+A **skill** is a tool subtype (`tool.type = "skill"`).
+
+Compatibility rule:
+
+* legacy `skill` payload fields are accepted during migration
+* new runtime and API payloads should emit `tool` fields as canonical
 
 ---
 
@@ -35,8 +50,8 @@ This document establishes:
 1. **Workflow code orchestrates only.**
    No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities.
 
-2. **Everything executable is a Skill invocation.**
-   “Planning” is a Skill that outputs a Plan.
+2. **Everything executable is a Tool invocation.**
+   “Planning” is a Tool that outputs a Plan.
 
 3. **Plans are data, not code.**
    Plans are validated, stored as artifacts, and interpreted deterministically.
@@ -81,11 +96,11 @@ Large inputs/outputs (plans, manifests, patches, logs, model transcripts) are st
 
 ---
 
-## 4) Skill contract
+## 4) Tool contract (skill subtype)
 
 ### 4.1 Definition
 
-A **Skill** is a named capability defined by:
+A **Tool** is a named capability defined by:
 
 * input schema
 * output schema
@@ -93,17 +108,19 @@ A **Skill** is a named capability defined by:
 * default policies (timeouts, retries)
 * capability requirements (what worker fleet can run it)
 
-A Skill is not a workflow. Workflows interpret Plans and invoke Skills as Activities.
+A Tool is not a workflow. Workflows interpret Plans and invoke Tools as Activities.
+In current MoonMind execution, the active tool subtype is `skill`.
 
 ---
 
-### 4.2 SkillDefinition schema (registry entry)
+### 4.2 ToolDefinition schema (registry entry)
 
-Skills are declared in a registry (YAML or JSON). Example:
+Tools are declared in a registry (YAML or JSON). Example:
 
 ```yaml
 name: "repo.apply_patch"
 version: "2.1.0"
+type: "skill"
 description: "Apply a patch artifact to a repo ref and optionally format."
 inputs:
   schema:
@@ -123,7 +140,7 @@ outputs:
       diff_artifact: { type: string }       # artifact_ref (optional)
 executor:
   # See §11 decision: hybrid model
-  activity_type: "mm.skill.execute"
+  activity_type: "mm.tool.execute"
   selector:
     mode: "by_capability"
 requirements:
@@ -153,14 +170,14 @@ security:
 
 ---
 
-### 4.3 SkillInvocation schema
+### 4.3 ToolInvocation schema
 
-A Plan node references a Skill with pinned version and inputs.
+A Plan node references a Tool with pinned version and inputs.
 
 ```json
 {
   "id": "n1",
-  "skill": { "name": "repo.apply_patch", "version": "2.1.0" },
+  "tool": { "type": "skill", "name": "repo.apply_patch", "version": "2.1.0" },
   "inputs": {
     "repo_ref": "git:org/repo#branch",
     "patch_artifact": "art:sha256:…",
@@ -173,18 +190,31 @@ A Plan node references a Skill with pinned version and inputs.
 }
 ```
 
+Legacy compatibility form (accepted during migration):
+
+```json
+{
+  "id": "n1",
+  "skill": { "name": "repo.apply_patch", "version": "2.1.0" },
+  "inputs": {
+    "repo_ref": "git:org/repo#branch",
+    "patch_artifact": "art:sha256:…"
+  }
+}
+```
+
 #### Rules
 
 * `id` unique within Plan.
-* Skill must exist in the pinned registry snapshot (see §8).
-* Inputs must validate against the skill input schema.
+* Tool must exist in the pinned registry snapshot (see §8).
+* Inputs must validate against the tool input schema.
 * Overrides are optional and must be within safety limits.
 
 ---
 
-### 4.4 SkillResult schema
+### 4.4 ToolResult schema
 
-Skill execution returns a structured result:
+Tool execution returns a structured result:
 
 ```json
 {
@@ -210,7 +240,7 @@ Skill execution returns a structured result:
 
 ---
 
-### 4.5 Error model (SkillFailure)
+### 4.5 Error model (ToolFailure)
 
 All failures normalize to:
 
