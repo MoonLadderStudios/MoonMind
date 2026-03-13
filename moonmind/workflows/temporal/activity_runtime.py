@@ -606,8 +606,14 @@ class TemporalPlanActivities:
 class TemporalSkillActivities:
     """Implementation helper for ``mm.skill.execute``."""
 
-    def __init__(self, *, dispatcher: Any) -> None:
+    def __init__(
+        self,
+        *,
+        dispatcher: Any,
+        artifact_service: TemporalArtifactService | None = None,
+    ) -> None:
         self._dispatcher = dispatcher
+        self._artifact_service = artifact_service
 
     async def mm_skill_execute(
         self,
@@ -619,10 +625,30 @@ class TemporalSkillActivities:
         principal: str | None = None,
         context: Mapping[str, Any] | None = None,
     ) -> SkillResult:
+        return await self._execute_skill_invocation(
+            invocation_payload=invocation_payload,
+            registry_snapshot=registry_snapshot,
+            registry_snapshot_ref=registry_snapshot_ref,
+            artifact_service=artifact_service,
+            principal=principal,
+            context=context,
+        )
+
+    async def _execute_skill_invocation(
+        self,
+        *,
+        invocation_payload: Mapping[str, Any],
+        registry_snapshot: SkillRegistrySnapshot | None = None,
+        registry_snapshot_ref: ArtifactRef | str | None = None,
+        artifact_service: TemporalArtifactService | None = None,
+        principal: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> SkillResult:
         resolved_snapshot = registry_snapshot
+        resolved_artifact_service = artifact_service or self._artifact_service
         if resolved_snapshot is None:
             if (
-                artifact_service is None
+                resolved_artifact_service is None
                 or principal is None
                 or registry_snapshot_ref is None
             ):
@@ -630,7 +656,7 @@ class TemporalSkillActivities:
                     "skill execution requires a registry snapshot or an artifact-backed registry reference"
                 )
             registry_payload = await _read_json_artifact(
-                artifact_service,
+                resolved_artifact_service,
                 artifact_ref=registry_snapshot_ref,
                 principal=principal,
             )
@@ -662,7 +688,7 @@ class TemporalSkillActivities:
     ) -> SkillResult:
         """Canonical tool-execution alias for mm.skill.execute."""
 
-        return await self.mm_skill_execute(
+        return await self._execute_skill_invocation(
             invocation_payload=invocation_payload,
             registry_snapshot=registry_snapshot,
             registry_snapshot_ref=registry_snapshot_ref,

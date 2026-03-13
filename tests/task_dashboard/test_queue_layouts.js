@@ -115,6 +115,10 @@ const {
   renderProposalLayouts,
   renderProposalActionFeedback,
   filterProposalsByTag,
+  sortRows,
+  rowOrderKey,
+  buildRowOrderIndex,
+  stabilizeRowsByPreviousOrder,
   toTemporalRows,
   parseQueuePaginationFromSearch,
   applyQueuePaginationToSearch,
@@ -287,6 +291,70 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(paginationState.hasMore, false);
   assert.strictEqual(paginationState.pageStart, 0);
   assert.strictEqual(paginationState.pageEnd, 0);
+})();
+
+(function testRowOrderKeyUsesNormalizedSourceAndId() {
+  assert.strictEqual(
+    rowOrderKey({ source: " Queue ", id: "job-1" }),
+    "queue:job-1",
+  );
+  assert.strictEqual(
+    rowOrderKey({ source: "", id: "" }),
+    "unknown:",
+  );
+})();
+
+(function testStableOrderKeepsExistingRowsInPreviousSequence() {
+  const previousRows = [
+    createQueueRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
+    createQueueRow({ id: "job-b", createdAt: "2026-03-09T00:00:00Z" }),
+    createQueueRow({ id: "job-c", createdAt: "2026-03-08T00:00:00Z" }),
+  ];
+  const previousIndex = buildRowOrderIndex(previousRows);
+  const refreshedRows = [
+    createQueueRow({ id: "job-a", createdAt: "2026-03-08T00:00:00Z" }),
+    createQueueRow({ id: "job-b", createdAt: "2026-03-11T00:00:00Z" }),
+    createQueueRow({ id: "job-c", createdAt: "2026-03-07T00:00:00Z" }),
+  ];
+
+  const stabilized = stabilizeRowsByPreviousOrder(refreshedRows, previousIndex);
+  assert.strictEqual(
+    stabilized.map((row) => row.id).join(","),
+    previousRows.map((row) => row.id).join(","),
+  );
+})();
+
+(function testStableOrderSurfacesNewRowsBeforeExistingRows() {
+  const previousRows = [
+    createQueueRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
+    createQueueRow({ id: "job-b", createdAt: "2026-03-09T00:00:00Z" }),
+  ];
+  const previousIndex = buildRowOrderIndex(previousRows);
+  const refreshedRows = [
+    createQueueRow({ id: "job-a", createdAt: "2026-03-12T00:00:00Z" }),
+    createQueueRow({ id: "job-new", createdAt: "2026-03-11T00:00:00Z" }),
+    createQueueRow({ id: "job-b", createdAt: "2026-03-08T00:00:00Z" }),
+  ];
+
+  const stabilized = stabilizeRowsByPreviousOrder(refreshedRows, previousIndex);
+  assert.strictEqual(stabilized[0].id, "job-new");
+  assert.strictEqual(
+    stabilized.slice(1).map((row) => row.id).join(","),
+    "job-a,job-b",
+  );
+})();
+
+(function testStableOrderFallsBackToDefaultSortWithoutHistory() {
+  const rows = [
+    createQueueRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
+    createQueueRow({ id: "job-b", createdAt: "2026-03-12T00:00:00Z" }),
+  ];
+  const stabilized = stabilizeRowsByPreviousOrder(rows, new Map());
+  const expected = sortRows(rows);
+  assert.strictEqual(
+    stabilized.map((row) => row.id).join(","),
+    expected.map((row) => row.id).join(","),
+  );
 })();
 
 (function testRenderQueueCardsRendersAllRows() {

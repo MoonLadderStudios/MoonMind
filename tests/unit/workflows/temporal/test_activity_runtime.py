@@ -329,6 +329,54 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
             assert result.outputs["ok"] is True
 
 
+async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            registry_artifact, _upload = await service.create(
+                principal="user-1",
+                content_type="application/json",
+            )
+            await service.write_complete(
+                artifact_id=registry_artifact.artifact_id,
+                principal="user-1",
+                payload=(json.dumps(_registry_payload()) + "\n").encode("utf-8"),
+                content_type="application/json",
+            )
+
+            dispatcher = SkillActivityDispatcher()
+            dispatcher.register_skill(
+                skill_name="repo.run_tests",
+                version="1.0.0",
+                handler=lambda inputs, _context: SkillResult(
+                    status="SUCCEEDED",
+                    outputs={"ok": inputs["repo_ref"].endswith("#main")},
+                ),
+            )
+
+            activities = TemporalSkillActivities(
+                dispatcher=dispatcher,
+                artifact_service=service,
+            )
+            result = await activities.mm_skill_execute(
+                invocation_payload={
+                    "id": "n1",
+                    "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                    "inputs": {"repo_ref": "git:org/repo#main"},
+                },
+                registry_snapshot_ref=registry_artifact.artifact_id,
+                principal="user-1",
+            )
+
+            assert result.status == "SUCCEEDED"
+            assert result.outputs["ok"] is True
+
+
 async def test_artifact_read_invalid_ref_failures_surface_cleanly(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -869,6 +917,65 @@ async def test_build_activity_bindings_injected_skill_handler_uses_request_mappi
 
             assert result["invocationId"] == "node-1"
             assert result["principal"] == "user-1"
+
+
+async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_payload(
+    tmp_path: Path,
+):
+    dispatcher = SkillActivityDispatcher()
+    dispatcher.register_skill(
+        skill_name="repo.run_tests",
+        version="1.0.0",
+        handler=lambda inputs, _context: SkillResult(
+            status="SUCCEEDED",
+            outputs={"ok": inputs["repo_ref"].endswith("#main")},
+        ),
+    )
+    snapshot = create_registry_snapshot(
+        skills=parse_skill_registry(_registry_payload()),
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            catalog = build_default_activity_catalog()
+            bindings = build_activity_bindings(
+                catalog,
+                artifact_activities=TemporalArtifactActivities(service),
+                skill_activities=TemporalSkillActivities(
+                    dispatcher=dispatcher,
+                    artifact_service=service,
+                ),
+                sandbox_activities=TemporalSandboxActivities(
+                    artifact_service=service,
+                    workspace_root=tmp_path,
+                ),
+                fleets=(SANDBOX_FLEET,),
+            )
+            tool_handler = next(
+                binding.handler
+                for binding in bindings
+                if binding.activity_type == "mm.tool.execute"
+            )
+
+            result = await tool_handler(
+                {
+                    "invocation_payload": {
+                        "id": "n1",
+                        "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                        "inputs": {"repo_ref": "git:org/repo#main"},
+                    },
+                    "registry_snapshot": snapshot,
+                    "context": {"workflow_id": "wf-1"},
+                }
+            )
+
+            assert result.status == "SUCCEEDED"
+            assert result.outputs["ok"] is True
 
 
 async def test_build_activity_bindings_requires_selected_family_implementation(

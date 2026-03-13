@@ -351,7 +351,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service,
                 planner=planner,
             ),
-            skill_activities=TemporalSkillActivities(dispatcher=dispatcher),
+            skill_activities=TemporalSkillActivities(
+                dispatcher=dispatcher,
+                artifact_service=artifact_service,
+            ),
             sandbox_activities=sandbox_activities,
             integration_activities=TemporalJulesActivities(
                 artifact_service=artifact_service

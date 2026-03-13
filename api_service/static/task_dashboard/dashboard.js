@@ -3192,6 +3192,10 @@
       renderProposalCards,
       renderProposalLayouts,
       renderProposalActionFeedback,
+      sortRows,
+      rowOrderKey,
+      buildRowOrderIndex,
+      stabilizeRowsByPreviousOrder,
       toQueueRows,
       toTemporalRows,
       parseQueuePaginationFromSearch,
@@ -3438,6 +3442,53 @@
     });
   }
 
+  function rowOrderKey(row) {
+    const source = String(pick(row, "source") || "").trim().toLowerCase() || "unknown";
+    const id = String(pick(row, "id") || "").trim();
+    return `${source}:${id}`;
+  }
+
+  function buildRowOrderIndex(rows) {
+    const index = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row, position) => {
+      index.set(rowOrderKey(row), position);
+    });
+    return index;
+  }
+
+  function stabilizeRowsByPreviousOrder(rows, previousOrderIndex) {
+    const sorted = sortRows(Array.isArray(rows) ? rows.slice() : []);
+    if (!(previousOrderIndex instanceof Map) || previousOrderIndex.size === 0) {
+      return sorted;
+    }
+    const ranked = sorted.map((row, baseIndex) => {
+      const key = rowOrderKey(row);
+      const hasPrevious = previousOrderIndex.has(key);
+      return {
+        row,
+        baseIndex,
+        hasPrevious,
+        previousIndex: hasPrevious
+          ? Number(previousOrderIndex.get(key))
+          : Number.POSITIVE_INFINITY,
+      };
+    });
+    ranked.sort((left, right) => {
+      if (left.hasPrevious && right.hasPrevious) {
+        if (left.previousIndex !== right.previousIndex) {
+          return left.previousIndex - right.previousIndex;
+        }
+        return left.baseIndex - right.baseIndex;
+      }
+      if (left.hasPrevious !== right.hasPrevious) {
+        // Let newly discovered rows surface first without reshuffling existing ones.
+        return left.hasPrevious ? 1 : -1;
+      }
+      return left.baseIndex - right.baseIndex;
+    });
+    return ranked.map((entry) => entry.row);
+  }
+
   async function renderActivePage() {
     const activeSubtitle = temporalListEnabled
       ? `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`
@@ -3602,6 +3653,7 @@
       pageStart: 0,
       pageEnd: 0,
     };
+    let stableListOrderIndex = new Map();
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -3654,6 +3706,7 @@
     }
 
     function resetPaginationToFirstPage() {
+      stableListOrderIndex = new Map();
       resetQueuePaginationState(paginationState);
       syncListQueryParams();
     }
@@ -4061,6 +4114,7 @@
           if (paginationState.cursorStack.length === 0) {
             return;
           }
+          stableListOrderIndex = new Map();
           const previousCursor = paginationState.cursorStack.pop() || null;
           paginationState.cursor = previousCursor || null;
           syncListQueryParams();
@@ -4075,6 +4129,7 @@
           if (!paginationState.hasMore || !paginationState.nextCursor) {
             return;
           }
+          stableListOrderIndex = new Map();
           paginationState.cursorStack.push(paginationState.cursor || "");
           paginationState.cursor = paginationState.nextCursor;
           syncListQueryParams();
@@ -4180,7 +4235,11 @@
           ? pageIndex * paginationState.limit + 1
           : 0;
         paginationState.pageEnd = pageIndex * paginationState.limit + filteredTemporalRows.length;
-        currentRows = sortRows(filteredTemporalRows);
+        currentRows = stabilizeRowsByPreviousOrder(
+          filteredTemporalRows,
+          stableListOrderIndex,
+        );
+        stableListOrderIndex = buildRowOrderIndex(currentRows);
         renderQueueList(currentRows);
         return;
       }
@@ -4234,11 +4293,15 @@
       const pageIndex = paginationState.cursorStack.length;
       paginationState.pageStart = items.length > 0 ? pageIndex * paginationState.limit + 1 : 0;
       paginationState.pageEnd = pageIndex * paginationState.limit + items.length;
-      currentRows = sortRows([
-        ...toQueueRows(items),
-        ...toOrchestratorRows(orchestratorItems),
-        ...(includeTemporalInMixed ? toTemporalRows(temporalPayload?.items || []) : []),
-      ]);
+      currentRows = stabilizeRowsByPreviousOrder(
+        [
+          ...toQueueRows(items),
+          ...toOrchestratorRows(orchestratorItems),
+          ...(includeTemporalInMixed ? toTemporalRows(temporalPayload?.items || []) : []),
+        ],
+        stableListOrderIndex,
+      );
+      stableListOrderIndex = buildRowOrderIndex(currentRows);
       renderQueueList(currentRows);
       refreshTelemetryIfStale().catch(() => {
         console.warn("queue telemetry refresh failed");

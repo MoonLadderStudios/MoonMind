@@ -141,7 +141,8 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         planner=ANY,
     )
     mock_skill_activities_cls.assert_called_once_with(
-        dispatcher=mock_dispatcher_cls.return_value
+        dispatcher=mock_dispatcher_cls.return_value,
+        artifact_service=mock_service_cls.return_value,
     )
     mock_sandbox_activities_cls.assert_called_once_with(
         artifact_service=mock_service_cls.return_value

@@ -412,6 +412,12 @@ class MoonMindRunWorkflow:
                 route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
                     skill_definitions_by_key[skill_key]
                 )
+            if route.activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
+                raise ValueError(
+                    "plan node tool executor "
+                    f"'{route.activity_type}' is unsupported by MoonMind.Run; "
+                    "expected mm.tool.execute or mm.skill.execute"
+                )
 
             self._summary = (
                 f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
@@ -420,7 +426,7 @@ class MoonMindRunWorkflow:
 
             try:
                 await workflow.execute_activity(
-                    "mm.skill.execute",
+                    route.activity_type,
                     {
                         "invocation_payload": invocation_payload,
                         "principal": self._principal(),
