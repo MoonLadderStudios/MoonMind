@@ -60,6 +60,7 @@ PlanGenerator = Callable[
     Mapping[str, Any] | PlanDefinition | Awaitable[Mapping[str, Any] | PlanDefinition],
 ]
 JulesClientFactory = Callable[[], JulesClient]
+_PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 
 
 class TemporalActivityRuntimeError(RuntimeError):
@@ -339,6 +340,56 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     return text[-max_chars:]
 
 
+def _default_skill_registry_payload() -> dict[str, Any]:
+    return {
+        "skills": [
+            {
+                "name": "auto",
+                "version": "1.0",
+                "description": "Execute generic runtime CLI instructions.",
+                "inputs": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "instructions": {"type": "string"},
+                            "runtime": {"type": "object"},
+                        },
+                        "additionalProperties": True,
+                    }
+                },
+                "outputs": {
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    }
+                },
+                "executor": {
+                    "activity_type": "mm.skill.execute",
+                    "selector": {"mode": "by_capability"},
+                },
+                "requirements": {"capabilities": ["sandbox"]},
+                "policies": {
+                    "timeouts": {
+                        "start_to_close_seconds": 900,
+                        "schedule_to_close_seconds": 1200,
+                    },
+                    "retries": {"max_attempts": 1},
+                },
+            }
+        ]
+    }
+
+
+def _contains_placeholder_refs(value: Any) -> bool:
+    if isinstance(value, str):
+        return _PLACEHOLDER_DIGEST_FRAGMENT in value.lower()
+    if isinstance(value, Mapping):
+        return any(_contains_placeholder_refs(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(_contains_placeholder_refs(item) for item in value)
+    return False
+
+
 def _coerce_activity_request(
     request: Mapping[str, Any] | None,
     *,
@@ -432,6 +483,23 @@ class TemporalPlanActivities:
                 registry_payload,
                 artifact_locator=_artifact_id_from_ref(registry_snapshot_ref),
             )
+        else:
+            registry_payload = _default_skill_registry_payload()
+            fallback_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload=registry_payload,
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "registry_snapshot.json",
+                    "producer": "activity:plan.generate",
+                    "labels": ["registry", "snapshot"],
+                },
+            )
+            snapshot = _temporal_snapshot_from_payload(
+                registry_payload,
+                artifact_locator=fallback_ref.artifact_id,
+            )
 
         result = self._planner(inputs_payload, dict(parameters or {}), snapshot)
         if inspect.isawaitable(result):
@@ -467,6 +535,11 @@ class TemporalPlanActivities:
                 )
             registry_meta.setdefault("digest", snapshot.digest)
             registry_meta.setdefault("artifact_ref", snapshot.artifact_ref)
+
+        if _contains_placeholder_refs(payload):
+            raise TemporalActivityRuntimeError(
+                "plan.generate output contains placeholder ref(s) matching '*:sha256:dummy'"
+            )
 
         parse_plan_definition(payload)
         plan_ref = await _write_json_artifact(

@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,6 +8,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindManifestIngest,
     MoonMindRun,
     _build_runtime_activities,
+    _build_runtime_planner,
     main_async,
 )
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
@@ -155,4 +157,121 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
     )
+    await resources.aclose()
+
+
+def test_runtime_planner_never_emits_placeholder_registry_refs():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("a" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T7V8"
+
+    payload = planner(
+        {
+            "task": {
+                "instructions": "Summarize the latest CI failure.",
+                "runtime": {
+                    "mode": "codex",
+                    "model": "gpt-5",
+                    "effort": "high",
+                },
+            }
+        },
+        {"repository": "moonladder/moonmind"},
+        snapshot,
+    )
+
+    rendered = json.dumps(payload, sort_keys=True)
+    assert "sha256:dummy" not in rendered
+    assert payload["metadata"]["registry_snapshot"]["digest"] == snapshot.digest
+    assert (
+        payload["metadata"]["registry_snapshot"]["artifact_ref"]
+        == snapshot.artifact_ref
+    )
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime._build_runtime_planner")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_build_runtime_activities_fails_fast_when_planner_wiring_missing(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_build_runtime_planner,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "llm"
+    mock_build_runtime_planner.return_value = None
+    mock_build_bindings.return_value = []
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        with pytest.raises(
+            RuntimeError, match="Temporal runtime planner wiring is required"
+        ):
+            await _build_runtime_activities(topology)
+
+    mock_repository_cls.assert_called_once_with("session")
+    mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
+    mock_dispatcher_cls.assert_called_once()
+    mock_build_bindings.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_auto_skill_handler_rejects_unsupported_runtime_mode(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "sandbox"
+    mock_build_bindings.return_value = []
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    register_kwargs = mock_dispatcher_cls.return_value.register_skill.call_args.kwargs
+    handler = register_kwargs["handler"]
+    result = await handler(
+        {
+            "instructions": "Inspect failing tests",
+            "runtime": {"mode": "unsupported-runtime"},
+        },
+        {"workflow_id": "wf-1", "node_id": "node-1", "principal": "user-1"},
+    )
+
+    assert result.status == "FAILED"
+    assert "unsupported" in result.outputs["error"]
     await resources.aclose()

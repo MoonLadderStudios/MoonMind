@@ -153,6 +153,8 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
 async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     test_client, service, user = client
 
+    executions_module.get_temporal_client_adapter.cache_clear()
+
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
@@ -177,9 +179,18 @@ async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     record.integration_state = None
     service.describe_execution.return_value = record
 
-    with patch(
-        "api_service.api.routers.executions._canonicalize_execution_identifier"
-    ) as mock_canon:
+    with (
+        patch(
+            "api_service.api.routers.executions._canonicalize_execution_identifier"
+        ) as mock_canon,
+        patch(
+            "api_service.api.routers.executions.TemporalClientAdapter"
+        ) as mock_adapter_cls,
+    ):
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
         mock_canon.return_value = ("mm:wf-123", True)
         response = test_client.get("/api/executions/wf-123")
 
