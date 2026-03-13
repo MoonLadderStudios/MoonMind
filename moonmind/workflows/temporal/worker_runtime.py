@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from typing import Any, Mapping
@@ -39,6 +40,10 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as Moo
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_AUTO_SKILL_RUNTIMES = frozenset({"codex", "gemini", "claude", "jules"})
+_TOOL_ERROR_PATTERNS = (
+    re.compile(r'Error executing tool .*?: Tool ".*?" not found', re.IGNORECASE),
+    re.compile(r'Tool ".*?" not found', re.IGNORECASE),
+)
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -168,6 +173,22 @@ def _resolve_task_tool(task_payload: Mapping[str, Any]) -> tuple[str, str, dict[
         inline_inputs = selected_payload.get("args")
     normalized_inputs = dict(inline_inputs) if isinstance(inline_inputs, Mapping) else {}
     return tool_name, tool_version, normalized_inputs
+
+
+def _detect_cli_tool_error(stdout_tail: Any, stderr_tail: Any) -> str | None:
+    candidates: list[str] = []
+    if isinstance(stderr_tail, str) and stderr_tail.strip():
+        candidates.append(stderr_tail)
+    if isinstance(stdout_tail, str) and stdout_tail.strip():
+        candidates.append(stdout_tail)
+    if not candidates:
+        return None
+    combined = "\n".join(candidates)
+    for pattern in _TOOL_ERROR_PATTERNS:
+        match = pattern.search(combined)
+        if match:
+            return match.group(0)
+    return None
 
 
 def _build_runtime_planner():
@@ -409,13 +430,27 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             if sandbox_result.diagnostics_ref:
                 output_artifacts.append(sandbox_result.diagnostics_ref)
 
+            tool_error = _detect_cli_tool_error(
+                sandbox_result.stdout_tail,
+                sandbox_result.stderr_tail,
+            )
+            result_status = "SUCCEEDED" if sandbox_result.exit_code == 0 else "FAILED"
+            progress_details = f"Executed generic LLM handler via {target_runtime}"
+            if result_status == "SUCCEEDED" and tool_error:
+                result_status = "FAILED"
+                outputs["error"] = (
+                    "runtime CLI reported a tool invocation failure despite zero exit code: "
+                    f"{tool_error}"
+                )
+                progress_details = (
+                    f"Generic LLM handler via {target_runtime} reported tool failure"
+                )
+
             return SkillResult(
-                status="SUCCEEDED" if sandbox_result.exit_code == 0 else "FAILED",
+                status=result_status,
                 outputs=outputs,
                 output_artifacts=tuple(output_artifacts),
-                progress={
-                    "details": f"Executed generic LLM handler via {target_runtime}"
-                },
+                progress={"details": progress_details},
             )
 
         dispatcher.register_skill(

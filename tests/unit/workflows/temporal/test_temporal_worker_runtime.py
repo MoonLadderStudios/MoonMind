@@ -418,6 +418,72 @@ async def test_auto_skill_handler_uses_request_mapping_and_gemini_prompt_command
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
 @patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_auto_skill_handler_fails_zero_exit_when_cli_reports_missing_tool(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "sandbox"
+    mock_build_bindings.return_value = []
+    mock_sandbox_activities_cls.return_value.sandbox_run_command = AsyncMock(
+        return_value=SimpleNamespace(
+            exit_code=0,
+            stdout_tail=(
+                "I will create the new directory and move the specified files into it."
+            ),
+            stderr_tail=(
+                'Error executing tool run_shell_command: Tool "run_shell_command" '
+                "not found."
+            ),
+            diagnostics_ref=None,
+        )
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    register_kwargs = mock_dispatcher_cls.return_value.register_skill.call_args.kwargs
+    handler = register_kwargs["handler"]
+    result = await handler(
+        {
+            "instructions": "Move docs files",
+            "workspaceRef": "/tmp/workspace",
+            "runtime": {"mode": "gemini", "model": "gemini-3.1-pro-preview"},
+        },
+        {"workflow_id": "wf-1", "node_id": "node-1", "principal": "user-1"},
+    )
+
+    assert result.status == "FAILED"
+    assert "tool invocation failure" in result.outputs["error"]
+    assert "run_shell_command" in result.outputs["error"]
+    assert "tool failure" in result.progress["details"]
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
 async def test_auto_skill_handler_gemini_oauth_mode_clears_api_key_env(
     mock_dispatcher_cls,
     mock_repository_cls,

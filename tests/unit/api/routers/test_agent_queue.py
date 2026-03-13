@@ -828,6 +828,36 @@ def test_create_job_with_attachments_success(
     assert called_attachments[0].data.startswith(b"\x89PNG")
 
 
+def test_create_job_with_attachments_rejects_temporal_routing(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Attachment submission should fail fast when task routing is Temporal."""
+
+    test_client, service = client
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    files = [
+        (
+            "files",
+            ("image.png", b"\x89PNG\r\n\x1a\n", "image/png"),
+        )
+    ]
+
+    response = test_client.post(
+        "/api/queue/jobs/with-attachments",
+        data={
+            "request": json.dumps(
+                {"type": "task", "payload": {"repository": "Moon/Test"}}
+            )
+        },
+        files=files,
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "invalid_routing_target"
+    service.create_job_with_attachments.assert_not_awaited()
+
+
 def test_create_job_with_attachments_invalid_request(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

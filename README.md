@@ -41,18 +41,13 @@ MoonMind exposes all of this through:
     ./tools/auth-claude-volume.sh   # oauth mode only (skip for api_key mode)
     ```
     This persists Codex auth in `codex_auth_volume` and Gemini OAuth auth in `gemini_auth_volume` so runtime pre-flight checks pass.
-    For the Claude worker, `MOONMIND_CLAUDE_CLI_AUTH_MODE=api_key` (the default) uses `ANTHROPIC_API_KEY` from `.env` — no volume setup needed. Set `MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth` in `.env` and run `./tools/auth-claude-volume.sh` once to persist browser-based OAuth credentials in `claude_auth_volume`.
-    By default (`AUTH_PROVIDER=disabled`) the `codex-worker` service auto-creates and persists a worker token on first start. If auth is enabled, set either `MOONMIND_WORKER_TOKEN` (recommended) or `MOONMIND_API_TOKEN` in `.env`. If required runtime auth is missing, the worker stays idle and retries until runtime-specific preflight checks pass.
+    For Claude runtime, `MOONMIND_CLAUDE_CLI_AUTH_MODE=api_key` (the default) uses `ANTHROPIC_API_KEY` from `.env` with no volume login step. Set `MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth` and run `./tools/auth-claude-volume.sh` to persist browser-based OAuth credentials in `claude_auth_volume`.
 3.  **Start the services** using the following command:
     ```bash
     docker-compose up -d
     ```
 
-    Claude runtime is available only when `ANTHROPIC_API_KEY` (or legacy alias `CLAUDE_API_KEY`) is configured. To start the optional Claude worker, run:
-
-    ```bash
-    docker-compose --profile claude up -d claude-worker
-    ```
+    Claude runtime is available only when `ANTHROPIC_API_KEY` (or legacy alias `CLAUDE_API_KEY`) is configured.
     The `-d` flag runs the containers in detached mode, meaning they will run in the background.
     To force-refresh remote images first, run:
     ```bash
@@ -176,7 +171,7 @@ description: Private project-specific scan helper skill
 
 2. Point workers at private skills and choose policy mode:
 
-- For spec workflow/Celery/Gemini workers, set in `.env`:
+- For workflow workers, set in `.env`:
 
   - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=.agents/skills/local`
   - `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=.agents/skills` (shared mirror root; nested `.agents/skills/skills` is auto-detected for compatibility)
@@ -185,15 +180,6 @@ description: Private project-specific scan helper skill
   - `WORKFLOW_ALLOWED_SKILLS="speckit,my-private-scan"` (legacy aliases: `SPEC_WORKFLOW_ALLOWED_SKILLS`; only enforced when policy mode is `allowlist`)
   - `WORKFLOW_DEFAULT_SKILL=my-private-scan` (legacy aliases: `SPEC_WORKFLOW_DEFAULT_SKILL`; optional)
   - `WORKFLOW_DISCOVER_SKILL=my-private-scan` / `WORKFLOW_SUBMIT_SKILL=my-private-scan` / `WORKFLOW_PUBLISH_SKILL=my-private-scan` (legacy aliases: `SPEC_WORKFLOW_DISCOVER_SKILL` / `SPEC_WORKFLOW_SUBMIT_SKILL` / `SPEC_WORKFLOW_PUBLISH_SKILL`)
-
-- For standalone `moonmind-codex-worker`, also use:
-
-  - `MOONMIND_DEFAULT_SKILL=my-private-scan`
-  - `MOONMIND_SKILL_POLICY_MODE=permissive` (default; set `allowlist` to enforce worker allowlists)
-  - `MOONMIND_ALLOWED_SKILLS=my-private-scan,speckit` (only enforced when `MOONMIND_SKILL_POLICY_MODE=allowlist`)
-  - `MOONMIND_WORKER_WORKFLOW_REPO_ROOT=/workspace` (legacy alias: `MOONMIND_WORKER_SPEC_WORKFLOW_REPO_ROOT`; resolve relative skill roots against mounted workspace)
-  - `WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=/workspace/.agents/skills/local` (legacy aliases: `MOONMIND_WORKER_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT`, `MOONMIND_WORKER_SPEC_SKILLS_LOCAL_MIRROR_ROOT`)
-  - `WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=/workspace/.agents/skills` (legacy aliases: `MOONMIND_WORKER_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT`, `MOONMIND_WORKER_SPEC_SKILLS_LEGACY_MIRROR_ROOT`)
 
 3. Source private skills from external locations when needed.
 
@@ -297,26 +283,15 @@ poetry run celery -A celery_worker.gemini_worker worker -Q gemini --loglevel=inf
 
 The worker entrypoints load `moonmind.config.settings.AppSettings`, ensuring broker and result backend defaults always match the active MoonMind environment. Preflight checks are runtime-aware: `codex` validates Codex auth, `claude` validates Claude runtime requirements (including `ANTHROPIC_API_KEY`), and `universal` validates both as configured.
 
-### Agent queue Codex worker
+### Temporal Runtime Workers
 
-MoonMind also includes a standalone queue worker daemon for `/api/queue/*` jobs (canonical `task`, plus legacy `codex_exec` / `codex_skill`):
-
-- Compose service: `codex-worker` (started by default via `docker compose up -d`).
-- CLI entrypoint: `moonmind-codex-worker`.
-- Claim path: `POST /api/queue/jobs/claim` with `X-MoonMind-Worker-Token`.
-- Runtime mode is selected with `MOONMIND_WORKER_RUNTIME=codex|claude|gemini|universal`.
-
-Run it manually outside Compose if needed:
-
-```bash
-poetry run moonmind-codex-worker
-```
+Task execution is Temporal-first. Runtime CLI execution (`codex`, `gemini`, `claude`) is handled by `temporal-worker-sandbox`, and orchestration is handled by the workflow/artifact/llm/integration Temporal worker fleets.
 
 Quick checks:
 
 ```bash
-docker compose logs -f codex-worker
-curl http://localhost:5000/api/queue/jobs/<job-id>
+docker compose logs -f temporal-worker-sandbox temporal-worker-workflow
+curl http://localhost:5000/api/executions?source=temporal
 ```
 
 The shared `api_service` image includes pinned Codex CLI and GitHub Spec Kit CLI versions so workers can run automation workflows without runtime downloads:

@@ -188,8 +188,8 @@ const helpers = loadSubmitRuntimeHelpers();
     endpoints,
     { temporalSubmitEnabled: true, preferQueueSubmit: true },
   );
-  assert.strictEqual(attachmentTarget.mode, "worker");
-  assert.strictEqual(attachmentTarget.endpoint, "/api/queue/jobs");
+  assert.strictEqual(attachmentTarget.mode, "temporal");
+  assert.strictEqual(attachmentTarget.endpoint, "/api/executions");
 })();
 
 (function testTemporalSubmitHelpersKeepPickerWorkerOnly() {

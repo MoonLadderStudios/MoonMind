@@ -47,6 +47,7 @@ services:
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       # OIDC specific variables for API service
       - AUTH_PROVIDER=${AUTH_PROVIDER:-disabled} # local, google, or disabled
       - OIDC_ISSUER_URL=${OIDC_ISSUER_URL:-http://keycloak:8080/realms/moonmind} # For 'local'
@@ -350,7 +351,22 @@ services:
       - TEMPORAL_WORKER_FLEET=sandbox
       - TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE=${TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE:-mm.activity.sandbox}
       - TEMPORAL_SANDBOX_WORKER_CONCURRENCY=${TEMPORAL_SANDBOX_WORKER_CONCURRENCY:-2}
-      - MOONMIND_GEMINI_CLI_AUTH_MODE=${MOONMIND_GEMINI_CLI_AUTH_MODE:-api_key}
+      - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
+      - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+      - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+      - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
+      - MOONMIND_GEMINI_CLI_AUTH_MODE=${MOONMIND_GEMINI_CLI_AUTH_MODE:-oauth}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
+      - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
+      - MOONMIND_GEMINI_MODEL=${MOONMIND_GEMINI_MODEL:-}
+      - MOONMIND_GEMINI_EFFORT=${MOONMIND_GEMINI_EFFORT:-}
+      - MOONMIND_CLAUDE_MODEL=${MOONMIND_CLAUDE_MODEL:-}
+      - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
       - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
@@ -360,6 +376,8 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - agent_workspaces:/work/agent_jobs
     entrypoint:
@@ -371,6 +389,10 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
       agent-workspaces-init:
+        condition: service_completed_successfully
+      codex-auth-init:
+        condition: service_completed_successfully
+      claude-auth-init:
         condition: service_completed_successfully
       gemini-auth-init:
         condition: service_completed_successfully
@@ -486,252 +508,6 @@ services:
     volumes:
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
     restart: "no"
-
-  codex-worker:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    user: app
-    env_file:
-      - .env
-    environment:
-      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONUNBUFFERED=1
-      - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
-      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
-      - MOONMIND_WORKER_ID=${MOONMIND_WORKER_ID:-codex-worker-1}
-      - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
-      - MOONMIND_WORKER_TOKEN=${MOONMIND_WORKER_TOKEN:-}
-      - MOONMIND_WORKER_BOOTSTRAP_TOKEN=${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}
-      - MOONMIND_WORKER_RUNTIME=${MOONMIND_CODEX_WORKER_RUNTIME:-${MOONMIND_WORKER_RUNTIME:-codex}}
-      - MOONMIND_WORKER_ALLOWED_TYPES=${MOONMIND_CODEX_WORKER_ALLOWED_TYPES:-${MOONMIND_WORKER_ALLOWED_TYPES:-task,codex_exec,codex_skill}}
-      - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_CODEX_WORKER_CAPABILITIES:-${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker,proposals_write}}
-      - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_CODEX_WORKER_TOKEN_DESCRIPTION:-Docker Compose codex worker}
-      - MOONMIND_WORKER_TOKEN_FILE=${MOONMIND_CODEX_WORKER_TOKEN_FILE:-${CODEX_VOLUME_PATH:-/home/app/.codex}/moonmind_worker_token}
-      - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
-      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
-      - MOONMIND_WORKER_WORKFLOW_REPO_ROOT=${MOONMIND_WORKER_WORKFLOW_REPO_ROOT:-/workspace}
-      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/agent_jobs/skill_cache}
-      - WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=${WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_WORKER_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}}
-      - WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=${WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_WORKER_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}}
-      - MOONMIND_LIVE_SESSION_ENABLED_DEFAULT=${MOONMIND_LIVE_SESSION_ENABLED_DEFAULT:-true}
-      - MOONMIND_LIVE_SESSION_PROVIDER=${MOONMIND_LIVE_SESSION_PROVIDER:-tmate}
-      - MOONMIND_LIVE_SESSION_TTL_MINUTES=${MOONMIND_LIVE_SESSION_TTL_MINUTES:-60}
-      - MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES=${MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES:-15}
-      - MOONMIND_LIVE_SESSION_ALLOW_WEB=${MOONMIND_LIVE_SESSION_ALLOW_WEB:-false}
-      - MOONMIND_TMATE_SERVER_HOST=${MOONMIND_TMATE_SERVER_HOST:-}
-      - MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER=${MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER:-4}
-      - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
-      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
-      - MOONMIND_CODEX_SANDBOX_MODE=${MOONMIND_CODEX_SANDBOX_MODE:-danger-full-access}
-      - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
-      - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
-      - MOONMIND_WORKER_RETRY_ENABLED=${MOONMIND_WORKER_RETRY_ENABLED:-true}
-      - MOONMIND_WORKER_RETRY_SECONDS=${MOONMIND_WORKER_RETRY_SECONDS:-20}
-      - MOONMIND_DEFAULT_TASK_RUNTIME=${MOONMIND_CODEX_DEFAULT_TASK_RUNTIME:-${MOONMIND_DEFAULT_TASK_RUNTIME:-codex}}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - DEFAULT_EMBEDDING_PROVIDER=${MOONMIND_WORKER_EMBEDDING_PROVIDER_OVERRIDE:-disabled}
-    volumes:
-      - .:/workspace
-      - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - speckit_workspaces:/work/runs
-      - ./var/artifacts:/workspace/var/artifacts
-      - agent_workspaces:/work/agent_jobs
-    working_dir: /workspace
-    command: >-
-      /workspace/tools/start-worker.sh
-    depends_on:
-      api:
-        condition: service_started
-      docker-proxy:
-        condition: service_started
-      minio:
-        condition: service_started
-      agent-workspaces-init:
-        condition: service_completed_successfully
-      codex-auth-init:
-        condition: service_completed_successfully
-    networks:
-      - local-network
-      - docker-proxy-network
-    restart: unless-stopped
-
-  gemini-worker:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    user: app
-    env_file:
-      - .env
-    environment:
-      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONUNBUFFERED=1
-      - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
-      - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
-      - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
-      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
-      - MOONMIND_WORKER_ID=${MOONMIND_GEMINI_WORKER_ID:-gemini-worker-1}
-      - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
-      - MOONMIND_WORKER_TOKEN=${MOONMIND_GEMINI_WORKER_TOKEN:-}
-      - MOONMIND_WORKER_BOOTSTRAP_TOKEN=${MOONMIND_GEMINI_WORKER_BOOTSTRAP_TOKEN:-${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}}
-      - MOONMIND_WORKER_RUNTIME=${MOONMIND_GEMINI_WORKER_RUNTIME:-gemini}
-      - MOONMIND_WORKER_ALLOWED_TYPES=${MOONMIND_GEMINI_WORKER_ALLOWED_TYPES:-task}
-      - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_GEMINI_WORKER_CAPABILITIES:-gemini,git,gh,docker,proposals_write}
-      - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_GEMINI_WORKER_TOKEN_DESCRIPTION:-Docker Compose gemini worker}
-      - MOONMIND_WORKER_TOKEN_FILE=${MOONMIND_GEMINI_WORKER_TOKEN_FILE:-${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}/moonmind_worker_token}
-      - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
-      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
-      - MOONMIND_WORKER_WORKFLOW_REPO_ROOT=${MOONMIND_WORKER_WORKFLOW_REPO_ROOT:-/workspace}
-      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/agent_jobs/skill_cache}
-      - WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=${WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_WORKER_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}}
-      - WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=${WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_WORKER_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}}
-      - MOONMIND_LIVE_SESSION_ENABLED_DEFAULT=${MOONMIND_LIVE_SESSION_ENABLED_DEFAULT:-true}
-      - MOONMIND_LIVE_SESSION_PROVIDER=${MOONMIND_LIVE_SESSION_PROVIDER:-tmate}
-      - MOONMIND_LIVE_SESSION_TTL_MINUTES=${MOONMIND_LIVE_SESSION_TTL_MINUTES:-60}
-      - MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES=${MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES:-15}
-      - MOONMIND_LIVE_SESSION_ALLOW_WEB=${MOONMIND_LIVE_SESSION_ALLOW_WEB:-false}
-      - MOONMIND_TMATE_SERVER_HOST=${MOONMIND_TMATE_SERVER_HOST:-}
-      - MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER=${MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER:-4}
-      - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
-      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
-      - MOONMIND_CODEX_SANDBOX_MODE=${MOONMIND_CODEX_SANDBOX_MODE:-danger-full-access}
-      - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
-      - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
-      - MOONMIND_GEMINI_MODEL=${MOONMIND_GEMINI_MODEL:-}
-      - MOONMIND_GEMINI_EFFORT=${MOONMIND_GEMINI_EFFORT:-}
-      - MOONMIND_WORKER_RETRY_ENABLED=${MOONMIND_WORKER_RETRY_ENABLED:-true}
-      - MOONMIND_WORKER_RETRY_SECONDS=${MOONMIND_WORKER_RETRY_SECONDS:-20}
-      - MOONMIND_DEFAULT_TASK_RUNTIME=${MOONMIND_GEMINI_DEFAULT_TASK_RUNTIME:-gemini}
-      - MOONMIND_GEMINI_CLI_AUTH_MODE=${MOONMIND_GEMINI_CLI_AUTH_MODE:-oauth}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - DEFAULT_EMBEDDING_PROVIDER=${MOONMIND_WORKER_EMBEDDING_PROVIDER_OVERRIDE:-disabled}
-    volumes:
-      - .:/workspace
-      - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
-      - speckit_workspaces:/work/runs
-      - ./var/artifacts:/workspace/var/artifacts
-      - agent_workspaces:/work/agent_jobs
-    working_dir: /workspace
-    command: >-
-      /workspace/tools/start-worker.sh
-    depends_on:
-      api:
-        condition: service_started
-      docker-proxy:
-        condition: service_started
-      minio:
-        condition: service_started
-      agent-workspaces-init:
-        condition: service_completed_successfully
-      gemini-auth-init:
-        condition: service_completed_successfully
-      codex-auth-init:
-        condition: service_completed_successfully
-    networks:
-      - local-network
-      - docker-proxy-network
-    restart: unless-stopped
-
-  claude-worker:
-    profiles: ["claude"]
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
-    image: ghcr.io/moonladderstudios/moonmind:latest
-    user: app
-    env_file:
-      - .env
-    environment:
-      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-dev_encryption_master_key_do_not_use_in_prod}
-      - PYTHONPATH=/app
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - PYTHONUNBUFFERED=1
-      - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
-      - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
-      - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
-      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
-      - MOONMIND_WORKER_ID=${MOONMIND_CLAUDE_WORKER_ID:-claude-worker-1}
-      - MOONMIND_ENABLE_TASK_PROPOSALS=${MOONMIND_ENABLE_TASK_PROPOSALS:-true}
-      - MOONMIND_WORKER_TOKEN=${MOONMIND_CLAUDE_WORKER_TOKEN:-}
-      - MOONMIND_WORKER_BOOTSTRAP_TOKEN=${MOONMIND_CLAUDE_WORKER_BOOTSTRAP_TOKEN:-${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}}
-      - MOONMIND_WORKER_RUNTIME=${MOONMIND_CLAUDE_WORKER_RUNTIME:-claude}
-      - MOONMIND_WORKER_ALLOWED_TYPES=${MOONMIND_CLAUDE_WORKER_ALLOWED_TYPES:-task}
-      - MOONMIND_WORKER_CAPABILITIES=${MOONMIND_CLAUDE_WORKER_CAPABILITIES:-claude,git,gh,docker,proposals_write}
-      - MOONMIND_WORKER_TOKEN_DESCRIPTION=${MOONMIND_CLAUDE_WORKER_TOKEN_DESCRIPTION:-Docker Compose claude worker}
-      - MOONMIND_WORKER_TOKEN_FILE=${MOONMIND_CLAUDE_WORKER_TOKEN_FILE:-${CODEX_VOLUME_PATH:-/home/app/.codex}/moonmind_claude_worker_token}
-      - MOONMIND_API_TOKEN=${MOONMIND_API_TOKEN:-}
-      - MOONMIND_WORKDIR=${MOONMIND_WORKDIR:-/work/agent_jobs}
-      - MOONMIND_WORKER_WORKFLOW_REPO_ROOT=${MOONMIND_WORKER_WORKFLOW_REPO_ROOT:-/workspace}
-      - WORKFLOW_SKILLS_CACHE_ROOT=${WORKFLOW_SKILLS_CACHE_ROOT:-/work/agent_jobs/skill_cache}
-      - WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT=${WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-${MOONMIND_WORKER_WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT:-/workspace/.agents/skills/local}}
-      - WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT=${WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-${MOONMIND_WORKER_WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT:-/workspace/.agents/skills}}
-      - MOONMIND_LIVE_SESSION_ENABLED_DEFAULT=${MOONMIND_LIVE_SESSION_ENABLED_DEFAULT:-true}
-      - MOONMIND_LIVE_SESSION_PROVIDER=${MOONMIND_LIVE_SESSION_PROVIDER:-tmate}
-      - MOONMIND_LIVE_SESSION_TTL_MINUTES=${MOONMIND_LIVE_SESSION_TTL_MINUTES:-60}
-      - MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES=${MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES:-15}
-      - MOONMIND_LIVE_SESSION_ALLOW_WEB=${MOONMIND_LIVE_SESSION_ALLOW_WEB:-false}
-      - MOONMIND_TMATE_SERVER_HOST=${MOONMIND_TMATE_SERVER_HOST:-}
-      - MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER=${MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER:-4}
-      - MOONMIND_CONTAINER_WORKSPACE_VOLUME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
-      - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}
-      - MOONMIND_CODEX_SANDBOX_MODE=${MOONMIND_CODEX_SANDBOX_MODE:-danger-full-access}
-      - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
-      - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
-      - MOONMIND_CLAUDE_MODEL=${MOONMIND_CLAUDE_MODEL:-}
-      - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
-      - MOONMIND_WORKER_RETRY_ENABLED=${MOONMIND_WORKER_RETRY_ENABLED:-true}
-      - MOONMIND_WORKER_RETRY_SECONDS=${MOONMIND_WORKER_RETRY_SECONDS:-20}
-      - MOONMIND_DEFAULT_TASK_RUNTIME=${MOONMIND_CLAUDE_DEFAULT_TASK_RUNTIME:-claude}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - DEFAULT_EMBEDDING_PROVIDER=${MOONMIND_WORKER_EMBEDDING_PROVIDER_OVERRIDE:-disabled}
-    volumes:
-      - .:/workspace
-      - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
-      - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
-      - speckit_workspaces:/work/runs
-      - ./var/artifacts:/workspace/var/artifacts
-      - agent_workspaces:/work/agent_jobs
-    working_dir: /workspace
-    command: >-
-      /workspace/tools/start-worker.sh
-    depends_on:
-      api:
-        condition: service_started
-      docker-proxy:
-        condition: service_started
-      minio:
-        condition: service_started
-      agent-workspaces-init:
-        condition: service_completed_successfully
-      codex-auth-init:
-        condition: service_completed_successfully
-      claude-auth-init:
-        condition: service_completed_successfully
-    networks:
-      - local-network
-      - docker-proxy-network
-    restart: unless-stopped
 
   orchestrator:
     build:

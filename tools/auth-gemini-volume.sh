@@ -2,6 +2,8 @@
 set -euo pipefail
 
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
+AUTH_SERVICE="${GEMINI_AUTH_SERVICE:-temporal-worker-sandbox}"
+AUTH_PROFILE="${GEMINI_AUTH_PROFILE:-}"
 
 GEMINI_HOME="${GEMINI_HOME:-/var/lib/gemini-auth}"
 GEMINI_CLI_HOME="${GEMINI_CLI_HOME:-${GEMINI_HOME}}"
@@ -27,7 +29,14 @@ if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[
   COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
 fi
 
+COMPOSE_PROFILE_ARGS=()
+if [ -n "$AUTH_PROFILE" ]; then
+  COMPOSE_PROFILE_ARGS+=(--profile "$AUTH_PROFILE")
+fi
+
 docker compose run --rm -it \
+  ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} \
+  --entrypoint /bin/bash \
   -e MOONMIND_GEMINI_CLI_AUTH_MODE=oauth \
   -e GOOGLE_API_KEY= \
   -e GEMINI_API_KEY= \
@@ -35,5 +44,5 @@ docker compose run --rm -it \
   -e GEMINI_HOME="${GEMINI_HOME}" \
   -e GEMINI_CLI_HOME="${GEMINI_CLI_HOME}" \
   ${COMPOSE_NETWORK_ARGS[@]+"${COMPOSE_NETWORK_ARGS[@]}"} \
-  gemini-worker \
-  bash -lc 'unset GOOGLE_API_KEY GEMINI_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${GEMINI_CLI_HOME:-/var/lib/gemini-auth}/.gemini"; exec gemini'
+  "$AUTH_SERVICE" \
+  -lc 'unset GOOGLE_API_KEY GEMINI_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${GEMINI_CLI_HOME:-/var/lib/gemini-auth}/.gemini"; exec gemini'

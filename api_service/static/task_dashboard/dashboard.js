@@ -2620,14 +2620,13 @@
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     const temporalSubmitEnabled = Boolean(options.temporalSubmitEnabled);
     const isEditMode = Boolean(options.isEditMode);
-    const preferQueueSubmit = Boolean(options.preferQueueSubmit);
     if (!temporalSubmitEnabled) {
       return false;
     }
     if (normalizedMode === ORCHESTRATOR_RUNTIME) {
       return false;
     }
-    if (isEditMode || preferQueueSubmit) {
+    if (isEditMode) {
       return false;
     }
     return true;
@@ -6904,9 +6903,14 @@
         {
           temporalSubmitEnabled,
           isEditMode,
-          preferQueueSubmit: hasAttachments,
         },
       );
+      if (submitDestination.mode === "temporal" && hasAttachments) {
+        message.className = "notice error queue-submit-message";
+        message.textContent =
+          "Attachments are not supported for Temporal task submission yet. Remove attachments and retry.";
+        return;
+      }
 
       if (submitButton instanceof HTMLButtonElement) {
         submitButton.disabled = true;

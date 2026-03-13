@@ -33,5 +33,5 @@ The `MoonMind.Run` workflow and other Temporal tasks were failing to execute or 
 - **Fix**: The `artifacts.py` schema restricts missing validation keys. Added `workflow.info().namespace` and hard-coded `link_type`s (`"plan"` and `"output.summary"`) where `execution_ref` is constructed.
 
 ## Validation
-- The Docker worker containers (`docker compose restart api orchestrator temporal-worker-artifacts temporal-worker-integrations temporal-worker-llm temporal-worker-sandbox temporal-worker-workflow gemini-worker claude-worker codex-worker`) must occasionally be restarted to load Python code updates into memory.
+- The Docker worker containers (`docker compose restart api orchestrator temporal-worker-artifacts temporal-worker-integrations temporal-worker-llm temporal-worker-sandbox temporal-worker-workflow`) must occasionally be restarted to load Python code updates into memory.
 - Confirmed unit tests passing for Execution Services and Temporal Worker validation (`test_temporal_worker_runtime.py` successfully updated to handle `planner=ANY` mock).

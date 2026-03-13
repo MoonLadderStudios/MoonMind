@@ -2,7 +2,8 @@
 set -euo pipefail
 
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
-AUTH_SERVICE="${CODEX_AUTH_SERVICE:-codex-worker}"
+AUTH_SERVICE="${CODEX_AUTH_SERVICE:-temporal-worker-sandbox}"
+AUTH_PROFILE="${CODEX_AUTH_PROFILE:-}"
 AUTH_COMMAND="${CODEX_AUTH_COMMAND:-codex login --device-auth && codex login status}"
 AUTH_COMMAND_TOKEN_RE='^[A-Za-z0-9._/:=?&%+#@!,-]+$'
 CODEX_TERM="${TERM:-xterm-256color}"
@@ -46,9 +47,14 @@ run_auth_command() {
     fi
   done
 
-  docker compose run --rm -it "${COMPOSE_NETWORK_ARGS[@]}" --user app \
+  docker compose run --rm -it \
+    ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} \
+    "${COMPOSE_NETWORK_ARGS[@]}" \
+    --user app \
+    --entrypoint /bin/bash \
     -e TERM="${CODEX_TERM}" \
     "$AUTH_SERVICE" \
+    -lc 'stty sane 2>/dev/null || true; exec "$@"' -- \
     "${command_parts[@]}"
 }
 
@@ -86,6 +92,11 @@ fi
 COMPOSE_NETWORK_ARGS=()
 if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
   COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
+fi
+
+COMPOSE_PROFILE_ARGS=()
+if [[ -n "$AUTH_PROFILE" ]]; then
+  COMPOSE_PROFILE_ARGS+=(--profile "$AUTH_PROFILE")
 fi
 
 AUTH_COMMAND_LINES=()
