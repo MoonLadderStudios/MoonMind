@@ -2,7 +2,7 @@
 
 **Status:** Active design  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-10  
+**Last updated:** 2026-03-12  
 **Audience:** backend, workflow authors, operators
 
 ## 1. Purpose
@@ -12,9 +12,8 @@ receive an agent task — whether a registered **skill** invocation (like
 `pr-resolver`) or a **generic LLM instruction** — and execute it end to end.
 
 It maps every step from HTTP submission through the Temporal workflow, into the
-relevant activity workers, and back. It also documents which pieces are
-**implemented**, which are **stubs**, and what remains to reach a fully
-functional system.
+relevant activity workers, and back. Open migration gaps are tracked in
+`docs/Temporal/RemainingWork.md`.
 
 For broader architecture context see
 [TemporalArchitecture.md](TemporalArchitecture.md) and
@@ -79,7 +78,7 @@ class MoonMindRunWorkflow:
 
         # Phase 3: Execute
         self._set_state("executing")
-        await self._run_execution_stage(parameters, plan_ref)        # ⚠️ STUB
+        await self._run_execution_stage(parameters, plan_ref)
 
         # Phase 4: Finalize
         self._set_state("finalizing")
@@ -118,23 +117,7 @@ Workflow stores plan_ref in memo for UI visibility
 The planning activity is fully implemented. If a `plan_artifact_ref` is already
 provided in the input payload (pre-planned job), this stage is skipped.
 
-### 2.4 Execution stage (⚠️ STUB — current state)
-
-```python
-# CURRENT implementation — this is the stub
-async def _run_execution_stage(self, *, parameters, plan_ref):
-    sandbox_result = await workflow.execute_activity(
-        "sandbox.run_command",
-        {"principal": ..., "cmd": "echo executing", "timeout_seconds": 300},
-        task_queue="mm.activity.sandbox",
-    )
-```
-
-The execution stage currently runs `echo executing` via `sandbox.run_command`
-and returns immediately. **It does not invoke `mm.skill.execute` or dispatch
-any real work.**
-
-### 2.5 Execution stage (🎯 target design)
+### 2.4 Execution stage (implemented)
 
 ```
 _run_execution_stage()
@@ -175,9 +158,9 @@ SkillActivityDispatcher.execute()                ← skill_dispatcher.py
   │  3. Return SkillResult
 ```
 
-For **generic LLM text instructions** (no specific skill), the plan generator
-would produce a plan node with `skill.name = "auto"` and the instructions as
-inputs. The dispatcher would route this to a generic LLM execution handler.
+For **generic LLM text instructions** (no specific skill), planning produces
+`skill.name = "auto"` and the dispatcher routes that skill to the runtime CLI
+handler in the Temporal worker runtime.
 
 ---
 
@@ -263,7 +246,7 @@ Serialized payload form: `{ id, skill: { name, version }, inputs: {...} }`
 | **`TemporalExecutionService.create_execution`** | ✅ Implemented | Creates DB record + starts workflow |
 | **`MoonMind.Run` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
 | **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
-| **Execution stage** (`_run_execution_stage`) | ⚠️ **Stub** | Runs `echo executing` only |
+| **Execution stage** (`_run_execution_stage`) | ✅ Implemented | Reads plan artifact, routes nodes via `mm.skill.execute`, and honors failure policy |
 | **`mm.skill.execute` activity** | ✅ Implemented | `TemporalSkillActivities.mm_skill_execute` is wired up |
 | **`SkillActivityDispatcher`** | ✅ Implemented | Routing by activity type and skill name/version |
 | **`SkillInvocation` contract** | ✅ Implemented | Validated dataclass in `skill_plan_contracts.py` |
@@ -277,88 +260,11 @@ Serialized payload form: `{ id, skill: { name, version }, inputs: {...} }`
 
 ---
 
-## 5. Remaining Work — Tasks and Acceptance Criteria
+## 5. Remaining Work
 
-### Task 1: Wire `_run_execution_stage` to `mm.skill.execute`
-
-**The critical missing piece.** Replace the `echo executing` stub with real
-skill dispatch.
-
-**Implementation:**
-1. Read the plan from `plan_ref` (via `artifact.read` activity)
-2. Parse plan nodes as `SkillInvocation` objects
-3. For each node, call `workflow.execute_activity("mm.skill.execute", ...)`
-4. Handle node-level success/failure and aggregate results
-
-**Acceptance criteria:**
-- [ ] `_run_execution_stage` reads and parses the plan artifact
-- [ ] `artifact.read(plan_ref)` is routed through the artifact activity family (`mm.activity.artifacts`) rather than a hardcoded LLM queue
-- [ ] Each plan node is dispatched as an `mm.skill.execute` activity call
-- [ ] Activity routing uses `TemporalActivityCatalog.resolve_skill()` for correct
-      task queue and timeout selection
-- [ ] `SkillResult` from each node is captured and logged
-- [ ] Plan-level failure policy (`FAIL_FAST` vs `CONTINUE`) is honored
-- [ ] Node dependency edges from `plan.edges` are respected (sequential ordering)
-- [ ] Workflow memo is updated with execution progress
-
-### Task 2: Handle generic LLM instruction execution (no explicit skill)
-
-When a task has `instructions` but no specific `skill.name` (or `skill.name = "auto"`),
-the system should route to a generic LLM execution path.
-
-**Implementation:**
-1. `plan.generate` activity produces a plan node with `skill.name = "auto"`
-2. The dispatcher routes `"auto"` to a generic LLM handler
-3. The handler invokes the appropriate CLI (Codex/Gemini/Claude) based on
-   `targetRuntime` from `initial_parameters`
-
-**Acceptance criteria:**
-- [ ] Tasks with only `instructions` (no explicit skill) produce a valid plan
-- [ ] The `"auto"` skill handler invokes the correct runtime CLI
-- [ ] `targetRuntime`, `model`, and `effort` are forwarded to the CLI invocation
-- [ ] Sandbox activities (`checkout_repo`, `run_command`) are used for actual
-      code execution within the handler
-- [ ] Execution outputs (patches, logs) are stored as artifacts
-
-### Task 3: Skill registry availability at runtime
-
-The `mm.skill.execute` handler requires a `SkillRegistrySnapshot` to resolve
-skill definitions, timeouts, and retry policies.
-
-**Acceptance criteria:**
-- [ ] A registry snapshot artifact is created during workflow initialization
-      or planning
-- [ ] The snapshot ref is passed through to execution-stage activity calls
-- [ ] Skills not found in the registry produce a clear `ContractValidationError`
-
-### Task 4: End-to-end acceptance test
-
-**Acceptance criteria:**
-- [ ] A test submits a `batch-pr-resolver` style payload via `POST /api/queue/jobs`
-- [ ] The `MoonMind.Run` workflow starts on Temporal
-- [ ] `plan.generate` produces a valid plan with a `pr-resolver` skill node
-- [ ] `mm.skill.execute` dispatches the `pr-resolver` skill
-- [ ] The skill handler executes (even if mocked) and returns a `SkillResult`
-- [ ] Workflow reaches `succeeded` state
-- [ ] Temporal↔DB sync reflects the final status in the dashboard
-
-### Task 5: Artifact linkage for execution outputs
-
-**Acceptance criteria:**
-- [ ] Skill execution outputs are stored as artifacts linked to the workflow
-- [ ] Logs, patches, and command outputs are captured via `artifact.write_complete`
-- [ ] Artifact refs are stored in workflow memo for UI access
-- [ ] `artifact.list_for_execution` returns all artifacts for a given workflow ID
-
-### Task 6: Error handling and retry semantics
-
-**Acceptance criteria:**
-- [ ] `SkillFailure` exceptions are caught and mapped to `SkillResult.status = "FAILED"`
-- [ ] Retryable failures respect the retry policy from the skill definition
-- [ ] Non-retryable error codes (`INVALID_INPUT`, `PERMISSION_DENIED`, etc.)
-      are propagated without retry
-- [ ] Workflow transitions to `failed` state with an error summary on
-      unrecoverable failure
+The execution-stage tasks formerly listed here are now implemented. The
+canonical open backlog is maintained in
+[`docs/Temporal/RemainingWork.md`](RemainingWork.md).
 
 ---
 

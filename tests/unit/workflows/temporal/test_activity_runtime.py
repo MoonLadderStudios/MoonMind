@@ -42,8 +42,10 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     LocalTemporalArtifactStore,
     TemporalArtifactActivities,
+    TemporalArtifactNotFoundError,
     TemporalArtifactRepository,
     TemporalArtifactService,
+    TemporalArtifactValidationError,
     build_artifact_ref,
 )
 
@@ -233,6 +235,53 @@ async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Pa
             assert b'"plan_version": "1.0"' in payload
 
 
+async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+
+            def _placeholder_planner(_inputs, _parameters, _snapshot):
+                return {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Bad placeholder plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:dummy",
+                            "artifact_ref": "art:sha256:dummy",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "n1",
+                            "skill": {"name": "auto", "version": "1.0"},
+                            "inputs": {
+                                "instructions": "Do work",
+                                "runtime": {"mode": "codex"},
+                            },
+                        }
+                    ],
+                    "edges": [],
+                }
+
+            planner = TemporalPlanActivities(
+                artifact_service=service,
+                planner=_placeholder_planner,
+            )
+            with pytest.raises(
+                TemporalActivityRuntimeError,
+                match="placeholder ref\\(s\\) matching '\\*:sha256:dummy'",
+            ):
+                await planner.plan_generate(
+                    principal="user-1",
+                    parameters={"repository": "moonladder/moonmind"},
+                )
+
+
 async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
     tmp_path: Path,
 ):
@@ -278,6 +327,31 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
 
             assert result.status == "SUCCEEDED"
             assert result.outputs["ok"] is True
+
+
+async def test_artifact_read_invalid_ref_failures_surface_cleanly(tmp_path: Path):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalArtifactActivities(service)
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="artifact_ref.artifact_id is required",
+            ):
+                await activities.artifact_read(
+                    artifact_ref={"artifactId": "  "},
+                    principal="user-1",
+                )
+
+            with pytest.raises(TemporalArtifactNotFoundError):
+                await activities.artifact_read(
+                    artifact_ref="art:sha256:dummy",
+                    principal="user-1",
+                )
 
 
 async def test_sandbox_run_command_writes_diagnostics_artifact(tmp_path: Path):
