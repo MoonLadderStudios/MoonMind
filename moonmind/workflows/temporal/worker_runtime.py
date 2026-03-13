@@ -49,13 +49,56 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        raise RuntimeError("auto skill runtime.mode is required")
+        raise RuntimeError("auto tool runtime.mode is required")
     if normalized not in _SUPPORTED_AUTO_SKILL_RUNTIMES:
         supported = ", ".join(sorted(_SUPPORTED_AUTO_SKILL_RUNTIMES))
         raise RuntimeError(
-            f"auto skill runtime.mode '{normalized}' is unsupported; expected one of: {supported}"
+            f"auto tool runtime.mode '{normalized}' is unsupported; expected one of: {supported}"
         )
     return normalized
+
+
+def _resolve_task_tool(task_payload: Mapping[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    tool_payload = _coerce_mapping(task_payload.get("tool"))
+    skill_payload = _coerce_mapping(task_payload.get("skill"))
+
+    selected_payload: dict[str, Any]
+    if tool_payload:
+        tool_type = str(
+            tool_payload.get("type") or tool_payload.get("kind") or "skill"
+        ).strip()
+        if tool_type and tool_type.lower() != "skill":
+            raise RuntimeError(
+                "task.tool.type must be 'skill' for the current runtime contract"
+            )
+        selected_payload = tool_payload
+    else:
+        selected_payload = skill_payload
+
+    tool_name = str(
+        selected_payload.get("name") or selected_payload.get("id") or ""
+    ).strip()
+    tool_version = str(selected_payload.get("version") or "").strip()
+
+    if tool_name and not tool_version:
+        raise RuntimeError(
+            "task.tool.version is required when task.tool.name is set "
+            "(task.skill is a legacy alias)"
+        )
+    if tool_version and not tool_name:
+        raise RuntimeError(
+            "task.tool.name is required when task.tool.version is set "
+            "(task.skill is a legacy alias)"
+        )
+    if not tool_name:
+        tool_name = "auto"
+        tool_version = "1.0"
+
+    inline_inputs = selected_payload.get("inputs")
+    if not isinstance(inline_inputs, Mapping):
+        inline_inputs = selected_payload.get("args")
+    normalized_inputs = dict(inline_inputs) if isinstance(inline_inputs, Mapping) else {}
+    return tool_name, tool_version, normalized_inputs
 
 
 def _build_runtime_planner():
@@ -70,28 +113,18 @@ def _build_runtime_planner():
         parameter_payload = dict(parameters or {})
         input_payload = _coerce_mapping(inputs)
         task_payload = _coerce_mapping(input_payload.get("task"))
-        task_skill = _coerce_mapping(task_payload.get("skill"))
-
-        skill_name = str(task_skill.get("name") or "").strip()
-        skill_version = str(task_skill.get("version") or "").strip()
-        if skill_name and not skill_version:
-            raise RuntimeError(
-                "task.skill.version is required when task.skill.name is set"
-            )
-        if skill_version and not skill_name:
-            raise RuntimeError(
-                "task.skill.name is required when task.skill.version is set"
-            )
-        if not skill_name:
-            skill_name = "auto"
-            skill_version = "1.0"
+        if not task_payload:
+            task_payload = _coerce_mapping(parameter_payload.get("task"))
+        tool_name, tool_version, inline_tool_inputs = _resolve_task_tool(task_payload)
 
         explicit_inputs = task_payload.get("inputs")
         node_inputs: dict[str, Any] = (
             dict(explicit_inputs) if isinstance(explicit_inputs, Mapping) else {}
         )
+        if not node_inputs and inline_tool_inputs:
+            node_inputs = dict(inline_tool_inputs)
 
-        if not node_inputs and skill_name == "auto":
+        if not node_inputs and tool_name == "auto":
             instructions = task_payload.get("instructions")
             if instructions is None:
                 instructions = input_payload.get("instructions")
@@ -99,7 +132,7 @@ def _build_runtime_planner():
                 instructions = parameter_payload.get("instructions")
             if not isinstance(instructions, str) or not instructions.strip():
                 raise RuntimeError(
-                    "auto skill requires non-empty instructions in task.instructions, "
+                    "auto tool requires non-empty instructions in task.instructions, "
                     "inputs.instructions, or parameters.instructions"
                 )
 
@@ -113,7 +146,7 @@ def _build_runtime_planner():
             if model is not None:
                 if not isinstance(model, str) or not model:
                     raise RuntimeError(
-                        "auto skill runtime.model must be a non-empty string"
+                        "auto tool runtime.model must be a non-empty string"
                     )
                 runtime_node["model"] = model
 
@@ -121,7 +154,7 @@ def _build_runtime_planner():
             if effort is not None:
                 if not isinstance(effort, str) or not effort:
                     raise RuntimeError(
-                        "auto skill runtime.effort must be a non-empty string"
+                        "auto tool runtime.effort must be a non-empty string"
                     )
                 runtime_node["effort"] = effort
 
@@ -172,7 +205,12 @@ def _build_runtime_planner():
             "nodes": [
                 {
                     "id": node_id,
-                    "skill": {"name": skill_name, "version": skill_version},
+                    "tool": {
+                        "type": "skill",
+                        "name": tool_name,
+                        "version": tool_version,
+                    },
+                    "skill": {"name": tool_name, "version": tool_version},
                     "inputs": node_inputs,
                 }
             ],
@@ -230,7 +268,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 return SkillResult(
                     status="FAILED",
                     outputs={"error": str(exc)},
-                    progress={"details": "Invalid auto skill runtime payload"},
+                    progress={"details": "Invalid auto tool runtime payload"},
                 )
 
             principal = str(context_payload.get("principal") or "system")
@@ -250,7 +288,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                         status="FAILED",
                         outputs={"error": str(exc)},
                         progress={
-                            "details": "Failed to checkout repoRef in auto skill handler"
+                            "details": "Failed to checkout repoRef in auto tool handler"
                         },
                     )
 

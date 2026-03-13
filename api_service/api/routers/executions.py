@@ -473,6 +473,43 @@ def _coerce_step_count(value: Any) -> int:
     return len(value)
 
 
+def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
+    tool_payload = (
+        task_payload.get("tool") if isinstance(task_payload.get("tool"), dict) else {}
+    )
+    skill_payload = (
+        task_payload.get("skill") if isinstance(task_payload.get("skill"), dict) else {}
+    )
+    selected_payload = tool_payload or skill_payload
+    if not selected_payload:
+        return None
+
+    tool_type = str(
+        selected_payload.get("type") or selected_payload.get("kind") or "skill"
+    ).strip()
+    if tool_type and tool_type.lower() != "skill":
+        raise _invalid_task_request(
+            "payload.task.tool.type must be 'skill' for Temporal-backed submit."
+        )
+
+    name = str(selected_payload.get("name") or selected_payload.get("id") or "").strip()
+    if not name:
+        return None
+    version = str(selected_payload.get("version") or "").strip() or "1.0"
+    normalized: dict[str, Any] = {
+        "type": "skill",
+        "name": name,
+        "version": version,
+    }
+
+    inline_inputs = selected_payload.get("inputs")
+    if not isinstance(inline_inputs, dict):
+        inline_inputs = selected_payload.get("args")
+    if isinstance(inline_inputs, dict) and inline_inputs:
+        normalized["inputs"] = dict(inline_inputs)
+    return normalized
+
+
 def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
@@ -548,6 +585,29 @@ async def _create_execution_from_task_request(
         if isinstance(task_payload.get("runtime"), dict)
         else {}
     )
+    normalized_tool = _normalize_task_tool(task_payload)
+    normalized_task_for_planner: dict[str, Any] = {}
+    instructions = str(task_payload.get("instructions") or "").strip()
+    if instructions:
+        normalized_task_for_planner["instructions"] = instructions
+    if normalized_tool is not None:
+        normalized_task_for_planner["tool"] = normalized_tool
+        # Keep legacy shape for compatibility while tool is canonical.
+        normalized_task_for_planner["skill"] = {
+            "name": normalized_tool["name"],
+            "version": normalized_tool["version"],
+        }
+        if isinstance(normalized_tool.get("inputs"), dict):
+            normalized_task_for_planner["inputs"] = dict(normalized_tool["inputs"])
+    if isinstance(task_payload.get("inputs"), dict):
+        normalized_task_for_planner["inputs"] = dict(task_payload["inputs"])
+    if runtime_payload:
+        normalized_task_for_planner["runtime"] = dict(runtime_payload)
+    for key in ("repoRef", "branch"):
+        value = task_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized_task_for_planner[key] = value.strip()
+
     initial_parameters = {
         "requestType": request.type,
         "repository": repository,
@@ -561,6 +621,10 @@ async def _create_execution_from_task_request(
         "proposeTasks": bool(task_payload.get("proposeTasks")),
         "stepCount": step_count,
     }
+    if instructions:
+        initial_parameters["instructions"] = instructions
+    if normalized_task_for_planner:
+        initial_parameters["task"] = normalized_task_for_planner
 
     try:
         record = await service.create_execution(

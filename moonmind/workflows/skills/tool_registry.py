@@ -41,6 +41,14 @@ class ToolRegistrySnapshot:
     def by_key(self) -> dict[tuple[str, str], ToolDefinition]:
         return {skill.key: skill for skill in self.skills}
 
+    @property
+    def tools(self) -> tuple[ToolDefinition, ...]:
+        return self.skills
+
+    @property
+    def tools_by_key(self) -> dict[tuple[str, str], ToolDefinition]:
+        return self.by_key
+
     def get_skill(self, *, name: str, version: str) -> ToolDefinition:
         try:
             return self.by_key[(name, version)]
@@ -49,19 +57,26 @@ class ToolRegistrySnapshot:
                 f"Skill '{name}:{version}' was not found in pinned snapshot {self.digest}"
             ) from exc
 
+    def get_tool(self, *, name: str, version: str) -> ToolDefinition:
+        return self.get_skill(name=name, version=version)
+
     def to_payload(self) -> dict[str, Any]:
+        entries = [skill.to_payload() for skill in self.skills]
         return {
             "digest": self.digest,
             "artifact_ref": self.artifact_ref,
-            "skills": [skill.to_payload() for skill in self.skills],
+            "tools": entries,
+            "skills": entries,
         }
 
 
 def _canonical_registry_doc(skills: tuple[ToolDefinition, ...]) -> dict[str, Any]:
     ordered = sorted(skills, key=lambda skill: (skill.name, skill.version))
+    entries = [skill.to_payload() for skill in ordered]
     return {
         "schema_version": "1.0",
-        "skills": [skill.to_payload() for skill in ordered],
+        "tools": entries,
+        "skills": entries,
     }
 
 
@@ -77,34 +92,36 @@ def validate_tool_registry(skills: tuple[ToolDefinition, ...]) -> None:
         raise ToolRegistryError("Registry is empty")
 
     seen: set[tuple[str, str]] = set()
-    for skill in skills:
-        if skill.key in seen:
+    for definition in skills:
+        if definition.key in seen:
             raise ToolRegistryError(
-                f"Duplicate skill definition for '{skill.name}:{skill.version}'"
+                f"Duplicate tool definition for '{definition.name}:{definition.version}'"
             )
-        seen.add(skill.key)
+        seen.add(definition.key)
 
 
 def parse_tool_registry(payload: Mapping[str, Any]) -> tuple[ToolDefinition, ...]:
-    """Parse untrusted registry payload into validated skill definitions."""
+    """Parse untrusted registry payload into validated tool definitions."""
 
     raw_skills: Any
-    if "skills" in payload:
+    if "tools" in payload:
+        raw_skills = payload.get("tools")
+    elif "skills" in payload:
         raw_skills = payload.get("skills")
     else:
         raw_skills = payload
 
     if isinstance(raw_skills, Mapping):
-        raise ToolRegistryError("Registry 'skills' must be an array")
+        raise ToolRegistryError("Registry 'tools' must be an array")
     if not isinstance(raw_skills, list):
         raise ToolRegistryError(
-            "Registry payload must be an object with a skills array"
+            "Registry payload must be an object with a tools array"
         )
 
     parsed: list[ToolDefinition] = []
     for entry in raw_skills:
         if not isinstance(entry, Mapping):
-            raise ToolRegistryError("Skill registry entries must be objects")
+            raise ToolRegistryError("Tool registry entries must be objects")
         try:
             parsed.append(parse_tool_definition(entry))
         except ContractValidationError as exc:
@@ -147,7 +164,7 @@ def create_registry_snapshot(
         canonical,
         metadata={
             "name": "registry_snapshot.json",
-            "producer": "skill:registry.snapshot",
+            "producer": "tool:registry.snapshot",
             "labels": ["registry", "snapshot"],
             "digest": digest,
         },

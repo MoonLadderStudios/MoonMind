@@ -369,26 +369,44 @@ class MoonMindRunWorkflow:
             }
 
         for index, node in enumerate(ordered_nodes, start=1):
+            tool = node.get("tool")
             skill = node.get("skill")
-            if not isinstance(skill, Mapping):
-                raise ValueError("plan node skill definition is required")
-            skill_name = str(skill.get("name") or "").strip()
-            skill_version = str(skill.get("version") or "").strip()
-            if not skill_name or not skill_version:
-                raise ValueError("plan node skill name/version is required")
+
+            selected_node: Mapping[str, Any] | None = None
+            if isinstance(tool, Mapping):
+                tool_type = str(tool.get("type") or tool.get("kind") or "skill").strip()
+                if tool_type and tool_type.lower() != "skill":
+                    raise ValueError(
+                        "plan node tool.type must be 'skill' for current runtime support"
+                    )
+                selected_node = tool
+            elif isinstance(skill, Mapping):
+                selected_node = skill
+            if selected_node is None:
+                raise ValueError(
+                    "plan node tool definition is required (node.skill is legacy alias)"
+                )
+
+            tool_name = str(
+                selected_node.get("name") or selected_node.get("id") or ""
+            ).strip()
+            tool_version = str(selected_node.get("version") or "").strip()
+            if not tool_name or not tool_version:
+                raise ValueError("plan node tool name/version is required")
             invocation_payload = {
                 "id": node.get("id"),
-                "skill": {"name": skill_name, "version": skill_version},
+                "tool": {"type": "skill", "name": tool_name, "version": tool_version},
+                "skill": {"name": tool_name, "version": tool_version},
                 "inputs": node.get("inputs", {}),
                 "options": node.get("options", {}),
             }
             route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
             if skill_definitions_by_key:
-                skill_key = (skill_name, skill_version)
+                skill_key = (tool_name, tool_version)
                 if skill_key not in skill_definitions_by_key:
                     raise ValueError(
-                        "Skill "
-                        f"'{skill_name}:{skill_version}' was not found in pinned "
+                        "Tool "
+                        f"'{tool_name}:{tool_version}' was not found in pinned "
                         "registry snapshot"
                     )
                 route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
@@ -396,7 +414,7 @@ class MoonMindRunWorkflow:
                 )
 
             self._summary = (
-                f"Executing plan step {index}/{len(ordered_nodes)}: {skill_name}"
+                f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
             )
             self._update_memo()
 

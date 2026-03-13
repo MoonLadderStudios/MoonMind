@@ -468,6 +468,8 @@ Initial expected mappings:
 
 - run-shaped submit flows may start `MoonMind.Run`
 - manifest-oriented submit flows may start `MoonMind.ManifestIngest`
+- submit payloads should use `task.tool` / `step.tool` as canonical execution shape; `task.skill` / `step.skill` may be accepted only as compatibility aliases
+- skills are a tool subtype (`tool.type = "skill"`), not a sibling to tools
 - `workflowType`, `idempotencyKey`, `failurePolicy`, and `initialParameters` are backend/API contract details, not primary user-facing dashboard concepts
 - the dashboard should focus on reviewed task-safe fields and artifact references, not on exposing raw workflow-start payload structure
 

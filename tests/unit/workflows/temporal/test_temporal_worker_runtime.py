@@ -190,6 +190,59 @@ def test_runtime_planner_never_emits_placeholder_registry_refs():
     )
 
 
+def test_runtime_planner_accepts_task_tool_payload():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("b" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T7W9"
+
+    payload = planner(
+        {
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                    "version": "1.0",
+                },
+                "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+            }
+        },
+        {"repository": "MoonLadderStudios/MoonMind"},
+        snapshot,
+    )
+
+    node = payload["nodes"][0]
+    assert node["tool"]["name"] == "pr-resolver"
+    assert node["tool"]["version"] == "1.0"
+    assert node["skill"]["name"] == "pr-resolver"
+    assert node["inputs"]["pr"] == "42"
+
+
+def test_runtime_planner_uses_parameter_task_fallback_when_inputs_missing():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("c" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T7X0"
+
+    payload = planner(
+        None,
+        {
+            "task": {
+                "instructions": "Diagnose the failing workflow.",
+                "tool": {"type": "skill", "name": "auto", "version": "1.0"},
+                "runtime": {"mode": "codex"},
+            },
+            "targetRuntime": "codex",
+            "repository": "MoonLadderStudios/MoonMind",
+        },
+        snapshot,
+    )
+
+    node = payload["nodes"][0]
+    assert node["tool"]["name"] == "auto"
+    assert node["inputs"]["instructions"] == "Diagnose the failing workflow."
+
+
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_planner")

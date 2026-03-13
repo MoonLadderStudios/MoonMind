@@ -158,6 +158,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.lifecycle_sweep": ("artifacts", "artifact_lifecycle_sweep"),
     "plan.generate": ("plans", "plan_generate"),
     "plan.validate": ("plans", "plan_validate"),
+    "mm.tool.execute": ("skills", "mm_tool_execute"),
     "mm.skill.execute": ("skills", "mm_skill_execute"),
     "sandbox.checkout_repo": ("sandbox", "sandbox_checkout_repo"),
     "sandbox.apply_patch": ("sandbox", "sandbox_apply_patch"),
@@ -364,7 +365,7 @@ def _default_skill_registry_payload() -> dict[str, Any]:
                     }
                 },
                 "executor": {
-                    "activity_type": "mm.skill.execute",
+                    "activity_type": "mm.tool.execute",
                     "selector": {"mode": "by_capability"},
                 },
                 "requirements": {"capabilities": ["sandbox"]},
@@ -646,6 +647,27 @@ class TemporalSkillActivities:
             invocation_payload=invocation_payload,
             registry_snapshot=resolved_snapshot,
             dispatcher=self._dispatcher,
+            context=context,
+        )
+
+    async def mm_tool_execute(
+        self,
+        *,
+        invocation_payload: Mapping[str, Any],
+        registry_snapshot: SkillRegistrySnapshot | None = None,
+        registry_snapshot_ref: ArtifactRef | str | None = None,
+        artifact_service: TemporalArtifactService | None = None,
+        principal: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> SkillResult:
+        """Canonical tool-execution alias for mm.skill.execute."""
+
+        return await self.mm_skill_execute(
+            invocation_payload=invocation_payload,
+            registry_snapshot=registry_snapshot,
+            registry_snapshot_ref=registry_snapshot_ref,
+            artifact_service=artifact_service,
+            principal=principal,
             context=context,
         )
 
@@ -1449,41 +1471,63 @@ def build_activity_bindings(
         bound_keys.add((binding.activity_type, binding.fleet))
 
     if skill_activities is not None:
+        activity_aliases = (
+            ("mm.tool.execute", "mm_tool_execute"),
+            ("mm.skill.execute", "mm_skill_execute"),
+        )
         for fleet in catalog.fleets:
             if fleet.fleet == "workflow":
                 continue
             if requested_fleets and fleet.fleet not in requested_fleets:
                 continue
-            binding_key = ("mm.skill.execute", fleet.fleet)
-            if binding_key in bound_keys:
-                continue
-            func = getattr(type(skill_activities), "mm_skill_execute", None)
-            if func is None:
-                raise TemporalActivityRuntimeError(
-                    f"Activity 'mm.skill.execute' requires handler "
-                    f"'mm_skill_execute' on {type(skill_activities).__name__}"
-                )
-            if not hasattr(func, "__temporal_activity_definition"):
+            for activity_type, attr_name in activity_aliases:
+                binding_key = (activity_type, fleet.fleet)
+                if binding_key in bound_keys:
+                    continue
+                resolved_attr_name = attr_name
+                func = getattr(type(skill_activities), resolved_attr_name, None)
+                if func is None and attr_name == "mm_tool_execute":
+                    # Compatibility: if only mm_skill_execute exists, bind it as
+                    # mm.tool.execute without requiring custom class changes.
+                    resolved_attr_name = "mm_skill_execute"
+                    func = getattr(type(skill_activities), resolved_attr_name, None)
+                if func is None:
+                    raise TemporalActivityRuntimeError(
+                        f"Activity '{activity_type}' requires handler "
+                        f"'{resolved_attr_name}' on {type(skill_activities).__name__}"
+                    )
+
                 from temporalio import activity
 
-                _wrapper = _build_activity_wrapper(func)
+                if resolved_attr_name != attr_name:
+                    # Create an alias activity definition with canonical name.
+                    _wrapper = _build_activity_wrapper(func)
+                    _wrapper.__name__ = func.__name__
+                    _wrapper.__qualname__ = func.__qualname__
+                    _wrapper.__doc__ = func.__doc__
+                    decorated_func = activity.defn(name=activity_type)(_wrapper)
+                    setattr(type(skill_activities), attr_name, decorated_func)
+                    handler = getattr(skill_activities, attr_name)
+                else:
+                    if not hasattr(func, "__temporal_activity_definition"):
+                        _wrapper = _build_activity_wrapper(func)
 
-                _wrapper.__name__ = func.__name__
-                _wrapper.__qualname__ = func.__qualname__
-                _wrapper.__doc__ = func.__doc__
+                        _wrapper.__name__ = func.__name__
+                        _wrapper.__qualname__ = func.__qualname__
+                        _wrapper.__doc__ = func.__doc__
 
-                decorated_func = activity.defn(name="mm.skill.execute")(_wrapper)
-                setattr(type(skill_activities), "mm_skill_execute", decorated_func)
+                        decorated_func = activity.defn(name=activity_type)(_wrapper)
+                        setattr(type(skill_activities), attr_name, decorated_func)
 
-            handler = getattr(skill_activities, "mm_skill_execute")
-            bindings.append(
-                TemporalActivityBinding(
-                    activity_type="mm.skill.execute",
-                    task_queue=fleet.task_queues[0],
-                    fleet=fleet.fleet,
-                    handler=handler,
+                    handler = getattr(skill_activities, attr_name)
+                bindings.append(
+                    TemporalActivityBinding(
+                        activity_type=activity_type,
+                        task_queue=fleet.task_queues[0],
+                        fleet=fleet.fleet,
+                        handler=handler,
+                    )
                 )
-            )
 
     return tuple(bindings)
 

@@ -1229,12 +1229,21 @@
     if (!task) {
       return null;
     }
-    const skillNode = pick(task, "skill");
-    if (!skillNode || typeof skillNode !== "object" || Array.isArray(skillNode)) {
-      return null;
+    const toolNode = pick(task, "tool");
+    if (toolNode && typeof toolNode === "object" && !Array.isArray(toolNode)) {
+      const toolName = String(pick(toolNode, "name") || pick(toolNode, "id") || "").trim();
+      if (toolName) {
+        return toolName;
+      }
     }
-    const skillId = pick(skillNode, "id");
-    return skillId ? String(skillId) : null;
+    const skillNode = pick(task, "skill");
+    if (skillNode && typeof skillNode === "object" && !Array.isArray(skillNode)) {
+      const skillId = String(
+        pick(skillNode, "name") || pick(skillNode, "id") || "",
+      ).trim();
+      return skillId || null;
+    }
+    return null;
   }
 
   function extractPublishModeFromPayload(payload) {
@@ -1476,10 +1485,18 @@
         : {};
     const gitNode =
       task && typeof task.git === "object" && !Array.isArray(task.git) ? task.git : {};
-    const skillNode =
-      task && typeof task.skill === "object" && !Array.isArray(task.skill)
-        ? task.skill
+    const toolNode =
+      task && typeof task.tool === "object" && !Array.isArray(task.tool)
+        ? task.tool
         : {};
+    const skillNode =
+      Object.keys(toolNode).length > 0
+        ? toolNode
+        : (
+          task && typeof task.skill === "object" && !Array.isArray(task.skill)
+            ? task.skill
+            : {}
+        );
 
     const taskSteps = Array.isArray(task.steps) ? task.steps : [];
     let objectiveInstructions = String(task.instructions || "").trim();
@@ -1491,17 +1508,45 @@
       firstStep && typeof firstStep === "object" && !Array.isArray(firstStep)
         ? String(pick(firstStep, "instructions") || "").trim()
         : "";
-    const firstStepSkillNode =
+    const firstStepToolNode =
       firstStep &&
         typeof firstStep === "object" &&
         !Array.isArray(firstStep) &&
-        firstStep.skill &&
-        typeof firstStep.skill === "object" &&
-        !Array.isArray(firstStep.skill)
-        ? firstStep.skill
+        firstStep.tool &&
+        typeof firstStep.tool === "object" &&
+        !Array.isArray(firstStep.tool)
+        ? firstStep.tool
         : {};
-    const firstStepSkillId = String(firstStepSkillNode.id || "").trim();
-    const firstStepSkillArgs = stringifySkillArgs(firstStepSkillNode.args);
+    const firstStepSkillNode =
+      Object.keys(firstStepToolNode).length > 0
+        ? firstStepToolNode
+        : (
+          firstStep &&
+            typeof firstStep === "object" &&
+            !Array.isArray(firstStep) &&
+            firstStep.skill &&
+            typeof firstStep.skill === "object" &&
+            !Array.isArray(firstStep.skill)
+            ? firstStep.skill
+            : {}
+        );
+    const firstStepSkillName = String(
+      firstStepSkillNode.name || firstStepSkillNode.id || "",
+    ).trim();
+    const firstStepInlineInputs =
+      firstStepSkillNode.inputs &&
+      typeof firstStepSkillNode.inputs === "object" &&
+      !Array.isArray(firstStepSkillNode.inputs)
+        ? firstStepSkillNode.inputs
+        : (
+          firstStepSkillNode.args &&
+          typeof firstStepSkillNode.args === "object" &&
+          !Array.isArray(firstStepSkillNode.args)
+            ? firstStepSkillNode.args
+            : {}
+        );
+    const firstStepSkillId = firstStepSkillName;
+    const firstStepSkillArgs = stringifySkillArgs(firstStepInlineInputs);
     const firstStepSkillCaps = extractCapabilityCsv(
       firstStepSkillNode.requiredCapabilities,
     );
@@ -1513,11 +1558,25 @@
       !firstStepSkillArgs &&
       !firstStepSkillCaps;
 
+    const primaryToolName = String(skillNode.name || skillNode.id || "auto").trim() || "auto";
+    const primaryInlineInputs =
+      skillNode.inputs && typeof skillNode.inputs === "object" && !Array.isArray(skillNode.inputs)
+        ? skillNode.inputs
+        : {};
+    const primarySkillArgsNode =
+      Object.keys(primaryInlineInputs).length > 0
+        ? primaryInlineInputs
+        : (
+          skillNode.args && typeof skillNode.args === "object" && !Array.isArray(skillNode.args)
+            ? skillNode.args
+            : {}
+        );
+
     const primaryStep = {
       id: "",
       instructions: objectiveInstructions,
-      skillId: String(skillNode.id || "auto").trim() || "auto",
-      skillArgs: stringifySkillArgs(skillNode.args),
+      skillId: primaryToolName,
+      skillArgs: stringifySkillArgs(primarySkillArgsNode),
       skillRequiredCapabilities: extractCapabilityCsv(skillNode.requiredCapabilities),
       templateStepId: "",
       templateInstructions: "",
@@ -1529,12 +1588,32 @@
         return;
       }
       const stepInstructions = String(rawStep.instructions || "").trim();
-      const stepSkillNode =
-        rawStep.skill && typeof rawStep.skill === "object" && !Array.isArray(rawStep.skill)
-          ? rawStep.skill
+      const stepToolNode =
+        rawStep.tool && typeof rawStep.tool === "object" && !Array.isArray(rawStep.tool)
+          ? rawStep.tool
           : {};
-      const stepSkillId = String(stepSkillNode.id || "").trim();
-      const stepSkillArgs = stringifySkillArgs(stepSkillNode.args);
+      const stepSkillNode =
+        Object.keys(stepToolNode).length > 0
+          ? stepToolNode
+          : (
+            rawStep.skill && typeof rawStep.skill === "object" && !Array.isArray(rawStep.skill)
+              ? rawStep.skill
+              : {}
+          );
+      const stepSkillId = String(stepSkillNode.name || stepSkillNode.id || "").trim();
+      const stepInlineInputs =
+        stepSkillNode.inputs &&
+        typeof stepSkillNode.inputs === "object" &&
+        !Array.isArray(stepSkillNode.inputs)
+          ? stepSkillNode.inputs
+          : (
+            stepSkillNode.args &&
+            typeof stepSkillNode.args === "object" &&
+            !Array.isArray(stepSkillNode.args)
+              ? stepSkillNode.args
+              : {}
+          );
+      const stepSkillArgs = stringifySkillArgs(stepInlineInputs);
       const stepSkillCaps = extractCapabilityCsv(stepSkillNode.requiredCapabilities);
       const isPrimaryMirror =
         index === 0 &&
@@ -5956,19 +6035,34 @@
     };
 
     const mapExpandedStepToState = (step) => {
-      const skill = step && typeof step.skill === "object" && !Array.isArray(step.skill) ? step.skill : null;
-      const caps = Array.isArray(skill?.requiredCapabilities)
-        ? skill.requiredCapabilities.join(",")
+      const tool =
+        step && typeof step.tool === "object" && !Array.isArray(step.tool)
+          ? step.tool
+          : (
+            step && typeof step.skill === "object" && !Array.isArray(step.skill)
+              ? step.skill
+              : null
+          );
+      const inlineInputs =
+        tool && tool.inputs && typeof tool.inputs === "object" && !Array.isArray(tool.inputs)
+          ? tool.inputs
+          : (
+            tool && tool.args && typeof tool.args === "object" && !Array.isArray(tool.args)
+              ? tool.args
+              : null
+          );
+      const caps = Array.isArray(tool?.requiredCapabilities)
+        ? tool.requiredCapabilities.join(",")
         : "";
-      const args = skill && skill.args && typeof skill.args === "object" && !Array.isArray(skill.args)
-        ? JSON.stringify(skill.args)
+      const args = inlineInputs
+        ? JSON.stringify(inlineInputs)
         : "";
       const stepId = String(step?.id || "").trim();
       const instructions = String(step?.instructions || "").trim();
       return createStepStateEntry({
         id: stepId,
         instructions,
-        skillId: String(skill?.id || "").trim(),
+        skillId: String(tool?.name || tool?.id || "").trim(),
         skillArgs: args,
         skillRequiredCapabilities: caps,
         templateStepId: stepId,
@@ -6119,8 +6213,17 @@
                 skillArgs = {};
               }
             }
+            const normalizedTool = {
+              type: "skill",
+              name: skillId || "auto",
+              version: "1.0",
+              inputs: skillArgs,
+              ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
+            };
+            blueprint.tool = normalizedTool;
+            // Keep legacy shape while templates migrate to tool-first payloads.
             blueprint.skill = {
-              id: skillId || "auto",
+              id: normalizedTool.name,
               args: skillArgs,
               ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
             };
@@ -6328,14 +6431,22 @@
           stepPayload.instructions = stepInstructions;
         }
         if (stepSkillId || stepSkillArgsRaw || stepSkillCaps.length > 0) {
+          const normalizedTool = {
+            type: "skill",
+            name: stepSkillId || skillId,
+            version: "1.0",
+            inputs: stepSkillArgs,
+          };
           const skillPayload = {
-            id: stepSkillId || skillId,
+            id: normalizedTool.name,
             args: stepSkillArgs,
           };
           if (stepSkillCaps.length > 0) {
+            normalizedTool.requiredCapabilities = stepSkillCaps;
             skillPayload.requiredCapabilities = stepSkillCaps;
             stepSkillRequiredCapabilities.push(...stepSkillCaps);
           }
+          stepPayload.tool = normalizedTool;
           stepPayload.skill = skillPayload;
         }
         additionalSteps.push({ sourceIndex: index, payload: stepPayload });
@@ -6552,6 +6663,15 @@
           }).concat(parseCapabilitiesCsv(templateCapabilities.join(","))),
         ),
       );
+      const normalizedTaskTool = {
+        type: "skill",
+        name: skillId,
+        version: "1.0",
+        inputs: skillArgs,
+        ...(taskSkillRequiredCapabilities.length > 0
+          ? { requiredCapabilities: taskSkillRequiredCapabilities }
+          : {}),
+      };
 
       const payload = {
         repository,
@@ -6559,13 +6679,15 @@
         targetRuntime: runtimeMode,
         task: {
           instructions: objectiveInstructions,
+          tool: normalizedTaskTool,
           skill: {
-            id: skillId,
+            id: normalizedTaskTool.name,
             args: skillArgs,
             ...(taskSkillRequiredCapabilities.length > 0
               ? { requiredCapabilities: taskSkillRequiredCapabilities }
               : {}),
           },
+          ...(Object.keys(skillArgs).length > 0 ? { inputs: skillArgs } : {}),
           proposeTasks,
           runtime: { mode: runtimeMode, model, effort },
           git: { startingBranch, newBranch },

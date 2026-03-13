@@ -8,8 +8,9 @@
 ## 1. Purpose
 
 This document explains how the Temporal-based execution system is designed to
-receive an agent task — whether a registered **skill** invocation (like
-`pr-resolver`) or a **generic LLM instruction** — and execute it end to end.
+receive an agent task - whether a registered **tool** invocation (currently a
+`skill` subtype like `pr-resolver`) or a **generic LLM instruction** - and
+execute it end to end.
 
 It maps every step from HTTP submission through the Temporal workflow, into the
 relevant activity workers, and back. Open migration gaps are tracked in
@@ -123,7 +124,7 @@ provided in the input payload (pre-planned job), this stage is skipped.
 _run_execution_stage()
   │
   │  1. Read the resolved plan from plan_ref
-  │  2. For each node in plan.nodes (a SkillInvocation):
+  │  2. For each node in plan.nodes (a Step ToolInvocation):
   │     a. Resolve routing via TemporalActivityCatalog.resolve_skill()
   │     b. Build the invocation payload
   │     c. Execute activity:
@@ -132,7 +133,7 @@ _run_execution_stage()
 workflow.execute_activity("mm.skill.execute", {
     invocation_payload: {
         id:           "<node-id>",
-        skill:        { name: "pr-resolver", version: "1.0" },
+        tool:         { type: "skill", name: "pr-resolver", version: "1.0" },
         inputs:       { repo: "...", pr: "42", branch: "..." },
         options:      { ... }
     },
@@ -145,22 +146,22 @@ workflow.execute_activity("mm.skill.execute", {
 TemporalSkillActivities.mm_skill_execute()       ← activity_runtime.py
   │
   │  1. Resolve registry snapshot (from ref or inline)
-  │  2. Parse invocation_payload as SkillInvocation
+  │  2. Parse invocation_payload as ToolInvocation (skill subtype)
   │  3. Delegate to execute_skill_activity() → SkillActivityDispatcher
-  │  4. Return SkillResult { status, outputs, output_artifacts }
+  │  4. Return ToolResult { status, outputs, output_artifacts }
   │
   ▼
 SkillActivityDispatcher.execute()                ← skill_dispatcher.py
   │
   │  1. Look up handler by activity_type ("mm.skill.execute")
   │     or by skill name+version from registry
-  │  2. Execute the handler (the actual skill logic)
-  │  3. Return SkillResult
+  │  2. Execute the handler (the actual tool logic; skill subtype today)
+  │  3. Return ToolResult
 ```
 
-For **generic LLM text instructions** (no specific skill), planning produces
-`skill.name = "auto"` and the dispatcher routes that skill to the runtime CLI
-handler in the Temporal worker runtime.
+For **generic LLM text instructions** (no specific tool), planning produces
+`tool = { type: "skill", name: "auto", version: "1.0" }` and the dispatcher
+routes that tool to the runtime CLI handler in the Temporal worker runtime.
 
 ---
 
@@ -179,7 +180,8 @@ handler in the Temporal worker runtime.
     "requiredCapabilities": ["gh"],
     "task": {
       "instructions": "Resolve PR #42 on branch `feature/test`.",
-      "skill": {
+      "tool": {
+        "type": "skill",
         "name": "pr-resolver",
         "version": "1.0"
       },
@@ -198,19 +200,25 @@ handler in the Temporal worker runtime.
 }
 ```
 
-### 3.2 `SkillInvocation` contract (plan node level)
+Legacy compatibility note:
+
+- `task.skill` remains accepted during migration.
+- Canonical Temporal-era payloads should emit `task.tool`.
+
+### 3.2 Step ToolInvocation contract (plan node level)
 
 From `moonmind/workflows/skills/skill_plan_contracts.py`:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `id` | string | ✅ | Unique node identifier within the plan |
-| `skill_name` | string | ✅ | Registered skill name (e.g. `"pr-resolver"`) |
-| `skill_version` | string | ✅ | Registry version (e.g. `"1.0"`) |
-| `inputs` | object | ✅ | Skill-specific input parameters |
+| `tool_name` | string | ✅ | Registered tool name (e.g. `"pr-resolver"`) |
+| `tool_version` | string | ✅ | Registry version (e.g. `"1.0"`) |
+| `inputs` | object | ✅ | Tool-specific input parameters |
 | `options` | object | ❌ | Optional execution options |
 
-Serialized payload form: `{ id, skill: { name, version }, inputs: {...} }`
+Serialized payload form (canonical): `{ id, tool: { type, name, version }, inputs: {...} }`
+Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inputs: {...} }`
 
 ### 3.3 Activity catalog
 

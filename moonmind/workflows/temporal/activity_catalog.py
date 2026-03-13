@@ -197,7 +197,7 @@ class TemporalActivityCatalog:
 
     def resolve_skill(self, definition: SkillDefinition) -> TemporalActivityRoute:
         activity_type = definition.executor.activity_type
-        if activity_type != "mm.skill.execute":
+        if activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
             route = self.resolve_activity(activity_type)
         else:
             fleet, capability_class = _skill_route_family(
@@ -485,7 +485,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == ARTIFACTS_FLEET
                 )
-                + ["mm.skill.execute"]
+                + ["mm.skill.execute", "mm.tool.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -495,7 +495,12 @@ def build_default_activity_catalog(
             privileges=("llm_provider_secrets",),
             scaling_notes="Rate-limited by provider quotas.",
             activity_types=tuple(
-                entry.activity_type for entry in activities if entry.fleet == LLM_FLEET
+                list(
+                    entry.activity_type
+                    for entry in activities
+                    if entry.fleet == LLM_FLEET
+                )
+                + ["mm.tool.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -510,7 +515,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == SANDBOX_FLEET
                 )
-                + ["mm.skill.execute"]
+                + ["mm.skill.execute", "mm.tool.execute"]
             ),
         ),
         TemporalWorkerFleet(
@@ -525,7 +530,7 @@ def build_default_activity_catalog(
                     for entry in activities
                     if entry.fleet == INTEGRATIONS_FLEET
                 )
-                + ["mm.skill.execute"]
+                + ["mm.skill.execute", "mm.tool.execute"]
             ),
         ),
     )

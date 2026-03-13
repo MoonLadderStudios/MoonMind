@@ -242,6 +242,23 @@ def test_validate_plan_payload_rejects_cyclic_graph():
         validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
 
 
+def test_parse_plan_definition_accepts_tool_nodes():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+    )
+    first = plan_payload["nodes"][0]
+    first["tool"] = {"type": "skill", "name": "repo.run_tests", "version": "1.0.0"}
+    del first["skill"]
+
+    parsed = parse_plan_definition(plan_payload)
+
+    assert parsed.nodes[0].skill_name == "repo.run_tests"
+    assert parsed.nodes[0].to_payload()["tool"]["type"] == "skill"
+
+
 def test_plan_validate_activity_persists_validated_plan_artifact():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
@@ -321,6 +338,36 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     assert result_a.status == "SUCCEEDED"
     assert result_b.outputs["files_changed"] == 1
     assert seen_inputs["repo_ref"] == "git:org/repo#branch"
+
+
+def test_skill_dispatcher_accepts_tool_payload_alias():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    dispatcher = SkillActivityDispatcher()
+
+    dispatcher.register_skill(
+        skill_name="repo.run_tests",
+        version="1.0.0",
+        handler=lambda inputs, _context: SkillResult(
+            status="SUCCEEDED",
+            outputs={"test_report_artifact": inputs["repo_ref"]},
+        ),
+    )
+
+    result = asyncio.run(
+        execute_skill_activity(
+            invocation_payload={
+                "id": "n1",
+                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1.0.0"},
+                "inputs": {"repo_ref": "git:org/repo#branch"},
+            },
+            registry_snapshot=snapshot,
+            dispatcher=dispatcher,
+        )
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert result.outputs["test_report_artifact"] == "git:org/repo#branch"
 
 
 def test_skill_dispatcher_rejects_missing_handlers():

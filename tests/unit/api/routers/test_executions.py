@@ -286,6 +286,52 @@ def test_create_task_shaped_execution_rejects_invalid_required_capabilities() ->
     mock_service.create_execution.assert_not_awaited()
 
 
+def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "priority": 2,
+            "maxAttempts": 4,
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "targetRuntime": "codex",
+                "requiredCapabilities": ["git"],
+                "task": {
+                    "instructions": "Fix failing Temporal run.",
+                    "runtime": {"mode": "codex", "model": "gpt-5-codex", "effort": "high"},
+                    "skill": {
+                        "id": "pr-resolver",
+                        "args": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    initial_parameters = called_kwargs["initial_parameters"]
+
+    assert initial_parameters["instructions"] == "Fix failing Temporal run."
+    assert initial_parameters["task"]["tool"]["type"] == "skill"
+    assert initial_parameters["task"]["tool"]["name"] == "pr-resolver"
+    assert initial_parameters["task"]["tool"]["version"] == "1.0"
+    assert initial_parameters["task"]["inputs"] == {
+        "repo": "MoonLadderStudios/MoonMind",
+        "pr": "42",
+    }
+    assert initial_parameters["task"]["skill"] == {
+        "name": "pr-resolver",
+        "version": "1.0",
+    }
+
+
 def test_create_execution_surfaces_domain_validation_errors(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

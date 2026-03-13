@@ -79,6 +79,9 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 2. **`workflow execution` remains the runtime noun.**  
    Temporal implementation docs, worker code, and execution APIs should use Temporal language precisely.
 
+2a. **Execution payloads should use `tool` as the canonical executable field.**  
+   During migration, `skill` may remain as a compatibility alias where needed.
+
 3. **A Temporal-backed task is not a fake queue item.**  
    It may render in the Mission Control, but it must not inherit queue-order semantics or leasing semantics.
 
@@ -93,6 +96,9 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 
 7. **Temporal-managed list/detail truth moves toward Temporal visibility and workflow state.**  
    Transitional projections are allowed, but they must mirror the documented execution contract instead of inventing a parallel model.
+
+8. **Skill is a tool subtype, not a competing top-level noun.**  
+   Task/step payload contracts should standardize on `task.tool` and `step.tool` with `tool.type="skill"` for current implementations.
 
 ---
 

@@ -19,8 +19,8 @@ SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 EXPLICIT_BINDING_REASONS = frozenset(
     {"stronger_isolation", "specialized_credentials", "clearer_routing"}
 )
-_LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
-_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
+_DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
+_LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
 OBSERVABILITY_OUTCOMES = frozenset({"succeeded", "failed", "cancelled", "partial"})
 SKILL_FAILURE_CODES = frozenset(
     {
@@ -278,7 +278,7 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    """Plan node invocation of a skill contract."""
+    """Plan node invocation of a tool contract (skill subtype)."""
 
     id: str
     skill_name: str
@@ -288,8 +288,8 @@ class Step:
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.id, field_name="node.id")
-        _ensure_non_empty(self.skill_name, field_name="node.skill.name")
-        _ensure_non_empty(self.skill_version, field_name="node.skill.version")
+        _ensure_non_empty(self.skill_name, field_name="node.tool.name")
+        _ensure_non_empty(self.skill_version, field_name="node.tool.version")
         if not isinstance(self.inputs, Mapping):
             raise ContractValidationError(
                 "invalid_plan", "node.inputs must be an object"
@@ -303,9 +303,26 @@ class Step:
     def skill_key(self) -> tuple[str, str]:
         return self.skill_name, self.skill_version
 
+    @property
+    def tool_name(self) -> str:
+        return self.skill_name
+
+    @property
+    def tool_version(self) -> str:
+        return self.skill_version
+
+    @property
+    def tool_key(self) -> tuple[str, str]:
+        return self.skill_key
+
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "id": self.id,
+            "tool": {
+                "type": "skill",
+                "name": self.skill_name,
+                "version": self.skill_version,
+            },
             "skill": {"name": self.skill_name, "version": self.skill_version},
             "inputs": dict(self.inputs),
         }
@@ -649,17 +666,40 @@ class PlanDefinition:
 def parse_step(payload: Mapping[str, Any]) -> Step:
     """Parse one plan node payload into ``Step``."""
 
-    skill = payload.get("skill")
-    if not isinstance(skill, Mapping):
-        raise ContractValidationError("invalid_plan", "node.skill must be an object")
+    tool_payload = payload.get("tool")
+    skill_payload = payload.get("skill")
+    node_payload: Mapping[str, Any] | None = None
+
+    if isinstance(tool_payload, Mapping):
+        tool_type = str(
+            tool_payload.get("type") or tool_payload.get("kind") or "skill"
+        ).strip()
+        if tool_type and tool_type.lower() != "skill":
+            raise ContractValidationError(
+                "invalid_plan",
+                "node.tool.type must be 'skill' for the current runtime contract",
+            )
+        node_payload = tool_payload
+    elif isinstance(skill_payload, Mapping):
+        node_payload = skill_payload
+    else:
+        raise ContractValidationError(
+            "invalid_plan", "node.tool must be an object (node.skill is legacy alias)"
+        )
+
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, Mapping):
+        # Legacy compatibility: allow inline inputs under tool.inputs or skill.args.
+        inline_inputs = node_payload.get("inputs")
+        if not isinstance(inline_inputs, Mapping):
+            inline_inputs = node_payload.get("args")
+        inputs = inline_inputs if isinstance(inline_inputs, Mapping) else {}
 
     return Step(
         id=str(payload.get("id") or "").strip(),
-        skill_name=str(skill.get("name") or "").strip(),
-        skill_version=str(skill.get("version") or "").strip(),
-        inputs=(
-            payload.get("inputs") if isinstance(payload.get("inputs"), Mapping) else {}
-        ),
+        skill_name=str(node_payload.get("name") or node_payload.get("id") or "").strip(),
+        skill_version=str(node_payload.get("version") or "").strip(),
+        inputs=inputs,
         options=(
             payload.get("options")
             if isinstance(payload.get("options"), Mapping)
@@ -734,11 +774,18 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
 
 
 def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
-    """Parse and validate a registry skill definition payload."""
+    """Parse and validate a registry tool definition payload."""
 
     if not isinstance(payload, Mapping):
         raise ContractValidationError(
-            "invalid_registry", "Skill definition entry must be an object"
+            "invalid_registry", "Tool definition entry must be an object"
+        )
+
+    tool_type = str(payload.get("type") or "skill").strip().lower()
+    if tool_type and tool_type != "skill":
+        raise ContractValidationError(
+            "invalid_registry",
+            "Tool definition type must be 'skill' for the current runtime contract",
         )
 
     inputs = payload.get("inputs")

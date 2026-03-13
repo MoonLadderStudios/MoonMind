@@ -25,7 +25,7 @@ SkillHandler = Callable[
 
 
 class ToolDispatchError(RuntimeError):
-    """Raised when a skill invocation cannot be dispatched."""
+    """Raised when a tool invocation cannot be dispatched."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -34,7 +34,7 @@ class ToolDispatchError(RuntimeError):
 
 @dataclass(slots=True)
 class ToolActivityDispatcher:
-    """Routes skill invocations based on activity type and skill key."""
+    """Routes tool invocations based on activity type and tool key."""
 
     _activity_handlers: dict[str, ActivityHandler] = field(default_factory=dict)
     _skill_handlers: dict[tuple[str, str], SkillHandler] = field(default_factory=dict)
@@ -70,7 +70,7 @@ class ToolActivityDispatcher:
         snapshot: ToolRegistrySnapshot,
         context: Mapping[str, Any] | None = None,
     ) -> ToolResult:
-        definition = snapshot.get_skill(
+        definition = snapshot.get_tool(
             name=invocation.skill_name,
             version=invocation.skill_version,
         )
@@ -80,7 +80,7 @@ class ToolActivityDispatcher:
             handler = self._skill_handlers.get(invocation.skill_key)
             if handler is None:
                 raise ToolDispatchError(
-                    "skill_handler_not_registered",
+                    "tool_handler_not_registered",
                     "No "
                     f"{activity_type} handler registered for "
                     f"{invocation.skill_name}:{invocation.skill_version}",
@@ -113,22 +113,45 @@ async def execute_tool_activity(
     dispatcher: ToolActivityDispatcher,
     context: Mapping[str, Any] | None = None,
 ) -> ToolResult:
-    """Execute one skill invocation payload through dispatcher semantics."""
+    """Execute one tool invocation payload through dispatcher semantics."""
 
     try:
+        tool_payload = invocation_payload.get("tool")
         skill_payload = invocation_payload.get("skill")
-        if not isinstance(skill_payload, Mapping):
-            raise ToolDispatchError("invalid_payload", "skill payload is required")
+        selected_payload: Mapping[str, Any] | None = None
+
+        if isinstance(tool_payload, Mapping):
+            tool_type = str(
+                tool_payload.get("type") or tool_payload.get("kind") or "skill"
+            ).strip()
+            if tool_type and tool_type.lower() != "skill":
+                raise ToolDispatchError(
+                    "invalid_payload",
+                    "tool.type must be 'skill' for the current runtime contract",
+                )
+            selected_payload = tool_payload
+        elif isinstance(skill_payload, Mapping):
+            selected_payload = skill_payload
+        else:
+            raise ToolDispatchError(
+                "invalid_payload",
+                "tool payload is required (skill is legacy alias)",
+            )
+
+        inputs = invocation_payload.get("inputs")
+        if not isinstance(inputs, Mapping):
+            inline_inputs = selected_payload.get("inputs")
+            if not isinstance(inline_inputs, Mapping):
+                inline_inputs = selected_payload.get("args")
+            inputs = inline_inputs if isinstance(inline_inputs, Mapping) else {}
 
         invocation = Step(
             id=str(invocation_payload.get("id") or "").strip(),
-            skill_name=str(skill_payload.get("name") or "").strip(),
-            skill_version=str(skill_payload.get("version") or "").strip(),
-            inputs=(
-                invocation_payload.get("inputs")
-                if isinstance(invocation_payload.get("inputs"), Mapping)
-                else {}
-            ),
+            skill_name=str(
+                selected_payload.get("name") or selected_payload.get("id") or ""
+            ).strip(),
+            skill_version=str(selected_payload.get("version") or "").strip(),
+            inputs=inputs,
             options=(
                 invocation_payload.get("options")
                 if isinstance(invocation_payload.get("options"), Mapping)
@@ -151,7 +174,7 @@ async def execute_tool_activity(
     except Exception as exc:  # pragma: no cover - defensive fallback
         raise ToolFailure(
             error_code="INTERNAL",
-            message=f"Unhandled skill execution error: {exc}",
+            message=f"Unhandled tool execution error: {exc}",
             retryable=True,
         ) from exc
 

@@ -799,6 +799,7 @@ During migration:
 - task rows may map to Temporal-backed executions behind the scenes,
 - `workflowId` should be the canonical Temporal execution identity,
 - compatibility adapters may transform execution responses into task-shaped payloads,
+- for task-shaped create/update payloads, `task.tool` / `step.tool` should be canonical while `task.skill` / `step.skill` remain compatibility aliases,
 - task-oriented compatibility surfaces should preserve the fixed identifier bridge `taskId == workflowId` for Temporal-backed work even though this API itself remains execution-oriented.
 
 ### 16.3 Contract stability goal
