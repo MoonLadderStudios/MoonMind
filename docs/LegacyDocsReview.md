@@ -21,17 +21,17 @@ The following documents contain valuable architectural concepts or workflows but
 
 | Document | Status | Judgment |
 |----------|--------|----------|
-| `docs/LiveTaskHandoff.md` | Partially out-of-date | Update (Align with Temporal pause/unpause signals) |
-| `docs/ManifestTaskSystem.md` | Partially out-of-date | Update (Refactor to Temporal terms) |
-| `docs/OrchestratorArchitecture.md` | Partially out-of-date | Update (Update orchestration references) |
-| `docs/OrchestratorTaskRuntime.md` | Partially out-of-date | Update (Update runtime execution references) |
-| `docs/SecretStore.md` | Partially out-of-date | Update (Refactor legacy queue payload to Temporal payload format) |
-| `docs/DockerOutOfDocker.md` | Partially out-of-date | Updated (Refactored execution model to match Temporal Managed Agents) |
-| `docs/SkillGithubPrResolver.md` | Partially out-of-date | Update (Refactor legacy payload structures to Temporal formats) |
-| `docs/WorkerGitAuth.md` | Partially out-of-date | Update (Update payload formats and worker capability mentions) |
-| `docs/WorkerPauseSystem.md` | Partially out-of-date | Update (Rewrite to use Temporal Activity pauses instead of REST API claim blocking) |
-| `docs/WorkerRag.md` | Partially out-of-date | Update (Refactor references from legacy Codex workers to Temporal Activities) |
-| `docs/WorkerVectorEmbedding.md` | Partially out-of-date | Update (Refactor references from FastAPI queue endpoints to Temporal Activities) |
-| `docs/ops-runbook.md` | Partially out-of-date | Update (Remove Celery and REST queue recovery instructions; add Temporal runbook instructions) |
-| `docs/Tasks/TasksJira.md` | Partially out-of-date | Update / Finish Implementation |
-| `docs/Tasks/TasksStepSystem.md` | Partially out-of-date | Update (Align step execution with Temporal workflows) |
+| `docs/LiveTaskHandoff.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/LiveTaskHandoff.md` and refactored) |
+| `docs/ManifestTaskSystem.md` | Partially out-of-date | Updated (Moved to `docs/Tasks/ManifestTaskSystem.md` and refactored) |
+| `docs/OrchestratorArchitecture.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorArchitecture.md` and refactored) |
+| `docs/OrchestratorTaskRuntime.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorTaskRuntime.md` and refactored) |
+| `docs/SecretStore.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/SecretStore.md` and refactored) |
+| `docs/DockerOutOfDocker.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/DockerOutOfDocker.md` and refactored) |
+| `docs/SkillGithubPrResolver.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/SkillGithubPrResolver.md` and refactored) |
+| `docs/WorkerGitAuth.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/WorkerGitAuth.md` and refactored) |
+| `docs/WorkerPauseSystem.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/WorkerPauseSystem.md` and refactored) |
+| `docs/WorkerRag.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/WorkerRag.md` and refactored) |
+| `docs/WorkerVectorEmbedding.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/WorkerVectorEmbedding.md` and refactored) |
+| `docs/ops-runbook.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/ops-runbook.md` and refactored) |
+| `docs/Tasks/TasksJira.md` | Partially out-of-date | Updated (Finished Temporal Activity Implementation Details) |
+| `docs/Tasks/TasksStepSystem.md` | Partially out-of-date | Updated (Aligned step execution with Temporal workflows) |
