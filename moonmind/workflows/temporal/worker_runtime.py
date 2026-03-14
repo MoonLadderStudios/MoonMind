@@ -357,48 +357,54 @@ def _build_runtime_planner():
         if not node_inputs and inline_tool_inputs:
             node_inputs = dict(inline_tool_inputs)
 
-        if not node_inputs:
+        instructions = node_inputs.get("instructions")
+        if instructions is None:
             instructions = task_payload.get("instructions")
-            if instructions is None:
-                instructions = input_payload.get("instructions")
-            if instructions is None:
-                instructions = parameter_payload.get("instructions")
+        if instructions is None:
+            instructions = input_payload.get("instructions")
+        if instructions is None:
+            instructions = parameter_payload.get("instructions")
 
-            if not isinstance(instructions, str) or not instructions.strip():
-                if tool_name == "auto":
-                    raise RuntimeError(
-                        "auto tool requires non-empty instructions in task.instructions, "
-                        "inputs.instructions, or parameters.instructions"
-                    )
-                instructions = (
-                    f"Execute the '{tool_name}' skill for this repository and report "
-                    "the result."
+        if not isinstance(instructions, str) or not instructions.strip():
+            if tool_name == "auto":
+                raise RuntimeError(
+                    "auto tool requires non-empty instructions in task.instructions, "
+                    "inputs.instructions, or parameters.instructions"
                 )
-
-            runtime_payload = _coerce_mapping(task_payload.get("runtime"))
-            runtime_mode = _normalize_runtime_mode(
-                runtime_payload.get("mode")
-                or parameter_payload.get("targetRuntime")
-                or settings.spec_workflow.default_task_runtime
+            instructions = (
+                f"Execute the '{tool_name}' skill for this repository and report "
+                "the result."
             )
-            runtime_node: dict[str, Any] = {"mode": runtime_mode}
 
+        runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+        runtime_node = _coerce_mapping(node_inputs.get("runtime"))
+        runtime_mode = _normalize_runtime_mode(
+            runtime_node.get("mode")
+            or runtime_payload.get("mode")
+            or parameter_payload.get("targetRuntime")
+            or settings.spec_workflow.default_task_runtime
+        )
+        runtime_node["mode"] = runtime_mode
+
+        model = runtime_node.get("model")
+        if model is None:
             model = runtime_payload.get("model", parameter_payload.get("model"))
-            if model is not None:
-                if not isinstance(model, str) or not model:
-                    raise RuntimeError(
-                        "auto tool runtime.model must be a non-empty string"
-                    )
-                runtime_node["model"] = model
+        if model is not None:
+            if not isinstance(model, str) or not model:
+                raise RuntimeError("auto tool runtime.model must be a non-empty string")
+            runtime_node["model"] = model
 
+        effort = runtime_node.get("effort")
+        if effort is None:
             effort = runtime_payload.get("effort", parameter_payload.get("effort"))
-            if effort is not None:
-                if not isinstance(effort, str) or not effort:
-                    raise RuntimeError(
-                        "auto tool runtime.effort must be a non-empty string"
-                    )
-                runtime_node["effort"] = effort
+        if effort is not None:
+            if not isinstance(effort, str) or not effort:
+                raise RuntimeError(
+                    "auto tool runtime.effort must be a non-empty string"
+                )
+            runtime_node["effort"] = effort
 
+        if not node_inputs:
             node_inputs = {
                 "instructions": instructions,
                 "runtime": runtime_node,
@@ -442,6 +448,9 @@ def _build_runtime_planner():
                 node_inputs["startingBranch"] = starting_branch
             if new_branch:
                 node_inputs["newBranch"] = new_branch
+        else:
+            node_inputs["instructions"] = instructions
+            node_inputs["runtime"] = runtime_node
 
         if not node_inputs and isinstance(input_payload.get("inputs"), Mapping):
             node_inputs = dict(input_payload["inputs"])

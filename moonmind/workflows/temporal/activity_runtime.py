@@ -349,6 +349,19 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
         if name == "auto"
         else f"Execute '{name}' via the generic runtime CLI handler."
     )
+    start_to_close_seconds = 900
+    schedule_to_close_seconds = 1200
+    if name in {
+        "pr-resolver",
+        "batch-pr-resolver",
+        "fix-comments",
+        "fix-ci",
+        "fix-merge-conflicts",
+    }:
+        # Resolver/fix skills can run longer due bounded retry loops and CI waits.
+        start_to_close_seconds = 7200
+        schedule_to_close_seconds = 7500
+
     return {
         "name": name,
         "version": version,
@@ -376,8 +389,8 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
         "requirements": {"capabilities": ["sandbox"]},
         "policies": {
             "timeouts": {
-                "start_to_close_seconds": 900,
-                "schedule_to_close_seconds": 1200,
+                "start_to_close_seconds": start_to_close_seconds,
+                "schedule_to_close_seconds": schedule_to_close_seconds,
             },
             "retries": {"max_attempts": 1},
         },

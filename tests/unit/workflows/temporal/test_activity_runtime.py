@@ -33,6 +33,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
+    _default_registry_skill_payload,
     _default_skill_registry_payload,
     build_activity_bindings,
     build_activity_execution_context,
@@ -305,6 +306,14 @@ async def test_default_skill_registry_payload_includes_selected_task_tool():
     }
     assert ("auto", "1.0") in keyset
     assert ("pr-resolver", "1.0") in keyset
+
+
+async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
+    payload = _default_registry_skill_payload(name="pr-resolver", version="1.0")
+    policies = payload.get("policies", {})
+    timeouts = policies.get("timeouts", {})
+    assert timeouts.get("start_to_close_seconds") == 7200
+    assert timeouts.get("schedule_to_close_seconds") == 7500
 
 
 async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(

@@ -147,6 +147,10 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
         assert response.status_code == 200
         mock_fetch.assert_called_once_with(mock_client, "mm:wf-123")
         mock_sync.assert_called_once()
+        service.describe_execution.assert_awaited_once_with(
+            "mm:wf-123",
+            include_orphaned=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -197,6 +201,10 @@ async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
         assert response.status_code == 200
         assert response.headers.get("Deprecation") == "true"
         assert response.headers.get("X-MoonMind-Canonical-WorkflowId") == "mm:wf-123"
+        service.describe_execution.assert_awaited_once_with(
+            "wf-123",
+            include_orphaned=False,
+        )
 
 
 @pytest.mark.asyncio

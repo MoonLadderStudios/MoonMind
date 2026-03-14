@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
@@ -52,6 +53,10 @@ CLOSE_STATUS_COMPLETED = "completed"
 CLOSE_STATUS_CANCELED = "canceled"
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
+_GITHUB_PR_URL_PATTERN = re.compile(
+    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
+    re.IGNORECASE,
+)
 
 
 @workflow.defn(name="MoonMind.Run")
@@ -352,6 +357,9 @@ class MoonMindRunWorkflow:
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         failure_mode = plan_definition.policy.failure_mode
+        publish_mode = self._publish_mode(parameters)
+        require_pull_request_url = publish_mode == "pr" and self._integration is None
+        pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
 
         if registry_snapshot_ref:
@@ -471,6 +479,12 @@ class MoonMindRunWorkflow:
                         f"plan node execution returned status {result_status}{detail}"
                     )
                 continue
+            if require_pull_request_url and pull_request_url is None:
+                pull_request_url = self._extract_pull_request_url(execution_result)
+        if require_pull_request_url and pull_request_url is None:
+            raise ValueError(
+                "publishMode 'pr' requested but no plan step reported a GitHub pull request URL"
+            )
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -507,6 +521,38 @@ class MoonMindRunWorkflow:
             if isinstance(details, str) and details.strip():
                 return details.strip()
         return ""
+
+    def _publish_mode(self, parameters: Mapping[str, Any]) -> str:
+        value = parameters.get("publishMode")
+        if not isinstance(value, str):
+            return ""
+        normalized = value.strip().lower()
+        return normalized if normalized in {"none", "branch", "pr"} else ""
+
+    def _extract_pull_request_url(self, result: Any) -> str | None:
+        outputs = self._get_from_result(result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return None
+
+        candidate_fields = (
+            "pull_request_url",
+            "pullRequestUrl",
+            "pr_url",
+            "prUrl",
+            "url",
+            "stdout_tail",
+            "stderr_tail",
+            "summary",
+            "message",
+        )
+        for field in candidate_fields:
+            value = outputs.get(field)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            match = _GITHUB_PR_URL_PATTERN.search(value)
+            if match is not None:
+                return match.group(0)
+        return None
 
     async def _run_integration_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]

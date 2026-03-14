@@ -714,9 +714,13 @@ async def _get_owned_execution(
     service: TemporalExecutionService,
     workflow_id: str,
     user: User,
+    include_orphaned_projection: bool = False,
 ):
     try:
-        record = await service.describe_execution(workflow_id)
+        record = await service.describe_execution(
+            workflow_id,
+            include_orphaned=include_orphaned_projection,
+        )
     except TemporalExecutionNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -965,11 +969,14 @@ async def describe_execution(
 
     from api_service.core.sync import fetch_and_sync_execution
 
+    use_projection_read = False
     if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
         try:
             client = temporal_client
             await fetch_and_sync_execution(session, canonical_workflow_id, client)
             await session.commit()
+            # Return the synced projection to avoid clobbering it with stale source data.
+            use_projection_read = True
         except RPCError as exc:
             if source == "temporal":
                 raise HTTPException(
@@ -991,6 +998,7 @@ async def describe_execution(
         service=service,
         workflow_id=workflow_id,
         user=user,
+        include_orphaned_projection=use_projection_read,
     )
     if alias_used:
         _mark_execution_alias_usage(

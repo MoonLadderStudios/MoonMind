@@ -246,6 +246,37 @@ def test_runtime_planner_synthesizes_named_skill_inputs_without_instructions():
     assert node_inputs["runtime"]["mode"] == "gemini"
 
 
+def test_runtime_planner_backfills_runtime_and_instructions_for_legacy_skill_args():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("1" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T8B4"
+
+    payload = planner(
+        {
+            "task": {
+                "skill": {
+                    "id": "pr-resolver",
+                    "version": "1.0",
+                    "args": {"repo": "MoonLadderStudios/MoonMind", "pr": "697"},
+                },
+                "instructions": "Resolve PR #697.",
+                "runtime": {"mode": "gemini", "model": "gemini-3.1-pro-preview"},
+            }
+        },
+        {"targetRuntime": "gemini"},
+        snapshot,
+    )
+
+    node = payload["nodes"][0]
+    node_inputs = node["inputs"]
+    assert node["tool"]["name"] == "pr-resolver"
+    assert node_inputs["pr"] == "697"
+    assert node_inputs["instructions"] == "Resolve PR #697."
+    assert node_inputs["runtime"]["mode"] == "gemini"
+    assert node_inputs["runtime"]["model"] == "gemini-3.1-pro-preview"
+
+
 def test_runtime_planner_uses_parameter_task_fallback_when_inputs_missing():
     planner = _build_runtime_planner()
     snapshot = MagicMock()
