@@ -40,7 +40,7 @@ Most agent platforms ask you to rebuild your workflows inside their SDK. MoonMin
 ### 🔐 Reclaim Control of Your AI Stack
 The real risk isn't just model lock-in; it's workflow lock-in. MoonMind helps you keep ownership of the operational layers *around* the model.
 * **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Keep your memory, artifacts, and orchestration logic intact regardless of the underlying LLM.
-* **Multi-Agent Chaining:** Break massive goals into smaller steps. Use a fast model to plan, Claude Code to implement, and an external MCP tool to test—with seamless artifact continuity between steps.
+* **Multi-Agent Chaining:** Break massive goals into smaller steps. Use Opus to plan, GLM to implement, and Gemini to document.
 
 ### 🔄 Designed for Resilient Execution
 Agent tasks fail in messy ways: rate limits, terminal hangs, and crashed containers. MoonMind expects failure and builds around it.
