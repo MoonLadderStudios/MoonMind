@@ -2,8 +2,8 @@
 
 <p align="center">
     <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/moonladderlogoalpha.html">
-        <img src="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/moonladderlogoalpha.html" alt="MoonMind" width="500">
+        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/task_dashboard/phase2/moonmindlogoalpha.png">
+        <img src="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/task_dashboard/phase2/moonmindlogoalpha.png" alt="MoonMind" width="500">
     </picture>
 </p>
 
