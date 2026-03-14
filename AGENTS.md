@@ -5,6 +5,17 @@
 - **WSL Unit Test Mode**: In WSL, `./tools/test_unit.sh` automatically delegates to `./tools/test_unit_docker.sh` (unless `MOONMIND_FORCE_LOCAL_TESTS=1` is set) so tests run in the Docker test environment by default. Use this path when working in WSL.
 - **Integration Tests**: Orchestrator integration tests run via GitHub Actions on main branch pushes or manually. Locally, use `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`.
 
+## MoonMind Workflow IDs
+
+IDs in the format `mm:<uuid>` (e.g. `mm:9da838b9-d07f-4a3c-b4a1-5e1b84481e08`) are **MoonMind workflow IDs**. When you encounter one:
+
+- Strip the `mm:` prefix to get the raw UUID.
+- Check the MoonMind records for this repo's local deployment. The primary places to look are:
+  - **Database**: query the `spec_workflow_runs` table (and `spec_workflow_task_states`) using the UUID as the `run_id`.
+  - **Artifacts**: check `var/artifacts/spec_workflows/<uuid>/` in the repository for durable workflow artifacts.
+  - **Agent job workspace**: check `var/agent_jobs/<uuid>/` (host path) or `/work/agent_jobs/<uuid>/` (inside a Docker worker container) for per-run workspace files.
+- Do not treat the ID as a GitHub issue/PR number, a Celery task ID, or any other identifier type.
+
 ## Agent Job Storage Locations
 - Agent jobs are executed in a per-run workspace directory named with the job UUID.
 - In a Docker worker container, look under `/work/agent_jobs/<job_id>/`.

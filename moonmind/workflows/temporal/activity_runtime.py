@@ -349,8 +349,11 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
         if name == "auto"
         else f"Execute '{name}' via the generic runtime CLI handler."
     )
-    start_to_close_seconds = 900
-    schedule_to_close_seconds = 1200
+    # 3600s gives the sandbox worker enough headroom to exhaust the full
+    # Gemini capacity-retry backoff cycle (up to 8 attempts with max 600s
+    # delay each) before Temporal cancels the activity.
+    start_to_close_seconds = 3600
+    schedule_to_close_seconds = 3900
     if name in {
         "pr-resolver",
         "batch-pr-resolver",
