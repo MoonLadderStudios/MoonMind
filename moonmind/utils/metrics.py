@@ -18,7 +18,6 @@ class _MetricsEmitter:
     def __init__(self) -> None:
         prefix = (
             os.getenv("WORKFLOW_METRICS_PREFIX")
-            or os.getenv("WORKFLOW_METRICS_PREFIX")
             or "moonmind.workflow"
         )
         self._prefix = prefix.rstrip(".")

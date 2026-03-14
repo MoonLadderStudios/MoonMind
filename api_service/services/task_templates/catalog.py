@@ -60,13 +60,11 @@ class _StatsdEmitter:
         host = (
             os.getenv("TASK_TEMPLATE_METRICS_HOST")
             or os.getenv("WORKFLOW_METRICS_HOST")
-            or os.getenv("WORKFLOW_METRICS_HOST")
             or os.getenv("STATSD_HOST")
             or ""
         ).strip()
         port_raw = (
             os.getenv("TASK_TEMPLATE_METRICS_PORT")
-            or os.getenv("WORKFLOW_METRICS_PORT")
             or os.getenv("WORKFLOW_METRICS_PORT")
             or os.getenv("STATSD_PORT")
             or "8125"

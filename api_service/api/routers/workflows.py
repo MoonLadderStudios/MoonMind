@@ -1,4 +1,4 @@
-"""API endpoints for interacting with Spec Kit Celery workflows."""
+"""API endpoints for interacting with Workflow Celery workflows."""
 
 from __future__ import annotations
 
@@ -42,7 +42,6 @@ from moonmind.workflows.automation.repositories import WorkflowRepository
 from moonmind.workflows.automation import models
 from moonmind.workflows.automation.preflight import run_codex_preflight_check
 from moonmind.workflows.automation.repositories import (
-    CodexShardHealth,
     PaginatedWorkflowRuns,
 )
 from moonmind.workflows.automation.router import get_codex_shard_router
@@ -612,7 +611,7 @@ async def retry_workflow_run(
 
 
 router.include_router(canonical_router)
-router.include_router(legacy_router)
+
 
 
 __all__ = ["router"]

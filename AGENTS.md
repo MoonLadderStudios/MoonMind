@@ -56,7 +56,7 @@ When creating a new spec folder/feature ID:
 - Prefer configuring `WORKFLOW_SKILLS_WORKSPACE_ROOT` and `WORKFLOW_SKILLS_CACHE_ROOT` for writable runtime paths in local and CI environments.
 
 ## Workflow Verification Checklist
-- Bring up RabbitMQ and the dedicated Celery worker alongside the API service when validating the Spec Kit workflow: `docker compose up rabbitmq celery-worker api`.
+- Bring up RabbitMQ and the dedicated Celery worker alongside the API service when validating the Agent Kit workflow: `docker compose up rabbitmq celery-worker api`.
 - Confirm the worker logs include `Spec workflow task ...` entries for discover, submit, and publish steps; these messages include per-task summaries and should align with repository state transitions.
 - Optional metrics: set `STATSD_HOST`/`STATSD_PORT` or `WORKFLOW_METRICS_HOST`/`WORKFLOW_METRICS_PORT` to capture task counters and durations emitted via StatsD before running end-to-end tests.
 - For orchestrator validation runs, also start the `orchestrator` service, watch for `ActionPlan` step logs (analyze → patch → build → restart → verify), and confirm artifacts land under `var/artifacts/workflows/<run_id>/`.

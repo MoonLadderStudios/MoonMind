@@ -333,8 +333,8 @@ class WorkflowSettings(BaseSettings):
 
     repo_root: str = Field(
         ".",
-        env=("WORKFLOW_REPO_ROOT", "WORKFLOW_REPO_ROOT"),
-        validation_alias=AliasChoices("WORKFLOW_REPO_ROOT", "WORKFLOW_REPO_ROOT"),
+        env=("WORKFLOW_REPO_ROOT",),
+        validation_alias=AliasChoices("WORKFLOW_REPO_ROOT"),
     )
     tasks_root: str = Field(
         "specs",

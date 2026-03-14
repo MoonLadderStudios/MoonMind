@@ -84,7 +84,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_DEFAULT_SKILL",
-            "WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
         default="agentkit",
@@ -92,7 +91,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     discover_skill = _first_non_empty(
         source,
         (
-            "WORKFLOW_DISCOVER_SKILL",
             "WORKFLOW_DISCOVER_SKILL",
             "MOONMIND_DISCOVER_SKILL",
         ),
@@ -102,7 +100,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_SUBMIT_SKILL",
-            "WORKFLOW_SUBMIT_SKILL",
             "MOONMIND_SUBMIT_SKILL",
         ),
         default=default_skill,
@@ -110,7 +107,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     publish_skill = _first_non_empty(
         source,
         (
-            "WORKFLOW_PUBLISH_SKILL",
             "WORKFLOW_PUBLISH_SKILL",
             "MOONMIND_PUBLISH_SKILL",
         ),
@@ -129,7 +125,7 @@ def _configured_skills_require_agentkit(source: Mapping[str, str]) -> bool:
     """Return whether current worker config requires Workflow executable checks."""
 
     if not _env_flag(
-        _first_non_empty(source, ("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS")),
+        _first_non_empty(source, ("WORKFLOW_USE_SKILLS",)),
         default=True,
     ):
         return False
