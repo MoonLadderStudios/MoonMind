@@ -44,9 +44,6 @@ _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_TASK_ID_SEGMENT = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-_SAFE_TEMPORAL_WORKFLOW_ID_SEGMENT = re.compile(
-    r"^mm:[A-Za-z0-9][A-Za-z0-9._:-]{0,123}$"
-)
 _STATIC_PATHS = {
     "list",
     "queue",

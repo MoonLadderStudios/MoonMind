@@ -41,9 +41,6 @@ from moonmind.workflows import (
 from moonmind.workflows.automation.repositories import WorkflowRepository
 from moonmind.workflows.automation import models
 from moonmind.workflows.automation.preflight import run_codex_preflight_check
-from moonmind.workflows.automation.repositories import (
-    PaginatedWorkflowRuns,
-)
 from moonmind.workflows.automation.router import get_codex_shard_router
 from moonmind.workflows.automation.serializers import (
     serialize_artifact_collection,

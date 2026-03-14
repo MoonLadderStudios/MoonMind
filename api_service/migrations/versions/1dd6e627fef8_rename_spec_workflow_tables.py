@@ -5,12 +5,12 @@ Revises: 202603060007
 Create Date: 2026-03-14 18:03:50.982203
 
 """
-from typing import Sequence, Union
+from typing import Union
 
 from alembic import op
 
 # revision identifiers, used by Alembic.
-down_revision: Union[str, None] = '202603060007'
+down_revision: Union[str, None] = '202603060007'  # noqa
 
 
 def upgrade() -> None:
