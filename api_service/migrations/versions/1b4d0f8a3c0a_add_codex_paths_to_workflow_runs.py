@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "1b4d0f8a3c0a"
-down_revision: Union[str, None] = "add_workflow_tables"
+down_revision: Union[str, None] = "add_workflow_tables"  # noqa
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
