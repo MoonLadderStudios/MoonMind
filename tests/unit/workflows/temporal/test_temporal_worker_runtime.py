@@ -450,7 +450,11 @@ async def test_auto_skill_handler_uses_request_mapping_and_gemini_prompt_command
     handler = register_kwargs["handler"]
     with patch.dict(
         "moonmind.workflows.temporal.worker_runtime.os.environ",
-        {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "google-test-key"},
+        {
+            "MOONMIND_GEMINI_CLI_AUTH_MODE": "api_key",
+            "GEMINI_API_KEY": "",
+            "GOOGLE_API_KEY": "google-test-key",
+        },
         clear=False,
     ):
         result = await handler(
