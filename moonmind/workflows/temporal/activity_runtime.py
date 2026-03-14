@@ -166,6 +166,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.apply_patch": ("sandbox", "sandbox_apply_patch"),
     "sandbox.run_command": ("sandbox", "sandbox_run_command"),
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
+    "auth_profile.list": ("artifacts", "auth_profile_list"),
     "integration.jules.start": ("integrations", "integration_jules_start"),
     "integration.jules.status": ("integrations", "integration_jules_status"),
     "integration.jules.fetch_result": (

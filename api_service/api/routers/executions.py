@@ -733,12 +733,16 @@ async def _get_owned_execution(
     if _is_execution_admin(user):
         return record
 
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
     record_owner_type = _enum_value(getattr(record, "owner_type", None))
     if record_owner_type is None:
         record_owner_type = _normalize_owner_type(
-            record, dict(getattr(record, "search_attributes", None) or {})
+            record, search_attributes
         )
-    if record_owner_type != "user" or record.owner_id != _owner_id(user):
+    record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
+    if not record_owner_id:
+        record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
+    if record_owner_type != "user" or record_owner_id != _owner_id(user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
