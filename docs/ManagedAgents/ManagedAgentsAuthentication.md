@@ -48,6 +48,19 @@ Each runtime has a dedicated Docker named volume that stores persistent auth sta
 | `codex_auth_volume` | `/home/app/.codex` | Codex CLI config and session state |
 | `claude_auth_volume` | `/home/app/.claude` | Claude CLI config and session state |
 
+### Host Shell Guardrail
+
+`/var/lib/gemini-auth` is a container path, not a host-user path. Keep host and container auth paths separate:
+
+- Set `GEMINI_VOLUME_PATH=/var/lib/gemini-auth` in MoonMind `.env` for Docker mount wiring.
+- Do not export `GEMINI_HOME` or `GEMINI_CLI_HOME` in your host shell unless they point to a writable host directory (typically `~/.gemini`).
+
+If your local `gemini` CLI fails with `EACCES` on `/var/lib/gemini-auth`, clear leaked container-path variables in the host shell:
+
+```bash
+unset GEMINI_HOME GEMINI_CLI_HOME
+```
+
 Volumes are initialized by `*-auth-init` services in `docker-compose.yaml` that create the directory structure and set correct ownership (UID 1000).
 
 ### Provisioning Credentials

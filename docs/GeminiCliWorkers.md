@@ -84,6 +84,7 @@ Within a **single Gemini worker group**, we share a **named Docker volume**:
 
 - The Celery worker container mounts the volume at `GEMINI_HOME`.
 - This ensures that if the CLI requires a one-time "login" or setup command, it only needs to run once for the entire group.
+- Use `GEMINI_VOLUME_PATH` in MoonMind `.env` for this container mount path. Avoid exporting `GEMINI_HOME`/`GEMINI_CLI_HOME` in your host shell with `/var/lib/gemini-auth`, because local host `gemini` runs need a writable user path (usually `~/.gemini`).
 
 ### 4.3 Authentication Mode Design
 

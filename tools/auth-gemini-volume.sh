@@ -12,13 +12,16 @@
 # Environment overrides:
 #   GEMINI_AUTH_HOST_DIR  Host credential directory (default: ~/.gemini)
 #   GEMINI_VOLUME_NAME    Docker volume name (default: moonmind_gemini_auth_volume)
-#   GEMINI_HOME           Container-side auth root (default: /var/lib/gemini-auth)
+#   GEMINI_VOLUME_PATH    Container-side auth root (default: /var/lib/gemini-auth)
+#   GEMINI_HOME           Legacy alias for GEMINI_VOLUME_PATH
+#   GEMINI_CLI_HOME       Container-side Gemini CLI home (defaults to GEMINI_VOLUME_PATH)
 set -euo pipefail
 
 VOLUME_NAME="${GEMINI_VOLUME_NAME:-moonmind_gemini_auth_volume}"
 HOST_GEMINI_DIR="${GEMINI_AUTH_HOST_DIR:-${HOME}/.gemini}"
-GEMINI_HOME="${GEMINI_HOME:-/var/lib/gemini-auth}"
-GEMINI_CLI_HOME="${GEMINI_CLI_HOME:-${GEMINI_HOME}}"
+GEMINI_VOLUME_PATH="${GEMINI_VOLUME_PATH:-${GEMINI_HOME:-/var/lib/gemini-auth}}"
+GEMINI_HOME="${GEMINI_VOLUME_PATH}"
+GEMINI_CLI_HOME="${GEMINI_CLI_HOME:-${GEMINI_VOLUME_PATH}}"
 
 AUTH_FILES=(oauth_creds.json settings.json google_accounts.json installation_id)
 
@@ -122,7 +125,7 @@ cmd_login() {
     -e GEMINI_CLI_HOME="${GEMINI_CLI_HOME}" \
     ${COMPOSE_NETWORK_ARGS[@]+"${COMPOSE_NETWORK_ARGS[@]}"} \
     "$AUTH_SERVICE" \
-    -lc 'unset GOOGLE_API_KEY GEMINI_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${GEMINI_CLI_HOME:-/var/lib/gemini-auth}/.gemini"; exec gemini'
+    -lc 'unset GOOGLE_API_KEY GEMINI_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${GEMINI_CLI_HOME:-${GEMINI_HOME:-/var/lib/gemini-auth}}/.gemini"; exec gemini'
 }
 
 # ---------------------------------------------------------------------------
