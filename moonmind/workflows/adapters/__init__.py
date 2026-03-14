@@ -1,5 +1,6 @@
 """Adapters bridging MoonMind workflows with external services."""
 
+from .agent_adapter import AgentAdapter
 from .codex_client import (
     CodexClient,
     CodexDiffNotReadyError,
@@ -8,8 +9,10 @@ from .codex_client import (
     CodexSubmissionResult,
 )
 from .github_client import GitHubClient, GitHubPublishResult
+from .jules_agent_adapter import JulesAgentAdapter
 
 __all__ = [
+    "AgentAdapter",
     "CodexClient",
     "CodexDiffNotReadyError",
     "CodexDiffRetrievalError",
@@ -17,4 +20,5 @@ __all__ = [
     "CodexDiffResult",
     "GitHubClient",
     "GitHubPublishResult",
+    "JulesAgentAdapter",
 ]
