@@ -1,60 +1,607 @@
 # Task Presets System
 
-Status: Active  
-Owners: MoonMind Engineering (Task Platform + UI)  
-Last Updated: 2026-03-13  
+Status: Active
+Owners: MoonMind Engineering (Task Platform + UI)
+Last Updated: 2026-03-13
 
 ## 1. Purpose
 
-Define the MoonMind "Task Presets" system: a server-hosted catalog of step templates with compile-time expansion into concrete `task.steps[]`. The design keeps the execution contract unchanged while giving UI, CLI, and MCP users reusable orchestrations, convenient editing affordances, and the ability to save real task steps back into the catalog.
+Define the MoonMind **Task Presets** system: a server-hosted catalog of reusable orchestration presets that users browse, parameterize, and apply to tasks. Presets compile into `PlanDefinition` artifacts (see `docs/Tasks/SkillAndPlanContracts.md`) for execution by the Temporal Plan Interpreter.
+
+The system serves three roles:
+
+1. **Discovery** — a searchable catalog of ready-made orchestrations with scopes, favorites, and recency tracking.
+2. **Authoring** — parameterized blueprints (Jinja2 inputs) that produce deterministic, validated plans without manual JSON editing.
+3. **Governance** — versioned, RBAC-scoped entries with audit trails, secret scrubbing, and release lifecycle management.
+
+### 1.1 Relationship to Plans
+
+A **Preset** is what a user *chooses*. A **Plan** is what *executes*.
+
+Presets are the authoring and discovery surface; Plans are the runtime execution contract. The expansion service compiles a preset into a `PlanDefinition` DAG, which is then stored as an immutable artifact and submitted to the `MoonMind.Run` Temporal workflow.
+
+```
+Preset (catalog entry)
+  ├── inputs_schema (parameterization)
+  ├── step blueprints (Jinja2 templates)
+  └── metadata (scope, tags, capabilities)
+         │
+         │  expand(inputs) — server-side
+         v
+PlanDefinition (immutable artifact)
+  ├── nodes[] (concrete Step invocations)
+  ├── edges[] (dependency DAG)
+  ├── policy (failure_mode, max_concurrency)
+  └── metadata.registry_snapshot (pinned skill versions)
+         │
+         │  submit to Temporal
+         v
+Plan Interpreter (MoonMind.Run workflow)
+  └── schedules Activities, tracks progress, enforces policy
+```
+
+### 1.2 Terminology
+
+| Term | Definition |
+|------|-----------|
+| **Preset** | A versioned, parameterized blueprint in the catalog. Users browse and select presets. |
+| **Plan** | A validated DAG of tool/skill invocations. The runtime execution artifact. See `SkillAndPlanContracts.md` §6. |
+| **Step** | A single node in a Plan that invokes one tool (skill subtype). See `Step` dataclass. |
+| **Tool / Skill** | An executable capability with input/output schemas, policies, and activity bindings. See `ToolDefinition`. |
+| **Expansion** | The server-side compilation of a preset + user inputs into a `PlanDefinition`. |
+
+---
 
 ## 2. Goals and Non-Goals
 
 ### Goals
 
-- Provide a single authoritative task step template catalog with versioning, ownership, and scopes (global/team/personal).
-- Offer deterministic server-side expansion, validation, and audit tracking before tasks are executed.
-- Deliver UI conveniences (preview, append/replace, collapse-as-group, favorites) without changing the task payload schema.
+- Provide a single authoritative preset catalog with versioning, ownership, and scopes (global / team / personal).
+- Offer deterministic server-side expansion that produces validated `PlanDefinition` artifacts with pinned registry snapshots.
+- Deliver UI conveniences (preview, append/replace, collapse-as-group, favorites) without changing the Plan execution contract.
 - Support CLI/MCP flows via REST endpoints identical to the UI.
+- Maintain full audit trails linking every task execution back to the preset, version, and inputs that produced it.
 
 ### Non-Goals
 
-- Changing Temporal Workflow execution behavior or allowing parameter substitutions during runtime (remains an anti-pattern).
-- Replacing SpecKit skills or orchestrator workflows (templates are complementary UI conveniences).
+- Allowing parameter substitutions during Temporal runtime (remains an anti-pattern; all parameterization happens at expansion time).
+- Replacing the Plan Interpreter or modifying Temporal Workflow execution behavior.
+- Supporting conditional logic within presets (conditions belong in Plans via future `edges[].condition` support; see `SkillAndPlanContracts.md` §Q2).
+
+---
 
 ## 3. System Overview
 
 ```
              +---------------------+
-             | Template Catalog DB |
+             |  Preset Catalog DB  |
              +----------+----------+
                         ^
                         | CRUD + version seed
 +-------------+   REST  |                      +----------------+
-| Task UI /   +-------->+  Task Template API  <-+ MCP / CLI / CI |
+| Task UI /   +-------->+  Preset Catalog API  <-+ MCP / CLI / CI |
 | Automations |         |                      +----------------+
 +------+------+         v
        |          +-----+------------------+
-       | expand   | Step Expansion Service |
-       +--------->+ (validation + hydrate) |
+       | expand   | Preset Expansion Svc   |
+       +--------->+ (validate + hydrate    |
+                  |  + compile to Plan)    |
+                  +-----+------------------+
+                        |
+                        | PlanDefinition artifact
+                        v
+                  +-----+------------------+
+                  | Plan Submission        |
+                  | (store artifact +      |
+                  |  start workflow)       |
                   +-----+------------------+
                         v
                   +-----+------------------+
-                  | Task Payload Compiler |
-                  | merges steps + audit  |
-                  +-----+------------------+
-                        v
-                  +-----+------------------+
-                  | Temporal Run Execution |
+                  | Plan Interpreter       |
+                  | (MoonMind.Run workflow) |
                   +------------------------+
 ```
 
 Key properties:
 
-- Templates are stored centrally and exposed via FastAPI routers under `/api/task-step-templates`.
-- The expansion service applies inputs, generates stable step IDs, validates schema compliance, and emits derived metadata.
-- The compiler merges expanded steps into the task payload, updates `task.appliedStepTemplates`, and submits it to the backend.
+- Presets are stored centrally and exposed via FastAPI routers under `/api/task-step-templates` (to be renamed `/api/presets` in a future migration).
+- The expansion service applies inputs via Jinja2 rendering, validates against skill schemas, generates deterministic step IDs, resolves the current registry snapshot, and compiles the result into a `PlanDefinition`.
+- The `PlanDefinition` is written as an immutable artifact. The Plan Interpreter in `MoonMind.Run` reads the artifact reference and executes the DAG.
+- Audit metadata (`appliedPreset`) is attached to the task record for governance and traceability.
 
-## 4. Template Model
+---
 
-Templates define `.yaml` configuration containing variables (`inputs_schema`) and a sequence of tasks/prompts (`steps`). They do not bypass authorization policies. When executed, they expand into an explicit array of instructions sent to the `MoonMind.Run` Temporal workflow.
+## 4. Preset Model
+
+### 4.1 Catalog Entry (database)
+
+A preset is a `TaskStepTemplate` row with versioned releases:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `slug` | `String(128)` | Unique identifier within scope. URL-safe, lowercase. |
+| `scope_type` | `Enum(GLOBAL, TEAM, PERSONAL)` | Visibility scope. |
+| `scope_ref` | `String(64)` | Owner reference (user_id or team_id). Null for GLOBAL. |
+| `title` | `String(255)` | Human-readable display name. |
+| `description` | `Text` | Long-form description shown in catalog. |
+| `tags` | `JSON[List[str]]` | Searchable tags for filtering. |
+| `required_capabilities` | `JSON[List[str]]` | Worker capabilities needed to execute. |
+| `latest_version_id` | `UUID FK` | Points to the current active release. |
+| `is_active` | `Boolean` | Soft-delete flag. |
+| `created_by` | `UUID` | Creator user ID. |
+
+Unique constraint: `(slug, scope_type, scope_ref)`.
+
+### 4.2 Version (immutable release)
+
+Each version is a `TaskStepTemplateVersion` row:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | `String(32)` | Semantic version label (e.g. `1.0.0`). |
+| `inputs_schema` | `JSON[List[Dict]]` | Input definitions for parameterization. |
+| `steps` | `JSON[List[Dict]]` | Step blueprints (Jinja2 templates). |
+| `annotations` | `JSON[Dict]` | Metadata (e.g. `sourceSkill`, `profile`). |
+| `required_capabilities` | `JSON[List[str]]` | Version-specific capability overrides. |
+| `max_step_count` | `Integer` | Safety limit on expanded steps (default 25). |
+| `release_status` | `Enum(DRAFT, ACTIVE, INACTIVE)` | Lifecycle state. |
+| `seed_source` | `String(255)` | Origin YAML file path for seeded presets. |
+
+Unique constraint: `(template_id, version)`.
+
+### 4.3 Input definitions
+
+Each entry in `inputs_schema` declares a parameterizable field:
+
+```yaml
+- name: feature_request
+  label: Feature Request
+  type: markdown        # text | textarea | markdown | enum | boolean | user | team | repo_path
+  required: true
+  default: null
+  options: []           # populated for enum type
+```
+
+### 4.4 Step blueprints
+
+Each entry in `steps` is a Jinja2 template that expands into a Plan node:
+
+```yaml
+- title: Invoke speckit-specify
+  instructions: |-
+    Run speckit-specify with the canonical feature request:
+    {{ inputs.feature_request }}
+
+    Selected mode: {{ inputs.orchestration_mode }}.
+  skill:
+    id: speckit-specify
+    args: {}
+    requiredCapabilities: [codex, git]
+  annotations:
+    phase: specification
+```
+
+**Allowed keys**: `instructions`, `title`, `slug`, `skill`, `annotations`.
+
+**Forbidden keys** (prevent runtime override via presets): `runtime`, `targetRuntime`, `target_runtime`, `model`, `effort`, `repository`, `repo`, `git`, `publish`, `container`.
+
+### 4.5 YAML seed format
+
+Global presets can be seeded from YAML files in `api_service/data/task_step_templates/`:
+
+```yaml
+slug: speckit-orchestrate
+title: Spec Kit Orchestrate
+description: Run the full Spec Kit pipeline...
+scope: global
+version: 1.0.0
+tags: [speckit, orchestration]
+requiredCapabilities: [git]
+annotations:
+  sourceSkill: speckit-orchestrate
+inputs:
+  - name: feature_request
+    label: Feature Request
+    type: markdown
+    required: true
+steps:
+  - title: Step 1
+    instructions: "{{ inputs.feature_request }}"
+    skill:
+      id: auto
+      args: {}
+```
+
+---
+
+## 5. Expansion Pipeline (Preset → PlanDefinition)
+
+### 5.1 Overview
+
+Expansion is a server-side, deterministic compilation that transforms a preset + user inputs into a `PlanDefinition` ready for Temporal submission. The process is stateless and idempotent — the same preset version + inputs always produce the same Plan.
+
+### 5.2 Expansion steps
+
+```
+1. Resolve preset version
+   └── Look up (slug, scope, version) in catalog DB
+   └── Verify release_status is ACTIVE (or DRAFT for preview)
+
+2. Validate and resolve inputs
+   └── Check required fields present
+   └── Validate types and enum constraints
+   └── Apply defaults for optional inputs
+
+3. Build Jinja2 variable context
+   └── { inputs: {...}, context: {...}, now: ISO-timestamp, iso_today: YYYY-MM-DD }
+
+4. Render step blueprints
+   └── Apply SandboxedEnvironment to each step's instructions/title
+   └── Reject any unresolved {{ ... }} placeholders
+   └── Reject any forbidden keys in rendered output
+
+5. Generate deterministic step IDs
+   └── Format: tpl:{slug}:{version}:{index:02d}:{input_hash}
+   └── input_hash = sha256(canonical JSON of inputs)[:8]
+
+6. Resolve registry snapshot                              ← NEW
+   └── Load current skill registry
+   └── Compute snapshot digest
+   └── Store snapshot as artifact, capture ArtifactRef
+
+7. Map steps to Plan nodes                                ← NEW
+   └── For each rendered step:
+   │   ├── Resolve skill.id → ToolDefinition(name, version) from registry
+   │   ├── Validate step inputs against ToolDefinition.input_schema
+   │   └── Create Step(id, skill_name, skill_version, inputs)
+   └── Infer edges from sequential ordering (linear chain)
+       └── Future: support explicit dependency annotations in blueprints
+
+8. Assemble PlanDefinition                                ← NEW
+   └── plan_version: "1.0"
+   └── metadata: { title, created_at, registry_snapshot }
+   └── policy: { failure_mode: from preset annotations or default FAIL_FAST,
+                  max_concurrency: from preset annotations or default 1 }
+   └── nodes: [Step, ...]
+   └── edges: [PlanEdge, ...] (linear chain by default)
+
+9. Store Plan artifact                                    ← NEW
+   └── Write PlanDefinition JSON as immutable artifact
+   └── Return ArtifactRef for workflow submission
+
+10. Record audit metadata
+    └── Write appliedPreset { slug, version, inputs, planArtifactRef, appliedAt }
+    └── Update recents table (top 5 per user)
+```
+
+### 5.3 Dependency inference
+
+In v1, preset steps compile to a **linear chain** — each step depends on the previous:
+
+```
+n1 → n2 → n3 → n4 → ...
+```
+
+This matches the existing sequential step model. Future versions will support:
+
+- **Explicit edges** via `dependsOn` annotations in step blueprints.
+- **Parallel groups** via `group` annotations that share a common predecessor and successor.
+- **Fan-out / fan-in** patterns for steps that can run concurrently.
+
+### 5.4 Registry snapshot pinning
+
+Every expanded Plan pins a `registry_snapshot`:
+
+```json
+{
+  "digest": "reg:sha256:abc123...",
+  "artifact_ref": "art:sha256:def456..."
+}
+```
+
+This ensures the Plan can be re-executed against the exact same skill definitions, regardless of future registry changes. The snapshot is computed at expansion time from the current deployed registry.
+
+### 5.5 Policy defaults
+
+Presets can declare execution policy via `annotations`:
+
+```yaml
+annotations:
+  planPolicy:
+    failure_mode: CONTINUE    # default: FAIL_FAST
+    max_concurrency: 4        # default: 1
+```
+
+If omitted, the expansion service applies defaults (`FAIL_FAST`, concurrency 1).
+
+### 5.6 Skill resolution
+
+The `skill.id` field in step blueprints maps to registered `ToolDefinition` entries:
+
+| Blueprint `skill.id` | Resolution |
+|----------------------|------------|
+| `auto` | Inferred from step context (e.g. instructions analysis). Falls back to a default general-purpose skill. |
+| `speckit-specify` | Exact match to `ToolDefinition.name` in registry. Uses latest version in snapshot. |
+| `repo.apply_patch@2.1.0` | Pinned to specific version. |
+
+Resolution failures (skill not found, version mismatch) produce expansion errors, not runtime failures.
+
+---
+
+## 6. API Contract
+
+### 6.1 Endpoints
+
+Base path: `/api/task-step-templates`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET /` | List presets | Filterable by scope, tags, favorites, recency. |
+| `POST /` | Create preset | New catalog entry with initial version. |
+| `POST /save-from-task` | Save from steps | Convert executed steps into a personal/team preset. |
+| `POST /{slug}:expand` | Expand preset | Compile to `PlanDefinition` with given inputs. Returns Plan artifact ref. |
+| `GET /{slug}` | Get latest version | Fetch preset details with latest active release. |
+| `GET /{slug}/versions/{version}` | Get specific version | Fetch a pinned version. |
+| `PUT /{slug}/versions/{version}` | Review version | Approve/reject for release (admin only for GLOBAL). |
+| `POST /{slug}:favorite` | Add favorite | Mark for quick access. |
+| `DELETE /{slug}:favorite` | Remove favorite | Unmark. |
+| `DELETE /{slug}` | Soft delete | Deactivate preset (preserves history). |
+
+### 6.2 Expand request
+
+```json
+POST /api/task-step-templates/{slug}:expand
+
+{
+  "version": "1.0.0",
+  "inputs": {
+    "feature_request": "Add caching to the API layer",
+    "orchestration_mode": "runtime"
+  },
+  "context": {},
+  "options": {
+    "enforceStepLimit": true,
+    "preview": false
+  }
+}
+```
+
+### 6.3 Expand response (updated for Plan output)
+
+```json
+{
+  "plan": {
+    "plan_version": "1.0",
+    "metadata": {
+      "title": "speckit-orchestrate v1.0.0",
+      "created_at": "2026-03-13T12:00:00Z",
+      "registry_snapshot": {
+        "digest": "reg:sha256:abc123...",
+        "artifact_ref": "art:sha256:def456..."
+      }
+    },
+    "policy": {
+      "failure_mode": "FAIL_FAST",
+      "max_concurrency": 1
+    },
+    "nodes": [
+      {
+        "id": "tpl:speckit-orchestrate:1.0.0:01:a1b2c3d4",
+        "tool": { "type": "skill", "name": "speckit-specify", "version": "1.2.0" },
+        "inputs": { "feature_request": "Add caching to the API layer" }
+      }
+    ],
+    "edges": []
+  },
+  "planArtifactRef": "art:sha256:789abc...",
+  "appliedPreset": {
+    "slug": "speckit-orchestrate",
+    "version": "1.0.0",
+    "inputs": { "feature_request": "Add caching...", "orchestration_mode": "runtime" },
+    "nodeIds": ["tpl:speckit-orchestrate:1.0.0:01:a1b2c3d4"],
+    "appliedAt": "2026-03-13T12:00:00Z"
+  },
+  "capabilities": ["git", "codex"],
+  "warnings": []
+}
+```
+
+When `options.preview` is true, the Plan is returned but not stored as an artifact — the caller can inspect it before committing.
+
+### 6.4 Save-from-task request
+
+```json
+POST /api/task-step-templates/save-from-task
+
+{
+  "scope": "personal",
+  "scopeRef": "user-uuid",
+  "title": "My custom pipeline",
+  "description": "Steps I use for feature work",
+  "steps": [ ... ],
+  "suggestedInputs": [ ... ],
+  "tags": ["custom", "feature-work"]
+}
+```
+
+The save service sanitizes steps (strips forbidden keys), scans for secrets (GitHub tokens, AWS keys, PEM blocks, generic patterns), and creates a DRAFT version.
+
+---
+
+## 7. RBAC and Scoping
+
+### 7.1 Scope rules
+
+| Scope | Visibility | Create | Activate | Delete |
+|-------|-----------|--------|----------|--------|
+| `PERSONAL` | Owner only | Any user | Auto (DRAFT default) | Owner |
+| `TEAM` | Team members | Team members | Team admin | Team admin |
+| `GLOBAL` | All users | Admin | Admin (requires review) | Admin |
+
+### 7.2 Access enforcement
+
+- The API resolves the caller's scope permissions before any read or write operation.
+- Expansion of INACTIVE presets emits a warning but is allowed with explicit confirmation (audit logged).
+- Personal presets are invisible to other users in listings and direct fetch.
+
+---
+
+## 8. UX Affordances
+
+### 8.1 Catalog browsing
+
+- Filter by scope, tags, required capabilities.
+- Sort by recency, popularity, or alphabetical.
+- Favorites pinned to top of listings.
+
+### 8.2 Preview and apply
+
+- **Preview**: expand with `options.preview: true` to see the resulting Plan nodes without submitting.
+- **Append**: merge expanded nodes into existing draft plan (extends the DAG).
+- **Replace**: discard existing draft nodes and replace with expanded preset.
+- **Collapse-as-group**: UI renders preset-derived nodes as a collapsible group with the preset title.
+
+### 8.3 Save-as-preset
+
+- Select steps from an executed task.
+- Scrub detected secrets (highlighted in UI).
+- Parameterize repeated values as input placeholders.
+- Choose scope (personal or team; global requires admin promotion).
+
+---
+
+## 9. Observability and Governance
+
+### 9.1 Audit trail
+
+Every preset expansion records:
+
+- `appliedPreset.slug` — which preset was used.
+- `appliedPreset.version` — which version was expanded.
+- `appliedPreset.inputs` — what inputs the user provided.
+- `appliedPreset.planArtifactRef` — reference to the produced Plan artifact.
+- `appliedPreset.appliedAt` — when expansion occurred.
+
+This metadata is stored on the task record and is queryable for compliance review.
+
+### 9.2 Telemetry
+
+StatsD counters emitted under `moonmind.task_templates.*`:
+
+- `expand.count` — total expansions (tagged by slug, scope).
+- `expand.error` — expansion failures (tagged by error type).
+- `save.count` — presets saved from task steps.
+- `favorite.count` — favorite toggles.
+
+### 9.3 Lifecycle management
+
+- Versions are immutable once created. Edits produce new versions.
+- `INACTIVE` versions remain in the catalog for audit but emit warnings on expansion.
+- Soft-deleted presets (`is_active: false`) are excluded from listings but preserved in DB.
+
+---
+
+## 10. Migration Path
+
+### 10.1 Current state → Plan compilation
+
+The existing implementation expands presets into raw `task.steps[]` arrays. The migration to Plan-based output proceeds in phases:
+
+**Phase 1: Dual output (backward compatible)**
+
+- Expansion endpoint returns both `steps[]` (legacy) and `plan` (new).
+- Callers that understand Plans use the `plan` field; legacy callers use `steps[]`.
+- Task payload compiler continues to work with `appliedStepTemplates` for legacy paths.
+
+**Phase 2: Plan-first**
+
+- Expansion endpoint returns `plan` + `planArtifactRef` as primary output.
+- `steps[]` field deprecated but still populated for transitional consumers.
+- New UI code submits `planArtifactRef` directly to `MoonMind.Run`.
+
+**Phase 3: Plan-only**
+
+- `steps[]` field removed from expand response.
+- All preset-driven tasks flow through Plan Interpreter.
+- `appliedStepTemplates` in task payload replaced by `appliedPreset` with `planArtifactRef`.
+- API path migrated from `/api/task-step-templates` to `/api/presets`.
+
+### 10.2 Database model alignment
+
+The DB models (`TaskStepTemplate`, `TaskStepTemplateVersion`, etc.) will be renamed to `Preset` / `PresetVersion` in Phase 3, alongside the API path migration. During Phases 1-2, the existing table names are retained to avoid migration risk.
+
+### 10.3 Code changes required
+
+| Component | Current | Target |
+|-----------|---------|--------|
+| `catalog.py` expand_template() | Returns `{steps[], appliedTemplate}` | Returns `{plan, planArtifactRef, appliedPreset}` |
+| `payload.py` compile_task_payload_templates() | Merges `appliedStepTemplates` + capabilities | Merges `appliedPreset` + `planArtifactRef` |
+| `task_step_templates.py` router | Serves `/api/task-step-templates` | Phase 3: serves `/api/presets` |
+| `models.py` DB models | `TaskStepTemplate*` naming | Phase 3: `Preset*` naming |
+| Expansion service | Jinja2 → step dicts | Jinja2 → step dicts → `PlanDefinition` (new final stage) |
+
+---
+
+## 11. Open Design Decisions
+
+### Q1: How should presets express non-linear dependencies?
+
+**Proposed**: Add optional `dependsOn` field to step blueprints:
+
+```yaml
+steps:
+  - slug: run-tests
+    title: Run tests
+    instructions: "..."
+    skill: { id: repo.run_tests }
+
+  - slug: run-lint
+    title: Run linter
+    instructions: "..."
+    skill: { id: repo.lint }
+
+  - slug: merge-results
+    title: Merge results
+    instructions: "..."
+    skill: { id: plan.merge }
+    dependsOn: [run-tests, run-lint]    # ← parallel predecessors
+```
+
+The expansion service would translate `dependsOn` into `PlanEdge` entries. Steps without `dependsOn` default to depending on the previous step (linear chain). This is a Phase 2+ feature.
+
+### Q2: Should presets support `planPolicy` overrides per-expansion?
+
+**Proposed**: Allow callers to override policy in the expand request:
+
+```json
+{
+  "inputs": { ... },
+  "policyOverrides": {
+    "failure_mode": "CONTINUE",
+    "max_concurrency": 4
+  }
+}
+```
+
+Overrides are bounded by server-enforced limits (e.g. max_concurrency capped at 16).
+
+### Q3: How do presets reference skills that require specific versions?
+
+**Current**: `skill.id` resolves to the latest version in the registry snapshot.
+
+**Proposed**: Support explicit version pinning in blueprints via `skill.id: "repo.apply_patch@2.1.0"`. Unpinned skills resolve to latest-in-snapshot. This preserves the registry snapshot's reproducibility guarantee while allowing presets to be more or less specific.
+
+---
+
+## 12. Related Documents
+
+- `docs/Tasks/SkillAndPlanContracts.md` — Plan schema, execution semantics, validation rules.
+- `docs/Tasks/SkillAndPlanEvolution.md` — Design rationale and terminology decisions.
+- `specs/028-task-presets/spec.md` — Original feature specification with user stories and acceptance criteria.
+- `moonmind/workflows/skills/tool_plan_contracts.py` — `PlanDefinition`, `Step`, `PlanEdge` dataclasses.
+- `moonmind/workflows/skills/plan_validation.py` — DAG validation logic.
+- `moonmind/workflows/skills/plan_interpreter.py` — Deterministic plan execution in Temporal.
+- `api_service/services/task_templates/catalog.py` — Expansion service implementation.
+- `api_service/services/task_templates/save.py` — Save-from-task service.
+- `api_service/api/routers/task_step_templates.py` — REST API router.
+- `api_service/db/models.py` — Database models (`TaskStepTemplate*`).

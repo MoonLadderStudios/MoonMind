@@ -37,10 +37,11 @@ Most agent platforms ask you to rebuild your workflows inside their SDK. MoonMin
 * **Black-Box Orchestration:** Run third-party cloud agents (like Jules) under a strict operational model. MoonMind tracks their status and injects context even if you don't control their internals.
 * **Universal Integration:** Connect custom agents via MCP or standard API endpoints.
 
-### 🔐 Reclaim Control of Your AI Stack
-The real risk isn't just model lock-in; it's workflow lock-in. MoonMind helps you keep ownership of the operational layers *around* the model.
+### 🔓 Free Yourself from Vendor Lock-In
+MoonMind can manage any agent runtime and makes it easy to mix agents and models in even a single workflow.
 * **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Keep your memory, artifacts, and orchestration logic intact regardless of the underlying LLM.
-* **Multi-Agent Chaining:** Break massive goals into smaller steps. Use Opus to plan, GLM to implement, and Gemini to document.
+* **Multi-Agent Chaining:** Break massive goals into smaller steps. Only use expensive models for steps that need them.
+* **Side-by-Side Comparison:** Easily run the same task with different models and runtimes to compare results.
 
 ### 🔄 Designed for Resilient Execution
 Agent tasks fail in messy ways: rate limits, terminal hangs, and crashed containers. MoonMind expects failure and builds around it.
