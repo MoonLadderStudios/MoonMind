@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import random
 import re
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
@@ -60,6 +61,48 @@ _TOOL_ERROR_PATTERNS = (
 _GITHUB_PR_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
     re.IGNORECASE,
+)
+_GEMINI_TRANSIENT_CAPACITY_PATTERNS = (
+    re.compile(r"\bMODEL_CAPACITY_EXHAUSTED\b", re.IGNORECASE),
+    re.compile(r"\bRESOURCE_EXHAUSTED\b", re.IGNORECASE),
+    re.compile(r"\brateLimitExceeded\b", re.IGNORECASE),
+    re.compile(r"\bNo capacity available for model\b", re.IGNORECASE),
+)
+
+
+def _read_positive_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _read_positive_float_env(name: str, default: float) -> float:
+    raw = str(os.environ.get(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+_GEMINI_CAPACITY_RETRY_MAX_ATTEMPTS = _read_positive_int_env(
+    "MOONMIND_GEMINI_CAPACITY_RETRY_MAX_ATTEMPTS",
+    8,
+)
+_GEMINI_CAPACITY_RETRY_BASE_DELAY_SECONDS = _read_positive_float_env(
+    "MOONMIND_GEMINI_CAPACITY_RETRY_BASE_DELAY_SECONDS",
+    30.0,
+)
+_GEMINI_CAPACITY_RETRY_MAX_DELAY_SECONDS = _read_positive_float_env(
+    "MOONMIND_GEMINI_CAPACITY_RETRY_MAX_DELAY_SECONDS",
+    600.0,
 )
 
 
@@ -240,6 +283,24 @@ def _extract_pull_request_url(stdout_tail: Any, stderr_tail: Any) -> str | None:
     if match is None:
         return None
     return match.group(0)
+
+
+def _is_transient_gemini_capacity_error(stdout_tail: Any, stderr_tail: Any) -> bool:
+    candidates: list[str] = []
+    if isinstance(stderr_tail, str) and stderr_tail.strip():
+        candidates.append(stderr_tail)
+    if isinstance(stdout_tail, str) and stdout_tail.strip():
+        candidates.append(stdout_tail)
+    if not candidates:
+        return False
+    combined = "\n".join(candidates)
+    return any(pattern.search(combined) for pattern in _GEMINI_TRANSIENT_CAPACITY_PATTERNS)
+
+
+def _gemini_capacity_retry_delay_seconds(failed_attempt: int) -> float:
+    # Exponential backoff with a fixed ceiling to keep retries bounded.
+    delay = _GEMINI_CAPACITY_RETRY_BASE_DELAY_SECONDS * (2 ** max(failed_attempt - 1, 0))
+    return min(delay, _GEMINI_CAPACITY_RETRY_MAX_DELAY_SECONDS)
 
 
 def _normalize_publish_mode(raw_mode: Any) -> str:
@@ -715,9 +776,50 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 }
                 if command_env:
                     request_payload["env"] = command_env
-                sandbox_result = await sandbox_activities.sandbox_run_command(
-                    request_payload
+                max_command_attempts = (
+                    _GEMINI_CAPACITY_RETRY_MAX_ATTEMPTS
+                    if target_runtime == "gemini"
+                    else 1
                 )
+                command_attempt = 1
+                while True:
+                    sandbox_result = await sandbox_activities.sandbox_run_command(
+                        request_payload
+                    )
+                    if (
+                        target_runtime == "gemini"
+                        and sandbox_result.exit_code != 0
+                        and command_attempt < max_command_attempts
+                        and _is_transient_gemini_capacity_error(
+                            sandbox_result.stdout_tail,
+                            sandbox_result.stderr_tail,
+                        )
+                    ):
+                        retry_delay_seconds = _gemini_capacity_retry_delay_seconds(
+                            command_attempt
+                        )
+                        # Apply ±25% jitter so concurrent workers don't all
+                        # retry at the same instant, which would re-trigger
+                        # the rate limit immediately.
+                        jitter_range = retry_delay_seconds * 0.25
+                        retry_delay_seconds = max(
+                            1.0,
+                            retry_delay_seconds
+                            + random.uniform(-jitter_range, jitter_range),
+                        )
+                        logger.warning(
+                            "Gemini capacity exhausted for workflow_id=%s node_id=%s "
+                            "(attempt %d/%d); retrying in %.1fs",
+                            workflow_id,
+                            node_id,
+                            command_attempt,
+                            max_command_attempts,
+                            retry_delay_seconds,
+                        )
+                        await asyncio.sleep(retry_delay_seconds)
+                        command_attempt += 1
+                        continue
+                    break
             except Exception as exc:
                 return SkillResult(
                     status="FAILED",

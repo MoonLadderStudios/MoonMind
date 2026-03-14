@@ -10,6 +10,8 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindRun,
     _build_runtime_activities,
     _build_runtime_planner,
+    _gemini_capacity_retry_delay_seconds,
+    _is_transient_gemini_capacity_error,
     main_async,
 )
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
@@ -190,6 +192,27 @@ def test_runtime_planner_never_emits_placeholder_registry_refs():
         payload["metadata"]["registry_snapshot"]["artifact_ref"]
         == snapshot.artifact_ref
     )
+
+
+def test_is_transient_gemini_capacity_error_detects_known_markers():
+    assert _is_transient_gemini_capacity_error(
+        "",
+        "status=429 RESOURCE_EXHAUSTED reason=MODEL_CAPACITY_EXHAUSTED",
+    )
+    assert _is_transient_gemini_capacity_error(
+        "No capacity available for model gemini-3.1-pro-preview",
+        "",
+    )
+    assert not _is_transient_gemini_capacity_error(
+        "",
+        "fatal: not a git repository",
+    )
+
+
+def test_gemini_capacity_retry_delay_seconds_is_bounded():
+    assert _gemini_capacity_retry_delay_seconds(1) == 30.0
+    assert _gemini_capacity_retry_delay_seconds(2) == 60.0
+    assert _gemini_capacity_retry_delay_seconds(10) == 600.0
 
 
 def test_runtime_planner_accepts_task_tool_payload():
@@ -523,6 +546,86 @@ async def test_auto_skill_handler_uses_request_mapping_and_gemini_prompt_command
     assert "/tmp/workspace" in include_dirs
     assert request_payload["cmd"][-2:] == ["--model", "gemini-3.1-pro-preview"]
     assert request_payload["env"]["GEMINI_API_KEY"] == "google-test-key"
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_auto_skill_handler_retries_transient_gemini_capacity_errors(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "sandbox"
+    mock_build_bindings.return_value = []
+    mock_sandbox_activities_cls.return_value.sandbox_run_command = AsyncMock(
+        side_effect=[
+            SimpleNamespace(
+                exit_code=1,
+                stdout_tail="Attempt 1 failed with status 429.",
+                stderr_tail=(
+                    "RESOURCE_EXHAUSTED MODEL_CAPACITY_EXHAUSTED "
+                    "No capacity available for model gemini-3.1-pro-preview"
+                ),
+                diagnostics_ref=None,
+            ),
+            SimpleNamespace(
+                exit_code=0,
+                stdout_tail="ok",
+                stderr_tail="",
+                diagnostics_ref=None,
+            ),
+        ]
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    register_kwargs = mock_dispatcher_cls.return_value.register_skill.call_args.kwargs
+    handler = register_kwargs["handler"]
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.asyncio.sleep",
+        new=AsyncMock(),
+    ) as mock_sleep:
+        result = await handler(
+            {
+                "instructions": "Inspect failing tests",
+                "workspaceRef": "/tmp/workspace",
+                "runtime": {"mode": "gemini", "model": "gemini-3.1-pro-preview"},
+            },
+            {"workflow_id": "wf-1", "node_id": "node-1", "principal": "user-1"},
+        )
+
+    assert result.status == "SUCCEEDED"
+    assert (
+        mock_sandbox_activities_cls.return_value.sandbox_run_command.await_count == 2
+    )
+    # Delay is 30s base ± 25% jitter, so must fall in [22.5, 37.5].
+    mock_sleep.assert_awaited_once()
+    actual_delay = mock_sleep.call_args[0][0]
+    assert 22.5 <= actual_delay <= 37.5, f"unexpected retry delay: {actual_delay}"
     await resources.aclose()
 
 
