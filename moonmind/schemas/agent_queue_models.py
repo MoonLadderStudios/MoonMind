@@ -409,7 +409,7 @@ class TaskRunLiveSessionModel(BaseModel):
 
     @model_validator(mode="after")
     def _apply_web_visibility_policy(self) -> "TaskRunLiveSessionModel":
-        if not settings.spec_workflow.live_session_allow_web:
+        if not settings.workflow.live_session_allow_web:
             self.web_ro = None
         return self
 
@@ -434,7 +434,7 @@ class TaskRunLiveSessionWriteGrantResponse(BaseModel):
 
     @model_validator(mode="after")
     def _apply_web_visibility_policy(self) -> "TaskRunLiveSessionWriteGrantResponse":
-        if not settings.spec_workflow.live_session_allow_web:
+        if not settings.workflow.live_session_allow_web:
             self.web_rw = None
         return self
 

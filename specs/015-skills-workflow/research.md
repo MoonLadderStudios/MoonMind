@@ -14,9 +14,9 @@
 - **Alternatives considered**:
   - Keep adapter data only in raw metadata payloads: rejected because consumers would need custom payload parsing and lose typed API support.
 
-## Decision 3: Preserve compatibility defaults for legacy Speckit metadata
+## Decision 3: Preserve compatibility defaults for legacy Agentkit metadata
 
-- **Decision**: For legacy Speckit phase records missing skill fields, derive defaults (`selectedSkill=speckit`, `adapterId=speckit`, `executionPath=skill`).
+- **Decision**: For legacy Agentkit phase records missing skill fields, derive defaults (`selectedSkill=agentkit`, `adapterId=agentkit`, `executionPath=skill`).
 - **Rationale**: Historical records should remain interpretable without requiring data backfills.
 - **Alternatives considered**:
   - Return null for missing fields: rejected because it weakens operator diagnostics on older runs.
@@ -28,12 +28,12 @@
 - **Alternatives considered**:
   - Keep per-adapter independent skill mirrors as the primary contract: rejected because it no longer matches runtime behavior.
 
-## Decision 5: Keep Speckit verification conditional on selected/configured stage skills
+## Decision 5: Keep Agentkit verification conditional on selected/configured stage skills
 
-- **Decision**: Verify Speckit CLI only for stages that actually resolve to a Speckit-backed adapter when skills mode is enabled.
-- **Rationale**: Startup and per-stage checks should align with selected stage-skill strategy, not assume unconditional Speckit usage.
+- **Decision**: Verify Agentkit CLI only for stages that actually resolve to a Agentkit-backed adapter when skills mode is enabled.
+- **Rationale**: Startup and per-stage checks should align with selected stage-skill strategy, not assume unconditional Agentkit usage.
 - **Alternatives considered**:
-  - Keep unconditional Speckit checks for all runs: rejected because it blocks non-Speckit stage strategies and misrepresents runtime policy.
+  - Keep unconditional Agentkit checks for all runs: rejected because it blocks non-Agentkit stage strategies and misrepresents runtime policy.
 
 ## Decision 6: Keep runtime-vs-docs behavior aligned with orchestration mode
 

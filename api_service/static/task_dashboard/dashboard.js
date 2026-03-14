@@ -3984,7 +3984,7 @@
               </select>
             </label>
             <label>Skill
-              <input name="skill" placeholder="auto, speckit-orchestrate, ..." value="${escapeHtml(
+              <input name="skill" placeholder="auto, agentkit-orchestrate, ..." value="${escapeHtml(
         filterState.skill,
       )}" />
             </label>
@@ -5683,7 +5683,7 @@
           const stepLabel = isPrimaryStep ? " (Primary)" : "";
           const skillLabel = "Skill (optional)";
           const skillPlaceholder = isPrimaryStep
-            ? "auto (default), speckit-orchestrate, ..."
+            ? "auto (default), agentkit-orchestrate, ..."
             : "inherit primary step skill";
           const instructionsLabel = "Instructions";
           const instructionsPlaceholder = isPrimaryStep
@@ -5900,7 +5900,7 @@
     const templateSaveCurrent = document.getElementById("queue-template-save-current");
     let templateItems = [];
     const templateInputMemory = {};
-    const preferredTemplateSlug = "speckit-orchestrate";
+    const preferredTemplateSlug = "agentkit-orchestrate";
     const templateScopeLoadOrder = ["global", "team", "personal"];
 
     const setTemplateMessage = (text, isError = false) => {

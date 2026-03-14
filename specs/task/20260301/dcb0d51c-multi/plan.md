@@ -103,7 +103,7 @@ tools/
 
 ## Implementation Readiness
 
-- Planning artifacts are complete for `/speckit.tasks` generation and implementation execution.
+- Planning artifacts are complete for `/agentkit.tasks` generation and implementation execution.
 - No unresolved clarifications remain.
 - `DOC-REQ-*` coverage is explicit and includes runtime-intent requirement `DOC-REQ-011`.
 

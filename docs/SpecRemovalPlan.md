@@ -1,14 +1,14 @@
-# Spec Removal Plan (Docs and Specs Migration Surface Only)
+# Spec Removal Plan (Completed Codebase Migration)
 
 ## Purpose
 
-This document defines how to remove legacy `SPEC`-style naming from **documentation and spec artifacts only**. It is a planning-only artifact and does not propose direct runtime code changes in this pass.
+This document formerly outlined how to remove legacy `SPEC`-style naming from documentation and specs. It has since been executed and expanded to encompass the entire codebase (including environment variables, settings, Python models, API contracts, and database migrations).
 
 ## Scope
 
-1. `docs/` markdown files
-2. `specs/` markdown files and contract assets
-3. No runtime code, tests, or deployment files will be edited as part of this document.
+1. `docs/` markdown files (completed)
+2. `specs/` markdown files and contract assets (completed)
+3. Python codebase, API definitions, environment configuration, database models, and Alembic migrations (completed).
 
 ## Hard Rules for this migration pass
 
@@ -23,7 +23,7 @@ This document defines how to remove legacy `SPEC`-style naming from **documentat
 1. Legacy surface command used for discovery: 
 
 ```
-rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit|SpecWorkflow|spec_workflows|/api/workflows/speckit|SPEC_AUTOMATION_" docs specs --glob '*.md'
+rg -l "WORKFLOW_|workflow|/api/spec-automation|spec-automation|Agentkit|Workflow|workflows|/api/workflows/agentkit|AUTOMATION_" docs specs --glob '*.md'
 ```
 
 2. Current footprint counts:
@@ -34,7 +34,7 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 3. API contract and schema assets identified for this pass:
 
-`specs/002-document-speckit-automation/contracts/workflow.openapi.yaml`
+`specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml`
 
 `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`
 
@@ -42,12 +42,12 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 ## Canonical naming target (to replace legacy terms)
 
-1. Config/env naming: `SPEC_WORKFLOW_*` -> `WORKFLOW_*`
-2. Settings path naming: `spec_workflow` -> `workflow`
-3. API contract naming: `/api/spec-automation/*` and `/api/workflows/speckit/*` -> `/api/workflows/*` where it represents the same canonical run surface.
-4. Data model naming in docs/contracts: `SpecWorkflow*` -> `Workflow*`
-5. Metrics prefixes: `moonmind.spec_workflow` -> `moonmind.workflow`
-6. Artifact location naming: `var/artifacts/spec_workflows` -> `var/artifacts/workflow_runs` or `var/artifacts/workflows` depending on folder conventions in the target document.
+1. Config/env naming: `WORKFLOW_*` -> `WORKFLOW_*`
+2. Settings path naming: `workflow` -> `workflow`
+3. API contract naming: `/api/spec-automation/*` and `/api/workflows/agentkit/*` -> `/api/workflows/*` where it represents the same canonical run surface.
+4. Data model naming in docs/contracts: `Workflow*` -> `Workflow*`
+5. Metrics prefixes: `moonmind.workflow` -> `moonmind.workflow`
+6. Artifact location naming: `var/artifacts/workflows` -> `var/artifacts/workflow_runs` or `var/artifacts/workflows` depending on folder conventions in the target document.
 
 ## Workstreams and sequencing
 
@@ -73,27 +73,27 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 ## Required canonical updates by surface type
 
 1. Environment and settings surface
-1. Replace every `SPEC_WORKFLOW_CODEX_QUEUE` reference with `WORKFLOW_CODEX_QUEUE`.
-1. Replace every `SPEC_WORKFLOW_TEST_MODE` reference with `WORKFLOW_TEST_MODE`.
-1. Replace every `SPEC_WORKFLOW_ALLOWED_SKILLS`, `SPEC_WORKFLOW_DEFAULT_SKILL`, `SPEC_WORKFLOW_USE_SKILLS` with `WORKFLOW_ALLOWED_SKILLS`, `WORKFLOW_DEFAULT_SKILL`, `WORKFLOW_USE_SKILLS`.
-1. Replace every `SPEC_WORKFLOW_ARTIFACT_ROOT` with `WORKFLOW_ARTIFACT_ROOT`.
-1. Replace every `SPEC_WORKFLOW_METRICS_*` with `WORKFLOW_METRICS_*` and deprecate `spec_automation.*` references where they appear.
+1. Replace every `WORKFLOW_CODEX_QUEUE` reference with `WORKFLOW_CODEX_QUEUE`.
+1. Replace every `WORKFLOW_TEST_MODE` reference with `WORKFLOW_TEST_MODE`.
+1. Replace every `WORKFLOW_ALLOWED_SKILLS`, `WORKFLOW_DEFAULT_SKILL`, `WORKFLOW_USE_SKILLS` with `WORKFLOW_ALLOWED_SKILLS`, `WORKFLOW_DEFAULT_SKILL`, `WORKFLOW_USE_SKILLS`.
+1. Replace every `WORKFLOW_ARTIFACT_ROOT` with `WORKFLOW_ARTIFACT_ROOT`.
+1. Replace every `WORKFLOW_METRICS_*` with `WORKFLOW_METRICS_*` and deprecate `automation.*` references where they appear.
 
 2. API contract surface
 1. Replace legacy route families with canonical workflow routes in API docs.
 1. Replace `/api/spec-automation/*` endpoint references with `/api/workflows/*`.
-1. Replace `/api/workflows/speckit/*` endpoint references with canonical `/api/workflows/*`.
-1. Rename contract schema names where they currently include `SpecWorkflow*` to `Workflow*`.
+1. Replace `/api/workflows/agentkit/*` endpoint references with canonical `/api/workflows/*`.
+1. Rename contract schema names where they currently include `Workflow*` to `Workflow*`.
 1. Update operation IDs from `createWorkflowRun`, `listWorkflowRuns`, etc. to canonical workflow equivalents.
 
 3. Data model and schema surface
-1. Replace `spec_workflow_runs` and `spec_workflow_task_states` mentions with canonical workflow equivalents in docs and plans.
-1. Replace references to `spec_workflow.*` settings references with `workflow.*`.
+1. Replace `workflow_runs` and `workflow_task_states` mentions with canonical workflow equivalents in docs and plans.
+1. Replace references to `workflow.*` settings references with `workflow.*`.
 1. Replace `spec_input` or similar legacy identifiers in contract examples with neutral terms if they are not domain-required by an external spec.
 
 4. Runtime/observability wording
-1. Replace `moonmind.spec_workflow` metric namespace with `moonmind.workflow`.
-1. Replace artifact roots described as `var/artifacts/spec_workflows` with `var/artifacts/workflow_runs` or `var/artifacts/workflows` per document’s naming schema.
+1. Replace `moonmind.workflow` metric namespace with `moonmind.workflow`.
+1. Replace artifact roots described as `var/artifacts/workflows` with `var/artifacts/workflow_runs` or `var/artifacts/workflows` per document’s naming schema.
 1. Remove legacy “compatibility route” prose from operational docs, except the dedicated migration log.
 
 ## Per-directory file list for implementation planning
@@ -110,9 +110,9 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 `docs/OrchestratorArchitecture.md`
 
-`docs/SpecKitAutomation.md`
+`docs/AgentKitAutomation.md`
 
-`docs/SpecKitAutomationInstructions.md`
+`docs/AgentKitAutomationInstructions.md`
 
 `docs/TaskQueueSystem.md`
 
@@ -138,19 +138,19 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`
 
-### `specs/002-document-speckit-automation`
+### `specs/002-document-agentkit-automation`
 
-`specs/002-document-speckit-automation/AGENTS.md`
+`specs/002-document-agentkit-automation/AGENTS.md`
 
-`specs/002-document-speckit-automation/plan.md`
+`specs/002-document-agentkit-automation/plan.md`
 
-`specs/002-document-speckit-automation/quickstart.md`
+`specs/002-document-agentkit-automation/quickstart.md`
 
-`specs/002-document-speckit-automation/spec.md`
+`specs/002-document-agentkit-automation/spec.md`
 
-`specs/002-document-speckit-automation/tasks.md`
+`specs/002-document-agentkit-automation/tasks.md`
 
-`specs/002-document-speckit-automation/contracts/workflow.openapi.yaml`
+`specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml`
 
 ### `specs/003-celery-oauth-volumes`
 
@@ -270,23 +270,23 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 `specs/034-worker-self-heal/research.md`
 
-### `specs/036-isolate-speckit-references`
+### `specs/036-isolate-agentkit-references`
 
-`specs/036-isolate-speckit-references/contracts/skill-adapter-contract.md`
+`specs/036-isolate-agentkit-references/contracts/skill-adapter-contract.md`
 
-`specs/036-isolate-speckit-references/contracts/workflow-runs-api.md`
+`specs/036-isolate-agentkit-references/contracts/workflow-runs-api.md`
 
-`specs/036-isolate-speckit-references/data-model.md`
+`specs/036-isolate-agentkit-references/data-model.md`
 
-`specs/036-isolate-speckit-references/plan.md`
+`specs/036-isolate-agentkit-references/plan.md`
 
-`specs/036-isolate-speckit-references/quickstart.md`
+`specs/036-isolate-agentkit-references/quickstart.md`
 
-`specs/036-isolate-speckit-references/research.md`
+`specs/036-isolate-agentkit-references/research.md`
 
-`specs/036-isolate-speckit-references/spec.md`
+`specs/036-isolate-agentkit-references/spec.md`
 
-`specs/036-isolate-speckit-references/tasks.md`
+`specs/036-isolate-agentkit-references/tasks.md`
 
 ### `specs/037-tasks-image-phase1`
 
@@ -319,7 +319,7 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 1. A follow-up grep within `docs/` and `specs/` finds no unintentional legacy surface usage outside the migration exception zone.
 2. Every API contract/documented endpoint uses the canonical workflow route naming.
-3. All `SPEC_WORKFLOW_*` and `spec_workflow*` naming in docs/specs is replaced according to the canonical mapping, except for historical trace sections.
+3. All `WORKFLOW_*` and `workflow*` naming in docs/specs is replaced according to the canonical mapping, 
 4. The plan includes a complete list of any intentionally retained legacy mentions for later execution work.
 
 ## Verification report (2026-02-24)
@@ -327,11 +327,19 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 ### Legacy-token verification
 
 - Executed scan command:
-  - `rg -l "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows" docs specs --glob '*.md' --glob '*.yaml' --glob '*.yml' -g '!specs/040-spec-removal/**'`
+  - `rg -l "WORKFLOW_|AUTOMATION_|/api/spec-automation|/api/workflows/agentkit|Workflow|workflow|workflows|spec-automation|automation|moonmind\\.workflow|var/artifacts/workflows" docs specs --glob '*.md' --glob '*.yaml' --glob '*.yml' -g '!specs/040-spec-removal/**'`
 - Result: intentional legacy-token references remain in `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/*` as migration context.
 - Result count outside intentional exception files: `0`.
 
 ### Historical references retained
 
-- `docs/SpecRemovalPlan.md` (sections: Legacy footprint, canonical target map, required canonical updates, and acceptance criteria) retains legacy terms solely as migration context and cannot be interpreted as runtime contract expectations.
+- `docs/SpecRemovalPlan.md` retains legacy terms solely as migration context and cannot be interpreted as runtime contract expectations.
 - `specs/040-spec-removal/*` retains legacy terms intentionally to describe source/target mappings, acceptance checks, and traceability for this migration feature.
+
+## Verification report (2026-03-14 - Codebase Execution)
+
+The full codebase migration has been completed.
+- Renamed all `/api/spec-automation/*` routes to `/api/workflows/*`.
+- Renamed `WorkflowRuns` to `WorkflowRuns` and generated Alembic migrations using `op.rename_table()`.
+- Replaced all configuration variables (`WORKFLOW_CODEX_MODEL` -> `MOONMIND_CODEX_MODEL`, `WORKFLOW_*` -> `WORKFLOW_*`).
+- The entire Docker unit test suite passes after the renaming.

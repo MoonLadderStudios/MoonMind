@@ -5,18 +5,18 @@
 
 ## Summary
 
-Align Codex worker runtime behavior to the 015 umbrella by keeping Speckit always available, preserving skills-first stage metadata semantics, and hardening startup checks for authenticated Codex execution plus Google Gemini embedding readiness.
+Align Codex worker runtime behavior to the 015 umbrella by keeping Agentkit always available, preserving skills-first stage metadata semantics, and hardening startup checks for authenticated Codex execution plus Google Gemini embedding readiness.
 
 ## Technical Context
 
 **Language/Version**: Python 3.11  
-**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x, PostgreSQL result backend, Codex CLI, Speckit CLI, Gemini CLI, Pydantic settings  
+**Primary Dependencies**: Celery 5.4, RabbitMQ 3.x, PostgreSQL result backend, Codex CLI, Agentkit CLI, Gemini CLI, Pydantic settings  
 **Storage**: Docker volumes (`codex_auth_volume`, `gemini_auth_volume`), workflow artifacts under `var/artifacts/workflow_runs/<run_id>`  
 **Testing**: Unit tests via `./tools/test_unit.sh`  
 **Target Platform**: Docker Compose (API + Celery workers)  
 **Project Type**: Backend worker runtime + workflow orchestration compatibility + spec artifacts  
 **Performance Goals**: Preserve startup latency while ensuring fail-fast diagnostics for missing prerequisites  
-**Constraints**: Maintain queue/API compatibility (`speckit`, `codex`, `gemini`; `/api/workflows/*`) and non-interactive execution  
+**Constraints**: Maintain queue/API compatibility (`agentkit`, `codex`, `gemini`; `/api/workflows/*`) and non-interactive execution  
 **Scale/Scope**: Worker startup checks, skills metadata compatibility, compose/quickstart contract alignment
 
 ## Constitution Check
@@ -48,7 +48,7 @@ specs/007-scalable-codex-worker/
 
 ```text
 celery_worker/
-├── speckit_worker.py
+├── agentkit_worker.py
 ├── gemini_worker.py
 └── startup_checks.py            # shared startup profile + embedding preflight helper
 

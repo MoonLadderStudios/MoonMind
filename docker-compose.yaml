@@ -62,7 +62,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./.agents:/app/.agents:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
-      - speckit_workspaces:/work/runs:ro
+      - agentkit_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
@@ -543,7 +543,7 @@ services:
       - MOONMIND_WORKER_RETRY_SECONDS=${MOONMIND_WORKER_RETRY_SECONDS:-20}
       - MOONMIND_POLL_INTERVAL_MS=${MOONMIND_ORCHESTRATOR_POLL_INTERVAL_MS:-1500}
       - MOONMIND_LEASE_SECONDS=${MOONMIND_ORCHESTRATOR_LEASE_SECONDS:-120}
-      - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
+      - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/workflows}
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
       - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-unix:///var/run/docker.sock}
@@ -668,7 +668,7 @@ volumes:
   qdrant-storage:
   postgres-data:
   minio-data:
-  speckit_workspaces:
+  agentkit_workspaces:
   agent_workspaces:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   unreal_ccache_volume:

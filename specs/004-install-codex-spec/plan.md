@@ -24,7 +24,7 @@ Package Codex CLI and GitHub Spec Kit CLI directly into `api_service/Dockerfile`
 Research outcomes:
 
 1. Codex CLI will be installed from npm with a `CODEX_CLI_VERSION` build arg and verified via `codex --version`.  
-2. GitHub Spec Kit CLI ships from npm with its own `SPEC_KIT_VERSION` build arg to keep worker behavior deterministic.  
+2. GitHub Spec Kit CLI ships from npm with its own `AGENT_KIT_VERSION` build arg to keep worker behavior deterministic.  
 3. `~/.codex/config.toml` will be merged from a template at entrypoint time to guarantee `approval_policy = "never"` without overwriting other keys.
 
 ## Constitution Check
@@ -39,12 +39,12 @@ Research outcomes:
 
 ```text
 specs/004-install-codex-spec/
-├── plan.md              # This file (/speckit.plan output)
+├── plan.md              # This file (/agentkit.plan output)
 ├── research.md          # Phase 0 research (this run)
 ├── data-model.md        # Phase 1 deliverable
 ├── quickstart.md        # Phase 1 deliverable
 ├── contracts/           # Phase 1 API/CLI contracts
-└── tasks.md             # Phase 2 deliverable (future /speckit.tasks)
+└── tasks.md             # Phase 2 deliverable (future /agentkit.tasks)
 ```
 
 ### Source Code (repository root)
@@ -56,13 +56,13 @@ api_service/
 └── pyproject/poetry     # Python dependencies already define runtime stack
 
 celery_worker/
-└── speckit_worker.py    # Runs on same image, consumes bundled CLIs
+└── agentkit_worker.py    # Runs on same image, consumes bundled CLIs
 
-moonmind/workflows/speckit_celery/
+moonmind/workflows/agentkit_celery/
 ├── tasks.py             # Invokes Codex/Spec Kit commands
 └── job_container.py     # Defines workspace + env for CLI usage
 
-docs/SpecKitAutomation*.md
+docs/AgentKitAutomation*.md
 └── Operational runbooks referencing expected tooling (update if needed)
 
 specs/004-install-codex-spec/

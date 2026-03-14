@@ -887,7 +887,7 @@ def test_create_job_with_attachments_file_too_large(
 
     test_client, service = client
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_max_bytes",
         2,
     )
@@ -914,7 +914,7 @@ def test_create_job_with_attachments_total_too_large(
 
     test_client, service = client
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_total_bytes",
         4,
     )
@@ -1557,7 +1557,7 @@ def test_list_jobs_with_summary_returns_compact_payload(
         "instruction": "This is a long instruction that should be trimmed for list responses.",
         "task": {
             "runtime": {"mode": "codex"},
-            "skill": {"id": "speckit-run"},
+            "skill": {"id": "agentkit-run"},
             "publish": {"mode": "pr"},
             "instructions": "Task instructions for list rendering.",
         },
@@ -1576,7 +1576,7 @@ def test_list_jobs_with_summary_returns_compact_payload(
     payload = body["items"][0]["payload"]
     assert payload["runtime"] == "codex"
     assert payload["task"]["runtime"]["mode"] == "codex"
-    assert payload["task"]["skill"]["id"] == "speckit-run"
+    assert payload["task"]["skill"]["id"] == "agentkit-run"
     assert payload["task"]["publish"]["mode"] == "pr"
     assert payload["task"]["instructions"] == "Task instructions for list rendering."
     assert (

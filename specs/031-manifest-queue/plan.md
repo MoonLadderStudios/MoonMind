@@ -40,7 +40,7 @@ This feature aligns `specs/028-manifest-queue` with the current MoonMind runtime
 
 ```text
 specs/028-manifest-queue/
-├── plan.md                              # This file (speckit-plan output)
+├── plan.md                              # This file (agentkit-plan output)
 ├── research.md                          # Phase 0 decisions
 ├── data-model.md                        # Phase 1 entity/validation model
 ├── quickstart.md                        # Phase 1 validation steps

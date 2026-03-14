@@ -100,7 +100,7 @@ Expected outcome: runtime scope checks pass with backend and dashboard implement
 
 ## 10. Planning artifact completion gate
 
-Before running `/speckit.tasks`, ensure these artifacts exist:
+Before running `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/048-run-history-rerun/plan.md`
 - `specs/048-run-history-rerun/research.md`

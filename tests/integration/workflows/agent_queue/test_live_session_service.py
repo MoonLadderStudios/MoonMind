@@ -23,7 +23,7 @@ from moonmind.workflows.agent_queue.service import (
     LiveSessionStateError,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @asynccontextmanager
@@ -123,7 +123,7 @@ async def test_report_live_session_clears_web_links_when_allow_web_disabled(
             job.claimed_by = "worker-1"
             await repo.commit()
 
-            monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", True)
+            monkeypatch.setattr(settings.workflow, "live_session_allow_web", True)
             initial = await service.report_live_session(
                 task_run_id=job.id,
                 worker_id="worker-1",
@@ -141,7 +141,7 @@ async def test_report_live_session_clears_web_links_when_allow_web_disabled(
             assert initial.web_ro == "https://web-ro.example"
             assert initial.web_rw_encrypted == "https://web-rw.example"
 
-            monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
+            monkeypatch.setattr(settings.workflow, "live_session_allow_web", False)
             updated = await service.report_live_session(
                 task_run_id=job.id,
                 worker_id="worker-1",
@@ -169,7 +169,7 @@ async def test_grant_live_session_write_hides_web_link_when_allow_web_disabled(
             job.claimed_by = "worker-1"
             await repo.commit()
 
-            monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", True)
+            monkeypatch.setattr(settings.workflow, "live_session_allow_web", True)
             await service.report_live_session(
                 task_run_id=job.id,
                 worker_id="worker-1",
@@ -185,7 +185,7 @@ async def test_grant_live_session_write_hides_web_link_when_allow_web_disabled(
                 expires_at=datetime.now(UTC) + timedelta(minutes=30),
             )
 
-            monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
+            monkeypatch.setattr(settings.workflow, "live_session_allow_web", False)
             grant = await service.grant_live_session_write(
                 task_run_id=job.id,
                 actor_user_id=job.requested_by_user_id,

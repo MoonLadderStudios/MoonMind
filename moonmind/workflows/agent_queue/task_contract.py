@@ -60,7 +60,7 @@ def _clean_optional_str(value: object) -> str | None:
 
 
 def _default_publish_mode() -> str:
-    mode = getattr(settings.spec_workflow, "default_publish_mode", "pr") or "pr"
+    mode = getattr(settings.workflow, "default_publish_mode", "pr") or "pr"
     normalized = str(mode).strip().lower()
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
@@ -68,7 +68,7 @@ def _default_publish_mode() -> str:
 def _default_propose_tasks() -> bool:
     """Default queue-task proposal generation toggle."""
 
-    return bool(getattr(settings.spec_workflow, "enable_task_proposals", True))
+    return bool(getattr(settings.workflow, "enable_task_proposals", True))
 
 
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:
@@ -921,7 +921,7 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
     input_codex_raw = inputs.get("codex")
     input_codex = input_codex_raw if isinstance(input_codex_raw, Mapping) else {}
 
-    skill_id = _clean_optional_str(payload.get("skillId")) or "speckit"
+    skill_id = _clean_optional_str(payload.get("skillId")) or "agentkit"
     repository = (
         _clean_optional_str(inputs.get("repo"))
         or _clean_optional_str(inputs.get("repository"))

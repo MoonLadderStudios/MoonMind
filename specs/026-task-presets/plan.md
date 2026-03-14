@@ -5,7 +5,7 @@
 
 ## Summary
 
-Align the seeded global `speckit-orchestrate` preset with MoonMind publish-stage strategy by keeping runtime execution in report handoff mode, synchronizing existing DB seed rows with current YAML content through an idempotent migration, and locking behavior with regression tests. Runtime versus docs orchestration mode behavior remains explicit through `inputs.orchestration_mode` propagation and mode-aware scope validation gates.
+Align the seeded global `agentkit-orchestrate` preset with MoonMind publish-stage strategy by keeping runtime execution in report handoff mode, synchronizing existing DB seed rows with current YAML content through an idempotent migration, and locking behavior with regression tests. Runtime versus docs orchestration mode behavior remains explicit through `inputs.orchestration_mode` propagation and mode-aware scope validation gates.
 
 ## Technical Context
 
@@ -17,7 +17,7 @@ Align the seeded global `speckit-orchestrate` preset with MoonMind publish-stage
 **Project Type**: Backend service with seeded orchestration template documents.  
 **Performance Goals**: Preserve current template expansion latency; migration remains one-time and no-op safe when data is absent.  
 **Constraints**: Keep runtime/docs orchestration behavior mode-aligned, do not introduce runtime publish actions (commit/push/PR) from preset instructions, keep migration idempotent and best-effort on missing seed/rows.  
-**Scale/Scope**: Single seeded preset (`speckit-orchestrate`, version `1.0.0`) and its existing global template/version records.
+**Scale/Scope**: Single seeded preset (`agentkit-orchestrate`, version `1.0.0`) and its existing global template/version records.
 
 ## Constitution Check
 
@@ -54,9 +54,9 @@ specs/024-task-presets/
 ```text
 api_service/
 ├── data/task_step_templates/
-│   └── speckit-orchestrate.yaml
+│   └── agentkit-orchestrate.yaml
 ├── migrations/versions/
-│   └── 202603010001_align_speckit_orchestrate_publish_stage.py
+│   └── 202603010001_align_agentkit_orchestrate_publish_stage.py
 ├── services/task_templates/
 │   └── catalog.py
 └── api/routers/

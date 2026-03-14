@@ -25,7 +25,7 @@ from moonmind.workflows.agent_queue.service import (
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @asynccontextmanager
@@ -96,7 +96,7 @@ async def test_create_job_with_attachments_respects_total_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_total_bytes",
         8,
     )

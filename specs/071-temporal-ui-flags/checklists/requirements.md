@@ -31,4 +31,4 @@
 
 ## Notes
 
-- All validation items passed. No further iterations needed. Specification aligns with runtime-intent guard. Canonical feature request re-applied for speckit-specify Step 2/16 with runtime scope guard: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+- All validation items passed. No further iterations needed. Specification aligns with runtime-intent guard. Canonical feature request re-applied for agentkit-specify Step 2/16 with runtime scope guard: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."

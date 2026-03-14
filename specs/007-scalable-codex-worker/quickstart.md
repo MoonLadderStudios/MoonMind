@@ -5,7 +5,7 @@
 Bring up Codex + Gemini workers with:
 
 - persistent Codex authentication via shared volume
-- Speckit capability checks on startup
+- Agentkit capability checks on startup
 - Google Gemini embedding defaults validated before task execution
 - skills-first workflow metadata preserved for stage execution
 
@@ -58,7 +58,7 @@ docker compose up -d --scale celery_codex_worker=2
 docker compose ps celery_codex_worker
 ```
 
-Codex workers should still consume configured `speckit` + `codex` queues.
+Codex workers should still consume configured `agentkit` + `codex` queues.
 
 ## 5) Verify embedding defaults from API settings
 

@@ -36,7 +36,7 @@
       "skill": { "id": "auto", "args": {} },
       "steps": [
         { "id": "inspect", "instructions": "Inspect existing implementation." },
-        { "id": "patch", "instructions": "Apply code changes.", "skill": { "id": "speckit", "args": {} } },
+        { "id": "patch", "instructions": "Apply code changes.", "skill": { "id": "agentkit", "args": {} } },
         { "id": "verify", "instructions": "Run and fix failing unit tests." }
       ],
       "publish": { "mode": "pr" }

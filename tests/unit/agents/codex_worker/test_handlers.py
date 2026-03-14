@@ -20,7 +20,7 @@ from moonmind.agents.codex_worker.handlers import (
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @pytest.fixture(autouse=True)
@@ -68,11 +68,11 @@ async def test_codex_skill_payload_defaults_and_validation() -> None:
 
     payload = CodexSkillPayload.from_payload(
         {
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "inputs": {"repo": "MoonLadderStudios/MoonMind"},
         }
     )
-    assert payload.skill_id == "speckit"
+    assert payload.skill_id == "agentkit"
     assert payload.repository == "MoonLadderStudios/MoonMind"
     assert payload.workdir_mode == "fresh_clone"
     assert payload.publish_mode == "none"
@@ -82,7 +82,7 @@ async def test_codex_skill_payload_defaults_and_validation() -> None:
     with pytest.raises(CodexWorkerHandlerError, match="codex_skill workdirMode"):
         CodexSkillPayload.from_payload(
             {
-                "skillId": "speckit",
+                "skillId": "agentkit",
                 "inputs": {"repo": "Moon/Mind", "workdirMode": "bad"},
             }
         )
@@ -93,7 +93,7 @@ async def test_codex_skill_payload_parses_codex_overrides() -> None:
 
     payload = CodexSkillPayload.from_payload(
         {
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "codex": {"model": "gpt-5-codex", "effort": "medium"},
             "inputs": {"repo": "MoonLadderStudios/MoonMind"},
         }
@@ -1675,20 +1675,20 @@ async def test_handle_skill_maps_to_exec_payload_and_marks_summary(
     result = await handler.handle_skill(
         job_id=uuid4(),
         payload={
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "inputs": {
                 "repo": "MoonLadderStudios/MoonMind",
                 "instruction": "run unit tests",
             },
             "codex": {"model": "gpt-5-codex", "effort": "high"},
         },
-        selected_skill="speckit",
+        selected_skill="agentkit",
         fallback=False,
     )
 
     assert result.succeeded is True
     assert result.summary is not None
-    assert "skill=speckit" in result.summary
+    assert "skill=agentkit" in result.summary
     assert "executionPath=skill" in result.summary
 
 

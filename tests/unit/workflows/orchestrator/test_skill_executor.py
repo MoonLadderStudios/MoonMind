@@ -19,7 +19,7 @@ def _clear_skill_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
         "SPEC_SKILLS_WORKSPACE_ROOT",
         "WORKFLOW_REPO_ROOT",
-        "SPEC_WORKFLOW_REPO_ROOT",
+        "WORKFLOW_REPO_ROOT",
         "WORKSPACE_ROOT",
         "CODEX_HOME",
     ):

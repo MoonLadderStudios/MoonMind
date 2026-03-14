@@ -1064,7 +1064,7 @@ class RecurringTasksService:
             or not str(payload.get("repository") or "").strip()
         ):
             payload["repository"] = str(
-                settings.spec_workflow.github_repository or "MoonLadderStudios/MoonMind"
+                settings.workflow.github_repository or "MoonLadderStudios/MoonMind"
             ).strip()
 
         priority_raw = job_defaults.get("priority")

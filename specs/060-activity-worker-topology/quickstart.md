@@ -96,7 +96,7 @@ Notes:
 
 ## 9. Planning completion gate
 
-Before running `/speckit.tasks`, ensure these artifacts exist:
+Before running `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/060-activity-worker-topology/plan.md`
 - `specs/060-activity-worker-topology/research.md`

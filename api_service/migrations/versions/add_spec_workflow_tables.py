@@ -8,13 +8,13 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "add_spec_workflow_tables"
+revision: str = "add_workflow_tables"
 down_revision: Union[str, None] = "cb32e6509d1a"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-SPEC_WORKFLOW_RUN_STATUS = postgresql.ENUM(
+WORKFLOW_RUN_STATUS = postgresql.ENUM(
     "pending",
     "running",
     "succeeded",
@@ -24,7 +24,7 @@ SPEC_WORKFLOW_RUN_STATUS = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
+WORKFLOW_RUN_PHASE = postgresql.ENUM(
     "discover",
     "submit",
     "apply",
@@ -34,7 +34,7 @@ SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_WORKFLOW_TASK_STATUS = postgresql.ENUM(
+WORKFLOW_TASK_STATUS = postgresql.ENUM(
     "queued",
     "running",
     "succeeded",
@@ -96,27 +96,27 @@ def upgrade() -> None:  # noqa: D401
             """
         )
 
-    _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
-    _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)
-    _create_enum_if_missing(SPEC_WORKFLOW_TASK_STATUS)
+    _create_enum_if_missing(WORKFLOW_RUN_STATUS)
+    _create_enum_if_missing(WORKFLOW_RUN_PHASE)
+    _create_enum_if_missing(WORKFLOW_TASK_STATUS)
     _create_enum_if_missing(WORKFLOW_CODEX_CREDENTIAL_STATUS)
     _create_enum_if_missing(WORKFLOW_GITHUB_CREDENTIAL_STATUS)
     _create_enum_if_missing(WORKFLOW_ARTIFACT_TYPE)
 
     op.create_table(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
         sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
-            SPEC_WORKFLOW_RUN_STATUS,
+            WORKFLOW_RUN_STATUS,
             nullable=False,
             server_default="pending",
         ),
         sa.Column(
             "phase",
-            SPEC_WORKFLOW_RUN_PHASE,
+            WORKFLOW_RUN_PHASE,
             nullable=False,
             server_default="discover",
         ),
@@ -144,32 +144,32 @@ def upgrade() -> None:  # noqa: D401
     )
 
     op.create_index(
-        "ix_spec_workflow_runs_feature_key",
-        "spec_workflow_runs",
+        "ix_workflow_runs_feature_key",
+        "workflow_runs",
         ["feature_key"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_status",
-        "spec_workflow_runs",
+        "ix_workflow_runs_status",
+        "workflow_runs",
         ["status"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_created_by",
-        "spec_workflow_runs",
+        "ix_workflow_runs_created_by",
+        "workflow_runs",
         ["created_by"],
     )
 
     op.create_table(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("task_name", sa.String(length=128), nullable=False),
-        sa.Column("status", SPEC_WORKFLOW_TASK_STATUS, nullable=False),
+        sa.Column("status", WORKFLOW_TASK_STATUS, nullable=False),
         sa.Column("attempt", sa.Integer(), nullable=False, server_default="1"),
         sa.Column(
             "payload",
@@ -195,18 +195,18 @@ def upgrade() -> None:  # noqa: D401
             "workflow_run_id",
             "task_name",
             "attempt",
-            name="uq_spec_workflow_task_state_attempt",
+            name="uq_workflow_task_state_attempt",
         ),
     )
 
     op.create_index(
-        "ix_spec_workflow_task_states_run_id",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_run_id",
+        "workflow_task_states",
         ["workflow_run_id"],
     )
     op.create_index(
-        "ix_spec_workflow_task_states_failed",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_failed",
+        "workflow_task_states",
         ["workflow_run_id"],
         postgresql_where=sa.text("status = 'failed'"),
     )
@@ -217,7 +217,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -249,7 +249,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("artifact_type", WORKFLOW_ARTIFACT_TYPE, nullable=False),
@@ -284,24 +284,24 @@ def downgrade() -> None:  # noqa: D401
     op.drop_table("workflow_credential_audits")
 
     op.drop_index(
-        "ix_spec_workflow_task_states_failed",
-        table_name="spec_workflow_task_states",
+        "ix_workflow_task_states_failed",
+        table_name="workflow_task_states",
     )
     op.drop_index(
-        "ix_spec_workflow_task_states_run_id",
-        table_name="spec_workflow_task_states",
+        "ix_workflow_task_states_run_id",
+        table_name="workflow_task_states",
     )
-    op.drop_table("spec_workflow_task_states")
+    op.drop_table("workflow_task_states")
 
-    op.drop_index("ix_spec_workflow_runs_created_by", table_name="spec_workflow_runs")
-    op.drop_index("ix_spec_workflow_runs_status", table_name="spec_workflow_runs")
-    op.drop_index("ix_spec_workflow_runs_feature_key", table_name="spec_workflow_runs")
-    op.drop_table("spec_workflow_runs")
+    op.drop_index("ix_workflow_runs_created_by", table_name="workflow_runs")
+    op.drop_index("ix_workflow_runs_status", table_name="workflow_runs")
+    op.drop_index("ix_workflow_runs_feature_key", table_name="workflow_runs")
+    op.drop_table("workflow_runs")
 
     bind = op.get_bind()
     WORKFLOW_ARTIFACT_TYPE.drop(bind, checkfirst=True)
     WORKFLOW_GITHUB_CREDENTIAL_STATUS.drop(bind, checkfirst=True)
     WORKFLOW_CODEX_CREDENTIAL_STATUS.drop(bind, checkfirst=True)
-    SPEC_WORKFLOW_TASK_STATUS.drop(bind, checkfirst=True)
-    SPEC_WORKFLOW_RUN_PHASE.drop(bind, checkfirst=True)
-    SPEC_WORKFLOW_RUN_STATUS.drop(bind, checkfirst=True)
+    WORKFLOW_TASK_STATUS.drop(bind, checkfirst=True)
+    WORKFLOW_RUN_PHASE.drop(bind, checkfirst=True)
+    WORKFLOW_RUN_STATUS.drop(bind, checkfirst=True)

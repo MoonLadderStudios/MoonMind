@@ -8,13 +8,13 @@ Last Updated: 2026-02-16
 
 This design unifies MoonMind worker execution around:
 
-- One shared worker image that includes `codex`, `gemini`, `claude`, and `speckit`.
+- One shared worker image that includes `codex`, `gemini`, `claude`, and `agentkit`.
 - One RabbitMQ queue for AI execution jobs (`moonmind.jobs`).
 - Runtime selection through environment (`MOONMIND_WORKER_RUNTIME`) plus per-job target runtime.
 - Canonical `type="task"` queue payloads that are runtime-neutral and policy-safe.
 - Automatic pre/execute/publish wrapper stages for each claimed Task.
 
-Key requirement: `speckit` remains bundled in the same Docker image as the other CLIs.
+Key requirement: `agentkit` remains bundled in the same Docker image as the other CLIs.
 
 ## 2. Current State (Repo-Scoped)
 
@@ -26,7 +26,7 @@ This adds operational complexity and blocks a consistent typed Task UI contract.
 
 - Keep a single queue for worker jobs.
 - Allow runtime mode selection by `.env` per worker container.
-- Keep one base image for all AI CLIs plus `speckit`.
+- Keep one base image for all AI CLIs plus `agentkit`.
 - Execute canonical Task jobs across runtimes with capability matching.
 - Preserve compatibility with legacy job types during migration.
 
@@ -45,7 +45,7 @@ Use `api_service/Dockerfile` as the build source for API and worker services. Re
 - `codex`
 - `gemini`
 - `claude`
-- `speckit`
+- `agentkit`
 
 ### 5.2 Single Queue
 
@@ -168,8 +168,8 @@ Supported modes:
 
 ### Phase 1: Image and Runtime Unification
 
-- keep `speckit` in shared image
-- ensure `codex`, `gemini`, `claude`, `speckit` health checks
+- keep `agentkit` in shared image
+- ensure `codex`, `gemini`, `claude`, `agentkit` health checks
 
 ### Phase 2: Canonical Task Payload
 
@@ -207,7 +207,7 @@ Required artifacts:
 
 ## 9. Acceptance Criteria
 
-- Single image from `api_service/Dockerfile` contains `codex`, `gemini`, `claude`, `speckit`.
+- Single image from `api_service/Dockerfile` contains `codex`, `gemini`, `claude`, `agentkit`.
 - Workers are selectable through `MOONMIND_WORKER_RUNTIME` only.
 - Queue jobs submitted from Task UI use `type="task"` and canonical payload shape.
 - `prepare -> execute -> publish` events appear for Task jobs.

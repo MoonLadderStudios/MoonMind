@@ -10,8 +10,8 @@ Sync Impact Report
 - Templates requiring updates:
   - ✅ No template changes required; `/mnt/d/code/MoonMind/.specify/templates/plan-template.md`
     already instructs plans to derive gates from the constitution.
-  - ✅ No prompt changes required; `/mnt/d/code/MoonMind/.codex/prompts/speckit.plan.md`
-    and `/mnt/d/code/MoonMind/.gemini/commands/speckit.plan.toml` already load the
+  - ✅ No prompt changes required; `/mnt/d/code/MoonMind/.codex/prompts/agentkit.plan.md`
+    and `/mnt/d/code/MoonMind/.gemini/commands/agentkit.plan.toml` already load the
     constitution directly.
 - Follow-up TODOs: None.
 -->
@@ -209,7 +209,7 @@ Rationale: Specs are how MoonMind stays maintainable while evolving quickly.
 ## Development Workflow & Quality Gates
 
 - **Constitution is a gate**:
-  - Every `/speckit.plan` output MUST include the Constitution Check gate, and it MUST be re-checked after Phase 1 design.
+  - Every `/agentkit.plan` output MUST include the Constitution Check gate, and it MUST be re-checked after Phase 1 design.
 - **Validation is required**:
   - Each feature MUST define at least one independent validation path (automated tests or a deterministic quickstart/manual validation).
 - **Clarity over cleverness**:

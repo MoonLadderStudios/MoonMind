@@ -266,7 +266,7 @@ def test_get_live_session_hides_web_ro_when_allow_web_disabled(
     live = _build_live_session(task_run_id=task_run_id)
     live.web_ro = "https://web-ro.example"
     service.get_live_session.return_value = live
-    monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
+    monkeypatch.setattr(settings.workflow, "live_session_allow_web", False)
 
     response = test_client.get(f"/api/task-runs/{task_run_id}/live-session")
 
@@ -287,7 +287,7 @@ def test_grant_live_session_write_hides_web_rw_when_allow_web_disabled(
         web_rw="https://web-rw.example",
         granted_until=datetime.now(UTC),
     )
-    monkeypatch.setattr(settings.spec_workflow, "live_session_allow_web", False)
+    monkeypatch.setattr(settings.workflow, "live_session_allow_web", False)
 
     response = test_client.post(
         f"/api/task-runs/{task_run_id}/live-session/grant-write",

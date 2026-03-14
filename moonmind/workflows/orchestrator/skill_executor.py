@@ -21,7 +21,7 @@ _IMPORT_PROBE_TIMEOUT_SECONDS = 5.0
 def _resolve_workspace_root() -> Path:
     raw = (
         os.getenv("WORKFLOW_REPO_ROOT")
-        or os.getenv("SPEC_WORKFLOW_REPO_ROOT")
+        or os.getenv("WORKFLOW_REPO_ROOT")
         or os.getenv("WORKSPACE_ROOT")
         or ""
     ).strip()

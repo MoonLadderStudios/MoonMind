@@ -24,4 +24,4 @@
   - Minimal logging limited to success/failure: rejected because it leaves operators without visibility into which volume served a run.
   - Centralized metrics only: rejected since metrics alone cannot provide per-run traceability required for compliance.
 
-All identified clarifications have been resolved through existing Spec Kit guidance, so no open questions remain for `/speckit.clarify`.
+All identified clarifications have been resolved through existing Spec Kit guidance, so no open questions remain for `/agentkit.clarify`.

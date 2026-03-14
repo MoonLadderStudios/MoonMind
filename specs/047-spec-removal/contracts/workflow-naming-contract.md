@@ -8,12 +8,12 @@ Define canonical naming requirements for runtime and documentation surfaces duri
 
 | Surface | Legacy Pattern | Canonical Pattern | Contract Rule |
 |---|---|---|---|
-| Environment keys | `SPEC_WORKFLOW_*`, `SPEC_AUTOMATION_*` | `WORKFLOW_*` | Runtime and docs must expose canonical keys only for active configuration guidance. |
-| Settings namespace | `spec_workflow` | `workflow` | Config references, docs, and contracts use `workflow` naming. |
-| API routes | `/api/spec-automation/*`, `/api/workflows/speckit/*` | `/api/workflows/*` | Canonical route family is `/api/workflows/*`; legacy routes are not silently aliased. |
-| Schema/type names | `SpecWorkflow*` | `Workflow*` | Contracts and examples use `Workflow*` identifiers. |
-| Metrics namespace | `moonmind.spec_workflow*`, `spec_automation.*` | `moonmind.workflow*` | Observability docs and runtime emitters use canonical namespace names. |
-| Artifact roots | `var/artifacts/spec_workflows` | `var/artifacts/workflow_runs` or `var/artifacts/workflows` | Artifact path naming must be canonical and consistent per document/component context. |
+| Environment keys | `WORKFLOW_*`, `AUTOMATION_*` | `WORKFLOW_*` | Runtime and docs must expose canonical keys only for active configuration guidance. |
+| Settings namespace | `workflow` | `workflow` | Config references, docs, and contracts use `workflow` naming. |
+| API routes | `/api/spec-automation/*`, `/api/workflows/agentkit/*` | `/api/workflows/*` | Canonical route family is `/api/workflows/*`; legacy routes are not silently aliased. |
+| Schema/type names | `Workflow*` | `Workflow*` | Contracts and examples use `Workflow*` identifiers. |
+| Metrics namespace | `moonmind.workflow*`, `automation.*` | `moonmind.workflow*` | Observability docs and runtime emitters use canonical namespace names. |
+| Artifact roots | `var/artifacts/workflows` | `var/artifacts/workflow_runs` or `var/artifacts/workflows` | Artifact path naming must be canonical and consistent per document/component context. |
 
 ## Behavioral Invariants
 

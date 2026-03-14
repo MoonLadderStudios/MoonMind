@@ -9,7 +9,7 @@
 
 ### User Story 1 - Runtime orchestration preset follows MoonMind publish strategy (Priority: P1)
 
-Platform operators apply the global `speckit-orchestrate` task preset to queue jobs and expect runtime execution to stop at implementation/reporting while MoonMind publish stage controls commit/PR behavior.
+Platform operators apply the global `agentkit-orchestrate` task preset to queue jobs and expect runtime execution to stop at implementation/reporting while MoonMind publish stage controls commit/PR behavior.
 
 **Why this priority**: Runtime workers must not perform direct git publish actions when MoonMind wrapper stages own publish semantics.
 
@@ -17,14 +17,14 @@ Platform operators apply the global `speckit-orchestrate` task preset to queue j
 
 **Acceptance Scenarios**:
 
-1. **Given** the seeded `speckit-orchestrate` template, **When** step instructions are loaded from the catalog, **Then** no step instructs direct commit or PR creation from runtime execution.
+1. **Given** the seeded `agentkit-orchestrate` template, **When** step instructions are loaded from the catalog, **Then** no step instructs direct commit or PR creation from runtime execution.
 2. **Given** runtime mode orchestration, **When** final validation gates pass, **Then** the preset directs the agent to return a final report and defer publish actions to MoonMind publish stage.
 
 ---
 
 ### User Story 2 - Existing deployments receive preset behavior updates safely (Priority: P1)
 
-Platform maintainers migrate existing databases and expect the seeded `speckit-orchestrate` template row/version content to align with the current YAML definition without manual SQL edits.
+Platform maintainers migrate existing databases and expect the seeded `agentkit-orchestrate` template row/version content to align with the current YAML definition without manual SQL edits.
 
 **Why this priority**: Seed file updates alone do not modify environments that have already applied prior migrations.
 
@@ -32,7 +32,7 @@ Platform maintainers migrate existing databases and expect the seeded `speckit-o
 
 **Acceptance Scenarios**:
 
-1. **Given** an existing `speckit-orchestrate` template row, **When** the alignment migration runs, **Then** template/version `required_capabilities` and `steps` are updated from the current seed file.
+1. **Given** an existing `agentkit-orchestrate` template row, **When** the alignment migration runs, **Then** template/version `required_capabilities` and `steps` are updated from the current seed file.
 2. **Given** a deployment missing the seed file or template row, **When** migration runs, **Then** it exits without error and leaves schema/data intact.
 
 ---
@@ -61,16 +61,16 @@ Engineers using `specs/024-task-presets` as a reference see accurate file paths,
 ### Functional Requirements
 
 - **FR-001**: `specs/024-task-presets` artifacts MUST describe the current task preset implementation surfaces (actual migration IDs, service modules, router paths, and test locations used in this repository).
-- **FR-002**: The seeded `speckit-orchestrate` preset MUST not instruct runtime agents to create commits, push branches, or open pull requests directly.
-- **FR-003**: The `speckit-orchestrate` preset MUST instruct runtime execution to return a final report and defer publish behavior to MoonMind publish stage.
-- **FR-004**: A new idempotent Alembic migration MUST synchronize existing `speckit-orchestrate` template/version records with the current seed YAML definition.
+- **FR-002**: The seeded `agentkit-orchestrate` preset MUST not instruct runtime agents to create commits, push branches, or open pull requests directly.
+- **FR-003**: The `agentkit-orchestrate` preset MUST instruct runtime execution to return a final report and defer publish behavior to MoonMind publish stage.
+- **FR-004**: A new idempotent Alembic migration MUST synchronize existing `agentkit-orchestrate` template/version records with the current seed YAML definition.
 - **FR-005**: Automated tests MUST validate the seeded preset’s publish-stage-safe instruction language and protect against regressions.
 - **FR-006**: Validation MUST run through `./tools/test_unit.sh` per repository testing policy.
 - **FR-007**: Delivery MUST include production runtime code changes and validation tests; documentation/spec-only updates are out of scope for completion.
 
 ### Key Entities
 
-- **TaskPresetSeedDocument**: YAML definition in `api_service/data/task_step_templates/speckit-orchestrate.yaml` containing required capabilities and ordered orchestration steps.
+- **TaskPresetSeedDocument**: YAML definition in `api_service/data/task_step_templates/agentkit-orchestrate.yaml` containing required capabilities and ordered orchestration steps.
 - **TaskPresetTemplateRecord**: `task_step_templates` row storing scope, slug, and top-level required capabilities.
 - **TaskPresetVersionRecord**: `task_step_template_versions` row storing versioned step blueprints and required capabilities.
 - **PresetAlignmentMigration**: Alembic migration that updates existing seeded preset records to match current YAML content.
@@ -79,7 +79,7 @@ Engineers using `specs/024-task-presets` as a reference see accurate file paths,
 
 ### Measurable Outcomes
 
-- **SC-001**: Seeded `speckit-orchestrate` final step language contains explicit "do not commit/push" guidance and contains no direct commit/PR creation directives.
+- **SC-001**: Seeded `agentkit-orchestrate` final step language contains explicit "do not commit/push" guidance and contains no direct commit/PR creation directives.
 - **SC-002**: Migration applies cleanly in existing environments and updates seeded preset template/version fields using YAML-derived data.
 - **SC-003**: Unit test coverage includes regression checks for preset instruction language and seed capability/runtime neutrality.
 - **SC-004**: Updated `specs/024-task-presets/tasks.md` is fully completed (`[X]`) with references to implemented files and executed validation command.

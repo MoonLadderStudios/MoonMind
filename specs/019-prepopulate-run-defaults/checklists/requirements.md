@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Checklist completed during speckit-specify for runtime implementation readiness.
+- Checklist completed during agentkit-specify for runtime implementation readiness.

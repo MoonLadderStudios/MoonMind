@@ -14,8 +14,8 @@ def test_normalize_status_maps_queue_dead_letter_to_failed() -> None:
     assert normalize_status("queue", "dead_letter") == "failed"
 
 
-def test_normalize_status_maps_removed_speckit_to_fallback_queued() -> None:
-    assert normalize_status("speckit", "retrying") == "queued"
+def test_normalize_status_maps_removed_agentkit_to_fallback_queued() -> None:
+    assert normalize_status("agentkit", "retrying") == "queued"
 
 
 def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
@@ -56,7 +56,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_enabled", True)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
 
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
@@ -172,7 +172,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/artifacts/{artifactId}/download"
     )
-    assert "speckit" not in config["sources"]
+    assert "agentkit" not in config["sources"]
     assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
@@ -227,11 +227,11 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
 def test_build_runtime_config_normalizes_attachment_policy_settings(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_max_count", 0)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_max_bytes", 0)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_total_bytes", 0)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_count", 0)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_bytes", 0)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_total_bytes", 0)
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_allowed_content_types",
         (),
     )
@@ -278,12 +278,12 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
-    monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
-    monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
-    monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "codex")
+    monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(settings.workflow, "codex_model", "gpt-test-codex")
+    monkeypatch.setattr(settings.workflow, "codex_effort", "medium")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
-    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+    monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
 

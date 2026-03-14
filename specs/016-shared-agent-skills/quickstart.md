@@ -27,7 +27,7 @@ docker compose up -d rabbitmq api celery_worker orchestrator
 
 Submit a workflow run with job overrides (example):
 
-- `skill_overrides=["speckit:1.2.0","docs-lint:0.4.1"]`
+- `skill_overrides=["agentkit:1.2.0","docs-lint:0.4.1"]`
 
 Expected behavior:
 

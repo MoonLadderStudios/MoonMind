@@ -14,7 +14,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
 )
 
-pytestmark = [pytest.mark.speckit]
+pytestmark = [pytest.mark.agentkit]
 
 
 def test_job_cursor_round_trip() -> None:

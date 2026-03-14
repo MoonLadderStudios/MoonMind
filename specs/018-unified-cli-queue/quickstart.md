@@ -35,7 +35,7 @@ Expected startup validation commands:
 - `codex --version`
 - `gemini --version`
 - `claude --version`
-- `speckit --version`
+- `agentkit --version`
 
 Workers should refuse job processing if any required command fails.
 

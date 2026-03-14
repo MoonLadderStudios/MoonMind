@@ -212,7 +212,7 @@ Payload extension:
 ```json
 {
   "action": "resume_from_step",
-  "stepId": "tpl:speckit-orchestrate:1.0.0:05:f7739e20",
+  "stepId": "tpl:agentkit-orchestrate:1.0.0:05:f7739e20",
   "reason": "operator recovery"
 }
 ```

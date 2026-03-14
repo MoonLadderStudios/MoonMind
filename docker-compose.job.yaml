@@ -42,7 +42,7 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     command: >-
-      celery -A celery_worker.speckit_worker worker
+      celery -A celery_worker.agentkit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=${WORKFLOW_CODEX_QUEUE:-codex}
     environment:
@@ -60,8 +60,8 @@ services:
       - ./celery_worker:/app/celery_worker:ro
       - ./specs:/app/specs:ro
       - ./model_data:/app/model_data
-      - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
-      - speckit_workspaces:/work/runs
+      - ./var/artifacts/workflows:/app/var/artifacts/workflows
+      - agentkit_workspaces:/work/runs
     depends_on:
       rabbitmq:
         condition: service_started
@@ -75,7 +75,7 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     command: >-
-      celery -A celery_worker.speckit_worker worker
+      celery -A celery_worker.agentkit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=codex-0
     environment:
@@ -96,8 +96,8 @@ services:
       - ./celery_worker:/app/celery_worker:ro
       - ./specs:/app/specs:ro
       - ./model_data:/app/model_data
-      - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
-      - speckit_workspaces:/work/runs
+      - ./var/artifacts/workflows:/app/var/artifacts/workflows
+      - agentkit_workspaces:/work/runs
       - codex_auth_0:/var/lib/codex-auth
     depends_on:
       rabbitmq:
@@ -112,7 +112,7 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     command: >-
-      celery -A celery_worker.speckit_worker worker
+      celery -A celery_worker.agentkit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=codex-1
     environment:
@@ -133,8 +133,8 @@ services:
       - ./celery_worker:/app/celery_worker:ro
       - ./specs:/app/specs:ro
       - ./model_data:/app/model_data
-      - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
-      - speckit_workspaces:/work/runs
+      - ./var/artifacts/workflows:/app/var/artifacts/workflows
+      - agentkit_workspaces:/work/runs
       - codex_auth_1:/var/lib/codex-auth
     depends_on:
       rabbitmq:
@@ -149,7 +149,7 @@ services:
       dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     command: >-
-      celery -A celery_worker.speckit_worker worker
+      celery -A celery_worker.agentkit_worker worker
       --loglevel=${CELERY_LOG_LEVEL:-info}
       --queues=codex-2
     environment:
@@ -170,8 +170,8 @@ services:
       - ./celery_worker:/app/celery_worker:ro
       - ./specs:/app/specs:ro
       - ./model_data:/app/model_data
-      - ./var/artifacts/spec_workflows:/app/var/artifacts/spec_workflows
-      - speckit_workspaces:/work/runs
+      - ./var/artifacts/workflows:/app/var/artifacts/workflows
+      - agentkit_workspaces:/work/runs
       - codex_auth_2:/var/lib/codex-auth
     depends_on:
       rabbitmq:
@@ -191,7 +191,7 @@ services:
       - CELERY_BROKER_URL=${WORKFLOW_CELERY_BROKER_URL:-amqp://${RABBITMQ_USER:-moonmind}:${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}@rabbitmq:5672//}
       - CELERY_RESULT_BACKEND=${WORKFLOW_CELERY_RESULT_BACKEND:-rpc://}
       - ORCHESTRATOR_CELERY_QUEUE=${ORCHESTRATOR_CELERY_QUEUE:-orchestrator.run}
-      - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/spec_workflows}
+      - ORCHESTRATOR_ARTIFACT_ROOT=${ORCHESTRATOR_ARTIFACT_ROOT:-var/artifacts/workflows}
       - ORCHESTRATOR_STATSD_HOST=${ORCHESTRATOR_STATSD_HOST:-}
       - ORCHESTRATOR_STATSD_PORT=${ORCHESTRATOR_STATSD_PORT:-8125}
       - DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-unix:///var/run/docker.sock}
@@ -232,7 +232,7 @@ networks:
 
 volumes:
   rabbitmq-data:
-  speckit_workspaces:
+  agentkit_workspaces:
   codex_auth_0:
   codex_auth_1:
   codex_auth_2:

@@ -79,7 +79,7 @@ Expected outcome: runtime scope checks pass with production runtime code and val
 
 ## 8. Planning artifact completion gate
 
-Before running `/speckit.tasks`, ensure these artifacts exist:
+Before running `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/046-workflow-type-lifecycle/plan.md`
 - `specs/046-workflow-type-lifecycle/research.md`

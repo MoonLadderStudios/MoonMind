@@ -89,7 +89,7 @@ def _configured_manifest_capabilities() -> tuple[str, ...]:
     """Return baseline manifest capability labels from settings."""
 
     configured = getattr(
-        settings.spec_workflow,
+        settings.workflow,
         "manifest_required_capabilities",
         ("manifest",),
     )
@@ -522,7 +522,7 @@ def sanitize_manifest_payload(payload: Mapping[str, Any] | None) -> dict[str, An
 
 def _allowed_source_kinds() -> frozenset[str]:
     kinds = set(_BASE_ALLOWED_SOURCE_KINDS)
-    if settings.spec_workflow.allow_manifest_path_source:
+    if settings.workflow.allow_manifest_path_source:
         kinds.add("path")
     return frozenset(kinds)
 

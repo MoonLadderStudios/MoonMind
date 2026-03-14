@@ -5,7 +5,7 @@
 - **Description**: Deterministic mapping from each legacy workflow token to its canonical token.
 - **Fields**:
   - `mapping_id` (string): stable identifier for audit references.
-  - `legacy_term` (string): source token (example: `SPEC_WORKFLOW_CODEX_QUEUE`).
+  - `legacy_term` (string): source token (example: `WORKFLOW_CODEX_QUEUE`).
   - `canonical_term` (string): target token (example: `WORKFLOW_CODEX_QUEUE`).
   - `surface_type` (enum): `config`, `route`, `schema`, `metric`, `artifact_path`, `documentation`.
   - `scope` (enum): `runtime`, `docs`, `both`.

@@ -18,7 +18,7 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 **Purpose**: Ensure the development environment can build and run the shared api_service image.
 
 - [x] T001 Install Node.js toolchain prerequisites in `api_service/Dockerfile` builder stage per research decisions
-- [x] T002 Document required environment variables for Codex/Spec Kit installs in `docs/SpecKitAutomationInstructions.md`
+- [x] T002 Document required environment variables for Codex/Spec Kit installs in `docs/AgentKitAutomationInstructions.md`
 
 ---
 
@@ -27,11 +27,11 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 **Purpose**: Core build + config assets that every story depends on.
 
 - [x] T003 Create `api_service/docker/README.md` entry describing multi-stage build flow and new build args
-- [x] T004 [P] Add `CODEX_CLI_VERSION` and `SPEC_KIT_VERSION` build arguments with defaults to `api_service/Dockerfile`
+- [x] T004 [P] Add `CODEX_CLI_VERSION` and `AGENT_KIT_VERSION` build arguments with defaults to `api_service/Dockerfile`
 - [x] T005 [P] Add multi-stage Node builder that installs `@openai/codex` and `@githubnext/spec-kit` via npm in `api_service/Dockerfile`
 - [x] T006 [P] Copy Codex & Spec Kit binaries plus licenses from builder stage into the runtime layer in `api_service/Dockerfile`
 - [x] T007 Update `README.md` tooling section to mention bundled CLIs and version pin strategy
-- [x] T008 Extend `docs/SpecKitAutomation.md` with health-check expectations for bundled CLIs
+- [x] T008 Extend `docs/AgentKitAutomation.md` with health-check expectations for bundled CLIs
 
 **Checkpoint**: Dockerfile now supports versioned CLI installs and documentation references the new flow.
 
@@ -47,9 +47,9 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 - [x] T009 [US1] Add builder-layer test step to run `codex --version` during Docker build in `api_service/Dockerfile`
 - [x] T010 [US1] Ensure runtime layer sets PATH/permissions so `codex` is executable by the `app` user in `api_service/Dockerfile`
-- [x] T011 [US1] Update `moonmind/workflows/speckit_celery/job_container.py` to assert Codex binary exists before task execution
-- [x] T012 [US1] Add worker startup log message confirming Codex CLI version in `celery_worker/speckit_worker.py`
-- [x] T013 [US1] Document Codex CLI verification commands in `docs/SpecKitAutomationInstructions.md#codex`
+- [x] T011 [US1] Update `moonmind/workflows/agentkit_celery/job_container.py` to assert Codex binary exists before task execution
+- [x] T012 [US1] Add worker startup log message confirming Codex CLI version in `celery_worker/agentkit_worker.py`
+- [x] T013 [US1] Document Codex CLI verification commands in `docs/AgentKitAutomationInstructions.md#codex`
 
 **Parallel Opportunities**: Tasks T009–T013 can run in parallel except T010 depends on T009’s install step, and T012 depends on worker log message schema shared with other logging updates.
 
@@ -59,15 +59,15 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 **Goal**: Spec Kit CLI is bundled with the image and exposed on PATH for Celery jobs.
 
-**Independent Test**: Start worker from new image, run `speckit --version` and the smoke test without network installs.
+**Independent Test**: Start worker from new image, run `agentkit --version` and the smoke test without network installs.
 
 ### Implementation
 
-- [x] T014 [P] [US2] Run `speckit --version` verification during Docker build in `api_service/Dockerfile`
-- [x] T015 [US2] Confirm runtime layer exposes `speckit` on PATH with correct ownership in `api_service/Dockerfile`
-- [x] T016 [US2] Update `moonmind/workflows/speckit_celery/tasks.py` to log Spec Kit CLI availability before orchestrating phases
+- [x] T014 [P] [US2] Run `agentkit --version` verification during Docker build in `api_service/Dockerfile`
+- [x] T015 [US2] Confirm runtime layer exposes `agentkit` on PATH with correct ownership in `api_service/Dockerfile`
+- [x] T016 [US2] Update `moonmind/workflows/agentkit_celery/tasks.py` to log Spec Kit CLI availability before orchestrating phases
 - [x] T017 [US2] Add quickstart section covering Spec Kit smoke test in `specs/004-install-codex-spec/quickstart.md`
-- [x] T018 [US2] Expand `docs/SpecKitAutomation.md` with troubleshooting specific to Spec Kit CLI failures
+- [x] T018 [US2] Expand `docs/AgentKitAutomation.md` with troubleshooting specific to Spec Kit CLI failures
 
 **Parallel Opportunities**: T014 and T015 depend on foundational builder changes but can run parallel to US1 tasks. T017–T018 are documentation-only and parallelizable after verification commands are known.
 
@@ -83,9 +83,9 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 - [x] T019 [US3] Add `/etc/codex/config.toml` template with `approval_policy = "never"` in `api_service/Dockerfile`
 - [x] T020 [US3] Implement entrypoint merge script (Python/TOML) at `api_service/scripts/ensure_codex_config.py` and invoke from Dockerfile CMD
-- [x] T021 [US3] Update `moonmind/workflows/speckit_celery/speckit_worker.py` startup to fail if merge script is missing or config lacks required policy
+- [x] T021 [US3] Update `moonmind/workflows/agentkit_celery/agentkit_worker.py` startup to fail if merge script is missing or config lacks required policy
 - [x] T022 [US3] Extend health-check API contract (`specs/004-install-codex-spec/contracts/tooling-healthcheck.openapi.yaml`) with `approvalPolicy` enforcement details
-- [x] T023 [US3] Document remediation steps when config drifts in `docs/SpecKitAutomationInstructions.md#codex-config`
+- [x] T023 [US3] Document remediation steps when config drifts in `docs/AgentKitAutomationInstructions.md#codex-config`
 
 **Parallel Opportunities**: T019 and T020 must happen sequentially; T021–T023 can proceed once merge script behavior is defined.
 
@@ -95,8 +95,8 @@ All tasks below follow `- [ ] T### [P?] [Story?] Description with file path`.
 
 **Purpose**: Final validation, docs, and release readiness for all stories.
 
-- [x] T024 [P] Add CI job or pipeline step to run `codex --version && speckit --version` inside `docker-compose.test.yaml`
-- [x] T025 [P] Update `docs/SpecKitAutomation.md` quick troubleshooting table with summary of Codex/Spec Kit install steps
+- [x] T024 [P] Add CI job or pipeline step to run `codex --version && agentkit --version` inside `docker-compose.test.yaml`
+- [x] T025 [P] Update `docs/AgentKitAutomation.md` quick troubleshooting table with summary of Codex/Spec Kit install steps
 - [x] T026 Prepare release notes summarizing bundled CLI versions in `docs/release-notes.md`
 - [x] T027 Run full quickstart (build, smoke tests) and record outputs in `specs/004-install-codex-spec/research.md#verification`
 

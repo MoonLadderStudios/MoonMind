@@ -29,10 +29,10 @@
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
 - [x] T003 Expand Spec Kit settings for CODEX shard configuration in `moonmind/config/settings.py`
-- [x] T004 Add CodexAuthVolume/CodexWorkerShard models and new run metadata fields in `moonmind/workflows/speckit_celery/models.py`
+- [x] T004 Add CodexAuthVolume/CodexWorkerShard models and new run metadata fields in `moonmind/workflows/agentkit_celery/models.py`
 - [x] T005 Create Alembic migration adding Codex shard tables and run columns in `api_service/migrations/versions/*_codex_shards.py`
-- [x] T006 Update Spec workflow repositories to persist shard and pre-flight fields in `moonmind/workflows/speckit_celery/repositories.py`
-- [x] T007 Surface Codex shard metadata in API serializers and schemas via `moonmind/workflows/speckit_celery/serializers.py` and `moonmind/schemas/workflow_models.py`
+- [x] T006 Update Spec workflow repositories to persist shard and pre-flight fields in `moonmind/workflows/agentkit_celery/repositories.py`
+- [x] T007 Surface Codex shard metadata in API serializers and schemas via `moonmind/workflows/agentkit_celery/serializers.py` and `moonmind/schemas/workflow_models.py`
 
 **Checkpoint**: Foundation ready—Codex shard metadata can be stored and returned end-to-end.
 
@@ -46,10 +46,10 @@
 
 ### Implementation for User Story 1
 
-- [x] T008 [P] [US1] Mount worker-specific Codex auth volume when starting job containers in `moonmind/workflows/speckit_celery/job_container.py`
-- [x] T009 [P] [US1] Implement Codex pre-flight login helper using Docker mounts in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T010 [US1] Gate Codex submission on pre-flight success and persist status/message in `moonmind/workflows/speckit_celery/tasks.py`
-- [x] T011 [US1] Record mounted volume metadata on the workflow context in `moonmind/workflows/speckit_celery/orchestrator.py`
+- [x] T008 [P] [US1] Mount worker-specific Codex auth volume when starting job containers in `moonmind/workflows/agentkit_celery/job_container.py`
+- [x] T009 [P] [US1] Implement Codex pre-flight login helper using Docker mounts in `moonmind/workflows/agentkit_celery/tasks.py`
+- [x] T010 [US1] Gate Codex submission on pre-flight success and persist status/message in `moonmind/workflows/agentkit_celery/tasks.py`
+- [x] T011 [US1] Record mounted volume metadata on the workflow context in `moonmind/workflows/agentkit_celery/orchestrator.py`
 - [x] T012 [P] [US1] Add unit coverage for volume mount and pre-flight failure handling in `tests/unit/workflows/test_tasks.py`
 
 **Checkpoint**: Codex phases reuse persistent auth, and failures halt before execution with clear remediation instructions.
@@ -64,11 +64,11 @@
 
 ### Implementation for User Story 2
 
-- [x] T013 [P] [US2] Add Celery routing helper for codex shard queues in `moonmind/workflows/speckit_celery/celeryconfig.py`
-- [x] T014 [US2] Wire Celery app to new shard queues and routing in `moonmind/workflows/speckit_celery/__init__.py`
-- [x] T015 [US2] Compute shard affinity keys and attach queue metadata when scheduling Codex jobs in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T013 [P] [US2] Add Celery routing helper for codex shard queues in `moonmind/workflows/agentkit_celery/celeryconfig.py`
+- [x] T014 [US2] Wire Celery app to new shard queues and routing in `moonmind/workflows/agentkit_celery/__init__.py`
+- [x] T015 [US2] Compute shard affinity keys and attach queue metadata when scheduling Codex jobs in `moonmind/workflows/agentkit_celery/tasks.py`
 - [x] T016 [US2] Define codex worker services and volumes in `docker-compose.yaml` and `docker-compose.job.yaml`
-- [x] T017 [P] [US2] Emit queue and volume diagnostics for each Codex run in `moonmind/workflows/speckit_celery/tasks.py`
+- [x] T017 [P] [US2] Emit queue and volume diagnostics for each Codex run in `moonmind/workflows/agentkit_celery/tasks.py`
 - [x] T018 [P] [US2] Add deterministic routing tests covering shard selection in `tests/unit/workflows/test_tasks.py`
 
 **Checkpoint**: Codex tasks fan out across dedicated queues with auditable routing data while other work stays unaffected.
@@ -83,10 +83,10 @@
 
 ### Implementation for User Story 3
 
-- [x] T019 [P] [US3] Implement shard and volume query helpers in `moonmind/workflows/speckit_celery/repositories.py`
+- [x] T019 [P] [US3] Implement shard and volume query helpers in `moonmind/workflows/agentkit_celery/repositories.py`
 - [x] T020 [US3] Expose `/api/workflows/codex/shards` endpoint in `api_service/api/routers/workflows.py`
 - [x] T021 [US3] Expose `/api/workflows/runs/{run_id}/codex/preflight` endpoint in `api_service/api/routers/workflows.py`
-- [x] T022 [P] [US3] Update operator documentation and quickstart instructions in `docs/SpecKitAutomation.md` and `specs/001-celery-oauth-volumes/quickstart.md`
+- [x] T022 [P] [US3] Update operator documentation and quickstart instructions in `docs/AgentKitAutomation.md` and `specs/001-celery-oauth-volumes/quickstart.md`
 - [x] T023 [P] [US3] Add contract coverage for shard and pre-flight endpoints in `tests/contract/test_workflow_api.py`
 - [x] T024 [US3] Add repository/API unit coverage for shard health responses in `tests/unit/workflows/test_tasks.py`
 
@@ -130,7 +130,7 @@
 ```bash
 # In parallel
 poetry run pytest tests/unit/workflows/test_tasks.py::test_codex_preflight_gates  # from T012
-python -m build_tools.apply_patch moonmind/workflows/speckit_celery/job_container.py  # from T008
+python -m build_tools.apply_patch moonmind/workflows/agentkit_celery/job_container.py  # from T008
 ```
 
 ### User Story 2
@@ -146,7 +146,7 @@ python scripts/update_compose.py docker-compose.yaml  # from T016
 ```bash
 # In parallel
 poetry run pytest tests/contract/test_workflow_api.py::test_codex_shard_endpoints  # from T023
-code docs/SpecKitAutomation.md  # from T022
+code docs/AgentKitAutomation.md  # from T022
 ```
 
 ## Implementation Strategy (MVP First)

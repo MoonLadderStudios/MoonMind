@@ -20,7 +20,7 @@
 **Purpose**: Establish the canonical preset/contract baseline that user stories depend on.
 
 - [X] T004 Update `specs/024-task-presets/contracts/task-step-templates.yaml` by reconciling endpoint surface and operations with `api_service/api/routers/task_step_templates.py` and `api_service/services/task_templates/catalog.py`.
-- [X] T005 Ensure `api_service/data/task_step_templates/speckit-orchestrate.yaml` keeps mode-aware validation placeholders (including `validate-implementation-scope.sh --check tasks --mode {{ inputs.orchestration_mode }}`) so runtime/docs behavior remains explicit.
+- [X] T005 Ensure `api_service/data/task_step_templates/agentkit-orchestrate.yaml` keeps mode-aware validation placeholders (including `validate-implementation-scope.sh --check tasks --mode {{ inputs.orchestration_mode }}`) so runtime/docs behavior remains explicit.
 
 **Checkpoint**: Spec artifacts and shared preset baseline are consistent, enabling story implementation.
 
@@ -28,7 +28,7 @@
 
 ## Phase 3: User Story 1 - Runtime orchestration preset follows MoonMind publish strategy (Priority: P1) 🎯 MVP
 
-**Goal**: Runtime expansion of `speckit-orchestrate` prohibits direct publish actions and returns a final report for wrapper publish handling.
+**Goal**: Runtime expansion of `agentkit-orchestrate` prohibits direct publish actions and returns a final report for wrapper publish handling.
 
 **Independent Test**: Expand the seeded preset and verify final instructions explicitly say runtime must not commit/push/open PRs and must return handoff report details.
 
@@ -38,8 +38,8 @@
 
 ### Implementation for User Story 1
 
-- [X] T007 [US1] Update final-step instructions in `api_service/data/task_step_templates/speckit-orchestrate.yaml` so runtime execution returns a report and defers commit/PR behavior to MoonMind publish stage.
-- [X] T008 [US1] Keep `api_service/data/task_step_templates/speckit-orchestrate.yaml` required capabilities runtime-neutral by ensuring no GitHub-only capability requirements are introduced in the final-step skill configuration.
+- [X] T007 [US1] Update final-step instructions in `api_service/data/task_step_templates/agentkit-orchestrate.yaml` so runtime execution returns a report and defers commit/PR behavior to MoonMind publish stage.
+- [X] T008 [US1] Keep `api_service/data/task_step_templates/agentkit-orchestrate.yaml` required capabilities runtime-neutral by ensuring no GitHub-only capability requirements are introduced in the final-step skill configuration.
 
 **Checkpoint**: Seeded runtime instructions match publish-stage ownership and are regression-protected.
 
@@ -47,7 +47,7 @@
 
 ## Phase 4: User Story 2 - Existing deployments receive preset behavior updates safely (Priority: P1)
 
-**Goal**: Existing environments refresh stored `speckit-orchestrate` template/version payloads from the latest YAML seed through an idempotent migration.
+**Goal**: Existing environments refresh stored `agentkit-orchestrate` template/version payloads from the latest YAML seed through an idempotent migration.
 
 **Independent Test**: Run migration with pre-seeded records and verify `required_capabilities` and `steps` are refreshed; run against missing seed/rows and verify clean no-op behavior.
 
@@ -57,8 +57,8 @@
 
 ### Implementation for User Story 2
 
-- [X] T010 [US2] Implement/refresh idempotent data-alignment logic in `api_service/migrations/versions/202603010001_align_speckit_orchestrate_publish_stage.py` to load the YAML seed and safely no-op when seed file or target rows are missing.
-- [X] T011 [US2] Update `api_service/migrations/versions/202603010001_align_speckit_orchestrate_publish_stage.py` to synchronize `task_step_templates.required_capabilities` and `task_step_template_versions.required_capabilities`, `steps`, and `seed_source` from the seed document.
+- [X] T010 [US2] Implement/refresh idempotent data-alignment logic in `api_service/migrations/versions/202603010001_align_agentkit_orchestrate_publish_stage.py` to load the YAML seed and safely no-op when seed file or target rows are missing.
+- [X] T011 [US2] Update `api_service/migrations/versions/202603010001_align_agentkit_orchestrate_publish_stage.py` to synchronize `task_step_templates.required_capabilities` and `task_step_template_versions.required_capabilities`, `steps`, and `seed_source` from the seed document.
 
 **Checkpoint**: Migration upgrades existing deployments to the current preset behavior without brittle/manual SQL patches.
 
@@ -117,7 +117,7 @@
 ```bash
 # Parallelizable US1 tasks after foundational completion:
 Task: "T006 [US1] Extend regression coverage in tests/unit/api/test_task_template_seed_alignment.py"
-Task: "T007 [US1] Update final-step publish handoff instructions in api_service/data/task_step_templates/speckit-orchestrate.yaml"
+Task: "T007 [US1] Update final-step publish handoff instructions in api_service/data/task_step_templates/agentkit-orchestrate.yaml"
 ```
 
 ## Parallel Example: User Story 2
@@ -125,7 +125,7 @@ Task: "T007 [US1] Update final-step publish handoff instructions in api_service/
 ```bash
 # Run seed-shape regression assertions while migration logic is being finalized:
 Task: "T009 [US2] Add migration-required seed-shape assertions in tests/unit/api/test_task_template_seed_alignment.py"
-Task: "T010 [US2] Implement idempotent alignment migration in api_service/migrations/versions/202603010001_align_speckit_orchestrate_publish_stage.py"
+Task: "T010 [US2] Implement idempotent alignment migration in api_service/migrations/versions/202603010001_align_agentkit_orchestrate_publish_stage.py"
 ```
 
 ## Parallel Example: User Story 3

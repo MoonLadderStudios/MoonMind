@@ -38,7 +38,7 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
-from moonmind.workflows.spec_automation.workspace import generate_branch_name
+from moonmind.workflows.automation.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
 
@@ -443,7 +443,7 @@ def _build_runtime_planner():
             runtime_node.get("mode")
             or runtime_payload.get("mode")
             or parameter_payload.get("targetRuntime")
-            or settings.spec_workflow.default_task_runtime
+            or settings.workflow.default_task_runtime
         )
         runtime_node["mode"] = runtime_mode
 

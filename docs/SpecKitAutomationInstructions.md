@@ -1,14 +1,14 @@
 # Spec Kit Automation Instructions
 
-These instructions describe how to launch the Spec Kit automation pipeline so that, after you supply credentials, the desired repository, and the Spec Kit input text, the system handles cloning, running `/speckit.specify`, `/speckit.plan`, and `/speckit.tasks`, committing any changes, and opening a pull request automatically.【F:docs/SpecKitAutomation.md†L12-L78】【F:specs/002-document-speckit-automation/spec.md†L11-L45】
+These instructions describe how to launch the Spec Kit automation pipeline so that, after you supply credentials, the desired repository, and the Spec Kit input text, the system handles cloning, running `/agentkit.specify`, `/agentkit.plan`, and `/agentkit.tasks`, committing any changes, and opening a pull request automatically.【F:docs/AgentKitAutomation.md†L12-L78】【F:specs/002-document-agentkit-automation/spec.md†L11-L45】
 
 ## Prerequisites
 
-1. **Runtime services** – Bring up RabbitMQ, the Codex-focused Celery worker, and the API service together; they share the automation queues, result backend, and REST surface used to trigger and monitor runs.【F:docs/SpecKitAutomation.md†L32-L95】【F:specs/002-document-speckit-automation/quickstart.md†L47-L55】
-   - Bind the worker to both Workflow queues (`${CELERY_DEFAULT_QUEUE:-speckit}` and `${WORKFLOW_CODEX_QUEUE:-codex}`), so discovery and Codex phases execute on the same worker process.
-2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`./tools/auth-codex-volume.sh`, which runs `codex login --device-auth`) so the pre-flight status check passes before jobs start. Set `WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-speckit-automation/quickstart.md†L32-L43】【F:docs/SpecKitAutomation.md†L116-L129】
-3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/speckit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-speckit-automation/spec.md†L11-L45】
-4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/workflows` endpoints require authentication.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
+1. **Runtime services** – Bring up RabbitMQ, the Codex-focused Celery worker, and the API service together; they share the automation queues, result backend, and REST surface used to trigger and monitor runs.【F:docs/AgentKitAutomation.md†L32-L95】【F:specs/002-document-agentkit-automation/quickstart.md†L47-L55】
+   - Bind the worker to both Workflow queues (`${CELERY_DEFAULT_QUEUE:-agentkit}` and `${WORKFLOW_CODEX_QUEUE:-codex}`), so discovery and Codex phases execute on the same worker process.
+2. **Credentials** – Export a GitHub token with `repo` scope, ensure `CODEX_ENV` and `CODEX_MODEL` are configured, and authenticate the Codex auth volume (`./tools/auth-codex-volume.sh`, which runs `codex login --device-auth`) so the pre-flight status check passes before jobs start. Set `WORKFLOW_TEST_MODE=true` when you only want to dry-run without pushing changes.【F:specs/002-document-agentkit-automation/quickstart.md†L32-L43】【F:docs/AgentKitAutomation.md†L116-L129】
+3. **Spec input** – Prepare the text (YAML/JSON/Markdown) you want to feed into `/agentkit.specify`; save it locally so it can be injected into the run request body.【F:specs/002-document-agentkit-automation/spec.md†L11-L45】
+4. **API access** – Obtain an access token for the MoonMind API (e.g., via Keycloak) because `/api/workflows` endpoints require authentication.【F:specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml†L11-L101】 If you are using the bundled Keycloak realm, walk through the steps below and then export the resulting bearer token as `MOONMIND_API_TOKEN`.
     1. **Start Keycloak** – Run `docker compose --profile keycloak up keycloak keycloak-db -d` so the `moonmind` realm is available at `http://localhost:8085`. The default admin credentials are `admin/admin` unless you set `KC_ADMIN_PW`.
     2. **Point the API at Keycloak** – In your `.env`, set `AUTH_PROVIDER=keycloak`, `OIDC_ISSUER_URL=http://localhost:8085/realms/moonmind`, `OIDC_CLIENT_ID=api-service`, and `OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme}` (match any overrides you applied in `docker-compose.yaml`). Restart the `api` container so it reloads the settings.
     3. **Create a user** – Sign in to the Keycloak admin console, select the `moonmind` realm, and add (or reset) a user that will own automation runs. Under the **Credentials** tab, set a non-temporary password and note the username/password pair for the next step.
@@ -43,16 +43,16 @@ To keep Codex and Spec Kit CLI installs deterministic, standardize on two enviro
 | Variable | Purpose | Recommended default |
 |----------|---------|---------------------|
 | `CODEX_CLI_VERSION` | Selects the npm tag of `@openai/codex` installed during the image build. Align with the version validated by your automation tests. | `0.104.0` |
-| `SPEC_KIT_VERSION` | Selects the npm tag of `@githubnext/spec-kit` installed alongside Codex. Keep it in sync with the Spec Kit workflows your team supports. | `0.4.0` |
+| `AGENT_KIT_VERSION` | Selects the npm tag of `@githubnext/spec-kit` installed alongside Codex. Keep it in sync with the Spec Kit workflows your team supports. | `0.4.0` |
 
 Set the variables in your shell or CI pipeline and forward them with `--build-arg` once the Dockerfile exposes the matching build arguments:
 
 ```bash
 export CODEX_CLI_VERSION=0.104.0
-export SPEC_KIT_VERSION=0.4.0
+export AGENT_KIT_VERSION=0.4.0
 docker build -f api_service/Dockerfile \
   --build-arg CODEX_CLI_VERSION \
-  --build-arg SPEC_KIT_VERSION \
+  --build-arg AGENT_KIT_VERSION \
   -t moonmind/api-service:tooling .
 ```
 
@@ -132,21 +132,21 @@ From the repository root, authenticate the Codex volume once, then start support
 docker compose up rabbitmq celery_codex_worker api
 ```
 
-Leave the stack running. The default `docker-compose.yaml` mounts the host Docker socket and provisions a shared `speckit_workspaces` volume so the Celery worker can launch job containers while the API retains read-only access to generated artifacts. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docker-compose.yaml†L90-L198】【F:docs/SpecKitAutomation.md†L32-L113】【F:specs/002-document-speckit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/speckit_celery/workspace.py†L1-L48】
+Leave the stack running. The default `docker-compose.yaml` mounts the host Docker socket and provisions a shared `agentkit_workspaces` volume so the Celery worker can launch job containers while the API retains read-only access to generated artifacts. Each run receives an isolated workspace under `/work/runs/<run_id>` that persists for monitoring until you tear the stack down.【F:docker-compose.yaml†L90-L198】【F:docs/AgentKitAutomation.md†L32-L113】【F:specs/002-document-agentkit-automation/quickstart.md†L47-L106】【F:moonmind/workflows/agentkit_celery/workspace.py†L1-L48】
 
 ## Step 2 – Prepare your run request
 
 Use Postman to compose the request that kicks off a Workflow run.
 
-1. **Create (or select) an environment** – Add variables such as `base_url` (`http://localhost:5000`), `moonmind_api_token`, `repository`, `feature_key`, and `notes`. Keeping credentials in Postman variables prevents them from leaking into shell history while making the request reusable across workspaces.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L101】
-2. **Define the request** – Inside a collection, add a `POST {{base_url}}/api/workflows/runs` request. Set the **Authorization** tab to **Bearer Token** and reference `{{moonmind_api_token}}` so the header updates automatically. Confirm the **Headers** tab includes `Content-Type: application/json`.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L11-L80】
+1. **Create (or select) an environment** – Add variables such as `base_url` (`http://localhost:5000`), `moonmind_api_token`, `repository`, `feature_key`, and `notes`. Keeping credentials in Postman variables prevents them from leaking into shell history while making the request reusable across workspaces.【F:specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml†L11-L101】
+2. **Define the request** – Inside a collection, add a `POST {{base_url}}/api/workflows/runs` request. Set the **Authorization** tab to **Bearer Token** and reference `{{moonmind_api_token}}` so the header updates automatically. Confirm the **Headers** tab includes `Content-Type: application/json`.【F:specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml†L11-L80】
 3. **Populate the body** – Choose **raw** + **JSON** and paste the payload below. You can replace literal values with Postman variables (for example, `"repository": "{{repository}}"` or `"featureKey": "{{feature_key}}"`) to tailor future runs without editing the JSON.
 4. **Send the request** – Click **Send** to enqueue the workflow. Save the response so you can reference the returned `id` in later steps.
 
 ```json
 {
   "repository": "MoonLadderStudios/moonmind",
-  "featureKey": "002-document-speckit-automation",
+  "featureKey": "002-document-agentkit-automation",
   "forcePhase": "discover",
   "notes": "Validate workflow automation from Postman"
 }
@@ -162,7 +162,7 @@ curl -sS -X POST "http://localhost:5000/api/workflows/runs" \
   -H "Content-Type: application/json" \
   -d '{
     "repository": "MoonLadderStudios/moonmind",
-    "featureKey": "002-document-speckit-automation",
+    "featureKey": "002-document-agentkit-automation",
     "forcePhase": "discover",
     "notes": "Validate workflow automation from curl"
   }'
@@ -172,11 +172,11 @@ curl -sS -X POST "http://localhost:5000/api/workflows/runs" \
 > `localhost:5000`. If you change the Compose file or run the service directly,
 > adjust the host and port accordingly.
 
-The response matches the `WorkflowRun` schema defined in the Workflow contract and includes fields such as `id`, `status`, and `phase` so you can confirm the request was queued.【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L13-L80】
+The response matches the `WorkflowRun` schema defined in the Workflow contract and includes fields such as `id`, `status`, and `phase` so you can confirm the request was queued.【F:specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml†L13-L80】
 
-A successful response includes the queued status and `id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/SpecKitAutomation.md†L66-L112】【F:moonmind/workflows/speckit_celery/orchestrator.py†L124-L150】
+A successful response includes the queued status and `id`. Behind the scenes the worker allocates a workspace, starts the job container, clones the repository, and executes the Spec Kit phases in order before committing and pushing changes when a diff exists.【F:docs/AgentKitAutomation.md†L66-L112】【F:moonmind/workflows/agentkit_celery/orchestrator.py†L124-L150】
 
-Ensure the Celery worker (or Compose stack) exports `WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients; these settings must align with the repository slug you pass in the request.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/speckit_celery/tasks.py†L568-L585】
+Ensure the Celery worker (or Compose stack) exports `WORKFLOW_GITHUB_REPOSITORY` and related overrides before you trigger a run so the orchestrator can clone the correct repository and configure the agent clients; these settings must align with the repository slug you pass in the request.【F:moonmind/config/settings.py†L138-L190】【F:moonmind/workflows/agentkit_celery/tasks.py†L568-L585】
 
 ## Step 4 – Monitor progress
 
@@ -189,7 +189,7 @@ Ensure the Celery worker (or Compose stack) exports `WORKFLOW_GITHUB_REPOSITORY`
    curl -H "Authorization: Bearer ${MOONMIND_API_TOKEN}" \
      "http://localhost:5000/api/workflows/runs/<run_id>"
    ```
-3. **Artifacts** – Inspect logs and generated assets under `/work/runs/<run_id>/artifacts` or download them through `/api/workflows/runs/<run_id>/artifacts/<artifact_id>` as needed.【F:docs/SpecKitAutomation.md†L131-L156】【F:specs/002-document-speckit-automation/quickstart.md†L82-L106】【F:specs/002-document-speckit-automation/contracts/workflow.openapi.yaml†L32-L77】
+3. **Artifacts** – Inspect logs and generated assets under `/work/runs/<run_id>/artifacts` or download them through `/api/workflows/runs/<run_id>/artifacts/<artifact_id>` as needed.【F:docs/AgentKitAutomation.md†L131-L156】【F:specs/002-document-agentkit-automation/quickstart.md†L82-L106】【F:specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml†L32-L77】
    - Workflow (Celery chain) runs store Codex JSONL logs, generated patches, and GitHub responses under `var/artifacts/workflow_runs/<run_id>/`. Mount this path when running Compose locally so retries can reuse the artifacts.
    - To retry a failed Celery chain after fixing credentials, POST `/api/workflows/runs/{id}/retry` with `{"mode": "resume_failed_task"}`. The worker resumes from the failed task and reuses existing artifacts rather than recomputing patches.【F:specs/001-celery-chain-workflow/tasks.md†L85-L93】
 
@@ -200,7 +200,7 @@ When the run reports `succeeded` (or `no_changes`), use the status response to c
 - `branch_name` and `pull_request_url` for reviewer handoff.
 - Artifact IDs for stdout/stderr, diff summaries, credential audits, and commit status logs.
 
-Because each run uses an isolated workspace and redacts sensitive environment values, you can safely share artifacts with reviewers while leaving the Celery stack running for additional requests.【F:docs/SpecKitAutomation.md†L100-L156】
+Because each run uses an isolated workspace and redacts sensitive environment values, you can safely share artifacts with reviewers while leaving the Celery stack running for additional requests.【F:docs/AgentKitAutomation.md†L100-L156】
 
 ## Step 6 – Cleanup (optional)
 
@@ -210,4 +210,4 @@ To shut down the environment, stop the Compose stack and prune cached workspaces
 docker compose down --volumes
 ```
 
-This removes the worker containers and deletes cached workspaces so future automation runs start from a clean slate.【F:docs/SpecKitAutomation.md†L94-L113】【F:specs/002-document-speckit-automation/quickstart.md†L109-L118】
+This removes the worker containers and deletes cached workspaces so future automation runs start from a clean slate.【F:docs/AgentKitAutomation.md†L94-L113】【F:specs/002-document-agentkit-automation/quickstart.md†L109-L118】

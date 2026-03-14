@@ -6,58 +6,58 @@ import pytest
 
 from moonmind.workflows.skills.registry import resolve_stage_execution
 from moonmind.workflows.skills.runner import execute_stage
-from moonmind.workflows.skills.speckit_adapter import SkillAdapterError
+from moonmind.workflows.skills.agentkit_adapter import SkillAdapterError
 
 
 def _set_skill_defaults(monkeypatch) -> None:
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skills_enabled",
+        "moonmind.workflows.skills.registry.settings.workflow.skills_enabled",
         True,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skills_canary_percent",
+        "moonmind.workflows.skills.registry.settings.workflow.skills_canary_percent",
         100,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skills_shadow_mode",
+        "moonmind.workflows.skills.registry.settings.workflow.skills_shadow_mode",
         False,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skills_fallback_enabled",
+        "moonmind.workflows.skills.registry.settings.workflow.skills_fallback_enabled",
         True,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.registry.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.discover_skill",
+        "moonmind.workflows.skills.registry.settings.workflow.discover_skill",
         None,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.submit_skill",
+        "moonmind.workflows.skills.registry.settings.workflow.submit_skill",
         None,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.publish_skill",
+        "moonmind.workflows.skills.registry.settings.workflow.publish_skill",
         None,
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.registry.settings.workflow.skill_policy_mode",
         "allowlist",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
-        ("speckit",),
+        "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
+        ("agentkit",),
         raising=False,
     )
 
@@ -79,7 +79,7 @@ def test_execute_stage_uses_skill_path_by_default(monkeypatch):
     )
 
     assert outcome.result == "ok"
-    assert outcome.selected_skill == "speckit"
+    assert outcome.selected_skill == "agentkit"
     assert outcome.execution_path == "skill"
     assert outcome.used_skills is True
     assert outcome.used_fallback is False
@@ -89,7 +89,7 @@ def test_execute_stage_uses_skill_path_by_default(monkeypatch):
 def test_execute_stage_uses_direct_path_when_skills_disabled(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skills_enabled",
+        "moonmind.workflows.skills.registry.settings.workflow.skills_enabled",
         False,
         raising=False,
     )
@@ -103,14 +103,14 @@ def test_execute_stage_uses_direct_path_when_skills_disabled(monkeypatch):
 
     assert outcome.execution_path == "direct_only"
     assert outcome.used_skills is False
-    assert outcome.selected_skill == "speckit"
+    assert outcome.selected_skill == "agentkit"
 
 
 def test_stage_override_respects_allowlist(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
-        ("speckit", "custom"),
+        "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
+        ("agentkit", "custom"),
         raising=False,
     )
 
@@ -128,13 +128,13 @@ def test_stage_override_respects_allowlist(monkeypatch):
 def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.registry.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
-        ("speckit",),
+        "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
+        ("agentkit",),
         raising=False,
     )
 
@@ -152,8 +152,8 @@ def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
 def test_execute_stage_unregistered_skill_fails_fast(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
-        "moonmind.workflows.skills.registry.settings.spec_workflow.allowed_skills",
-        ("speckit", "custom"),
+        "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
+        ("agentkit", "custom"),
         raising=False,
     )
 
@@ -178,7 +178,7 @@ def test_execute_stage_fallback_when_adapter_errors(monkeypatch):
         raise SkillAdapterError("adapter unavailable")
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.runner.run_speckit_stage",
+        "moonmind.workflows.skills.runner.run_agentkit_stage",
         raise_adapter_error,
     )
 

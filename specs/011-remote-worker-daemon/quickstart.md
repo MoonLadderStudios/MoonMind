@@ -4,14 +4,14 @@
 
 Run `moonmind-codex-worker` with:
 
-- Codex + Speckit preflight checks passing
+- Codex + Agentkit preflight checks passing
 - Google embedding readiness validated when applicable
 - support for `codex_exec` and `codex_skill` queue claims
 
 ## Prerequisites
 
 - MoonMind API and queue endpoints are running.
-- `codex`, `speckit`, and optionally `gh` CLIs are installed on worker host.
+- `codex`, `agentkit`, and optionally `gh` CLIs are installed on worker host.
 - Codex authentication is complete (`codex login status`).
 
 ## 1) Configure environment
@@ -27,8 +27,8 @@ export MOONMIND_CODEX_MODEL="gpt-5-codex"
 export MOONMIND_CODEX_EFFORT="medium"
 
 # Skills policy
-export MOONMIND_DEFAULT_SKILL="speckit"
-export MOONMIND_ALLOWED_SKILLS="speckit,custom-skill"
+export MOONMIND_DEFAULT_SKILL="agentkit"
+export MOONMIND_ALLOWED_SKILLS="agentkit,custom-skill"
 
 # Embedding fast path
 export DEFAULT_EMBEDDING_PROVIDER="google"
@@ -40,7 +40,7 @@ export GOOGLE_API_KEY="<google-api-key>"
 
 ```bash
 codex login status
-speckit --version
+agentkit --version
 ```
 
 ## 3) Start daemon
@@ -88,7 +88,7 @@ curl -X POST "$MOONMIND_URL/api/queue/jobs" \
     "type": "codex_skill",
     "priority": 5,
     "payload": {
-      "skillId": "speckit",
+      "skillId": "agentkit",
       "codex": {
         "model": "gpt-5-codex",
         "effort": "medium"

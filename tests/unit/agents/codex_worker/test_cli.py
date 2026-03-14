@@ -66,11 +66,11 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
     )
 
     def fake_run(command, *args, **kwargs):
-        if command == ["/usr/bin/speckit", "--version"]:
+        if command == ["/usr/bin/agentkit", "--version"]:
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=0,
-                stdout="speckit 0.4.0",
+                stdout="agentkit 0.4.0",
                 stderr="",
             )
         if command == ["/usr/bin/rg", "--version"]:
@@ -118,7 +118,7 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         }
     )
 
-    assert calls[0] == (["/usr/bin/speckit", "--version"], None, None)
+    assert calls[0] == (["/usr/bin/agentkit", "--version"], None, None)
     assert calls[1] == (["/usr/bin/rg", "--version"], None, None)
     assert calls[2] == (["/usr/bin/codex", "login", "status"], None, None)
     assert calls[3][0] == [
@@ -176,16 +176,16 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
 
     cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
-    assert verifications == ["codex", "rg", "speckit"]
+    assert verifications == ["codex", "rg", "agentkit"]
     assert calls == [
-        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
     ]
 
 
-def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -> None:
-    """Non-speckit stage skill configuration should not require Speckit preflight."""
+def test_run_preflight_skips_agentkit_for_non_agentkit_stage_skills(monkeypatch) -> None:
+    """Non-agentkit stage skill configuration should not require Workflow preflight."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -206,10 +206,10 @@ def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -
     cli.run_preflight(
         env={
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-            "SPEC_WORKFLOW_DEFAULT_SKILL": "custom-skill",
-            "SPEC_WORKFLOW_DISCOVER_SKILL": "custom-skill",
-            "SPEC_WORKFLOW_SUBMIT_SKILL": "custom-skill",
-            "SPEC_WORKFLOW_PUBLISH_SKILL": "custom-skill",
+            "WORKFLOW_DEFAULT_SKILL": "custom-skill",
+            "WORKFLOW_DISCOVER_SKILL": "custom-skill",
+            "WORKFLOW_SUBMIT_SKILL": "custom-skill",
+            "WORKFLOW_PUBLISH_SKILL": "custom-skill",
         }
     )
 
@@ -221,7 +221,7 @@ def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -
 
 
 def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
-    """Canonical WORKFLOW_* aliases should drive speckit dependency checks."""
+    """Canonical WORKFLOW_* aliases should drive agentkit dependency checks."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -257,7 +257,7 @@ def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
 
 
 def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
-    """WORKFLOW_USE_SKILLS=false should skip Speckit checks."""
+    """WORKFLOW_USE_SKILLS=false should skip Workflow checks."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -279,7 +279,7 @@ def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
         env={
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             "WORKFLOW_USE_SKILLS": "false",
-            "SPEC_WORKFLOW_DEFAULT_SKILL": "speckit",
+            "WORKFLOW_DEFAULT_SKILL": "agentkit",
         }
     )
 
@@ -457,22 +457,22 @@ def test_run_checked_command_error_message_without_detail_uses_compact_hint(
     assert "run now" not in message
 
 
-def test_run_preflight_missing_speckit_raises(monkeypatch) -> None:
-    """Preflight should fail when speckit binary is unavailable."""
+def test_run_preflight_missing_agentkit_raises(monkeypatch) -> None:
+    """Preflight should fail when agentkit binary is unavailable."""
 
     def fake_verify(name: str) -> str:
-        if name == "speckit":
-            raise CliVerificationError("missing speckit")
+        if name == "agentkit":
+            raise CliVerificationError("missing agentkit")
         return f"/usr/bin/{name}"
 
     monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
 
-    with pytest.raises(RuntimeError, match="missing speckit"):
+    with pytest.raises(RuntimeError, match="missing agentkit"):
         cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
 
-def test_run_preflight_speckit_version_fallback_to_help(monkeypatch) -> None:
-    """Preflight should accept speckit shims that only support --help."""
+def test_run_preflight_agentkit_version_fallback_to_help(monkeypatch) -> None:
+    """Preflight should accept agentkit shims that only support --help."""
 
     calls: list[list[str]] = []
 
@@ -484,7 +484,7 @@ def test_run_preflight_speckit_version_fallback_to_help(monkeypatch) -> None:
 
     def fake_run(command, *args, **kwargs):
         calls.append(list(command))
-        if command == ["/usr/bin/speckit", "--version"]:
+        if command == ["/usr/bin/agentkit", "--version"]:
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=2,
@@ -503,15 +503,15 @@ def test_run_preflight_speckit_version_fallback_to_help(monkeypatch) -> None:
     cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
     assert calls[:4] == [
-        ["/usr/bin/speckit", "--version"],
-        ["/usr/bin/speckit", "--help"],
+        ["/usr/bin/agentkit", "--version"],
+        ["/usr/bin/agentkit", "--help"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
     ]
 
 
-def test_run_preflight_speckit_non_version_error_raises(monkeypatch) -> None:
-    """Fallback should not mask unrelated Speckit execution failures."""
+def test_run_preflight_agentkit_non_version_error_raises(monkeypatch) -> None:
+    """Fallback should not mask unrelated Workflow execution failures."""
 
     monkeypatch.setattr(
         cli,
@@ -520,7 +520,7 @@ def test_run_preflight_speckit_non_version_error_raises(monkeypatch) -> None:
     )
 
     def fake_run(command, *args, **kwargs):
-        if command == ["/usr/bin/speckit", "--version"]:
+        if command == ["/usr/bin/agentkit", "--version"]:
             return subprocess.CompletedProcess(
                 args=command,
                 returncode=1,
@@ -584,9 +584,9 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
         }
     )
 
-    assert verifications == ["gemini", "speckit"]
+    assert verifications == ["gemini", "agentkit"]
     assert calls == [
-        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/gemini", "--version"],
     ]
 
@@ -630,9 +630,9 @@ def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> 
         }
     )
 
-    assert verifications == ["claude", "speckit"]
+    assert verifications == ["claude", "agentkit"]
     assert calls == [
-        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/claude", "--version"],
     ]
 
@@ -678,8 +678,8 @@ def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) ->
         }
     )
 
-    assert verifications == ["speckit"]
-    assert calls == [["/usr/bin/speckit", "--version"]]
+    assert verifications == ["agentkit"]
+    assert calls == [["/usr/bin/agentkit", "--version"]]
 
 
 def test_run_preflight_universal_without_claude_capability_skips_checks(
@@ -711,9 +711,9 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
         }
     )
 
-    assert verifications == ["codex", "gemini", "rg", "speckit"]
+    assert verifications == ["codex", "gemini", "rg", "agentkit"]
     assert calls == [
-        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
         ["/usr/bin/gemini", "--version"],
@@ -787,9 +787,9 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
         }
     )
 
-    assert verifications == ["codex", "gemini", "claude", "rg", "speckit"]
+    assert verifications == ["codex", "gemini", "claude", "rg", "agentkit"]
     assert calls == [
-        ["/usr/bin/speckit", "--version"],
+        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
         ["/usr/bin/gemini", "--version"],

@@ -9,7 +9,7 @@ from moonmind.config.settings import settings
 # api_service.auth during global pytest collection.
 _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
 
-settings.spec_workflow.test_mode = True
+settings.workflow.test_mode = True
 
 
 @pytest.fixture

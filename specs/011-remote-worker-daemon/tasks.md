@@ -13,7 +13,7 @@
 
 ## Phase 2: 015 Umbrella Runtime Alignment
 
-- [x] T004 Add Speckit CLI startup gate in `moonmind/agents/codex_worker/cli.py`.
+- [x] T004 Add Agentkit CLI startup gate in `moonmind/agents/codex_worker/cli.py`.
 - [x] T005 Add embedding readiness startup gate for Google profiles in `moonmind/agents/codex_worker/cli.py`.
 - [x] T006 Extend worker policy defaults to include skills configuration (`default_skill`, `allowed_skills`) and `codex_skill` claim support in `moonmind/agents/codex_worker/worker.py`.
 - [x] T007 Implement `codex_skill` compatibility mapping path in `moonmind/agents/codex_worker/handlers.py`.
@@ -23,7 +23,7 @@
 
 ## Phase 3: Test Coverage Alignment
 
-- [x] T009 Update CLI preflight tests for Speckit + embedding checks in `tests/unit/agents/codex_worker/test_cli.py`.
+- [x] T009 Update CLI preflight tests for Agentkit + embedding checks in `tests/unit/agents/codex_worker/test_cli.py`.
 - [x] T010 Update worker loop tests for `codex_skill` support and allowlist enforcement in `tests/unit/agents/codex_worker/test_worker.py`.
 - [x] T011 Add handler tests for `codex_skill` payload mapping and failure paths in `tests/unit/agents/codex_worker/test_handlers.py`.
 

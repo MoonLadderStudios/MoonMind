@@ -114,7 +114,7 @@ Validation results recorded on 2026-03-06:
 
 ## 8. Planning artifact completion gate
 
-Before running `/speckit.tasks`, ensure these artifacts exist:
+Before running `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/048-executions-api-contract/plan.md`
 - `specs/048-executions-api-contract/research.md`

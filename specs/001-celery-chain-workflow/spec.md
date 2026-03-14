@@ -9,7 +9,7 @@
 
 ### User Story 0 - Fast Worker Launch with Skills-First Defaults (Priority: P1)
 
-MoonMind operator wants the shortest path to launch an authenticated Codex worker and Gemini embedding runtime, while keeping Speckit always available and skills-first stage execution enabled by default.
+MoonMind operator wants the shortest path to launch an authenticated Codex worker and Gemini embedding runtime, while keeping Agentkit always available and skills-first stage execution enabled by default.
 
 **Why this priority**: Worker startup/auth determinism and embedding readiness are prerequisites for every workflow run.
 
@@ -86,8 +86,8 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - **FR-008**: The workflow must enforce idempotency by deriving branch names from the feature identifier and reusing existing pull requests when repeats occur.
 - **FR-009**: The provider must expose retry semantics that resume the chain from the failing task when safe to do so, otherwise starting a new run with operator consent.
 - **FR-010**: Credential validation must occur before tasks that need them, with clear failure messaging when tokens or environment identifiers are missing or invalid.
-- **FR-011**: Workflow stage execution must resolve through a skills-first policy layer, with Speckit as the default skill for backward-compatible behavior.
-- **FR-012**: Speckit capability checks must execute at worker startup for Spec Kit and Gemini worker runtimes so Speckit remains always available.
+- **FR-011**: Workflow stage execution must resolve through a skills-first policy layer, with Agentkit as the default skill for backward-compatible behavior.
+- **FR-012**: Agentkit capability checks must execute at worker startup for Spec Kit and Gemini worker runtimes so Agentkit remains always available.
 - **FR-013**: Stage task-state payloads and run artifacts must record selected skill and execution path (`skill`, `direct_fallback`, or `direct_only`) for each stage.
 - **FR-014**: Skills policy controls must support global enable/disable, canary percentage, fallback enablement, and per-stage skill overrides via configuration.
 - **FR-015**: Docker Compose and quickstart guidance must define a fastest startup path for authenticated Codex workers and Google Gemini embeddings.
@@ -120,7 +120,7 @@ MoonMind operator selects a workflow run that stopped at a specific Celery task 
 - Spec Kit task definitions are maintained in a repository-accessible location compatible with the discovery task parser.
 - Network egress from the execution environment to Codex Cloud and GitHub APIs is permitted within organizational policy.
 - Governance for branch naming conventions and PR review routing remains managed by existing MoonMind policies; this feature does not alter approval flows.
-- Speckit skill definitions are exposed through run-local shared adapters at `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` remains optional compatibility fallback).
+- Agentkit skill definitions are exposed through run-local shared adapters at `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` remains optional compatibility fallback).
 - The initial skills-first implementation keeps existing `/api/workflows/*` API naming for compatibility, even when stage orchestration is generalized.
 - The fastest deployment profile uses Google Gemini embeddings (`gemini-embedding-001`) and authenticated Codex CLI volumes.
 

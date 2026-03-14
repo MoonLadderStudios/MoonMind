@@ -35,8 +35,8 @@
 **Purpose**: Complete shared runtime foundations and traceability needed by all stories.
 
 - [ ] T004 Update canonical workflow env/settings keys in `moonmind/config/settings.py`, `api_service/config.template.toml`, and `services/orchestrator/entrypoint.sh` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-011).
-- [ ] T005 [P] Normalize schema/type naming from `SpecWorkflow*` to `Workflow*` in `moonmind/schemas/workflow_models.py` and `moonmind/workflows/speckit_celery/models.py` (DOC-REQ-004, DOC-REQ-011).
-- [ ] T006 [P] Canonicalize artifact root handling in `moonmind/workflows/speckit_celery/storage.py` and `moonmind/workflows/speckit_celery/tasks.py` with workflow path naming invariants (DOC-REQ-006, DOC-REQ-011).
+- [ ] T005 [P] Normalize schema/type naming from `Workflow*` to `Workflow*` in `moonmind/schemas/workflow_models.py` and `moonmind/workflows/agentkit_celery/models.py` (DOC-REQ-004, DOC-REQ-011).
+- [ ] T006 [P] Canonicalize artifact root handling in `moonmind/workflows/agentkit_celery/storage.py` and `moonmind/workflows/agentkit_celery/tasks.py` with workflow path naming invariants (DOC-REQ-006, DOC-REQ-011).
 - [X] T007 Update `specs/040-spec-removal/contracts/requirements-traceability.md` with one-to-one mapping for `DOC-REQ-001` through `DOC-REQ-011`, including planned runtime and validation surfaces.
 
 **Checkpoint**: Foundational runtime/config contract is ready for story implementation.
@@ -52,14 +52,14 @@
 ### Tests for User Story 1
 
 - [X] T008 [US1] Add docs/spec verification command usage examples to `specs/040-spec-removal/quickstart.md` and `docs/SpecRemovalPlan.md`, including expected pass/fail criteria (DOC-REQ-008, DOC-REQ-010).
-- [ ] T009 [US1] Add docs/spec naming regression coverage in `tests/unit/workflows/test_spec_automation_env.py` and `tests/unit/api/test_spec_automation.py` for canonical token assertions in exposed guidance surfaces (DOC-REQ-001, DOC-REQ-007).
+- [ ] T009 [US1] Add docs/spec naming regression coverage in `tests/unit/workflows/test_automation_env.py` and `tests/unit/api/test_automation.py` for canonical token assertions in exposed guidance surfaces (DOC-REQ-001, DOC-REQ-007).
 
 ### Implementation for User Story 1
 
 - [ ] T010 [P] [US1] Migrate canonical terminology across operational docs in `docs/CodexCliWorkers.md`, `docs/LiveTaskHandoff.md`, `docs/MemoryArchitecture.md`, and `docs/OrchestratorArchitecture.md` (DOC-REQ-001, DOC-REQ-005, DOC-REQ-007).
-- [ ] T011 [P] [US1] Migrate canonical terminology across automation docs in `docs/SpecKitAutomation.md`, `docs/SpecKitAutomationInstructions.md`, `docs/TaskQueueSystem.md`, `docs/TasksStepSystem.md`, and `docs/ops-runbook.md` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005, DOC-REQ-007).
+- [ ] T011 [P] [US1] Migrate canonical terminology across automation docs in `docs/AgentKitAutomation.md`, `docs/AgentKitAutomationInstructions.md`, `docs/TaskQueueSystem.md`, `docs/TasksStepSystem.md`, and `docs/ops-runbook.md` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005, DOC-REQ-007).
 - [ ] T012 [P] [US1] Apply canonical naming updates to `specs/001-celery-chain-workflow/spec.md`, `specs/001-celery-chain-workflow/plan.md`, `specs/001-celery-chain-workflow/research.md`, `specs/001-celery-chain-workflow/quickstart.md`, and `specs/001-celery-chain-workflow/data-model.md` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-005).
-- [ ] T013 [P] [US1] Apply canonical naming updates to `specs/002-document-speckit-automation/spec.md`, `specs/002-document-speckit-automation/plan.md`, `specs/002-document-speckit-automation/quickstart.md`, and `specs/002-document-speckit-automation/tasks.md` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-007).
+- [ ] T013 [P] [US1] Apply canonical naming updates to `specs/002-document-agentkit-automation/spec.md`, `specs/002-document-agentkit-automation/plan.md`, `specs/002-document-agentkit-automation/quickstart.md`, and `specs/002-document-agentkit-automation/tasks.md` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-007).
 - [ ] T014 [P] [US1] Apply canonical naming updates to runtime-adjacent specs in `specs/003-celery-oauth-volumes/tasks.md`, `specs/005-orchestrator-architecture/spec.md`, `specs/005-orchestrator-architecture/plan.md`, and `specs/031-manifest-phase0/plan.md` (DOC-REQ-002, DOC-REQ-005, DOC-REQ-006).
 
 **Checkpoint**: User Story 1 is independently complete with canonical docs/spec vocabulary.
@@ -74,16 +74,16 @@
 
 ### Tests for User Story 2
 
-- [ ] T015 [P] [US2] Update route and contract regression tests in `tests/contract/test_workflow_api.py`, `tests/unit/api/test_spec_automation.py`, and `tests/unit/api/routers/test_task_runs.py` for canonical `/api/workflows/*` behavior (DOC-REQ-003, DOC-REQ-004, DOC-REQ-011).
-- [ ] T016 [P] [US2] Update runtime naming regression tests in `tests/unit/config/test_settings.py`, `tests/unit/workflows/test_spec_automation_env.py`, and `tests/unit/workflows/test_storage.py` for env/settings/metric/artifact canonicalization (DOC-REQ-001, DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-011).
+- [ ] T015 [P] [US2] Update route and contract regression tests in `tests/contract/test_workflow_api.py`, `tests/unit/api/test_automation.py`, and `tests/unit/api/routers/test_task_runs.py` for canonical `/api/workflows/*` behavior (DOC-REQ-003, DOC-REQ-004, DOC-REQ-011).
+- [ ] T016 [P] [US2] Update runtime naming regression tests in `tests/unit/config/test_settings.py`, `tests/unit/workflows/test_automation_env.py`, and `tests/unit/workflows/test_storage.py` for env/settings/metric/artifact canonicalization (DOC-REQ-001, DOC-REQ-002, DOC-REQ-005, DOC-REQ-006, DOC-REQ-011).
 
 ### Implementation for User Story 2
 
-- [ ] T017 [US2] Canonicalize workflow route families in `api_service/api/routers/workflows.py`, `api_service/api/routers/spec_automation.py`, and `api_service/main.py` (DOC-REQ-003, DOC-REQ-011).
+- [ ] T017 [US2] Canonicalize workflow route families in `api_service/api/routers/workflows.py`, `api_service/api/routers/automation.py`, and `api_service/main.py` (DOC-REQ-003, DOC-REQ-011).
 - [ ] T018 [US2] Replace remaining legacy env and settings names in `moonmind/config/settings.py`, `api_service/auth_providers.py`, and `services/orchestrator/entrypoint.sh` with fail-fast handling for unsupported legacy inputs (DOC-REQ-001, DOC-REQ-002, DOC-REQ-007, DOC-REQ-011).
-- [ ] T019 [US2] Canonicalize runtime schema identifiers in `moonmind/schemas/workflow_models.py`, `moonmind/workflows/speckit_celery/models.py`, and `moonmind/workflows/speckit_celery/serializers.py` (DOC-REQ-004, DOC-REQ-011).
+- [ ] T019 [US2] Canonicalize runtime schema identifiers in `moonmind/schemas/workflow_models.py`, `moonmind/workflows/agentkit_celery/models.py`, and `moonmind/workflows/agentkit_celery/serializers.py` (DOC-REQ-004, DOC-REQ-011).
 - [ ] T020 [US2] Canonicalize metrics namespace usage in `moonmind/workflows/orchestrator/metrics.py` and `moonmind/agents/codex_worker/metrics.py` (DOC-REQ-005, DOC-REQ-011).
-- [ ] T021 [US2] Canonicalize artifact directory naming and references in `moonmind/workflows/speckit_celery/storage.py`, `moonmind/workflows/speckit_celery/tasks.py`, and `services/orchestrator/entrypoint.sh` (DOC-REQ-006, DOC-REQ-011).
+- [ ] T021 [US2] Canonicalize artifact directory naming and references in `moonmind/workflows/agentkit_celery/storage.py`, `moonmind/workflows/agentkit_celery/tasks.py`, and `services/orchestrator/entrypoint.sh` (DOC-REQ-006, DOC-REQ-011).
 
 **Checkpoint**: User Story 2 is independently complete with runtime parity and validation coverage.
 
@@ -114,8 +114,8 @@
 
 **Purpose**: Final consistency sweep and release-readiness checks.
 
-- [ ] T027 [P] Remove remaining operational aliasing language from `docs/SpecKitAutomation.md`, `docs/SpecKitAutomationInstructions.md`, `docs/TaskQueueSystem.md`, and `docs/ops-runbook.md` (DOC-REQ-007).
-- [ ] T028 [P] Align contract wording and operation naming in `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`, `specs/002-document-speckit-automation/contracts/workflow.openapi.yaml`, and `specs/005-orchestrator-architecture/contracts/orchestrator.openapi.yaml` (DOC-REQ-003, DOC-REQ-004).
+- [ ] T027 [P] Remove remaining operational aliasing language from `docs/AgentKitAutomation.md`, `docs/AgentKitAutomationInstructions.md`, `docs/TaskQueueSystem.md`, and `docs/ops-runbook.md` (DOC-REQ-007).
+- [ ] T028 [P] Align contract wording and operation naming in `specs/001-celery-chain-workflow/contracts/workflow.openapi.yaml`, `specs/002-document-agentkit-automation/contracts/workflow.openapi.yaml`, and `specs/005-orchestrator-architecture/contracts/orchestrator.openapi.yaml` (DOC-REQ-003, DOC-REQ-004).
 - [ ] T029 Execute final docs/spec/runtime scans with `./tools/verify_workflow_naming.sh` and capture final pass evidence in `specs/040-spec-removal/quickstart.md` and `specs/040-spec-removal/plan.md` (DOC-REQ-008, DOC-REQ-010).
 
 ---
@@ -153,13 +153,13 @@
 
 ```bash
 # Parallel test updates
-Task: T015 tests/contract/test_workflow_api.py + tests/unit/api/test_spec_automation.py
+Task: T015 tests/contract/test_workflow_api.py + tests/unit/api/test_automation.py
 Task: T016 tests/unit/config/test_settings.py + tests/unit/workflows/test_storage.py
 
 # Parallel runtime implementation by subsystem
-Task: T017 api_service/api/routers/workflows.py + api_service/api/routers/spec_automation.py
+Task: T017 api_service/api/routers/workflows.py + api_service/api/routers/automation.py
 Task: T020 moonmind/workflows/orchestrator/metrics.py + moonmind/agents/codex_worker/metrics.py
-Task: T021 moonmind/workflows/speckit_celery/storage.py + services/orchestrator/entrypoint.sh
+Task: T021 moonmind/workflows/agentkit_celery/storage.py + services/orchestrator/entrypoint.sh
 ```
 
 ## Implementation Strategy

@@ -86,7 +86,7 @@ Expected result: runtime scope guards confirm the feature includes production ru
 
 ## 8. Planning artifact completion gate
 
-Before `/speckit.tasks`, ensure these artifacts exist:
+Before `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/047-temporal-artifact-presentation/plan.md`
 - `specs/047-temporal-artifact-presentation/research.md`

@@ -54,7 +54,7 @@
 - **Rationale**: Prevents accidental docs-only completion claims for a runtime-scoped objective.
 - **Alternatives considered**:
   - Docs-only planning completion: rejected by `DOC-REQ-019` and FR-012/FR-013.
-  - Runtime work without planning artifacts: rejected because this step requires speckit-plan outputs.
+  - Runtime work without planning artifacts: rejected because this step requires agentkit-plan outputs.
 
 ## Decision 8: Validation command source of truth stays `./tools/test_unit.sh`
 

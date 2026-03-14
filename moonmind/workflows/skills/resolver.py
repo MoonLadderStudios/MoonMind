@@ -150,7 +150,7 @@ def _project_root() -> Path:
 def _resolve_base_repo_path() -> Path:
     """Resolve base path used for relative skill mirror roots."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     project_root = _project_root()
     raw_repo_root = str(cfg.repo_root or "").strip()
     if not raw_repo_root:
@@ -197,7 +197,7 @@ def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:
 
 
 def _resolve_local_source(skill_name: str) -> str | None:
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
 
     configured_roots = (
         Path(cfg.skills_local_mirror_root),
@@ -214,7 +214,7 @@ def _resolve_local_source(skill_name: str) -> str | None:
 def _discover_local_skill_names() -> tuple[str, ...]:
     """Discover skill names from configured local and legacy mirrors."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     configured_roots = (
         Path(cfg.skills_local_mirror_root),
         Path(cfg.skills_legacy_mirror_root),
@@ -250,7 +250,7 @@ def _discover_local_skill_names() -> tuple[str, ...]:
 def list_available_skill_names() -> tuple[str, ...]:
     """List currently resolvable skill names for dashboard/task selection UX."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     allowlisted = set(cfg.allowed_skills or ())
 
     # 1) Gather all raw candidate names in intended display precedence.
@@ -262,7 +262,7 @@ def list_available_skill_names() -> tuple[str, ...]:
 
     raw_candidates.extend(_discover_local_skill_names())
 
-    # Include explicit allowlist entries so builtin skills (for example `speckit`)
+    # Include explicit allowlist entries so builtin skills (for example `agentkit`)
     # still surface even when they are not mirrored locally.
     raw_candidates.extend(str(item).strip() for item in (cfg.allowed_skills or ()))
 
@@ -333,7 +333,7 @@ def _resolve_source_uri(
         return local_source
 
     # Deprecated compatibility path: prefer local/shared skill mirrors instead.
-    if skill_name == "speckit":
+    if skill_name == "agentkit":
         if skill_name not in _BUILTIN_FALLBACK_WARNED:
             logger.warning(
                 "Skill '%s' resolved through deprecated builtin source fallback. "
@@ -341,7 +341,7 @@ def _resolve_source_uri(
                 skill_name,
             )
             _BUILTIN_FALLBACK_WARNED.add(skill_name)
-        return "builtin://speckit"
+        return "builtin://agentkit"
 
     raise SkillResolutionError(
         f"No source URI resolved for skill '{skill_name}:{version}'. "
@@ -366,7 +366,7 @@ def resolve_run_skill_selection(
         raw_selection = queue_profile
         selection_source = "queue_profile"
     else:
-        cfg = settings.spec_workflow
+        cfg = settings.workflow
         default = cfg.default_skill
         if cfg.skill_policy_mode == "allowlist":
             allowed = tuple(cfg.allowed_skills or ())

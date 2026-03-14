@@ -3,7 +3,7 @@
 **Branch**: `008-gemini-cli-worker` | **Date**: 2025-11-30 | **Spec**: [specs/008-gemini-cli-worker/spec.md](../spec.md)
 **Input**: Feature specification from `/specs/008-gemini-cli-worker/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
@@ -39,12 +39,12 @@ Implement a dedicated Celery worker service (`celery_gemini_worker`) listening o
 
 ```text
 specs/008-gemini-cli-worker/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+├── plan.md              # This file (/agentkit.plan command output)
+├── research.md          # Phase 0 output (/agentkit.plan command)
+├── data-model.md        # Phase 1 output (/agentkit.plan command)
+├── quickstart.md        # Phase 1 output (/agentkit.plan command)
+├── contracts/           # Phase 1 output (/agentkit.plan command)
+└── tasks.md             # Phase 2 output (/agentkit.tasks command - NOT created by /agentkit.plan)
 ```
 
 ### Source Code (repository root)
@@ -56,7 +56,7 @@ docker-compose.yaml                  # Add celery_gemini_worker service & gemini
 # Worker Implementation
 celery_worker/
 ├── __init__.py
-└── speckit_worker.py                # Existing worker entrypoint (reuse or extend)
+└── agentkit_worker.py                # Existing worker entrypoint (reuse or extend)
 
 # Docker Build
 api_service/

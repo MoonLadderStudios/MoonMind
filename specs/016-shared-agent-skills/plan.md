@@ -57,7 +57,7 @@ moonmind/workflows/skills/
 ├── materializer.py                # new: fetch/verify/cache/link runtime skill sets
 └── workspace_links.py             # new: adapter symlink creation/validation
 
-moonmind/workflows/speckit_celery/
+moonmind/workflows/agentkit_celery/
 ├── workspace.py                   # extend run workspace preparation hooks
 └── tasks.py                       # call resolver/materializer before stage dispatch
 
@@ -65,7 +65,7 @@ moonmind/config/
 └── settings.py                    # add registry/cache/workspace knobs for skills runtime
 
 celery_worker/
-├── speckit_worker.py              # ensure runtime skill adapter checks for Codex path
+├── agentkit_worker.py              # ensure runtime skill adapter checks for Codex path
 └── gemini_worker.py               # ensure runtime skill adapter checks for Gemini path
 
 tests/unit/workflows/

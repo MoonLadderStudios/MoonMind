@@ -26,7 +26,7 @@ from moonmind.workflows.agent_queue.service import (
     WorkerPauseSnapshot,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @asynccontextmanager
@@ -562,12 +562,12 @@ async def test_create_task_job_applies_settings_defaults_for_missing_fields(
     """Task creation should resolve missing repository/model/effort from settings."""
 
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "github_repository",
         "MoonLadderStudios/MoonMind",
     )
-    monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-5.3-codex")
-    monkeypatch.setattr(settings.spec_workflow, "codex_effort", "high")
+    monkeypatch.setattr(settings.workflow, "codex_model", "gpt-5.3-codex")
+    monkeypatch.setattr(settings.workflow, "codex_effort", "high")
 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -597,7 +597,7 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
 ) -> None:
     """Missing runtime fields should use configured default task runtime."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "claude")
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
 
     async with queue_db(tmp_path) as session_maker:
@@ -627,7 +627,7 @@ async def test_create_task_job_uses_default_model_for_configured_runtime(
 ) -> None:
     """Missing runtime model should resolve from the configured default runtime."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "gemini")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "gemini")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
 
     async with queue_db(tmp_path) as session_maker:
@@ -686,7 +686,7 @@ async def test_create_task_job_explicit_runtime_overrides_default_runtime(
 ) -> None:
     """Explicit payload runtime should take precedence over configured default."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "claude")
 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -926,7 +926,7 @@ async def test_create_legacy_skill_job_is_enriched_with_task_contract(
             job = await service.create_job(
                 job_type="codex_skill",
                 payload={
-                    "skillId": "speckit",
+                    "skillId": "agentkit",
                     "inputs": {"repo": "Moon/Mind", "instruction": "Run"},
                     "publishMode": "none",
                 },
@@ -934,7 +934,7 @@ async def test_create_legacy_skill_job_is_enriched_with_task_contract(
 
     assert job.payload["repository"] == "Moon/Mind"
     assert job.payload["targetRuntime"] == "codex"
-    assert job.payload["task"]["skill"]["id"] == "speckit"
+    assert job.payload["task"]["skill"]["id"] == "agentkit"
     assert "codex" in job.payload["requiredCapabilities"]
     assert "git" in job.payload["requiredCapabilities"]
 

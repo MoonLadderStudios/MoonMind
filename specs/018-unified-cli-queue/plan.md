@@ -5,7 +5,7 @@
 
 ## Summary
 
-Implement a single-queue AI worker runtime that keeps `speckit` inside the shared worker image while adding Claude CLI support, runtime selection via `MOONMIND_WORKER_RUNTIME`, and runtime-neutral queue consumption through one queue (`moonmind.jobs`) with compatibility handling for legacy queue environment variables.
+Implement a single-queue AI worker runtime that keeps `agentkit` inside the shared worker image while adding Claude CLI support, runtime selection via `MOONMIND_WORKER_RUNTIME`, and runtime-neutral queue consumption through one queue (`moonmind.jobs`) with compatibility handling for legacy queue environment variables.
 
 ## Technical Context
 
@@ -16,7 +16,7 @@ Implement a single-queue AI worker runtime that keeps `speckit` inside the share
 **Target Platform**: Linux Docker runtime used by existing `api`, `celery-worker`, and specialized worker services  
 **Project Type**: Backend worker orchestration and container runtime configuration  
 **Performance Goals**: Preserve fair worker scheduling (`prefetch=1`) and avoid requeue thrash for runtime-neutral jobs  
-**Constraints**: Keep `speckit` in `api_service/Dockerfile`; no credential baking in image layers; preserve backwards compatibility during queue migration  
+**Constraints**: Keep `agentkit` in `api_service/Dockerfile`; no credential baking in image layers; preserve backwards compatibility during queue migration  
 **Scale/Scope**: Worker image tooling, runtime-mode gating, queue defaulting, compose runtime selection, and corresponding test coverage
 
 ## Constitution Check
@@ -58,19 +58,19 @@ docker-compose.yaml
 
 moonmind/
 ├── config/settings.py
-└── workflows/speckit_celery/
+└── workflows/agentkit_celery/
     ├── __init__.py
     └── celeryconfig.py
 
 celery_worker/
-├── speckit_worker.py
+├── agentkit_worker.py
 └── gemini_worker.py
 
 tests/
 └── unit/
     ├── config/
     │   └── test_settings.py
-    └── workflows/speckit_celery/
+    └── workflows/agentkit_celery/
         └── test_celeryconfig.py
 ```
 
@@ -78,7 +78,7 @@ tests/
 
 ## Phase 0: Research Plan
 
-1. Confirm safe/maintainable Claude CLI installation pattern aligned with existing Codex/Gemini/Speckit fallback behavior in `api_service/Dockerfile`.
+1. Confirm safe/maintainable Claude CLI installation pattern aligned with existing Codex/Gemini/Agentkit fallback behavior in `api_service/Dockerfile`.
 2. Determine queue migration strategy that defaults to `moonmind.jobs` while allowing temporary compatibility with existing `WORKFLOW_CODEX_QUEUE` and `GEMINI_CELERY_QUEUE` variables.
 3. Define runtime mode validation strategy (`codex|gemini|claude|universal`) that fails fast in worker startup.
 4. Define runtime-neutral payload contract representation and universal-targeting semantics without introducing queue partitioning.

@@ -386,12 +386,12 @@ __all__ = [
     "TemporalExecutionCanonicalRecord",
     "TemporalExecutionRecord",
     "TemporalIntegrationCorrelationRecord",
-    "SpecWorkflowRun",
-    "SpecWorkflowRunStatus",
-    "SpecWorkflowRunPhase",
-    "SpecWorkflowTaskState",
-    "SpecWorkflowTaskStatus",
-    "SpecWorkflowTaskName",
+    "WorkflowRun",
+    "WorkflowRunStatus",
+    "WorkflowRunPhase",
+    "WorkflowTaskState",
+    "WorkflowTaskStatus",
+    "WorkflowTaskName",
     "WorkflowArtifact",
     "WorkflowArtifactType",
     "WorkflowCredentialAudit",
@@ -681,7 +681,7 @@ class OrchestratorPlanStepStatus(str, enum.Enum):
     SKIPPED = "skipped"
 
 
-class SpecWorkflowRunStatus(str, enum.Enum):
+class WorkflowRunStatus(str, enum.Enum):
     """Lifecycle states tracked for Spec workflow runs."""
 
     PENDING = "pending"
@@ -693,7 +693,7 @@ class SpecWorkflowRunStatus(str, enum.Enum):
     RETRYING = "retrying"
 
 
-class SpecWorkflowRunPhase(str, enum.Enum):
+class WorkflowRunPhase(str, enum.Enum):
     """High-level phase executed by the Spec workflow chain."""
 
     DISCOVER = "discover"
@@ -703,7 +703,7 @@ class SpecWorkflowRunPhase(str, enum.Enum):
     COMPLETE = "complete"
 
 
-class SpecWorkflowTaskStatus(str, enum.Enum):
+class WorkflowTaskStatus(str, enum.Enum):
     """Execution state tracked for each workflow task."""
 
     QUEUED = "queued"
@@ -713,7 +713,7 @@ class SpecWorkflowTaskStatus(str, enum.Enum):
     SKIPPED = "skipped"
 
 
-class SpecWorkflowTaskName(str, enum.Enum):
+class WorkflowTaskName(str, enum.Enum):
     """Supported Celery task identifiers for the chain."""
 
     DISCOVER = "discover"
@@ -1516,11 +1516,11 @@ class OrchestratorRun(Base):
         cascade="all, delete-orphan",
         order_by="OrchestratorRunArtifact.created_at",
     )
-    task_states: Mapped[list["SpecWorkflowTaskState"]] = relationship(
-        "SpecWorkflowTaskState",
+    task_states: Mapped[list["WorkflowTaskState"]] = relationship(
+        "WorkflowTaskState",
         back_populates="orchestrator_run",
         cascade="all, delete-orphan",
-        order_by="SpecWorkflowTaskState.created_at",
+        order_by="WorkflowTaskState.created_at",
     )
     task_steps: Mapped[list["OrchestratorTaskStep"]] = relationship(
         "OrchestratorTaskStep",
@@ -1649,7 +1649,7 @@ class WorkflowCredentialAudit(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     workflow_run_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
     codex_status: Mapped[CodexCredentialStatus] = mapped_column(
@@ -1695,8 +1695,8 @@ class WorkflowCredentialAudit(Base):
         server_default=func.now(),
     )
 
-    workflow_run: Mapped["SpecWorkflowRun"] = relationship(
-        "SpecWorkflowRun",
+    workflow_run: Mapped["WorkflowRun"] = relationship(
+        "WorkflowRun",
         back_populates="credential_audit",
         foreign_keys=[workflow_run_id],
     )
@@ -1921,41 +1921,41 @@ class TemporalArtifactPin(Base):
     )
 
 
-class SpecWorkflowRun(Base):
+class WorkflowRun(Base):
     """Top-level record per Spec workflow execution."""
 
-    __tablename__ = "spec_workflow_runs"
+    __tablename__ = "workflow_runs"
     __table_args__ = (
-        Index("ix_spec_workflow_runs_feature_key", "feature_key"),
-        Index("ix_spec_workflow_runs_status", "status"),
-        Index("ix_spec_workflow_runs_requested_by", "requested_by_user_id"),
-        Index("ix_spec_workflow_runs_created_by", "created_by"),
+        Index("ix_workflow_runs_feature_key", "feature_key"),
+        Index("ix_workflow_runs_status", "status"),
+        Index("ix_workflow_runs_requested_by", "requested_by_user_id"),
+        Index("ix_workflow_runs_created_by", "created_by"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     feature_key: Mapped[str] = mapped_column(String(255), nullable=False)
     celery_chain_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    status: Mapped[SpecWorkflowRunStatus] = mapped_column(
+    status: Mapped[WorkflowRunStatus] = mapped_column(
         Enum(
-            SpecWorkflowRunStatus,
+            WorkflowRunStatus,
             name="specworkflowrunstatus",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=SpecWorkflowRunStatus.PENDING,
+        default=WorkflowRunStatus.PENDING,
     )
-    phase: Mapped[SpecWorkflowRunPhase] = mapped_column(
+    phase: Mapped[WorkflowRunPhase] = mapped_column(
         Enum(
-            SpecWorkflowRunPhase,
+            WorkflowRunPhase,
             name="specworkflowrunphase",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=SpecWorkflowRunPhase.DISCOVER,
+        default=WorkflowRunPhase.DISCOVER,
     )
     branch_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
@@ -1991,9 +1991,9 @@ class SpecWorkflowRun(Base):
     codex_logs_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     codex_patch_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     artifacts_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
-    current_task_name: Mapped[Optional[SpecWorkflowTaskName]] = mapped_column(
+    current_task_name: Mapped[Optional[WorkflowTaskName]] = mapped_column(
         Enum(
-            SpecWorkflowTaskName,
+            WorkflowTaskName,
             name="specworkflowtaskname",
             native_enum=True,
             validate_strings=True,
@@ -2016,11 +2016,11 @@ class SpecWorkflowRun(Base):
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
-    task_states: Mapped[list["SpecWorkflowTaskState"]] = relationship(
-        "SpecWorkflowTaskState",
+    task_states: Mapped[list["WorkflowTaskState"]] = relationship(
+        "WorkflowTaskState",
         back_populates="workflow_run",
         cascade="all, delete-orphan",
-        order_by="SpecWorkflowTaskState.created_at",
+        order_by="WorkflowTaskState.created_at",
     )
     artifacts: Mapped[list["WorkflowArtifact"]] = relationship(
         "WorkflowArtifact",
@@ -2032,28 +2032,28 @@ class SpecWorkflowRun(Base):
         "WorkflowCredentialAudit",
         back_populates="workflow_run",
         cascade="all, delete-orphan",
-        primaryjoin=lambda: SpecWorkflowRun.id
+        primaryjoin=lambda: WorkflowRun.id
         == WorkflowCredentialAudit.workflow_run_id,
         foreign_keys=lambda: [WorkflowCredentialAudit.workflow_run_id],
         uselist=False,
     )
     requested_by: Mapped[Optional[User]] = relationship(
         "User",
-        foreign_keys=lambda: [SpecWorkflowRun.requested_by_user_id],
+        foreign_keys=lambda: [WorkflowRun.requested_by_user_id],
     )
     created_by_user: Mapped[Optional[User]] = relationship(
         "User",
-        foreign_keys=lambda: [SpecWorkflowRun.created_by],
+        foreign_keys=lambda: [WorkflowRun.created_by],
     )
     codex_auth_volume: Mapped[Optional["CodexAuthVolume"]] = relationship(
         "CodexAuthVolume",
-        primaryjoin="SpecWorkflowRun.codex_volume == CodexAuthVolume.name",
-        foreign_keys=lambda: [SpecWorkflowRun.codex_volume],
+        primaryjoin="WorkflowRun.codex_volume == CodexAuthVolume.name",
+        foreign_keys=lambda: [WorkflowRun.codex_volume],
     )
     codex_shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
         "CodexWorkerShard",
-        primaryjoin="SpecWorkflowRun.codex_queue == CodexWorkerShard.queue_name",
-        foreign_keys=lambda: [SpecWorkflowRun.codex_queue],
+        primaryjoin="WorkflowRun.codex_queue == CodexWorkerShard.queue_name",
+        foreign_keys=lambda: [WorkflowRun.codex_queue],
     )
 
 
@@ -2070,7 +2070,7 @@ class WorkflowArtifact(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     workflow_run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False
     )
     artifact_type: Mapped[WorkflowArtifactType] = mapped_column(
         Enum(
@@ -2092,26 +2092,26 @@ class WorkflowArtifact(Base):
         server_default=func.now(),
     )
 
-    workflow_run: Mapped[SpecWorkflowRun] = relationship(
-        "SpecWorkflowRun", back_populates="artifacts"
+    workflow_run: Mapped[WorkflowRun] = relationship(
+        "WorkflowRun", back_populates="artifacts"
     )
 
 
-class SpecWorkflowTaskState(Base):
+class WorkflowTaskState(Base):
     """Per-task execution status persisted for monitoring."""
 
-    __tablename__ = "spec_workflow_task_states"
+    __tablename__ = "workflow_task_states"
     __table_args__ = (
         CheckConstraint(
             "(workflow_run_id IS NOT NULL AND orchestrator_run_id IS NULL) OR "
             "(workflow_run_id IS NULL AND orchestrator_run_id IS NOT NULL)",
-            name="ck_spec_workflow_task_state_run_id_exclusive",
+            name="ck_workflow_task_state_run_id_exclusive",
         ),
         UniqueConstraint(
             "workflow_run_id",
             "task_name",
             "attempt",
-            name="uq_spec_workflow_task_state_attempt",
+            name="uq_workflow_task_state_attempt",
         ),
         UniqueConstraint(
             "orchestrator_run_id",
@@ -2119,30 +2119,30 @@ class SpecWorkflowTaskState(Base):
             "attempt",
             name="uq_orchestrator_task_state_attempt",
         ),
-        Index("ix_spec_workflow_task_states_run_id", "workflow_run_id"),
+        Index("ix_workflow_task_states_run_id", "workflow_run_id"),
         Index(
-            "ix_spec_workflow_task_states_failed",
+            "ix_workflow_task_states_failed",
             "workflow_run_id",
             postgresql_where=text("status = 'failed'"),
         ),
         Index(
-            "ix_spec_workflow_task_states_orchestrator_run_id",
+            "ix_workflow_task_states_orchestrator_run_id",
             "orchestrator_run_id",
         ),
         CheckConstraint(
             "(orchestrator_run_id IS NULL) OR (plan_step IS NOT NULL)",
-            name="ck_spec_workflow_task_state_orchestrator_plan_step",
+            name="ck_workflow_task_state_orchestrator_plan_step",
         ),
         CheckConstraint(
             "(workflow_run_id IS NULL) OR (task_name IS NOT NULL)",
-            name="ck_spec_workflow_task_state_task_name_required",
+            name="ck_workflow_task_state_task_name_required",
         ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     workflow_run_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
-        ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
         nullable=True,
     )
     orchestrator_run_id: Mapped[Optional[UUID]] = mapped_column(
@@ -2151,9 +2151,9 @@ class SpecWorkflowTaskState(Base):
         nullable=True,
     )
     task_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    status: Mapped[SpecWorkflowTaskStatus] = mapped_column(
+    status: Mapped[WorkflowTaskStatus] = mapped_column(
         Enum(
-            SpecWorkflowTaskStatus,
+            WorkflowTaskStatus,
             name="specworkflowtaskstatus",
             native_enum=True,
             validate_strings=True,
@@ -2214,8 +2214,8 @@ class SpecWorkflowTaskState(Base):
         onupdate=func.now(),
     )
 
-    workflow_run: Mapped[Optional[SpecWorkflowRun]] = relationship(
-        "SpecWorkflowRun",
+    workflow_run: Mapped[Optional[WorkflowRun]] = relationship(
+        "WorkflowRun",
         back_populates="task_states",
     )
     orchestrator_run: Mapped[Optional[OrchestratorRun]] = relationship(
@@ -2235,7 +2235,7 @@ def _register_workflow_model_dependencies() -> None:
     if TYPE_CHECKING:
         return
 
-    import_module("moonmind.workflows.spec_automation.models")
+    import_module("moonmind.workflows.automation.models")
     import_module("moonmind.workflows.agent_queue.models")
 
 

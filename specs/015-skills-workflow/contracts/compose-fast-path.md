@@ -32,9 +32,9 @@
 
 ## Stage Verification Contract
 
-- Speckit CLI verification is conditional:
-  - execute verification when selected/configured stage skills resolve to the Speckit adapter and skills mode is active,
-  - skip Speckit CLI checks when stages run through non-Speckit adapters or direct-only mode.
+- Agentkit CLI verification is conditional:
+  - execute verification when selected/configured stage skills resolve to the Agentkit adapter and skills mode is active,
+  - skip Agentkit CLI checks when stages run through non-Agentkit adapters or direct-only mode.
 - Stage names in logs and payloads are canonical runtime task names:
   - `discover_next_phase`
   - `submit_codex_job`
@@ -53,6 +53,6 @@
 Operator validation includes:
 
 1. Worker auth scripts complete without interactive failures.
-2. Worker logs show runtime mode resolution and preflight success, including conditional Speckit checks.
+2. Worker logs show runtime mode resolution and preflight success, including conditional Agentkit checks.
 3. API runtime resolves embedding provider/model to expected defaults.
 4. Unit validation passes via `./tools/test_unit.sh`.

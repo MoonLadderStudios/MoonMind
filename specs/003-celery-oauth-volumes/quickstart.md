@@ -39,7 +39,7 @@
 ## 4. Trigger a Spec Kit Run
 1. Dispatch a run that exercises the Codex phase:
    ```bash
-   poetry run python -m tools.trigger_spec_run --repo <repo_url> --prompt speckit.specify
+   poetry run python -m tools.trigger_spec_run --repo <repo_url> --prompt agentkit.specify
    ```
 2. Observe Celery logs for entries such as:
    ```text

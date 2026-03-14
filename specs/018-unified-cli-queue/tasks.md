@@ -18,8 +18,8 @@
 **Purpose**: Implement shared queue defaults and runtime mode guardrails used by all user stories.
 
 - [X] T004 Implement single-queue defaults and compatibility fallback in `moonmind/config/settings.py` (DOC-REQ-003, DOC-REQ-010).
-- [X] T005 [P] Align Spec Kit Celery queue routing defaults in `moonmind/workflows/speckit_celery/celeryconfig.py` and `moonmind/workflows/speckit_celery/__init__.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-010).
-- [X] T006 [P] Implement runtime mode validation and queue/runtime startup logging in `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py` (DOC-REQ-004, DOC-REQ-011).
+- [X] T005 [P] Align Spec Kit Celery queue routing defaults in `moonmind/workflows/agentkit_celery/celeryconfig.py` and `moonmind/workflows/agentkit_celery/__init__.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-010).
+- [X] T006 [P] Implement runtime mode validation and queue/runtime startup logging in `celery_worker/agentkit_worker.py` and `celery_worker/gemini_worker.py` (DOC-REQ-004, DOC-REQ-011).
 - [X] T007 Update Gemini task queue binding to single-queue compatibility behavior in `celery_worker/gemini_tasks.py` (DOC-REQ-003, DOC-REQ-010).
 
 **Checkpoint**: Settings and worker bootstrap logic enforce one queue defaults and runtime mode validation.
@@ -39,8 +39,8 @@
 
 ### Implementation for User Story 1
 
-- [X] T010 [US1] Update worker queue configuration logging to reflect one effective queue in `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py` (DOC-REQ-003, DOC-REQ-011).
-- [X] T011 [US1] Add runtime-mode enum validation (`codex|gemini|claude|universal`) in worker entrypoints (`celery_worker/speckit_worker.py`, `celery_worker/gemini_worker.py`) (DOC-REQ-004, DOC-REQ-006).
+- [X] T010 [US1] Update worker queue configuration logging to reflect one effective queue in `celery_worker/agentkit_worker.py` and `celery_worker/gemini_worker.py` (DOC-REQ-003, DOC-REQ-011).
+- [X] T011 [US1] Add runtime-mode enum validation (`codex|gemini|claude|universal`) in worker entrypoints (`celery_worker/agentkit_worker.py`, `celery_worker/gemini_worker.py`) (DOC-REQ-004, DOC-REQ-006).
 
 **Checkpoint**: Workers bootstrap with validated runtime modes and one effective queue contract.
 
@@ -58,7 +58,7 @@
 
 ### Implementation for User Story 2
 
-- [X] T013 [US2] Extend shared image CLI install/copy/verify paths to include Claude while preserving `speckit` in same Dockerfile in `api_service/Dockerfile` (DOC-REQ-001, DOC-REQ-002).
+- [X] T013 [US2] Extend shared image CLI install/copy/verify paths to include Claude while preserving `agentkit` in same Dockerfile in `api_service/Dockerfile` (DOC-REQ-001, DOC-REQ-002).
 - [X] T014 [US2] Update compose worker env/queue defaults for single-queue runtime mode deployment in `docker-compose.yaml` (DOC-REQ-003, DOC-REQ-007, DOC-REQ-008, DOC-REQ-010).
 
 **Checkpoint**: Shared image and worker service configuration support homogeneous/mixed runtime deployments from one queue.
@@ -78,7 +78,7 @@
 
 ### Implementation for User Story 3
 
-- [X] T017 [US3] Enforce startup CLI checks for `codex`, `gemini`, `claude`, and `speckit` in worker entrypoints (`celery_worker/speckit_worker.py`, `celery_worker/gemini_worker.py`) (DOC-REQ-001, DOC-REQ-009).
+- [X] T017 [US3] Enforce startup CLI checks for `codex`, `gemini`, `claude`, and `agentkit` in worker entrypoints (`celery_worker/agentkit_worker.py`, `celery_worker/gemini_worker.py`) (DOC-REQ-001, DOC-REQ-009).
 - [X] T018 [US3] Ensure runtime-neutral queue/task contract docs remain aligned with implementation in `specs/018-unified-cli-queue/contracts/requirements-traceability.md` and `specs/018-unified-cli-queue/quickstart.md` (DOC-REQ-005, DOC-REQ-006, DOC-REQ-011, DOC-REQ-012).
 
 **Checkpoint**: Startup health and observability expectations are codified and validated.
@@ -128,7 +128,7 @@
 
 ### Incremental Delivery
 
-1. Add Claude CLI to shared image while preserving Speckit co-location.
+1. Add Claude CLI to shared image while preserving Agentkit co-location.
 2. Align compose/runtime env for mixed or homogeneous fleets.
 3. Finalize startup health checks and telemetry-facing runtime metadata.
 

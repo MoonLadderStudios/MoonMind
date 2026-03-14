@@ -14,7 +14,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     resolve_publish_mode_for_skill,
 )
 
-pytestmark = [pytest.mark.speckit]
+pytestmark = [pytest.mark.agentkit]
 
 
 def test_normalize_task_payload_derives_capabilities() -> None:
@@ -225,7 +225,7 @@ def test_normalize_task_payload_respects_default_publish_mode_override(
 ) -> None:
     """Default publish mode should follow configurable setting when publish missing."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+    monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
     normalized = normalize_queue_job_payload(
         job_type="task",
@@ -287,7 +287,7 @@ def test_normalize_task_payload_accepts_steps_schema() -> None:
                     {"instructions": "Inspect current behavior"},
                     {
                         "title": "Apply patch",
-                        "skill": {"id": "speckit", "args": {"phase": "patch"}},
+                        "skill": {"id": "agentkit", "args": {"phase": "patch"}},
                     },
                 ],
             },
@@ -297,7 +297,7 @@ def test_normalize_task_payload_accepts_steps_schema() -> None:
     assert len(normalized["task"]["steps"]) == 2
     assert normalized["task"]["steps"][0]["id"] == "step-1"
     assert normalized["task"]["steps"][1]["id"] == "step-2"
-    assert normalized["task"]["steps"][1]["skill"]["id"] == "speckit"
+    assert normalized["task"]["steps"][1]["skill"]["id"] == "agentkit"
 
 
 def test_normalize_task_payload_overrides_custom_step_ids() -> None:
@@ -334,7 +334,7 @@ def test_normalize_task_payload_derives_step_skill_required_capabilities() -> No
             "task": {
                 "instructions": "Run step flow",
                 "skill": {
-                    "id": "speckit",
+                    "id": "agentkit",
                     "args": {},
                     "requiredCapabilities": ["qdrant"],
                 },
@@ -682,13 +682,13 @@ def test_build_canonical_view_for_skill_payload_sets_skill_id() -> None:
     canonical = build_canonical_task_view(
         job_type="codex_skill",
         payload={
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "inputs": {"repo": "Moon/Mind", "instruction": "Run"},
         },
     )
 
     assert canonical["repository"] == "Moon/Mind"
-    assert canonical["task"]["skill"]["id"] == "speckit"
+    assert canonical["task"]["skill"]["id"] == "agentkit"
     assert canonical["task"]["instructions"] == "Run"
     assert canonical["targetRuntime"] == "codex"
 
@@ -701,7 +701,7 @@ def test_normalize_legacy_skill_payload_preserves_publish_verification_skip_reas
     canonical = build_canonical_task_view(
         job_type="codex_skill",
         payload={
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "inputs": {
                 "repo": "Moon/Mind",
                 "instruction": "Run",
@@ -730,7 +730,7 @@ def test_normalize_legacy_skill_payload_defaults_publish_mode_to_pr() -> None:
     canonical = build_canonical_task_view(
         job_type="codex_skill",
         payload={
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "inputs": {"repo": "Moon/Mind", "instruction": "Run"},
         },
     )
@@ -744,7 +744,7 @@ def test_build_canonical_view_for_skill_payload_requires_repository() -> None:
     with pytest.raises(TaskContractError, match="repository is required"):
         build_canonical_task_view(
             job_type="codex_skill",
-            payload={"skillId": "speckit", "inputs": {"instruction": "Run"}},
+            payload={"skillId": "agentkit", "inputs": {"instruction": "Run"}},
         )
 
 

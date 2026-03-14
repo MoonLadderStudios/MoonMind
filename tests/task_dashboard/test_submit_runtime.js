@@ -210,13 +210,13 @@ const helpers = loadSubmitRuntimeHelpers();
     instruction: "Ship",
     targetService: "orchestrator",
     priority: "HIGH",
-    skillId: "speckit-orchestrate",
+    skillId: "agentkit-orchestrate",
     skillArgs: '{"feature":"drafts"}',
     approvalToken: " token-value ",
   });
   assert.strictEqual(valid.ok, true);
   assert.strictEqual(valid.value.priority, "high");
-  assert.strictEqual(valid.value.skillId, "speckit-orchestrate");
+  assert.strictEqual(valid.value.skillId, "agentkit-orchestrate");
   assert.strictEqual(JSON.stringify(valid.value.skillArgs), JSON.stringify({ feature: "drafts" }));
   assert.strictEqual(valid.value.approvalToken, "token-value");
 
@@ -230,17 +230,17 @@ const helpers = loadSubmitRuntimeHelpers();
 
   const noInstructionWithWrongService = helpers.validateOrchestratorSubmission({
     targetService: "deploy",
-    skillId: "speckit-orchestrate",
+    skillId: "agentkit-orchestrate",
   });
   assert.strictEqual(noInstructionWithWrongService.ok, false);
   assert.ok(/Target service/i.test(noInstructionWithWrongService.error));
 
   const noInstructionWithSkill = helpers.validateOrchestratorSubmission({
     targetService: "orchestrator",
-    skillId: "speckit-orchestrate",
+    skillId: "agentkit-orchestrate",
   });
   assert.strictEqual(noInstructionWithSkill.ok, true);
-  assert.strictEqual(noInstructionWithSkill.value.skillId, "speckit-orchestrate");
+  assert.strictEqual(noInstructionWithSkill.value.skillId, "agentkit-orchestrate");
   assert.strictEqual(noInstructionWithSkill.value.instruction, "");
 })();
 

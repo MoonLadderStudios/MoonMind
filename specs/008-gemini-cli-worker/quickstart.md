@@ -36,7 +36,7 @@
     docker compose exec api python
     ```
     ```python
-    from celery_worker.speckit_worker import celery_app
+    from celery_worker.agentkit_worker import celery_app
     # Assuming task is registered
     celery_app.send_task('gemini_worker.tasks.generate', args=['Hello Gemini'], queue='gemini')
     ```

@@ -92,7 +92,7 @@
 
 - [ ] T027 [US2] Implement lifecycle request/response handling in `api_service/api/routers/executions.py` using `moonmind/schemas/temporal_models.py` (DOC-REQ-012).
 - [ ] T028 [US2] Implement visibility-backed list/count/filter pagination in `moonmind/workflows/temporal/service.py` and `moonmind/workflows/temporal/client.py` (DOC-REQ-005).
-- [ ] T029 [US2] Enforce Temporal-first execution ownership and activity side-effect boundaries in `moonmind/workflows/temporal/service.py` and `moonmind/workflows/speckit_celery/tasks.py` (DOC-REQ-011).
+- [ ] T029 [US2] Enforce Temporal-first execution ownership and activity side-effect boundaries in `moonmind/workflows/temporal/service.py` and `moonmind/workflows/agentkit_celery/tasks.py` (DOC-REQ-011).
 - [ ] T030 [US2] Implement artifact-reference payload persistence flow in `moonmind/workflows/temporal/service.py` and `moonmind/workflows/agent_queue/storage.py` to keep large payloads out of history (DOC-REQ-013).
 - [ ] T031 [US2] Implement manifest ingestion failure-policy runtime handling in `moonmind/workflows/temporal/service.py` and `api_service/api/routers/manifests.py` (DOC-REQ-014).
 - [ ] T032 [US2] Implement callback signal and timer polling fallback orchestration in `moonmind/workflows/temporal/service.py` and `api_service/api/routers/executions.py` (DOC-REQ-015).

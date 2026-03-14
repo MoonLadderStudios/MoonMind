@@ -84,16 +84,14 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_DEFAULT_SKILL",
-            "SPEC_WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
-        default="speckit",
+        default="agentkit",
     )
     discover_skill = _first_non_empty(
         source,
         (
             "WORKFLOW_DISCOVER_SKILL",
-            "SPEC_WORKFLOW_DISCOVER_SKILL",
             "MOONMIND_DISCOVER_SKILL",
         ),
         default=default_skill,
@@ -102,7 +100,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_SUBMIT_SKILL",
-            "SPEC_WORKFLOW_SUBMIT_SKILL",
             "MOONMIND_SUBMIT_SKILL",
         ),
         default=default_skill,
@@ -111,7 +108,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_PUBLISH_SKILL",
-            "SPEC_WORKFLOW_PUBLISH_SKILL",
             "MOONMIND_PUBLISH_SKILL",
         ),
         default=default_skill,
@@ -125,16 +121,16 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
 
-def _configured_skills_require_speckit(source: Mapping[str, str]) -> bool:
-    """Return whether current worker config requires Speckit executable checks."""
+def _configured_skills_require_agentkit(source: Mapping[str, str]) -> bool:
+    """Return whether current worker config requires Workflow executable checks."""
 
     if not _env_flag(
-        _first_non_empty(source, ("WORKFLOW_USE_SKILLS", "SPEC_WORKFLOW_USE_SKILLS")),
+        _first_non_empty(source, ("WORKFLOW_USE_SKILLS",)),
         default=True,
     ):
         return False
     return any(
-        get_stage_adapter(skill_name) == "speckit"
+        get_stage_adapter(skill_name) == "agentkit"
         for skill_name in _configured_stage_skills(source)
     )
 
@@ -240,27 +236,27 @@ def _run_checked_command(
     )
 
 
-def _verify_speckit_cli(
-    speckit_path: str,
+def _verify_agentkit_cli(
+    agentkit_path: str,
     *,
     redaction_values: Sequence[str] = (),
 ) -> None:
-    """Validate Speckit CLI across legacy and shimmed command variants."""
+    """Validate Workflow CLI across legacy and shimmed command variants."""
 
     try:
         _run_checked_command(
-            [speckit_path, "--version"],
+            [agentkit_path, "--version"],
             redaction_values=redaction_values,
         )
         return
     except RuntimeError as exc:
-        # Some environments ship `speckit` as a `specify` shim that does not
+        # Some environments ship `agentkit` as a `specify` shim that does not
         # expose `--version`. Fall back to `--help` to verify executability.
         if "no such option: --version" not in str(exc).lower():
             raise
 
     _run_checked_command(
-        [speckit_path, "--help"],
+        [agentkit_path, "--help"],
         redaction_values=redaction_values,
     )
 
@@ -398,16 +394,16 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
-    speckit_path: str | None = None
-    if _configured_skills_require_speckit(source):
+    agentkit_path: str | None = None
+    if _configured_skills_require_agentkit(source):
         try:
-            speckit_path = verify_cli_is_executable("speckit")
+            agentkit_path = verify_cli_is_executable("agentkit")
         except CliVerificationError as exc:
             raise RuntimeError(str(exc)) from exc
 
-    if speckit_path is not None:
-        _verify_speckit_cli(
-            speckit_path,
+    if agentkit_path is not None:
+        _verify_agentkit_cli(
+            agentkit_path,
             redaction_values=redaction_values,
         )
 

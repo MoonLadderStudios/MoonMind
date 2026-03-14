@@ -22,7 +22,7 @@ def skills_mirror(tmp_path, monkeypatch):
     mirror.mkdir(parents=True)
     legacy.mkdir(parents=True)
 
-    for root, name in ((mirror, "speckit"), (mirror, "docs-lint"), (legacy, "legacy")):
+    for root, name in ((mirror, "agentkit"), (mirror, "docs-lint"), (legacy, "legacy")):
         skill_dir = root / name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
@@ -31,12 +31,12 @@ def skills_mirror(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
         str(mirror),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
         str(legacy),
         raising=False,
     )
@@ -46,26 +46,26 @@ def skills_mirror(tmp_path, monkeypatch):
 def test_resolve_run_skill_selection_uses_global_defaults(skills_mirror, monkeypatch):
     mirror, _ = skills_mirror
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "allowlist",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
-        ("speckit",),
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
+        ("agentkit",),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
 
     resolved = resolve_run_skill_selection(run_id="run-1", context={})
 
     assert resolved.selection_source == "global_default"
-    assert [skill.skill_name for skill in resolved.skills] == ["speckit"]
-    assert resolved.skills[0].source_uri == (mirror / "speckit").resolve().as_uri()
+    assert [skill.skill_name for skill in resolved.skills] == ["agentkit"]
+    assert resolved.skills[0].source_uri == (mirror / "agentkit").resolve().as_uri()
 
 
 def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
@@ -73,18 +73,18 @@ def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
 ):
     mirror, legacy = skills_mirror
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
-        ("speckit",),
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
+        ("agentkit",),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
 
@@ -92,11 +92,11 @@ def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
 
     assert resolved.selection_source == "global_default"
     assert [skill.skill_name for skill in resolved.skills] == [
-        "speckit",
+        "agentkit",
         "docs-lint",
         "legacy",
     ]
-    assert resolved.skills[0].source_uri == (mirror / "speckit").resolve().as_uri()
+    assert resolved.skills[0].source_uri == (mirror / "agentkit").resolve().as_uri()
     assert resolved.skills[1].source_uri == (mirror / "docs-lint").resolve().as_uri()
     assert resolved.skills[2].source_uri == (legacy / "legacy").resolve().as_uri()
 
@@ -106,7 +106,7 @@ def test_resolve_run_skill_selection_prefers_job_override(skills_mirror):
         run_id="run-2",
         context={
             "skill_selection": ["docs-lint:1.2.0"],
-            "queue_skill_selection": ["speckit:1.0.0"],
+            "queue_skill_selection": ["agentkit:1.0.0"],
             "skill_sources": {"docs-lint:1.2.0": "file:///tmp/custom/docs-lint"},
         },
     )
@@ -121,7 +121,7 @@ def test_resolve_run_skill_selection_rejects_duplicates(skills_mirror):
     with pytest.raises(SkillResolutionError, match="Duplicate skill name"):
         resolve_run_skill_selection(
             run_id="run-3",
-            context={"skill_selection": ["speckit:1", "speckit:2"]},
+            context={"skill_selection": ["agentkit:1", "agentkit:2"]},
         )
 
 
@@ -149,12 +149,12 @@ def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
     empty_root.mkdir(parents=True)
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
         str(empty_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
         str(empty_root),
         raising=False,
     )
@@ -170,79 +170,79 @@ def test_list_available_skill_names_permissive_mode_discovers_local_roots(
     skills_mirror, monkeypatch
 ):
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
-        ("speckit",),
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
+        ("agentkit",),
         raising=False,
     )
 
-    assert list_available_skill_names() == ("speckit", "docs-lint", "legacy")
+    assert list_available_skill_names() == ("agentkit", "docs-lint", "legacy")
 
 
 def test_list_available_skill_names_allowlist_filters_unlisted_local_skills(
     skills_mirror, monkeypatch
 ):
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "allowlist",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
-        ("speckit", "legacy"),
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
+        ("agentkit", "legacy"),
         raising=False,
     )
 
-    assert list_available_skill_names() == ("speckit", "legacy")
+    assert list_available_skill_names() == ("agentkit", "legacy")
 
 
-def test_list_available_skill_names_includes_builtin_speckit_without_local_mirror(
+def test_list_available_skill_names_includes_builtin_agentkit_without_local_mirror(
     monkeypatch, tmp_path
 ):
     empty_root = tmp_path / "empty"
     empty_root.mkdir(parents=True)
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
         str(empty_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
         str(empty_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
         (),
         raising=False,
     )
 
-    assert list_available_skill_names() == ("speckit",)
+    assert list_available_skill_names() == ("agentkit",)
 
 
 def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
@@ -259,10 +259,10 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     local_skill.mkdir()
     (local_skill / "SKILL.md").write_text("name: local-tool\n", encoding="utf-8")
 
-    legacy_skill = legacy_nested_root / "speckit-orchestrate"
+    legacy_skill = legacy_nested_root / "agentkit-orchestrate"
     legacy_skill.mkdir()
     (legacy_skill / "SKILL.md").write_text(
-        "name: speckit-orchestrate\n", encoding="utf-8"
+        "name: agentkit-orchestrate\n", encoding="utf-8"
     )
 
     outside_cwd = tmp_path / "elsewhere"
@@ -270,40 +270,40 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     monkeypatch.chdir(outside_cwd)
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.repo_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.repo_root",
         str(repo_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
         ".agents/skills/local",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
         ".agents/skills",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
         (),
         raising=False,
     )
 
     assert list_available_skill_names() == (
-        "speckit",
+        "agentkit",
         "local-tool",
-        "speckit-orchestrate",
+        "agentkit-orchestrate",
     )
 
 
@@ -323,37 +323,37 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
     monkeypatch.chdir(cwd_root)
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.repo_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.repo_root",
         str(repo_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
         ".agents/skills/local",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
         ".agents/skills",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
         (),
         raising=False,
     )
 
-    assert list_available_skill_names() == ("speckit", "local-gate-tool")
+    assert list_available_skill_names() == ("agentkit", "local-gate-tool")
 
 
 def test_project_root_fallback_handles_shallow_paths(monkeypatch):
@@ -363,32 +363,32 @@ def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     assert resolver_module._project_root() == Path("/")
 
 
-def test_builtin_speckit_fallback_logs_once(monkeypatch, tmp_path, caplog):
+def test_builtin_agentkit_fallback_logs_once(monkeypatch, tmp_path, caplog):
     empty_root = tmp_path / "empty"
     empty_root.mkdir(parents=True)
 
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_local_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
         str(empty_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skills_legacy_mirror_root",
+        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
         str(empty_root),
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.skill_policy_mode",
+        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
         "permissive",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.default_skill",
-        "speckit",
+        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
+        "agentkit",
         raising=False,
     )
     monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.spec_workflow.allowed_skills",
+        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
         (),
         raising=False,
     )
@@ -399,8 +399,8 @@ def test_builtin_speckit_fallback_logs_once(monkeypatch, tmp_path, caplog):
             first = resolve_run_skill_selection(run_id="warn-1", context={})
             second = resolve_run_skill_selection(run_id="warn-2", context={})
 
-        assert first.skills[0].source_uri == "builtin://speckit"
-        assert second.skills[0].source_uri == "builtin://speckit"
+        assert first.skills[0].source_uri == "builtin://agentkit"
+        assert second.skills[0].source_uri == "builtin://agentkit"
         assert (
             len(
                 [

@@ -45,10 +45,10 @@ Stage execution returns:
   - `selected_skill <- selectedSkill`
   - `adapter_id <- adapterId`
   - `execution_path <- executionPath`
-- Legacy fallback defaults for Speckit phases:
-  - missing `selectedSkill` -> `speckit`
-  - missing `adapterId` with Speckit selection -> `speckit`
-  - missing `executionPath` with Speckit selection -> `skill`
+- Legacy fallback defaults for Agentkit phases:
+  - missing `selectedSkill` -> `agentkit`
+  - missing `adapterId` with Agentkit selection -> `agentkit`
+  - missing `executionPath` with Agentkit selection -> `skill`
 
 ## Observability Contract
 

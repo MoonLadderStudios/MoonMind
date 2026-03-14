@@ -177,7 +177,7 @@ class CodexSkillPayload:
     def from_payload(cls, payload: Mapping[str, Any]) -> "CodexSkillPayload":
         """Parse and validate a queue payload for skills-first execution."""
 
-        skill_id = str(payload.get("skillId", "")).strip() or "speckit"
+        skill_id = str(payload.get("skillId", "")).strip() or "agentkit"
         raw_inputs = payload.get("inputs")
         inputs = dict(raw_inputs) if isinstance(raw_inputs, Mapping) else {}
 

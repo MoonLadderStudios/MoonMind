@@ -24,19 +24,19 @@ Milestone 2 will store artifact metadata in a normalized `agent_job_artifacts` t
 
 ### Decision: Introduce job-scoped storage helper under queue workflow package
 
-Use a queue-specific storage helper modeled after `moonmind/workflows/speckit_celery/storage.py` to enforce:
+Use a queue-specific storage helper modeled after `moonmind/workflows/agentkit_celery/storage.py` to enforce:
 - relative artifact names only
 - no traversal components
 - resolution under `${AGENT_JOB_ARTIFACT_ROOT}/<job_id>/`
 
 ### Rationale
 
-- Reuses proven safety pattern while avoiding coupling queue artifacts to speckit-specific paths.
+- Reuses proven safety pattern while avoiding coupling queue artifacts to agentkit-specific paths.
 - Keeps storage validation centralized and testable.
 
 ### Alternatives Considered
 
-- Reuse speckit storage class directly: rejected because run-centric naming differs from job-centric artifact paths.
+- Reuse agentkit storage class directly: rejected because run-centric naming differs from job-centric artifact paths.
 
 ## Upload Size Enforcement
 

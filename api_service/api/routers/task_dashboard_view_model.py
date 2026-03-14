@@ -141,7 +141,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     if configured_runtime in supported_task_runtimes:
         default_task_runtime = configured_runtime
     else:
-        configured_default = resolve_default_task_runtime(settings.spec_workflow)
+        configured_default = resolve_default_task_runtime(settings.workflow)
         if configured_default in supported_task_runtimes:
             default_task_runtime = configured_default
         else:
@@ -151,7 +151,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     for runtime in supported_task_runtimes:
         default_model, default_effort = resolve_runtime_defaults(
             runtime,
-            spec_workflow_settings=settings.spec_workflow,
+            workflow_settings=settings.workflow,
         )
         if default_model:
             default_task_model_by_runtime[runtime] = default_model
@@ -160,11 +160,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     default_task_model = default_task_model_by_runtime.get(default_task_runtime, "")
     default_task_effort = default_task_effort_by_runtime.get(default_task_runtime, "")
     default_repository = (
-        str(settings.spec_workflow.github_repository or "").strip()
+        str(settings.workflow.github_repository or "").strip()
         or DEFAULT_REPOSITORY
     )
     default_publish_mode = (
-        str(settings.spec_workflow.default_publish_mode or "").strip().lower() or "pr"
+        str(settings.workflow.default_publish_mode or "").strip().lower() or "pr"
     )
 
     return {
@@ -268,7 +268,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultTaskModelByRuntime": default_task_model_by_runtime,
             "defaultTaskEffortByRuntime": default_task_effort_by_runtime,
             "defaultPublishMode": default_publish_mode,
-            "defaultProposeTasks": bool(settings.spec_workflow.enable_task_proposals),
+            "defaultProposeTasks": bool(settings.workflow.enable_task_proposals),
             "queueEnv": "MOONMIND_QUEUE",
             "taskSourceResolver": "/api/tasks/{taskId}/source",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
@@ -286,13 +286,13 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "pollIntervalMs": 5000,
             },
             "attachmentPolicy": {
-                "enabled": bool(settings.spec_workflow.agent_job_attachment_enabled),
+                "enabled": bool(settings.workflow.agent_job_attachment_enabled),
                 **_build_default_attachment_policy(
                     {
-                        "agent_job_attachment_max_count": settings.spec_workflow.agent_job_attachment_max_count,
-                        "agent_job_attachment_max_bytes": settings.spec_workflow.agent_job_attachment_max_bytes,
-                        "agent_job_attachment_total_bytes": settings.spec_workflow.agent_job_attachment_total_bytes,
-                        "agent_job_attachment_allowed_content_types": settings.spec_workflow.agent_job_attachment_allowed_content_types,
+                        "agent_job_attachment_max_count": settings.workflow.agent_job_attachment_max_count,
+                        "agent_job_attachment_max_bytes": settings.workflow.agent_job_attachment_max_bytes,
+                        "agent_job_attachment_total_bytes": settings.workflow.agent_job_attachment_total_bytes,
+                        "agent_job_attachment_allowed_content_types": settings.workflow.agent_job_attachment_allowed_content_types,
                     }
                 ),
             },

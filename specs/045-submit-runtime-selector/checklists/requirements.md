@@ -31,4 +31,4 @@
 
 ## Notes
 
-- All checklist items validated during spec drafting; ready for speckit-clarify or speckit-plan.
+- All checklist items validated during spec drafting; ready for agentkit-clarify or agentkit-plan.

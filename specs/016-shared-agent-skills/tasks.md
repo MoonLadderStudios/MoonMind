@@ -21,8 +21,8 @@
 - [X] T005 Implement run skill selection precedence logic in `moonmind/workflows/skills/resolver.py` (job overrides -> queue profile -> global defaults).
 - [X] T006 Implement workspace symlink invariants in `moonmind/workflows/skills/workspace_links.py` for `skills_active`, `.agents/skills`, and `.gemini/skills`.
 - [X] T007 Implement artifact verification and immutable cache materialization in `moonmind/workflows/skills/materializer.py`.
-- [X] T008 Integrate resolver/materializer execution into workflow stage context setup in `moonmind/workflows/speckit_celery/tasks.py`.
-- [X] T009 Extend `moonmind/workflows/speckit_celery/workspace.py` run paths with shared-skills directories used by resolver/materializer.
+- [X] T008 Integrate resolver/materializer execution into workflow stage context setup in `moonmind/workflows/agentkit_celery/tasks.py`.
+- [X] T009 Extend `moonmind/workflows/agentkit_celery/workspace.py` run paths with shared-skills directories used by resolver/materializer.
 
 **Checkpoint**: Shared skills runtime can resolve and materialize a run workspace before stage execution.
 
@@ -43,7 +43,7 @@
 ### Implementation for User Story 1
 
 - [X] T013 [US1] Export new resolver/materializer/workspace-link helpers via `moonmind/workflows/skills/__init__.py`.
-- [X] T014 [US1] Persist run-level materialization metadata in stage context and task payloads in `moonmind/workflows/speckit_celery/tasks.py`.
+- [X] T014 [US1] Persist run-level materialization metadata in stage context and task payloads in `moonmind/workflows/agentkit_celery/tasks.py`.
 
 **Checkpoint**: Run context contains validated shared skills workspace metadata consumed by both agent adapters.
 
@@ -63,8 +63,8 @@
 
 ### Implementation for User Story 2
 
-- [X] T018 [US2] Wire per-run selection inputs from task context (`skill_selection` and `skill_sources`) in `moonmind/workflows/speckit_celery/tasks.py`.
-- [X] T019 [US2] Add run workspace skill path fields to `moonmind/workflows/speckit_celery/workspace.py` and ensure deterministic path creation.
+- [X] T018 [US2] Wire per-run selection inputs from task context (`skill_selection` and `skill_sources`) in `moonmind/workflows/agentkit_celery/tasks.py`.
+- [X] T019 [US2] Add run workspace skill path fields to `moonmind/workflows/agentkit_celery/workspace.py` and ensure deterministic path creation.
 
 **Checkpoint**: Per-run skill selection is deterministic and isolated from user-global Codex/Gemini state.
 
@@ -83,8 +83,8 @@
 
 ### Implementation for User Story 3
 
-- [X] T022 [US3] Add optional startup validation for shared skills mirror roots in `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py`.
-- [X] T023 [US3] Add materialization error codes/messages and structured telemetry fields in `moonmind/workflows/skills/materializer.py` and `moonmind/workflows/speckit_celery/tasks.py`.
+- [X] T022 [US3] Add optional startup validation for shared skills mirror roots in `celery_worker/agentkit_worker.py` and `celery_worker/gemini_worker.py`.
+- [X] T023 [US3] Add materialization error codes/messages and structured telemetry fields in `moonmind/workflows/skills/materializer.py` and `moonmind/workflows/agentkit_celery/tasks.py`.
 
 **Checkpoint**: Invalid artifacts fail before CLI execution and diagnostics are visible in workflow metadata.
 
@@ -95,7 +95,7 @@
 **Purpose**: Complete documentation alignment, validation, and closure.
 
 - [X] T024 [P] Update shared skills guidance in `README.md`, `AGENTS.md`, and `specs/016-shared-agent-skills/quickstart.md` for `.agents/skills` + `.gemini/skills`.
-- [X] T025 [P] Align existing legacy assumptions referencing `.codex/skills` in `specs/001-celery-chain-workflow/spec.md`, `specs/002-document-speckit-automation/spec.md`, and `specs/015-skills-workflow/spec.md`.
+- [X] T025 [P] Align existing legacy assumptions referencing `.codex/skills` in `specs/001-celery-chain-workflow/spec.md`, `specs/002-document-agentkit-automation/spec.md`, and `specs/015-skills-workflow/spec.md`.
 - [X] T026 Run unit validation via `./tools/test_unit.sh`.
 - [X] T027 Run manual implementation scope validation against tasks and git diff (repository does not include `.specify/scripts/bash/validate-implementation-scope.sh`).
 

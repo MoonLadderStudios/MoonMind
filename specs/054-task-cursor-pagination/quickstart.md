@@ -67,7 +67,7 @@ Expected outcome: runtime scope checks pass with production code and test change
 
 ## 8. Planning completion gate
 
-Before running `/speckit.tasks`, ensure these artifacts exist:
+Before running `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/043-task-cursor-pagination/plan.md`
 - `specs/043-task-cursor-pagination/research.md`

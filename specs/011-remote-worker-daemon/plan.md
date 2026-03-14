@@ -5,7 +5,7 @@
 
 ## Summary
 
-Align the standalone `moonmind-codex-worker` daemon with 015 umbrella principles by enforcing Speckit-always startup readiness, validating Google embedding credential requirements, extending queue execution semantics to support `codex_skill` jobs through skills-first routing with compatibility fallback, and enabling per-task Codex model/effort overrides with worker-default fallback.
+Align the standalone `moonmind-codex-worker` daemon with 015 umbrella principles by enforcing Agentkit-always startup readiness, validating Google embedding credential requirements, extending queue execution semantics to support `codex_skill` jobs through skills-first routing with compatibility fallback, and enabling per-task Codex model/effort overrides with worker-default fallback.
 
 ## Technical Context
 
@@ -65,7 +65,7 @@ tests/unit/agents/codex_worker/
 ## Phase 0: Research Plan
 
 1. Reconcile Milestone-3 `codex_exec` scope with umbrella skills-first execution requirements.
-2. Define startup preflight additions for Speckit and embedding readiness.
+2. Define startup preflight additions for Agentkit and embedding readiness.
 3. Define compatibility strategy for `codex_skill` without breaking `codex_exec` behavior.
 4. Define required event metadata additions for observability.
 5. Define precedence and fallback behavior for task-level `codex.model`/`codex.effort`.

@@ -328,34 +328,34 @@ class TemporalDashboardSettings(BaseSettings):
     )
 
 
-class SpecWorkflowSettings(BaseSettings):
+class WorkflowSettings(BaseSettings):
     """Settings specific to Spec Kit Celery workflows."""
 
     repo_root: str = Field(
         ".",
-        env=("WORKFLOW_REPO_ROOT", "SPEC_WORKFLOW_REPO_ROOT"),
-        validation_alias=AliasChoices("WORKFLOW_REPO_ROOT", "SPEC_WORKFLOW_REPO_ROOT"),
+        env=("WORKFLOW_REPO_ROOT",),
+        validation_alias=AliasChoices("WORKFLOW_REPO_ROOT"),
     )
     tasks_root: str = Field(
         "specs",
-        env=("WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"),
+        env=("WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"),
         validation_alias=AliasChoices(
-            "WORKFLOW_TASKS_ROOT", "SPEC_WORKFLOW_TASKS_ROOT"
+            "WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"
         ),
     )
     artifacts_root: str = Field(
-        "var/artifacts/spec_workflows",
+        "var/artifacts/workflows",
         env=(
             "WORKFLOW_ARTIFACT_ROOT",
             "WORKFLOW_ARTIFACTS_ROOT",
-            "SPEC_WORKFLOW_ARTIFACT_ROOT",
-            "SPEC_WORKFLOW_ARTIFACTS_ROOT",
+            "WORKFLOW_ARTIFACT_ROOT",
+            "WORKFLOW_ARTIFACTS_ROOT",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_ARTIFACT_ROOT",
             "WORKFLOW_ARTIFACTS_ROOT",
-            "SPEC_WORKFLOW_ARTIFACT_ROOT",
-            "SPEC_WORKFLOW_ARTIFACTS_ROOT",
+            "WORKFLOW_ARTIFACT_ROOT",
+            "WORKFLOW_ARTIFACTS_ROOT",
         ),
         description="Filesystem location where Spec workflow artifacts are persisted.",
     )
@@ -552,32 +552,32 @@ class SpecWorkflowSettings(BaseSettings):
         ("manifest",),
         env=(
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
-            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
-            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
         ),
         description="Comma-delimited list of base capability labels applied to manifest jobs.",
     )
     job_image: str = Field(
         "ghcr.io/moonladderstudios/moonmind:latest",
-        env=("WORKFLOW_JOB_IMAGE", "SPEC_AUTOMATION_JOB_IMAGE"),
+        env=("WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"),
         validation_alias=AliasChoices(
-            "WORKFLOW_JOB_IMAGE", "SPEC_AUTOMATION_JOB_IMAGE"
+            "WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"
         ),
         description="Container image used for Spec Automation job executions.",
     )
     workspace_root: str = Field(
         "/work",
-        env="SPEC_AUTOMATION_WORKSPACE_ROOT",
+        env="WORKFLOW_WORKSPACE_ROOT",
         description="Host-mounted root directory for Spec Automation workspaces.",
     )
     celery_broker_url: Optional[str] = Field(
         None,
         env=(
             "WORKFLOW_CELERY_BROKER_URL",
-            "SPEC_WORKFLOW_CELERY_BROKER_URL",
+            "WORKFLOW_CELERY_BROKER_URL",
             "CELERY_BROKER_URL",
         ),
         description="Override Celery broker URL dedicated to Spec workflow chains.",
@@ -586,35 +586,35 @@ class SpecWorkflowSettings(BaseSettings):
         None,
         env=(
             "WORKFLOW_CELERY_RESULT_BACKEND",
-            "SPEC_WORKFLOW_CELERY_RESULT_BACKEND",
+            "WORKFLOW_CELERY_RESULT_BACKEND",
             "CELERY_RESULT_BACKEND",
         ),
         description="Override Celery result backend for Spec workflow chains.",
     )
     metrics_enabled: bool = Field(
         False,
-        env=("WORKFLOW_METRICS_ENABLED", "SPEC_WORKFLOW_METRICS_ENABLED"),
+        env=("WORKFLOW_METRICS_ENABLED", "WORKFLOW_METRICS_ENABLED"),
         description="Toggle emission of Spec Automation StatsD metrics.",
     )
     metrics_host: Optional[str] = Field(
         None,
-        env=("WORKFLOW_METRICS_HOST", "SPEC_WORKFLOW_METRICS_HOST"),
+        env=("WORKFLOW_METRICS_HOST", "WORKFLOW_METRICS_HOST"),
         description="Hostname for the StatsD metrics sink (optional).",
     )
     metrics_port: Optional[int] = Field(
         None,
-        env=("WORKFLOW_METRICS_PORT", "SPEC_WORKFLOW_METRICS_PORT"),
+        env=("WORKFLOW_METRICS_PORT", "WORKFLOW_METRICS_PORT"),
         description="Port for the StatsD metrics sink (optional).",
     )
     metrics_namespace: str = Field(
-        "spec_automation",
-        env=("WORKFLOW_METRICS_NAMESPACE", "SPEC_WORKFLOW_METRICS_NAMESPACE"),
+        "automation",
+        env=("WORKFLOW_METRICS_NAMESPACE", "WORKFLOW_METRICS_NAMESPACE"),
         description="Namespace/prefix applied to emitted Spec Automation metrics.",
     )
     default_feature_key: str = Field(
         "001-celery-chain-workflow",
         validation_alias=AliasChoices(
-            "WORKFLOW_DEFAULT_FEATURE_KEY", "SPEC_WORKFLOW_DEFAULT_FEATURE_KEY"
+            "WORKFLOW_DEFAULT_FEATURE_KEY", "WORKFLOW_DEFAULT_FEATURE_KEY"
         ),
     )
     codex_environment: Optional[str] = Field(None, env="CODEX_ENV")
@@ -649,7 +649,7 @@ class SpecWorkflowSettings(BaseSettings):
         env=(
             "MOONMIND_QUEUE",
             "WORKFLOW_CODEX_QUEUE",
-            "SPEC_WORKFLOW_CODEX_QUEUE",
+            "WORKFLOW_CODEX_QUEUE",
             "CODEX_QUEUE",
         ),
         description="Explicit Codex queue name assigned to this worker.",
@@ -684,12 +684,12 @@ class SpecWorkflowSettings(BaseSettings):
         env=(
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
         ),
         description="Fallback runtime for queue task payloads that omit runtime fields.",
     )
@@ -698,12 +698,12 @@ class SpecWorkflowSettings(BaseSettings):
         env=(
             "WORKFLOW_DEFAULT_PUBLISH_MODE",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
-            "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
+            "WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_PUBLISH_MODE",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
-            "SPEC_WORKFLOW_DEFAULT_PUBLISH_MODE",
+            "WORKFLOW_DEFAULT_PUBLISH_MODE",
         ),
         description="Fallback publish mode applied when queue task payloads omit publish.mode.",
     )
@@ -711,23 +711,23 @@ class SpecWorkflowSettings(BaseSettings):
         "MoonLadderStudios/MoonMind",
         env=(
             "WORKFLOW_GITHUB_REPOSITORY",
-            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_GITHUB_REPOSITORY",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_GITHUB_REPOSITORY",
-            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_GITHUB_REPOSITORY",
         ),
     )
     git_user_name: Optional[str] = Field(
         None,
         env=(
             "WORKFLOW_GIT_USER_NAME",
-            "SPEC_WORKFLOW_GIT_USER_NAME",
+            "WORKFLOW_GIT_USER_NAME",
             "MOONMIND_GIT_USER_NAME",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_GIT_USER_NAME",
-            "SPEC_WORKFLOW_GIT_USER_NAME",
+            "WORKFLOW_GIT_USER_NAME",
             "MOONMIND_GIT_USER_NAME",
         ),
         description="Optional Git author/committer display name used by worker publish stages.",
@@ -736,83 +736,83 @@ class SpecWorkflowSettings(BaseSettings):
         None,
         env=(
             "WORKFLOW_GIT_USER_EMAIL",
-            "SPEC_WORKFLOW_GIT_USER_EMAIL",
+            "WORKFLOW_GIT_USER_EMAIL",
             "MOONMIND_GIT_USER_EMAIL",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_GIT_USER_EMAIL",
-            "SPEC_WORKFLOW_GIT_USER_EMAIL",
+            "WORKFLOW_GIT_USER_EMAIL",
             "MOONMIND_GIT_USER_EMAIL",
         ),
         description="Optional Git author/committer email used by worker publish stages.",
     )
     github_token: Optional[str] = Field(
         None,
-        env=("WORKFLOW_GITHUB_TOKEN", "SPEC_WORKFLOW_GITHUB_TOKEN"),
+        env=("WORKFLOW_GITHUB_TOKEN", "WORKFLOW_GITHUB_TOKEN"),
         validation_alias=AliasChoices(
-            "WORKFLOW_GITHUB_TOKEN", "SPEC_WORKFLOW_GITHUB_TOKEN"
+            "WORKFLOW_GITHUB_TOKEN", "WORKFLOW_GITHUB_TOKEN"
         ),
     )
     test_mode: bool = Field(
         False,
-        env=("WORKFLOW_TEST_MODE", "SPEC_WORKFLOW_TEST_MODE"),
-        validation_alias=AliasChoices("WORKFLOW_TEST_MODE", "SPEC_WORKFLOW_TEST_MODE"),
+        env=("WORKFLOW_TEST_MODE", "WORKFLOW_TEST_MODE"),
+        validation_alias=AliasChoices("WORKFLOW_TEST_MODE", "WORKFLOW_TEST_MODE"),
     )
     agent_backend: str = Field(
         "codex_cli",
-        env="SPEC_AUTOMATION_AGENT_BACKEND",
+        env="WORKFLOW_AGENT_BACKEND",
         description="Active agent backend identifier for Spec Kit automation runs.",
     )
     allowed_agent_backends: tuple[str, ...] = Field(
         ("codex_cli",),
-        env="SPEC_AUTOMATION_ALLOWED_AGENT_BACKENDS",
+        env="WORKFLOW_ALLOWED_AGENT_BACKENDS",
         description="Whitelisted agent backend identifiers for Spec Kit automation.",
     )
     agent_version: str = Field(
         "unspecified",
-        env="SPEC_AUTOMATION_AGENT_VERSION",
+        env="WORKFLOW_AGENT_VERSION",
         description="Version string recorded with the agent configuration snapshot.",
     )
     prompt_pack_version: Optional[str] = Field(
         None,
-        env="SPEC_AUTOMATION_PROMPT_PACK_VERSION",
+        env="WORKFLOW_PROMPT_PACK_VERSION",
         description="Spec Kit prompt pack version associated with the selected agent.",
     )
     agent_runtime_env_keys: tuple[str, ...] = Field(
         ("CODEX_ENV", "CODEX_MODEL", "CODEX_PROFILE", "CODEX_API_KEY"),
-        env="SPEC_AUTOMATION_AGENT_RUNTIME_ENV_KEYS",
+        env="WORKFLOW_AGENT_RUNTIME_ENV_KEYS",
         description="Environment variable names forwarded to the agent runtime snapshot.",
     )
     skills_enabled: bool = Field(
         True,
-        env=("WORKFLOW_USE_SKILLS", "SPEC_WORKFLOW_USE_SKILLS"),
+        env=("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS"),
         description="Enable skills-first orchestration policy for workflow stages.",
     )
     skills_shadow_mode: bool = Field(
         False,
-        env=("WORKFLOW_SKILLS_SHADOW_MODE", "SPEC_WORKFLOW_SKILLS_SHADOW_MODE"),
+        env=("WORKFLOW_SKILLS_SHADOW_MODE", "WORKFLOW_SKILLS_SHADOW_MODE"),
         description="Enable shadow-mode telemetry for skills orchestration.",
     )
     skills_fallback_enabled: bool = Field(
         True,
         env=(
             "WORKFLOW_SKILLS_FALLBACK_ENABLED",
-            "SPEC_WORKFLOW_SKILLS_FALLBACK_ENABLED",
+            "WORKFLOW_SKILLS_FALLBACK_ENABLED",
         ),
         description="Allow direct stage fallback when skill adapters fail.",
     )
     skills_canary_percent: int = Field(
         100,
-        env=("WORKFLOW_SKILLS_CANARY_PERCENT", "SPEC_WORKFLOW_SKILLS_CANARY_PERCENT"),
+        env=("WORKFLOW_SKILLS_CANARY_PERCENT", "WORKFLOW_SKILLS_CANARY_PERCENT"),
         description="Percentage of runs routed through skills-first policy (0-100).",
         ge=0,
         le=100,
     )
     default_skill: str = Field(
-        "speckit",
+        "agentkit",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_SKILL",
-            "SPEC_WORKFLOW_DEFAULT_SKILL",
+            "WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
         description="Default skill identifier for workflow stage execution.",
@@ -821,7 +821,7 @@ class SpecWorkflowSettings(BaseSettings):
         None,
         validation_alias=AliasChoices(
             "WORKFLOW_DISCOVER_SKILL",
-            "SPEC_WORKFLOW_DISCOVER_SKILL",
+            "WORKFLOW_DISCOVER_SKILL",
             "MOONMIND_DISCOVER_SKILL",
         ),
         description="Optional skill override for discovery stage.",
@@ -830,7 +830,7 @@ class SpecWorkflowSettings(BaseSettings):
         None,
         validation_alias=AliasChoices(
             "WORKFLOW_SUBMIT_SKILL",
-            "SPEC_WORKFLOW_SUBMIT_SKILL",
+            "WORKFLOW_SUBMIT_SKILL",
             "MOONMIND_SUBMIT_SKILL",
         ),
         description="Optional skill override for submit stage.",
@@ -839,7 +839,7 @@ class SpecWorkflowSettings(BaseSettings):
         None,
         validation_alias=AliasChoices(
             "WORKFLOW_PUBLISH_SKILL",
-            "SPEC_WORKFLOW_PUBLISH_SKILL",
+            "WORKFLOW_PUBLISH_SKILL",
             "MOONMIND_PUBLISH_SKILL",
         ),
         description="Optional skill override for publish stage.",
@@ -848,17 +848,17 @@ class SpecWorkflowSettings(BaseSettings):
         "permissive",
         validation_alias=AliasChoices(
             "WORKFLOW_SKILL_POLICY_MODE",
-            "SPEC_WORKFLOW_SKILL_POLICY_MODE",
+            "WORKFLOW_SKILL_POLICY_MODE",
             "MOONMIND_SKILL_POLICY_MODE",
             "SKILL_POLICY_MODE",
         ),
         description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces allowed skills list.",
     )
     allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("speckit",),
+        ("agentkit",),
         validation_alias=AliasChoices(
             "WORKFLOW_ALLOWED_SKILLS",
-            "SPEC_WORKFLOW_ALLOWED_SKILLS",
+            "WORKFLOW_ALLOWED_SKILLS",
             "MOONMIND_ALLOWED_SKILLS",
         ),
         description="Allowlisted skills that can be selected for workflow stages.",
@@ -1035,12 +1035,12 @@ class SpecWorkflowSettings(BaseSettings):
         env=(
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
         description="Hard timeout for non-container worker stage commands.",
         ge=1,
@@ -1086,7 +1086,7 @@ class SpecWorkflowSettings(BaseSettings):
             return "s3"
         if backend not in {"s3", "local_fs"}:
             raise ValueError(
-                "spec_workflow.temporal_artifact_backend must be one of: s3, local_fs"
+                "workflow.temporal_artifact_backend must be one of: s3, local_fs"
             )
         return backend
 
@@ -1099,7 +1099,7 @@ class SpecWorkflowSettings(BaseSettings):
         if text not in _ALLOWED_TARGET_DEFAULTS:
             allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
             raise ValueError(
-                f"spec_workflow.proposal_targets_default must be one of: {allowed}"
+                f"workflow.proposal_targets_default must be one of: {allowed}"
             )
         return text
 
@@ -1112,7 +1112,7 @@ class SpecWorkflowSettings(BaseSettings):
         if text not in _ALLOWED_PROPOSAL_SEVERITIES:
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
-                "spec_workflow.proposal_moonmind_severity_floor must be one of: "
+                "workflow.proposal_moonmind_severity_floor must be one of: "
                 f"{allowed}"
             )
         return text
@@ -1340,7 +1340,7 @@ class SpecWorkflowSettings(BaseSettings):
                 setattr(self, attr, normalized or None)
 
         if not self.default_skill:
-            self.default_skill = "speckit"
+            self.default_skill = "agentkit"
         if (
             self.skill_policy_mode == "allowlist"
             and self.default_skill
@@ -1374,13 +1374,13 @@ class SpecWorkflowSettings(BaseSettings):
 # ``AppSettings.model_post_init`` to populate sensible defaults.
 
 
-class AppSpecWorkflowSettings(SpecWorkflowSettings):
+class AppWorkflowSettings(WorkflowSettings):
     """App-level variant used by `AppSettings` to avoid legacy alias overrides."""
 
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
-        env=("SPEC_WORKFLOW_GITHUB_REPOSITORY",),
-        validation_alias=AliasChoices("SPEC_WORKFLOW_GITHUB_REPOSITORY"),
+        env=("WORKFLOW_GITHUB_REPOSITORY",),
+        validation_alias=AliasChoices("WORKFLOW_GITHUB_REPOSITORY"),
     )
 
 
@@ -1815,8 +1815,8 @@ class AppSettings(BaseSettings):
     temporal_dashboard: TemporalDashboardSettings = Field(
         default_factory=TemporalDashboardSettings
     )
-    spec_workflow: AppSpecWorkflowSettings = Field(
-        default_factory=AppSpecWorkflowSettings
+    workflow: AppWorkflowSettings = Field(
+        default_factory=AppWorkflowSettings
     )
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
@@ -1838,12 +1838,12 @@ class AppSettings(BaseSettings):
         env=(
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
         validation_alias=AliasChoices(
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
         ),
         ge=1,
         exclude=True,
@@ -1922,12 +1922,12 @@ class AppSettings(BaseSettings):
         None,
         env=(
             "WORKFLOW_GITHUB_REPOSITORY",
-            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_GITHUB_REPOSITORY",
         ),
         validation_alias=AliasChoices(
             "workflow_github_repository",
             "WORKFLOW_GITHUB_REPOSITORY",
-            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_GITHUB_REPOSITORY",
         ),
         description="Compatibility passthrough for workflow repository override.",
         exclude=True,
@@ -2142,35 +2142,35 @@ class AppSettings(BaseSettings):
                 db.POSTGRES_DB,
             )
 
-        if not self.spec_workflow.celery_broker_url:
-            self.spec_workflow.celery_broker_url = self.celery.broker_url
-        if not self.spec_workflow.celery_result_backend:
-            self.spec_workflow.celery_result_backend = self.celery.result_backend
-        if not self.spec_workflow.codex_queue:
-            self.spec_workflow.codex_queue = self.celery.default_queue
+        if not self.workflow.celery_broker_url:
+            self.workflow.celery_broker_url = self.celery.broker_url
+        if not self.workflow.celery_result_backend:
+            self.workflow.celery_result_backend = self.celery.result_backend
+        if not self.workflow.codex_queue:
+            self.workflow.codex_queue = self.celery.default_queue
         if self.worker_enable_task_proposals is not None:
-            self.spec_workflow.enable_task_proposals = self.worker_enable_task_proposals
+            self.workflow.enable_task_proposals = self.worker_enable_task_proposals
         if self.worker_stage_command_timeout_seconds is not None:
-            self.spec_workflow.stage_command_timeout_seconds = (
+            self.workflow.stage_command_timeout_seconds = (
                 self.worker_stage_command_timeout_seconds
             )
         if self.worker_codex_model is not None:
-            self.spec_workflow.codex_model = self.worker_codex_model
+            self.workflow.codex_model = self.worker_codex_model
         if self.worker_codex_effort is not None:
-            self.spec_workflow.codex_effort = self.worker_codex_effort
+            self.workflow.codex_effort = self.worker_codex_effort
         if (
-            "spec_workflow" not in self.__pydantic_fields_set__
+            "workflow" not in self.__pydantic_fields_set__
             and self.workflow_github_repository is not None
         ):
             repo = self.workflow_github_repository.strip()
             if repo:
-                self.spec_workflow = AppSpecWorkflowSettings(
+                self.workflow = AppWorkflowSettings(
                     _env_file=None,
-                    **self.spec_workflow.model_dump(exclude={"github_repository"}),
+                    **self.workflow.model_dump(exclude={"github_repository"}),
                     github_repository=repo,
                 )
         configured_default = (
-            str(self.spec_workflow.default_task_runtime or "").strip().lower()
+            str(self.workflow.default_task_runtime or "").strip().lower()
         )
         if configured_default == "claude":
             anthropic_key = str(self.anthropic.anthropic_api_key or "").strip()

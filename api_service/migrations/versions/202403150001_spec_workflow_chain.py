@@ -15,7 +15,7 @@ __all__ = [
 ]
 
 
-SPEC_WORKFLOW_RUN_STATUS = postgresql.ENUM(
+WORKFLOW_RUN_STATUS = postgresql.ENUM(
     "pending",
     "running",
     "succeeded",
@@ -27,7 +27,7 @@ SPEC_WORKFLOW_RUN_STATUS = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_WORKFLOW_TASK_NAME = postgresql.ENUM(
+WORKFLOW_TASK_NAME = postgresql.ENUM(
     "discover",
     "submit",
     "apply",
@@ -38,7 +38,7 @@ SPEC_WORKFLOW_TASK_NAME = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
+WORKFLOW_RUN_PHASE = postgresql.ENUM(
     "discover",
     "submit",
     "apply",
@@ -48,7 +48,7 @@ SPEC_WORKFLOW_RUN_PHASE = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_WORKFLOW_TASK_STATUS = postgresql.ENUM(
+WORKFLOW_TASK_STATUS = postgresql.ENUM(
     "queued",
     "running",
     "succeeded",
@@ -95,22 +95,22 @@ WORKFLOW_ARTIFACT_TYPE = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_UPDATED_AT_TRIGGER_FUNCTION = "spec_workflow_set_updated_at"
+SPEC_UPDATED_AT_TRIGGER_FUNCTION = "workflow_set_updated_at"
 
 LEGACY_WORKFLOW_TABLES: tuple[str, ...] = (
     "workflow_artifacts",
     "workflow_credential_audits",
-    "spec_workflow_task_states",
-    "spec_workflow_runs",
+    "workflow_task_states",
+    "workflow_runs",
 )
 
 LEGACY_ENUM_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
-    "legacy_spec_workflow_runs": (
+    "legacy_workflow_runs": (
         ("status", "specworkflowrunstatus"),
         ("phase", "specworkflowrunphase"),
         ("codex_preflight_status", "codexpreflightstatus"),
     ),
-    "legacy_spec_workflow_task_states": (("status", "specworkflowtaskstatus"),),
+    "legacy_workflow_task_states": (("status", "specworkflowtaskstatus"),),
     "legacy_workflow_credential_audits": (
         ("codex_status", "workflowcodexcredentialstatus"),
         ("github_status", "workflowgithubcredentialstatus"),
@@ -128,7 +128,7 @@ LEGACY_ENUM_TYPES: tuple[str, ...] = tuple(
 )
 
 LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "spec_workflow_runs": (
+    "workflow_runs": (
         "id",
         "feature_key",
         "celery_chain_id",
@@ -150,7 +150,7 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "created_at",
         "updated_at",
     ),
-    "spec_workflow_task_states": (
+    "workflow_task_states": (
         "id",
         "workflow_run_id",
         "task_name",
@@ -247,8 +247,8 @@ def _detach_legacy_tables_from_enums() -> None:
         quoted_table = sa.sql.elements.quoted_name(table_name, quote=True)
         for column, _ in columns:
             quoted_column = sa.sql.elements.quoted_name(column, quote=True)
-            if table_name == "legacy_spec_workflow_task_states":
-                op.execute("DROP INDEX IF EXISTS ix_spec_workflow_task_states_failed")
+            if table_name == "legacy_workflow_task_states":
+                op.execute("DROP INDEX IF EXISTS ix_workflow_task_states_failed")
             op.execute(
                 f"ALTER TABLE IF EXISTS {quoted_table} "
                 f"ALTER COLUMN {quoted_column} DROP DEFAULT"
@@ -338,8 +338,8 @@ def upgrade() -> None:  # noqa: D401
     for table in (
         "workflow_artifacts",
         "workflow_credential_audits",
-        "spec_workflow_task_states",
-        "spec_workflow_runs",
+        "workflow_task_states",
+        "workflow_runs",
     ):
         op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
 
@@ -347,36 +347,36 @@ def upgrade() -> None:  # noqa: D401
     _detach_legacy_tables_from_enums()
     _drop_legacy_enums()
     for idx_name in (
-        "ix_spec_workflow_runs_feature_key",
-        "ix_spec_workflow_runs_status",
-        "ix_spec_workflow_runs_requested_by",
-        "ix_spec_workflow_runs_created_by",
+        "ix_workflow_runs_feature_key",
+        "ix_workflow_runs_status",
+        "ix_workflow_runs_requested_by",
+        "ix_workflow_runs_created_by",
     ):
         op.execute(f"DROP INDEX IF EXISTS {idx_name}")
 
-    _create_enum_if_missing(SPEC_WORKFLOW_RUN_STATUS)
-    _create_enum_if_missing(SPEC_WORKFLOW_RUN_PHASE)
-    _create_enum_if_missing(SPEC_WORKFLOW_TASK_STATUS)
-    _create_enum_if_missing(SPEC_WORKFLOW_TASK_NAME)
+    _create_enum_if_missing(WORKFLOW_RUN_STATUS)
+    _create_enum_if_missing(WORKFLOW_RUN_PHASE)
+    _create_enum_if_missing(WORKFLOW_TASK_STATUS)
+    _create_enum_if_missing(WORKFLOW_TASK_NAME)
     _create_enum_if_missing(CODEX_PREFLIGHT_STATUS)
     _create_enum_if_missing(WORKFLOW_CODEX_CREDENTIAL_STATUS)
     _create_enum_if_missing(WORKFLOW_GITHUB_CREDENTIAL_STATUS)
     _create_enum_if_missing(WORKFLOW_ARTIFACT_TYPE)
 
     op.create_table(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
         sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
-            SPEC_WORKFLOW_RUN_STATUS,
+            WORKFLOW_RUN_STATUS,
             nullable=False,
             server_default=sa.text("'pending'::specworkflowrunstatus"),
         ),
         sa.Column(
             "phase",
-            SPEC_WORKFLOW_RUN_PHASE,
+            WORKFLOW_RUN_PHASE,
             nullable=False,
             server_default=sa.text("'discover'::specworkflowrunphase"),
         ),
@@ -409,7 +409,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column("artifacts_path", sa.String(length=512), nullable=True),
         sa.Column(
             "current_task_name",
-            SPEC_WORKFLOW_TASK_NAME,
+            WORKFLOW_TASK_NAME,
             nullable=True,
         ),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
@@ -441,37 +441,37 @@ def upgrade() -> None:  # noqa: D401
     )
 
     op.create_index(
-        "ix_spec_workflow_runs_feature_key",
-        "spec_workflow_runs",
+        "ix_workflow_runs_feature_key",
+        "workflow_runs",
         ["feature_key"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_status",
-        "spec_workflow_runs",
+        "ix_workflow_runs_status",
+        "workflow_runs",
         ["status"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_requested_by",
-        "spec_workflow_runs",
+        "ix_workflow_runs_requested_by",
+        "workflow_runs",
         ["requested_by_user_id"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_created_by",
-        "spec_workflow_runs",
+        "ix_workflow_runs_created_by",
+        "workflow_runs",
         ["created_by"],
     )
 
-    _copy_legacy_table_data("spec_workflow_runs")
+    _copy_legacy_table_data("workflow_runs")
 
-    _create_updated_at_trigger("spec_workflow_runs")
+    _create_updated_at_trigger("workflow_runs")
 
     op.create_table(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=True,
         ),
         sa.Column(
@@ -483,7 +483,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column("task_name", sa.String(length=128), nullable=True),
         sa.Column(
             "status",
-            SPEC_WORKFLOW_TASK_STATUS,
+            WORKFLOW_TASK_STATUS,
             nullable=False,
         ),
         sa.Column(
@@ -538,7 +538,7 @@ def upgrade() -> None:  # noqa: D401
             "workflow_run_id",
             "task_name",
             "attempt",
-            name="uq_spec_workflow_task_state_attempt",
+            name="uq_workflow_task_state_attempt",
         ),
         sa.UniqueConstraint(
             "orchestrator_run_id",
@@ -549,38 +549,38 @@ def upgrade() -> None:  # noqa: D401
         sa.CheckConstraint(
             "(workflow_run_id IS NOT NULL AND orchestrator_run_id IS NULL) OR "
             "(workflow_run_id IS NULL AND orchestrator_run_id IS NOT NULL)",
-            name="ck_spec_workflow_task_state_run_id_exclusive",
+            name="ck_workflow_task_state_run_id_exclusive",
         ),
         sa.CheckConstraint(
             "(orchestrator_run_id IS NULL) OR (plan_step IS NOT NULL)",
-            name="ck_spec_workflow_task_state_orchestrator_plan_step",
+            name="ck_workflow_task_state_orchestrator_plan_step",
         ),
         sa.CheckConstraint(
             "(workflow_run_id IS NULL) OR (task_name IS NOT NULL)",
-            name="ck_spec_workflow_task_state_task_name_required",
+            name="ck_workflow_task_state_task_name_required",
         ),
     )
 
     op.create_index(
-        "ix_spec_workflow_task_states_run_id",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_run_id",
+        "workflow_task_states",
         ["workflow_run_id"],
     )
     op.create_index(
-        "ix_spec_workflow_task_states_failed",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_failed",
+        "workflow_task_states",
         ["workflow_run_id"],
         postgresql_where=sa.text("status = 'failed'"),
     )
     op.create_index(
-        "ix_spec_workflow_task_states_orchestrator_run_id",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_orchestrator_run_id",
+        "workflow_task_states",
         ["orchestrator_run_id"],
     )
 
-    _create_updated_at_trigger("spec_workflow_task_states")
+    _create_updated_at_trigger("workflow_task_states")
 
-    _copy_legacy_table_data("spec_workflow_task_states")
+    _copy_legacy_table_data("workflow_task_states")
 
     op.create_table(
         "workflow_artifacts",
@@ -588,7 +588,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -628,7 +628,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -690,27 +690,27 @@ def downgrade() -> None:  # noqa: D401
     op.drop_table("workflow_artifacts")
 
     op.drop_index(
-        "ix_spec_workflow_task_states_task", table_name="spec_workflow_task_states"
+        "ix_workflow_task_states_task", table_name="workflow_task_states"
     )
     op.drop_index(
-        "ix_spec_workflow_task_states_run_id", table_name="spec_workflow_task_states"
+        "ix_workflow_task_states_run_id", table_name="workflow_task_states"
     )
-    op.drop_table("spec_workflow_task_states")
+    op.drop_table("workflow_task_states")
 
-    op.drop_index("ix_spec_workflow_runs_requested_by", table_name="spec_workflow_runs")
-    op.drop_index("ix_spec_workflow_runs_status", table_name="spec_workflow_runs")
-    op.drop_index("ix_spec_workflow_runs_feature_key", table_name="spec_workflow_runs")
-    op.drop_table("spec_workflow_runs")
+    op.drop_index("ix_workflow_runs_requested_by", table_name="workflow_runs")
+    op.drop_index("ix_workflow_runs_status", table_name="workflow_runs")
+    op.drop_index("ix_workflow_runs_feature_key", table_name="workflow_runs")
+    op.drop_table("workflow_runs")
 
     _drop_updated_at_function()
 
     bind = op.get_bind()
     for enum_type in (
-        SPEC_WORKFLOW_TASK_NAME,
+        WORKFLOW_TASK_NAME,
         WORKFLOW_ARTIFACT_TYPE,
-        SPEC_WORKFLOW_TASK_STATUS,
-        SPEC_WORKFLOW_RUN_PHASE,
-        SPEC_WORKFLOW_RUN_STATUS,
+        WORKFLOW_TASK_STATUS,
+        WORKFLOW_RUN_PHASE,
+        WORKFLOW_RUN_STATUS,
         WORKFLOW_CODEX_CREDENTIAL_STATUS,
         WORKFLOW_GITHUB_CREDENTIAL_STATUS,
         CODEX_PREFLIGHT_STATUS,
@@ -793,7 +793,7 @@ def downgrade() -> None:  # noqa: D401
         _create_enum_if_missing(enum_type)
 
     op.create_table(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
         sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
@@ -857,30 +857,30 @@ def downgrade() -> None:  # noqa: D401
     )
 
     op.create_index(
-        "ix_spec_workflow_runs_feature_key",
-        "spec_workflow_runs",
+        "ix_workflow_runs_feature_key",
+        "workflow_runs",
         ["feature_key"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_status",
-        "spec_workflow_runs",
+        "ix_workflow_runs_status",
+        "workflow_runs",
         ["status"],
     )
     op.create_index(
-        "ix_spec_workflow_runs_created_by",
-        "spec_workflow_runs",
+        "ix_workflow_runs_created_by",
+        "workflow_runs",
         ["created_by"],
     )
 
-    _copy_legacy_table_data("spec_workflow_runs")
+    _copy_legacy_table_data("workflow_runs")
 
     op.create_table(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("task_name", sa.String(length=128), nullable=False),
@@ -919,18 +919,18 @@ def downgrade() -> None:  # noqa: D401
             "workflow_run_id",
             "task_name",
             "attempt",
-            name="uq_spec_workflow_task_state_attempt",
+            name="uq_workflow_task_state_attempt",
         ),
     )
 
     op.create_index(
-        "ix_spec_workflow_task_states_run_id",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_run_id",
+        "workflow_task_states",
         ["workflow_run_id"],
     )
     op.create_index(
-        "ix_spec_workflow_task_states_failed",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_failed",
+        "workflow_task_states",
         ["workflow_run_id"],
         postgresql_where=sa.text("status = 'failed'"),
     )
@@ -941,7 +941,7 @@ def downgrade() -> None:  # noqa: D401
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -975,7 +975,7 @@ def downgrade() -> None:  # noqa: D401
         sa.Column(
             "workflow_run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("workflow_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -1012,17 +1012,17 @@ def downgrade() -> None:  # noqa: D401
     # downgrades from failing when those migrations are not rerun.
     # ------------------------------------------------------------------
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("orchestrator_run_id", sa.Uuid(), nullable=True),
     )
     op.alter_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         "workflow_run_id",
         existing_type=sa.Uuid(),
         nullable=True,
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "plan_step",
             postgresql.ENUM(name="orchestratorplanstep", create_type=False),
@@ -1030,7 +1030,7 @@ def downgrade() -> None:  # noqa: D401
         ),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "plan_step_status",
             postgresql.ENUM(name="orchestratorplanstepstatus", create_type=False),
@@ -1038,7 +1038,7 @@ def downgrade() -> None:  # noqa: D401
         ),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "celery_state",
             postgresql.ENUM(name="orchestratortaskstate", create_type=False),
@@ -1046,15 +1046,15 @@ def downgrade() -> None:  # noqa: D401
         ),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("celery_task_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("message", sa.Text(), nullable=True),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "artifact_refs",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -1064,7 +1064,7 @@ def downgrade() -> None:  # noqa: D401
 
     op.create_foreign_key(
         "fk_task_states_orchestrator_run",
-        "spec_workflow_task_states",
+        "workflow_task_states",
         "orchestrator_runs",
         ["orchestrator_run_id"],
         ["id"],
@@ -1072,17 +1072,17 @@ def downgrade() -> None:  # noqa: D401
     )
 
     op.create_index(
-        "ix_spec_workflow_task_states_orchestrator_run_id",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_orchestrator_run_id",
+        "workflow_task_states",
         ["orchestrator_run_id"],
     )
 
     op.create_unique_constraint(
         "uq_orchestrator_task_state_attempt",
-        "spec_workflow_task_states",
+        "workflow_task_states",
         ["orchestrator_run_id", "plan_step", "attempt"],
     )
 
-    _copy_legacy_table_data("spec_workflow_task_states")
+    _copy_legacy_table_data("workflow_task_states")
 
     _drop_legacy_backups()
