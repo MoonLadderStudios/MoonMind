@@ -829,7 +829,7 @@ class TemporalArtifactService:
         self._store: TemporalArtifactStore = store or self._build_store_from_settings()
         self._default_namespace = (
             default_namespace
-            or settings.spec_workflow.temporal_artifact_default_namespace
+            or settings.workflow.temporal_artifact_default_namespace
             or "moonmind"
         )
         self._presign_ttl_seconds = max(
@@ -837,19 +837,19 @@ class TemporalArtifactService:
             int(
                 presign_ttl_seconds
                 if presign_ttl_seconds is not None
-                else settings.spec_workflow.temporal_artifact_presign_ttl_seconds
+                else settings.workflow.temporal_artifact_presign_ttl_seconds
             ),
         )
         configured_limit = (
             direct_upload_max_bytes
             if direct_upload_max_bytes is not None
-            else settings.spec_workflow.temporal_artifact_direct_upload_max_bytes
+            else settings.workflow.temporal_artifact_direct_upload_max_bytes
         )
         self._direct_upload_max_bytes = max(1, int(configured_limit))
         hard_delete_after_seconds = (
             lifecycle_hard_delete_after_seconds
             if lifecycle_hard_delete_after_seconds is not None
-            else settings.spec_workflow.temporal_artifact_lifecycle_hard_delete_after_seconds
+            else settings.workflow.temporal_artifact_lifecycle_hard_delete_after_seconds
         )
         self._lifecycle = _StorageLifecycleConfig(
             hard_delete_after=timedelta(seconds=max(0, int(hard_delete_after_seconds))),
@@ -857,19 +857,19 @@ class TemporalArtifactService:
 
     @staticmethod
     def _build_store_from_settings() -> TemporalArtifactStore:
-        backend = settings.spec_workflow.temporal_artifact_backend
+        backend = settings.workflow.temporal_artifact_backend
         if backend == db_models.TemporalArtifactStorageBackend.LOCAL_FS.value:
             return LocalTemporalArtifactStore(
-                settings.spec_workflow.temporal_artifact_root
+                settings.workflow.temporal_artifact_root
             )
         if backend == db_models.TemporalArtifactStorageBackend.S3.value:
             return S3TemporalArtifactStore(
-                endpoint_url=settings.spec_workflow.temporal_artifact_s3_endpoint,
-                bucket=settings.spec_workflow.temporal_artifact_s3_bucket,
-                access_key_id=settings.spec_workflow.temporal_artifact_s3_access_key_id,
-                secret_access_key=settings.spec_workflow.temporal_artifact_s3_secret_access_key,
-                region_name=settings.spec_workflow.temporal_artifact_s3_region,
-                use_ssl=settings.spec_workflow.temporal_artifact_s3_use_ssl,
+                endpoint_url=settings.workflow.temporal_artifact_s3_endpoint,
+                bucket=settings.workflow.temporal_artifact_s3_bucket,
+                access_key_id=settings.workflow.temporal_artifact_s3_access_key_id,
+                secret_access_key=settings.workflow.temporal_artifact_s3_secret_access_key,
+                region_name=settings.workflow.temporal_artifact_s3_region,
+                use_ssl=settings.workflow.temporal_artifact_s3_use_ssl,
             )
         raise TemporalArtifactValidationError(
             f"Unsupported temporal artifact backend '{backend}'"

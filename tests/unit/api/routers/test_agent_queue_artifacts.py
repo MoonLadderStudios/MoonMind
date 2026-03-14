@@ -192,7 +192,7 @@ def test_upload_artifact_limits_memory_before_service_dispatch(
 
     test_client, service = client
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_artifact_max_bytes",
         4,
     )

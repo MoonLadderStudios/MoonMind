@@ -21,7 +21,7 @@ class VisionConfig:
 def get_vision_config() -> VisionConfig:
     """Return the current vision configuration derived from settings."""
 
-    spec = settings.spec_workflow
+    spec = settings.workflow
     return VisionConfig(
         enabled=spec.vision_context_enabled,
         provider=spec.vision_provider,

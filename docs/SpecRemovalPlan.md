@@ -1,14 +1,14 @@
-# Spec Removal Plan (Docs and Specs Migration Surface Only)
+# Spec Removal Plan (Completed Codebase Migration)
 
 ## Purpose
 
-This document defines how to remove legacy `SPEC`-style naming from **documentation and spec artifacts only**. It is a planning-only artifact and does not propose direct runtime code changes in this pass.
+This document formerly outlined how to remove legacy `SPEC`-style naming from documentation and specs. It has since been executed and expanded to encompass the entire codebase (including environment variables, settings, Python models, API contracts, and database migrations).
 
 ## Scope
 
-1. `docs/` markdown files
-2. `specs/` markdown files and contract assets
-3. No runtime code, tests, or deployment files will be edited as part of this document.
+1. `docs/` markdown files (completed)
+2. `specs/` markdown files and contract assets (completed)
+3. Python codebase, API definitions, environment configuration, database models, and Alembic migrations (completed).
 
 ## Hard Rules for this migration pass
 
@@ -333,5 +333,13 @@ rg -l "SPEC_WORKFLOW_|spec_workflow|/api/spec-automation|spec-automation|Speckit
 
 ### Historical references retained
 
-- `docs/SpecRemovalPlan.md` (sections: Legacy footprint, canonical target map, required canonical updates, and acceptance criteria) retains legacy terms solely as migration context and cannot be interpreted as runtime contract expectations.
+- `docs/SpecRemovalPlan.md` retains legacy terms solely as migration context and cannot be interpreted as runtime contract expectations.
 - `specs/040-spec-removal/*` retains legacy terms intentionally to describe source/target mappings, acceptance checks, and traceability for this migration feature.
+
+## Verification report (2026-03-14 - Codebase Execution)
+
+The full codebase migration has been completed.
+- Renamed all `/api/spec-automation/*` routes to `/api/workflows/*`.
+- Renamed `SpecWorkflowRuns` to `WorkflowRuns` and generated Alembic migrations using `op.rename_table()`.
+- Replaced all configuration variables (`SPEC_WORKFLOW_CODEX_MODEL` -> `MOONMIND_CODEX_MODEL`, `SPEC_WORKFLOW_*` -> `WORKFLOW_*`).
+- The entire Docker unit test suite passes after the renaming.

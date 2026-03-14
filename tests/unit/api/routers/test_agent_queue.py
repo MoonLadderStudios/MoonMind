@@ -887,7 +887,7 @@ def test_create_job_with_attachments_file_too_large(
 
     test_client, service = client
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_max_bytes",
         2,
     )
@@ -914,7 +914,7 @@ def test_create_job_with_attachments_total_too_large(
 
     test_client, service = client
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_total_bytes",
         4,
     )

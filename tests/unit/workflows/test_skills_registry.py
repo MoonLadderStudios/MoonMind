@@ -14,7 +14,7 @@ from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 def mock_settings(monkeypatch):
     def _set_setting(name: str, value: Any):
         monkeypatch.setattr(
-            f"moonmind.workflows.skills.registry.settings.spec_workflow.{name}",
+            f"moonmind.workflows.skills.registry.settings.workflow.{name}",
             value,
             raising=False,
         )

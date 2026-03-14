@@ -1649,7 +1649,7 @@ class WorkflowCredentialAudit(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     workflow_run_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
     codex_status: Mapped[CodexCredentialStatus] = mapped_column(
@@ -1924,12 +1924,12 @@ class TemporalArtifactPin(Base):
 class SpecWorkflowRun(Base):
     """Top-level record per Spec workflow execution."""
 
-    __tablename__ = "spec_workflow_runs"
+    __tablename__ = "workflow_runs"
     __table_args__ = (
-        Index("ix_spec_workflow_runs_feature_key", "feature_key"),
-        Index("ix_spec_workflow_runs_status", "status"),
-        Index("ix_spec_workflow_runs_requested_by", "requested_by_user_id"),
-        Index("ix_spec_workflow_runs_created_by", "created_by"),
+        Index("ix_workflow_runs_feature_key", "feature_key"),
+        Index("ix_workflow_runs_status", "status"),
+        Index("ix_workflow_runs_requested_by", "requested_by_user_id"),
+        Index("ix_workflow_runs_created_by", "created_by"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -2070,7 +2070,7 @@ class WorkflowArtifact(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     workflow_run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False
     )
     artifact_type: Mapped[WorkflowArtifactType] = mapped_column(
         Enum(
@@ -2100,18 +2100,18 @@ class WorkflowArtifact(Base):
 class SpecWorkflowTaskState(Base):
     """Per-task execution status persisted for monitoring."""
 
-    __tablename__ = "spec_workflow_task_states"
+    __tablename__ = "workflow_task_states"
     __table_args__ = (
         CheckConstraint(
             "(workflow_run_id IS NOT NULL AND orchestrator_run_id IS NULL) OR "
             "(workflow_run_id IS NULL AND orchestrator_run_id IS NOT NULL)",
-            name="ck_spec_workflow_task_state_run_id_exclusive",
+            name="ck_workflow_task_state_run_id_exclusive",
         ),
         UniqueConstraint(
             "workflow_run_id",
             "task_name",
             "attempt",
-            name="uq_spec_workflow_task_state_attempt",
+            name="uq_workflow_task_state_attempt",
         ),
         UniqueConstraint(
             "orchestrator_run_id",
@@ -2119,30 +2119,30 @@ class SpecWorkflowTaskState(Base):
             "attempt",
             name="uq_orchestrator_task_state_attempt",
         ),
-        Index("ix_spec_workflow_task_states_run_id", "workflow_run_id"),
+        Index("ix_workflow_task_states_run_id", "workflow_run_id"),
         Index(
-            "ix_spec_workflow_task_states_failed",
+            "ix_workflow_task_states_failed",
             "workflow_run_id",
             postgresql_where=text("status = 'failed'"),
         ),
         Index(
-            "ix_spec_workflow_task_states_orchestrator_run_id",
+            "ix_workflow_task_states_orchestrator_run_id",
             "orchestrator_run_id",
         ),
         CheckConstraint(
             "(orchestrator_run_id IS NULL) OR (plan_step IS NOT NULL)",
-            name="ck_spec_workflow_task_state_orchestrator_plan_step",
+            name="ck_workflow_task_state_orchestrator_plan_step",
         ),
         CheckConstraint(
             "(workflow_run_id IS NULL) OR (task_name IS NOT NULL)",
-            name="ck_spec_workflow_task_state_task_name_required",
+            name="ck_workflow_task_state_task_name_required",
         ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     workflow_run_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
-        ForeignKey("spec_workflow_runs.id", ondelete="CASCADE"),
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"),
         nullable=True,
     )
     orchestrator_run_id: Mapped[Optional[UUID]] = mapped_column(
@@ -2235,7 +2235,7 @@ def _register_workflow_model_dependencies() -> None:
     if TYPE_CHECKING:
         return
 
-    import_module("moonmind.workflows.spec_automation.models")
+    import_module("moonmind.workflows.automation.models")
     import_module("moonmind.workflows.agent_queue.models")
 
 

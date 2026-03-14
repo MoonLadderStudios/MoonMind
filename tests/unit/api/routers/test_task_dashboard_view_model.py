@@ -56,7 +56,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_enabled", True)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
 
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
@@ -227,11 +227,11 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
 def test_build_runtime_config_normalizes_attachment_policy_settings(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_max_count", 0)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_max_bytes", 0)
-    monkeypatch.setattr(settings.spec_workflow, "agent_job_attachment_total_bytes", 0)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_count", 0)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_max_bytes", 0)
+    monkeypatch.setattr(settings.workflow, "agent_job_attachment_total_bytes", 0)
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "agent_job_attachment_allowed_content_types",
         (),
     )
@@ -278,12 +278,12 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
 
 def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
-    monkeypatch.setattr(settings.spec_workflow, "github_repository", "Octo/Repo")
-    monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-test-codex")
-    monkeypatch.setattr(settings.spec_workflow, "codex_effort", "medium")
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "codex")
+    monkeypatch.setattr(settings.workflow, "github_repository", "Octo/Repo")
+    monkeypatch.setattr(settings.workflow, "codex_model", "gpt-test-codex")
+    monkeypatch.setattr(settings.workflow, "codex_effort", "medium")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "codex")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
-    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+    monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
     config = build_runtime_config("/tasks")
 

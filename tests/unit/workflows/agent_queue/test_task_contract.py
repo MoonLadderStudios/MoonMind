@@ -225,7 +225,7 @@ def test_normalize_task_payload_respects_default_publish_mode_override(
 ) -> None:
     """Default publish mode should follow configurable setting when publish missing."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_publish_mode", "branch")
+    monkeypatch.setattr(settings.workflow, "default_publish_mode", "branch")
 
     normalized = normalize_queue_job_payload(
         job_type="task",

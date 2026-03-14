@@ -38,15 +38,15 @@ from moonmind.workflows import (
     retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
-from moonmind.workflows.spec_automation.repositories import SpecWorkflowRepository
-from moonmind.workflows.spec_automation import models
-from moonmind.workflows.spec_automation.preflight import run_codex_preflight_check
-from moonmind.workflows.spec_automation.repositories import (
+from moonmind.workflows.automation.repositories import SpecWorkflowRepository
+from moonmind.workflows.automation import models
+from moonmind.workflows.automation.preflight import run_codex_preflight_check
+from moonmind.workflows.automation.repositories import (
     CodexShardHealth,
     PaginatedSpecWorkflowRuns,
 )
-from moonmind.workflows.spec_automation.router import get_codex_shard_router
-from moonmind.workflows.spec_automation.serializers import (
+from moonmind.workflows.automation.router import get_codex_shard_router
+from moonmind.workflows.automation.serializers import (
     serialize_artifact_collection,
     serialize_run,
     serialize_task_collection,
@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 canonical_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 legacy_router = APIRouter(
-    prefix="/api/workflows/speckit",
+    prefix="/api/workflows",
     tags=["speckit-workflows"],
 )
 
@@ -97,20 +97,20 @@ def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> o
 
 
 def _canonicalize_legacy_path(path: str) -> str:
-    if path.startswith("/api/workflows/speckit"):
-        suffix = path[len("/api/workflows/speckit") :]
+    if path.startswith("/api/workflows"):
+        suffix = path[len("/api/workflows") :]
         return f"/api/workflows{suffix}"
     return path
 
 
 async def _mark_legacy_route_usage(request: Request, response: Response) -> None:
     path = request.url.path
-    if not path.startswith("/api/workflows/speckit"):
+    if not path.startswith("/api/workflows"):
         return
 
     canonical_path = _canonicalize_legacy_path(path)
     response.headers["Deprecation"] = "true"
-    response.headers["X-MoonMind-Deprecated-Route"] = "/api/workflows/speckit"
+    response.headers["X-MoonMind-Deprecated-Route"] = "/api/workflows"
     response.headers["X-MoonMind-Canonical-Route"] = canonical_path
 
     logger.info(
@@ -260,8 +260,8 @@ async def trigger_codex_preflight(
             volume_name = run.codex_auth_volume.name
         elif shard is not None and shard.volume_name:
             volume_name = shard.volume_name
-        elif settings.spec_workflow.codex_volume_name:
-            volume_name = settings.spec_workflow.codex_volume_name
+        elif settings.workflow.codex_volume_name:
+            volume_name = settings.workflow.codex_volume_name
 
     if not volume_name:
         raise HTTPException(

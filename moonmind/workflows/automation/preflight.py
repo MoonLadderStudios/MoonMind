@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from moonmind.config.settings import settings
-from moonmind.workflows.spec_automation import models
+from moonmind.workflows.automation import models
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def _run_codex_preflight_check(
 ) -> CodexPreflightResult:
     """Execute ``command -v rg && codex login status`` using the configured auth volume."""
 
-    volume = volume_name or settings.spec_workflow.codex_volume_name
+    volume = volume_name or settings.workflow.codex_volume_name
     if not volume:
         logger.info(
             "Skipping Codex pre-flight check because no auth volume is configured",
@@ -72,8 +72,8 @@ def _run_codex_preflight_check(
         )
 
     image = (
-        settings.spec_workflow.codex_login_check_image
-        or settings.spec_workflow.job_image
+        settings.workflow.codex_login_check_image
+        or settings.workflow.job_image
     )
     stdout = ""
     stderr = ""

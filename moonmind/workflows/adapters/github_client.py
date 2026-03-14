@@ -66,7 +66,7 @@ class GitHubClient:
 
         raise RuntimeError(
             "Real GitHub publication is not yet implemented. Enable test mode via "
-            "WORKFLOW_TEST_MODE=1 (or SPEC_WORKFLOW_TEST_MODE=1 for legacy environments) "
+            "WORKFLOW_TEST_MODE=1 (or WORKFLOW_TEST_MODE=1 for legacy environments) "
             "for local development."
         )
 

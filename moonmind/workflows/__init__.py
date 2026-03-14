@@ -6,14 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
-from moonmind.workflows.spec_automation.orchestrator import (
+from moonmind.workflows.automation.orchestrator import (
     TriggeredWorkflow,
     WorkflowConflictError,
     WorkflowRetryError,
     retry_spec_workflow_run,
     trigger_spec_workflow_run,
 )
-from moonmind.workflows.spec_automation.repositories import (
+from moonmind.workflows.automation.repositories import (
     SpecAutomationRepository,
     SpecWorkflowRepository,
 )

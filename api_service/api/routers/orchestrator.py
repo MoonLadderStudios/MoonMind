@@ -65,7 +65,7 @@ router = APIRouter(prefix="/orchestrator", tags=["Orchestrator"])
 
 
 def _artifact_root() -> Path:
-    default_root = Path(settings.spec_workflow.artifacts_root)
+    default_root = Path(settings.workflow.artifacts_root)
     configured = os.getenv("ORCHESTRATOR_ARTIFACT_ROOT")
     try:
         return resolve_artifact_root(default_root, configured)

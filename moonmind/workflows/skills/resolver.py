@@ -150,7 +150,7 @@ def _project_root() -> Path:
 def _resolve_base_repo_path() -> Path:
     """Resolve base path used for relative skill mirror roots."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     project_root = _project_root()
     raw_repo_root = str(cfg.repo_root or "").strip()
     if not raw_repo_root:
@@ -197,7 +197,7 @@ def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:
 
 
 def _resolve_local_source(skill_name: str) -> str | None:
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
 
     configured_roots = (
         Path(cfg.skills_local_mirror_root),
@@ -214,7 +214,7 @@ def _resolve_local_source(skill_name: str) -> str | None:
 def _discover_local_skill_names() -> tuple[str, ...]:
     """Discover skill names from configured local and legacy mirrors."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     configured_roots = (
         Path(cfg.skills_local_mirror_root),
         Path(cfg.skills_legacy_mirror_root),
@@ -250,7 +250,7 @@ def _discover_local_skill_names() -> tuple[str, ...]:
 def list_available_skill_names() -> tuple[str, ...]:
     """List currently resolvable skill names for dashboard/task selection UX."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     allowlisted = set(cfg.allowed_skills or ())
 
     # 1) Gather all raw candidate names in intended display precedence.
@@ -366,7 +366,7 @@ def resolve_run_skill_selection(
         raw_selection = queue_profile
         selection_source = "queue_profile"
     else:
-        cfg = settings.spec_workflow
+        cfg = settings.workflow
         default = cfg.default_skill
         if cfg.skill_policy_mode == "allowlist":
             allowed = tuple(cfg.allowed_skills or ())

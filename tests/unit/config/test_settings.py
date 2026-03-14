@@ -240,7 +240,7 @@ class TestSpecWorkflowSettings:
             "MOONMIND_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
             "WORKFLOW_GITHUB_REPOSITORY",
-            "SPEC_WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
             "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
             "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
@@ -250,9 +250,9 @@ class TestSpecWorkflowSettings:
             "WORKFLOW_SKILLS_WORKSPACE_ROOT",
             "SPEC_SKILLS_WORKSPACE_ROOT",
             "WORKFLOW_REPO_ROOT",
-            "SPEC_WORKFLOW_REPO_ROOT",
+            "WORKFLOW_REPO_ROOT",
             "WORKFLOW_TASKS_ROOT",
-            "SPEC_WORKFLOW_TASKS_ROOT",
+            "WORKFLOW_TASKS_ROOT",
         ):
             monkeypatch.delenv(key, raising=False)
 
@@ -405,19 +405,19 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
         monkeypatch.delenv("CLAUDE_HOME", raising=False)
         monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
 
     def test_task_default_env_supports_legacy_spec_prefix(self, monkeypatch):
-        """Legacy SPEC_WORKFLOW_GITHUB_REPOSITORY should remain supported."""
+        """Legacy WORKFLOW_GITHUB_REPOSITORY should remain supported."""
 
-        monkeypatch.setenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
+        monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
         settings = SpecWorkflowSettings(_env_file=None)
 
         assert settings.github_repository == "Legacy/Repo"
 
-        monkeypatch.delenv("SPEC_WORKFLOW_GITHUB_REPOSITORY", raising=False)
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
 
     def test_manifest_required_capabilities_supports_legacy_spec_prefix(
         self, monkeypatch
@@ -426,7 +426,7 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False)
         monkeypatch.setenv(
-            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", '["manifest", "planner"]'
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", '["manifest", "planner"]'
         )
 
         settings = SpecWorkflowSettings(_env_file=None)
@@ -434,7 +434,7 @@ class TestSpecWorkflowSettings:
         assert settings.manifest_required_capabilities == ("manifest", "planner")
 
         monkeypatch.delenv(
-            "SPEC_WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False
         )
 
     def test_default_publish_mode_rejects_invalid_value(self, monkeypatch):
@@ -464,16 +464,16 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
         monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "  Legacy User  ")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "  legacy@example.com  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Legacy User  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  legacy@example.com  ")
 
         settings = SpecWorkflowSettings(_env_file=None)
 
         assert settings.git_user_name == "Legacy User"
         assert settings.git_user_email == "legacy@example.com"
 
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
 
     def test_git_user_env_precedence_prefers_workflow_then_spec_then_moonmind(
         self, monkeypatch
@@ -482,8 +482,8 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
         monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "Spec Name")
-        monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Spec Name")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
         monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Workflow Name")
         monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "workflow@example.com")
 
@@ -494,8 +494,8 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_NAME", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
 
@@ -576,43 +576,16 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("SPEC_SKILLS_WORKSPACE_ROOT", raising=False)
 
     def test_repo_root_env_override(self, monkeypatch):
-        """Spec workflow repo root should honor SPEC_WORKFLOW_REPO_ROOT override."""
+        """Spec workflow repo root should honor WORKFLOW_REPO_ROOT override."""
 
-        monkeypatch.setenv("SPEC_WORKFLOW_REPO_ROOT", "/tmp/workspace-root")
+        monkeypatch.setenv("WORKFLOW_REPO_ROOT", "/tmp/workspace-root")
         settings = SpecWorkflowSettings(_env_file=None)
         assert settings.repo_root == "/tmp/workspace-root"
-        monkeypatch.delenv("SPEC_WORKFLOW_REPO_ROOT", raising=False)
-
-    def test_repo_root_workflow_alias_env_override(self, monkeypatch):
-        """Spec workflow repo root should honor WORKFLOW_REPO_ROOT alias."""
-
-        monkeypatch.setenv("WORKFLOW_REPO_ROOT", "/tmp/workflow-root")
-        monkeypatch.delenv("SPEC_WORKFLOW_REPO_ROOT", raising=False)
-
-        settings = SpecWorkflowSettings(_env_file=None)
-
-        assert settings.repo_root == "/tmp/workflow-root"
         monkeypatch.delenv("WORKFLOW_REPO_ROOT", raising=False)
 
-    def test_skill_policy_mode_workflow_aliases(self, monkeypatch):
-        """WORKFLOW_* aliases should configure skill policy and allowlist."""
 
-        monkeypatch.setenv("WORKFLOW_SKILL_POLICY_MODE", "allowlist")
-        monkeypatch.setenv("WORKFLOW_ALLOWED_SKILLS", "custom,speckit")
-        monkeypatch.setenv("WORKFLOW_DEFAULT_SKILL", "custom")
-        monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_ALLOWED_SKILLS", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_DEFAULT_SKILL", raising=False)
 
-        settings = SpecWorkflowSettings(_env_file=None)
 
-        assert settings.skill_policy_mode == "allowlist"
-        assert settings.allowed_skills == ("custom", "speckit")
-        assert settings.default_skill == "custom"
-
-        monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
-        monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
-        monkeypatch.delenv("WORKFLOW_DEFAULT_SKILL", raising=False)
 
     def test_live_session_env_overrides(self, monkeypatch):
         """Live session settings should honor MOONMIND_LIVE_SESSION_* overrides."""
@@ -660,19 +633,19 @@ class TestSpecWorkflowSettings:
         monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
         monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.spec_workflow.enable_task_proposals is True
-        assert settings.spec_workflow.stage_command_timeout_seconds == 2400
+        assert settings.workflow.enable_task_proposals is True
+        assert settings.workflow.stage_command_timeout_seconds == 2400
 
         monkeypatch.delenv("MOONMIND_ENABLE_TASK_PROPOSALS", raising=False)
         monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
         monkeypatch.setenv("ENABLE_TASK_PROPOSALS", "true")
-        monkeypatch.setenv("SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
+        monkeypatch.setenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
-        assert settings.spec_workflow.enable_task_proposals is True
-        assert settings.spec_workflow.stage_command_timeout_seconds == 1800
+        assert settings.workflow.enable_task_proposals is True
+        assert settings.workflow.stage_command_timeout_seconds == 1800
 
         monkeypatch.delenv("ENABLE_TASK_PROPOSALS", raising=False)
-        monkeypatch.delenv("SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.delenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
 
     def test_app_settings_accepts_codex_worker_env(
         self, app_settings_defaults, monkeypatch
@@ -684,8 +657,8 @@ class TestSpecWorkflowSettings:
 
         settings = AppSettings(_env_file=None, **app_settings_defaults)
 
-        assert settings.spec_workflow.codex_model == "gpt-custom-codex"
-        assert settings.spec_workflow.codex_effort == "medium"
+        assert settings.workflow.codex_model == "gpt-custom-codex"
+        assert settings.workflow.codex_effort == "medium"
 
         monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
         monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
@@ -698,24 +671,24 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
         settings = AppSettings(_env_file=None, **app_settings_defaults)
 
-        assert settings.spec_workflow.github_repository == "Example/Repo"
+        assert settings.workflow.github_repository == "Example/Repo"
 
         monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
 
     def test_app_settings_workflow_github_repository_preserves_explicit_override(
         self, app_settings_defaults, monkeypatch
     ):
-        """Explicit spec_workflow repository values should take precedence over env defaults."""
+        """Explicit workflow repository values should take precedence over env defaults."""
 
         monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
 
         settings = AppSettings(
             _env_file=None,
             **app_settings_defaults,
-            spec_workflow={"github_repository": "Explicit/Repo"},
+            workflow={"github_repository": "Explicit/Repo"},
         )
 
-        assert settings.spec_workflow.github_repository == "Explicit/Repo"
+        assert settings.workflow.github_repository == "Explicit/Repo"
 
         monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
 
@@ -775,11 +748,11 @@ class TestSpecWorkflowSettings:
                 "default_exchange": "moonmind.jobs",
                 "default_routing_key": "moonmind.jobs",
             },
-            spec_workflow={"codex_queue": None},
+            workflow={"codex_queue": None},
         )
 
         assert settings.celery.default_queue == "moonmind.jobs"
-        assert settings.spec_workflow.codex_queue == "moonmind.jobs"
+        assert settings.workflow.codex_queue == "moonmind.jobs"
 
 
 def test_task_proposal_policy_settings_defaults(app_settings_defaults):
@@ -787,11 +760,11 @@ def test_task_proposal_policy_settings_defaults(app_settings_defaults):
 
     settings = AppSettings(_env_file=None, **app_settings_defaults)
     assert settings.task_proposals.proposal_targets_default == "project"
-    assert settings.spec_workflow.proposal_targets_default == "project"
+    assert settings.workflow.proposal_targets_default == "project"
     assert settings.task_proposals.max_items_project_default == 3
-    assert settings.spec_workflow.proposal_max_items_project == 3
+    assert settings.workflow.proposal_max_items_project == 3
     assert settings.task_proposals.moonmind_severity_floor_default == "high"
-    assert settings.spec_workflow.proposal_moonmind_severity_floor == "high"
+    assert settings.workflow.proposal_moonmind_severity_floor == "high"
 
 
 def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
@@ -805,13 +778,13 @@ def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) 
     settings = AppSettings(_env_file=None, **app_settings_defaults)
 
     assert settings.task_proposals.proposal_targets_default == "both"
-    assert settings.spec_workflow.proposal_targets_default == "both"
+    assert settings.workflow.proposal_targets_default == "both"
     assert settings.task_proposals.max_items_project_default == 5
-    assert settings.spec_workflow.proposal_max_items_project == 5
+    assert settings.workflow.proposal_max_items_project == 5
     assert settings.task_proposals.max_items_moonmind_default == 4
-    assert settings.spec_workflow.proposal_max_items_moonmind == 4
+    assert settings.workflow.proposal_max_items_moonmind == 4
     assert settings.task_proposals.moonmind_severity_floor_default == "medium"
-    assert settings.spec_workflow.proposal_moonmind_severity_floor == "medium"
+    assert settings.workflow.proposal_moonmind_severity_floor == "medium"
 
     monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
     monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
@@ -846,14 +819,14 @@ class TestAppSettingsRuntimeValidation:
     ):
         for key in (
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "ANTHROPIC_API_KEY",
             "CLAUDE_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["spec_workflow"] = {"default_task_runtime": "claude"}
+        defaults["workflow"] = {"default_task_runtime": "claude"}
 
         with pytest.raises(
             ValueError,
@@ -866,16 +839,16 @@ class TestAppSettingsRuntimeValidation:
     ):
         for key in (
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["spec_workflow"] = {"default_task_runtime": "claude"}
+        defaults["workflow"] = {"default_task_runtime": "claude"}
         defaults["anthropic"] = {"anthropic_api_key": "test-key"}
 
         settings = AppSettings(**defaults)
-        assert settings.spec_workflow.default_task_runtime == "claude"
+        assert settings.workflow.default_task_runtime == "claude"
 
     def test_app_settings_maps_claude_alias_to_anthropic_api_key(
         self, app_settings_defaults, monkeypatch
@@ -892,24 +865,24 @@ class TestAppSettingsRuntimeValidation:
     ):
         for key in (
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "ANTHROPIC_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("CLAUDE_API_KEY", "alias-key")
         defaults = dict(app_settings_defaults)
-        defaults["spec_workflow"] = {"default_task_runtime": "claude"}
+        defaults["workflow"] = {"default_task_runtime": "claude"}
 
         settings = AppSettings(**defaults)
-        assert settings.spec_workflow.default_task_runtime == "claude"
+        assert settings.workflow.default_task_runtime == "claude"
 
     def test_app_settings_rejects_jules_default_without_runtime_config(
         self, app_settings_defaults, monkeypatch
     ):
         for key in (
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "JULES_ENABLED",
             "JULES_API_URL",
@@ -917,7 +890,7 @@ class TestAppSettingsRuntimeValidation:
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["spec_workflow"] = {"default_task_runtime": "jules"}
+        defaults["workflow"] = {"default_task_runtime": "jules"}
 
         with pytest.raises(
             ValueError,
@@ -930,12 +903,12 @@ class TestAppSettingsRuntimeValidation:
     ):
         for key in (
             "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "SPEC_WORKFLOW_DEFAULT_TASK_RUNTIME",
+            "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
         ):
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
-        defaults["spec_workflow"] = {"default_task_runtime": "jules"}
+        defaults["workflow"] = {"default_task_runtime": "jules"}
         defaults["jules"] = {
             "jules_enabled": True,
             "jules_api_url": "https://jules.example.test",
@@ -943,4 +916,4 @@ class TestAppSettingsRuntimeValidation:
         }
 
         settings = AppSettings(_env_file=None, **defaults)
-        assert settings.spec_workflow.default_task_runtime == "jules"
+        assert settings.workflow.default_task_runtime == "jules"

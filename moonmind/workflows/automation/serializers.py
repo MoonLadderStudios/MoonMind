@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, TypedDict
 from uuid import UUID
 
-from moonmind.workflows.spec_automation import models
+from moonmind.workflows.automation import models
 
 _TASK_ORDER: tuple[str, ...] = (
     "discover_next_phase",

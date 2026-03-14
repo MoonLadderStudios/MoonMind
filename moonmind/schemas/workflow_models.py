@@ -20,7 +20,7 @@ from api_service.db.models import (
     OrchestratorTaskState,
     SpecWorkflowTaskName,
 )
-from moonmind.workflows.spec_automation import models
+from moonmind.workflows.automation import models
 
 _REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 

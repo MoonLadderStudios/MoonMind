@@ -56,7 +56,7 @@ async def _wait_for_run_status(
 ) -> SpecWorkflowRunModel:
     last_model: SpecWorkflowRunModel | None = None
     for _ in range(attempts):
-        response = await client.get(f"/api/workflows/speckit/runs/{run_id}")
+        response = await client.get(f"/api/workflows/runs/{run_id}")
         assert response.status_code == 200
         model = SpecWorkflowRunModel.model_validate(response.json())
         last_model = model
@@ -248,7 +248,7 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             requested_by_user_id,
             force_phase,
         )  # unused in this contract test
-        key = feature_key or settings.spec_workflow.default_feature_key
+        key = feature_key or settings.workflow.default_feature_key
         run_id = uuid4()
         branch_name = branch_history.setdefault(
             key, generate_branch_name(run_id, prefix=key, timestamp=test_timestamp)
@@ -326,14 +326,14 @@ async def test_create_workflow_run_contract_idempotent_branch(tmp_path, monkeypa
             assert second_model.id != run_model.id
 
             legacy_response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert legacy_response.status_code == 202
             assert legacy_response.headers.get("Deprecation") == "true"
             assert (
                 legacy_response.headers.get("X-MoonMind-Deprecated-Route")
-                == "/api/workflows/speckit"
+                == "/api/workflows"
             )
             assert legacy_response.headers.get("X-MoonMind-Canonical-Route") == (
                 "/api/workflows/runs"
@@ -388,7 +388,7 @@ async def test_monitor_workflow_contract_endpoints(monkeypatch):
         )
 
         legacy_detail_response = await client.get(
-            f"/api/workflows/speckit/runs/{run_id}",
+            f"/api/workflows/runs/{run_id}",
             params={"includeArtifacts": True},
         )
         assert legacy_detail_response.status_code == 200
@@ -444,7 +444,7 @@ async def test_workflow_task_listing_contract(monkeypatch):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get(f"/api/workflows/speckit/runs/{run.id}/tasks")
+        response = await client.get(f"/api/workflows/runs/{run.id}/tasks")
         assert response.status_code == 200
         payload = response.json()
         assert payload["runId"] == str(run.id)
@@ -470,7 +470,7 @@ async def test_workflow_artifact_listing_contract(monkeypatch):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get(f"/api/workflows/speckit/runs/{run.id}/artifacts")
+        response = await client.get(f"/api/workflows/runs/{run.id}/artifacts")
         assert response.status_code == 200
         payload = response.json()
         assert payload["runId"] == str(run.id)
@@ -528,21 +528,21 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
     )
 
     artifacts_root = tmp_path / "artifacts"
-    monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
+    monkeypatch.setattr(settings.workflow, "test_mode", True, raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "repo_root", str(tmp_path), raising=False
+        settings.workflow, "repo_root", str(tmp_path), raising=False
     )
-    monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(settings.workflow, "tasks_root", "specs", raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "workspace_root", str(tmp_path), raising=False
-    )
-    monkeypatch.setattr(
-        settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
+        settings.workflow, "workspace_root", str(tmp_path), raising=False
     )
     monkeypatch.setattr(
-        settings.spec_workflow, "codex_volume_name", "codex_auth_0", raising=False
+        settings.workflow, "artifacts_root", str(artifacts_root), raising=False
     )
-    monkeypatch.setattr(settings.spec_workflow, "codex_shards", 1, raising=False)
+    monkeypatch.setattr(
+        settings.workflow, "codex_volume_name", "codex_auth_0", raising=False
+    )
+    monkeypatch.setattr(settings.workflow, "codex_shards", 1, raising=False)
     monkeypatch.setitem(celery_app.conf, "task_always_eager", True)
     monkeypatch.setitem(celery_app.conf, "task_eager_propagates", True)
 
@@ -607,7 +607,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             transport=transport, base_url="http://testserver"
         ) as client:
             response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
@@ -618,7 +618,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
                 workflow_models.SpecWorkflowRunStatus.FAILED,
             )
 
-            list_response = await client.get("/api/workflows/speckit/runs")
+            list_response = await client.get("/api/workflows/runs")
             assert list_response.status_code == 200
             collection = WorkflowRunCollectionResponse.model_validate(
                 list_response.json()
@@ -643,7 +643,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
 
             retry_payload = {"notes": "Retry after rotating token"}
             retry_response = await client.post(
-                f"/api/workflows/speckit/runs/{run_model.id}/retry",
+                f"/api/workflows/runs/{run_model.id}/retry",
                 json=retry_payload,
             )
             assert retry_response.status_code == 202
@@ -658,7 +658,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             )
 
             final_detail = await client.get(
-                f"/api/workflows/speckit/runs/{run_model.id}"
+                f"/api/workflows/runs/{run_model.id}"
             )
             assert final_detail.status_code == 200
             final_model = SpecWorkflowRunModel.model_validate(final_detail.json())
@@ -667,7 +667,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert final_model.pr_url is not None
             assert fail_state["calls"] == 2
 
-            shard_response = await client.get("/api/workflows/speckit/codex/shards")
+            shard_response = await client.get("/api/workflows/codex/shards")
             assert shard_response.status_code == 200
             shard_model = CodexShardListResponse.model_validate(shard_response.json())
             assert any(shard.queue_name == "codex-0" for shard in shard_model.shards)
@@ -676,7 +676,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             )
 
             preflight_response = await client.post(
-                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                f"/api/workflows/runs/{run_model.id}/codex/preflight",
                 json={},
             )
             assert preflight_response.status_code == 200
@@ -692,7 +692,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert preflight_calls["count"] == 1
 
             cached_response = await client.post(
-                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                f"/api/workflows/runs/{run_model.id}/codex/preflight",
                 json={},
             )
             assert cached_response.status_code == 200
@@ -703,7 +703,7 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert preflight_calls["count"] == 1
 
             forced_response = await client.post(
-                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                f"/api/workflows/runs/{run_model.id}/codex/preflight",
                 json={"forceRefresh": True},
             )
             assert forced_response.status_code == 200
@@ -714,13 +714,13 @@ async def test_workflow_endpoints_contract(tmp_path, monkeypatch):
             assert forced_model.checked_at >= cached_model.checked_at
 
             invalid_affinity = await client.post(
-                f"/api/workflows/speckit/runs/{run_model.id}/codex/preflight",
+                f"/api/workflows/runs/{run_model.id}/codex/preflight",
                 json={"affinityKey": "bad key"},
             )
             assert invalid_affinity.status_code == 422
             assert preflight_calls["count"] == 2
 
-            refreshed = await client.get("/api/workflows/speckit/codex/shards")
+            refreshed = await client.get("/api/workflows/codex/shards")
             refreshed_model = CodexShardListResponse.model_validate(refreshed.json())
             target_shard = next(
                 shard
@@ -773,21 +773,21 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
     )
 
     artifacts_root = tmp_path / "artifacts"
-    monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
+    monkeypatch.setattr(settings.workflow, "test_mode", True, raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "repo_root", str(tmp_path), raising=False
+        settings.workflow, "repo_root", str(tmp_path), raising=False
     )
-    monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(settings.workflow, "tasks_root", "specs", raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "workspace_root", str(tmp_path), raising=False
-    )
-    monkeypatch.setattr(
-        settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
+        settings.workflow, "workspace_root", str(tmp_path), raising=False
     )
     monkeypatch.setattr(
-        settings.spec_workflow, "codex_volume_name", "codex_auth_0", raising=False
+        settings.workflow, "artifacts_root", str(artifacts_root), raising=False
     )
-    monkeypatch.setattr(settings.spec_workflow, "codex_shards", 1, raising=False)
+    monkeypatch.setattr(
+        settings.workflow, "codex_volume_name", "codex_auth_0", raising=False
+    )
+    monkeypatch.setattr(settings.workflow, "codex_shards", 1, raising=False)
     monkeypatch.setitem(celery_app.conf, "task_always_eager", True)
     monkeypatch.setitem(celery_app.conf, "task_eager_propagates", True)
 
@@ -823,7 +823,7 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
             transport=transport, base_url="http://testserver"
         ) as client:
             response = await client.post(
-                "/api/workflows/speckit/runs",
+                "/api/workflows/runs",
                 json={"repository": TEST_REPOSITORY, "featureKey": feature_key},
             )
             assert response.status_code == 202
@@ -845,7 +845,7 @@ async def test_workflow_run_retry_handles_credential_error(monkeypatch, tmp_path
             )
 
             retry_response = await client.post(
-                f"/api/workflows/speckit/runs/{run_model.id}/retry", json={}
+                f"/api/workflows/runs/{run_model.id}/retry", json={}
             )
             assert retry_response.status_code == 202
             retry_model = SpecWorkflowRunModel.model_validate(retry_response.json())

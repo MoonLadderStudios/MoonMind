@@ -41,7 +41,7 @@ def _select_stage_skill(stage_name: str, context: Mapping[str, Any]) -> str:
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     stage_map = {
         "discover_next_phase": cfg.discover_skill,
         "submit_codex_job": cfg.submit_skill,
@@ -54,7 +54,7 @@ def _select_stage_skill(stage_name: str, context: Mapping[str, Any]) -> str:
 
 
 def _skill_allowed(skill_name: str) -> bool:
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     if cfg.skill_policy_mode != "allowlist":
         return True
     allowed = cfg.allowed_skills
@@ -71,7 +71,7 @@ def resolve_stage_execution(
 ) -> StageExecutionDecision:
     """Resolve whether a stage should run through the skill path or direct mode."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     selected_skill = _select_stage_skill(stage_name, context)
     if not _skill_allowed(selected_skill):
         selected_skill = cfg.default_skill
@@ -103,7 +103,7 @@ def get_stage_adapter(skill_name: str) -> Optional[str]:
 
 
 def skill_requires_speckit(skill_name: str) -> bool:
-    """Return whether the provided stage skill uses the Speckit adapter."""
+    """Return whether the provided stage skill uses the Workflow adapter."""
 
     return get_stage_adapter(skill_name) == _SPECKIT_ADAPTER_ID
 
@@ -111,7 +111,7 @@ def skill_requires_speckit(skill_name: str) -> bool:
 def configured_stage_skills() -> tuple[str, ...]:
     """Return configured stage skills in deterministic order."""
 
-    cfg = settings.spec_workflow
+    cfg = settings.workflow
     raw_values = (
         cfg.default_skill,
         cfg.discover_skill,
@@ -125,7 +125,7 @@ def configured_stage_skills() -> tuple[str, ...]:
 
 
 def configured_stage_skills_require_speckit() -> bool:
-    """Return whether current stage configuration requires Speckit CLI checks."""
+    """Return whether current stage configuration requires Workflow CLI checks."""
 
     return any(
         skill_requires_speckit(skill_name) for skill_name in configured_stage_skills()

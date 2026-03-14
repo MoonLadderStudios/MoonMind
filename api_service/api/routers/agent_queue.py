@@ -985,7 +985,7 @@ async def create_job_with_attachments(
                 },
             )
 
-    max_count = max(1, int(settings.spec_workflow.agent_job_attachment_max_count))
+    max_count = max(1, int(settings.workflow.agent_job_attachment_max_count))
     if len(files) > max_count:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1004,8 +1004,8 @@ async def create_job_with_attachments(
             },
         )
 
-    per_file_limit = max(1, int(settings.spec_workflow.agent_job_attachment_max_bytes))
-    total_limit = max(1, int(settings.spec_workflow.agent_job_attachment_total_bytes))
+    per_file_limit = max(1, int(settings.workflow.agent_job_attachment_max_bytes))
+    total_limit = max(1, int(settings.workflow.agent_job_attachment_total_bytes))
     attachments: list[AttachmentUpload] = []
     total_bytes = 0
 
@@ -1747,7 +1747,7 @@ async def upload_artifact(
 
     try:
         _ensure_worker_identity(worker_id, worker_auth)
-        max_bytes = max(1, int(settings.spec_workflow.agent_job_artifact_max_bytes))
+        max_bytes = max(1, int(settings.workflow.agent_job_artifact_max_bytes))
         payload = await file.read(max_bytes + 1)
         if len(payload) > max_bytes:
             raise AgentQueueValidationError(f"artifact exceeds max bytes ({max_bytes})")

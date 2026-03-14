@@ -109,7 +109,7 @@ def normalize_worker_fleet(fleet: str) -> str:
 
 
 def _artifact_secrets(app_settings: AppSettings) -> tuple[str, ...]:
-    if app_settings.spec_workflow.temporal_artifact_backend == "s3":
+    if app_settings.workflow.temporal_artifact_backend == "s3":
         return (
             "TEMPORAL_ARTIFACT_S3_ENDPOINT",
             "TEMPORAL_ARTIFACT_S3_BUCKET",

@@ -926,7 +926,7 @@ class TemporalSandboxActivities:
         self._artifact_service = artifact_service
         self._redactor = redactor or SecretRedactor.from_environ()
         self._workspace_root = Path(
-            workspace_root or settings.spec_workflow.workspace_root
+            workspace_root or settings.workflow.workspace_root
         ).resolve()
 
     def _resolve_workspace(

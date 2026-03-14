@@ -269,28 +269,28 @@ class AgentQueueService:
     ) -> None:
         self._repository = repository
         self._artifact_storage = artifact_storage or AgentQueueArtifactStorage(
-            settings.spec_workflow.agent_job_artifact_root
+            settings.workflow.agent_job_artifact_root
         )
         configured_limit = (
             artifact_max_bytes
             if artifact_max_bytes is not None
-            else settings.spec_workflow.agent_job_artifact_max_bytes
+            else settings.workflow.agent_job_artifact_max_bytes
         )
         self._artifact_max_bytes = max(1, int(configured_limit))
         self._attachments_enabled = bool(
-            settings.spec_workflow.agent_job_attachment_enabled
+            settings.workflow.agent_job_attachment_enabled
         )
         self._attachment_max_count = max(
-            0, int(settings.spec_workflow.agent_job_attachment_max_count)
+            0, int(settings.workflow.agent_job_attachment_max_count)
         )
         self._attachment_max_bytes = max(
-            1, int(settings.spec_workflow.agent_job_attachment_max_bytes)
+            1, int(settings.workflow.agent_job_attachment_max_bytes)
         )
         self._attachment_total_max_bytes = max(
-            1, int(settings.spec_workflow.agent_job_attachment_total_bytes)
+            1, int(settings.workflow.agent_job_attachment_total_bytes)
         )
         allowed_types = tuple(
-            settings.spec_workflow.agent_job_attachment_allowed_content_types or ()
+            settings.workflow.agent_job_attachment_allowed_content_types or ()
         )
         self._attachment_allowed_content_types = (
             allowed_types
@@ -302,9 +302,9 @@ class AgentQueueService:
             self._retry_backoff_base_seconds,
             int(retry_backoff_max_seconds),
         )
-        default_runtime = int(settings.spec_workflow.agent_job_max_runtime_seconds)
+        default_runtime = int(settings.workflow.agent_job_max_runtime_seconds)
         default_stale_grace = int(
-            settings.spec_workflow.agent_job_stale_lease_grace_seconds
+            settings.workflow.agent_job_stale_lease_grace_seconds
         )
         self._max_runtime_seconds = max(
             0, default_runtime if max_runtime_seconds is None else max_runtime_seconds
@@ -366,13 +366,13 @@ class AgentQueueService:
         """Fill missing canonical task payload fields from configured defaults."""
 
         enriched = dict(payload)
-        default_runtime = resolve_default_task_runtime(settings.spec_workflow)
+        default_runtime = resolve_default_task_runtime(settings.workflow)
         repository = self._clean_optional_str(
             enriched.get("repository") or enriched.get("repo")
         )
         if repository is None:
             repository = (
-                self._clean_optional_str(settings.spec_workflow.github_repository)
+                self._clean_optional_str(settings.workflow.github_repository)
                 or DEFAULT_REPOSITORY
             )
         self._validate_repository_reference(repository)
@@ -403,7 +403,7 @@ class AgentQueueService:
 
         default_model, default_effort = resolve_runtime_defaults(
             runtime_mode,
-            spec_workflow_settings=settings.spec_workflow,
+            spec_workflow_settings=settings.workflow,
         )
         if self._clean_optional_str(runtime.get("model")) is None and default_model:
             runtime["model"] = default_model
@@ -1874,7 +1874,7 @@ class AgentQueueService:
 
         provider = self._resolve_live_session_provider()
         now = datetime.now(UTC)
-        ttl_minutes = max(1, int(settings.spec_workflow.live_session_ttl_minutes))
+        ttl_minutes = max(1, int(settings.workflow.live_session_ttl_minutes))
         live = await self._repository.upsert_live_session(
             task_run_id=task_run_id,
             provider=provider,
@@ -2036,7 +2036,7 @@ class AgentQueueService:
         requested_ttl = (
             int(ttl_minutes)
             if ttl_minutes is not None
-            else int(settings.spec_workflow.live_session_rw_grant_ttl_minutes)
+            else int(settings.workflow.live_session_rw_grant_ttl_minutes)
         )
         effective_ttl = max(1, min(requested_ttl, 240))
         granted_until = now + timedelta(minutes=effective_ttl)
@@ -2690,7 +2690,7 @@ class AgentQueueService:
     @staticmethod
     def _resolve_live_session_provider() -> models.AgentJobLiveSessionProvider:
         provider = (
-            str(settings.spec_workflow.live_session_provider or "").strip().lower()
+            str(settings.workflow.live_session_provider or "").strip().lower()
         )
         if provider == "tmate" or not provider:
             return models.AgentJobLiveSessionProvider.TMATE
@@ -2698,7 +2698,7 @@ class AgentQueueService:
 
     @staticmethod
     def _live_session_web_allowed() -> bool:
-        return bool(settings.spec_workflow.live_session_allow_web)
+        return bool(settings.workflow.live_session_allow_web)
 
     async def _assert_live_session_worker_ownership(
         self,

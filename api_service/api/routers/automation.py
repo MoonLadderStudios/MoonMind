@@ -22,10 +22,10 @@ from moonmind.schemas.workflow_models import (
     SpecAutomationRunDetail,
 )
 from moonmind.workflows import get_spec_automation_repository
-from moonmind.workflows.spec_automation import models
-from moonmind.workflows.spec_automation.repositories import SpecAutomationRepository
+from moonmind.workflows.automation import models
+from moonmind.workflows.automation.repositories import SpecAutomationRepository
 
-router = APIRouter(prefix="/api/spec-automation", tags=["SpecAutomation"])
+router = APIRouter(prefix="/api/workflows", tags=["SpecAutomation"])
 
 
 async def _get_repository(
@@ -164,7 +164,7 @@ def _resolve_allowed_repositories(user: User) -> set[str] | None:
         if allowed:
             return allowed
 
-    default_repo = settings.spec_workflow.github_repository
+    default_repo = settings.workflow.github_repository
     if default_repo:
         slug = default_repo.strip().lower()
         if slug:
@@ -194,7 +194,7 @@ def _ensure_run_access(run: models.SpecAutomationRun, user: User) -> None:
 def _resolve_artifact_file(storage_path: str) -> Path:
     """Resolve artifact storage paths inside the configured artifacts root."""
 
-    base = Path(settings.spec_workflow.artifacts_root).resolve()
+    base = Path(settings.workflow.artifacts_root).resolve()
     candidate = (
         (base / storage_path).resolve()
         if not Path(storage_path).is_absolute()

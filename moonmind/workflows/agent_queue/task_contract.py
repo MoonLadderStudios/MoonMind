@@ -60,7 +60,7 @@ def _clean_optional_str(value: object) -> str | None:
 
 
 def _default_publish_mode() -> str:
-    mode = getattr(settings.spec_workflow, "default_publish_mode", "pr") or "pr"
+    mode = getattr(settings.workflow, "default_publish_mode", "pr") or "pr"
     normalized = str(mode).strip().lower()
     return normalized if normalized in SUPPORTED_PUBLISH_MODES else "pr"
 
@@ -68,7 +68,7 @@ def _default_publish_mode() -> str:
 def _default_propose_tasks() -> bool:
     """Default queue-task proposal generation toggle."""
 
-    return bool(getattr(settings.spec_workflow, "enable_task_proposals", True))
+    return bool(getattr(settings.workflow, "enable_task_proposals", True))
 
 
 def _normalize_runtime_value(value: object, *, field_name: str) -> str | None:

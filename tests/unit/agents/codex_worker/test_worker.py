@@ -5933,8 +5933,8 @@ async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) ->
     monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
     monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
     monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
-    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "Legacy Name")
-    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "legacy@example.com")
+    monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Legacy Name")
+    monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "legacy@example.com")
 
     config = CodexWorkerConfig.from_env()
 
@@ -5948,8 +5948,8 @@ async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
-    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_NAME", "Spec Name")
-    monkeypatch.setenv("SPEC_WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
+    monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Spec Name")
+    monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
     monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Workflow Name")
     monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "workflow@example.com")
 
@@ -5966,7 +5966,7 @@ async def test_config_from_env_supports_legacy_skill_policy_mode_env(
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
-    monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
+    monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.setenv("SKILL_POLICY_MODE", "allowlist")
 
     config = CodexWorkerConfig.from_env()
@@ -5981,7 +5981,7 @@ async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
-    monkeypatch.delenv("SPEC_WORKFLOW_ALLOWED_SKILLS", raising=False)
+    monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
     monkeypatch.setenv("MOONMIND_ALLOWED_SKILLS", "custom,speckit")
 
     config = CodexWorkerConfig.from_env()
@@ -6012,7 +6012,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_ARTIFACT_UPLOAD_INCREMENTAL", raising=False)
     monkeypatch.delenv("MOONMIND_STEP_LOG_MAX_BYTES", raising=False)
     monkeypatch.delenv("MOONMIND_SKILL_POLICY_MODE", raising=False)
-    monkeypatch.delenv("SPEC_WORKFLOW_SKILL_POLICY_MODE", raising=False)
+    monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SKILL_POLICY_MODE", raising=False)
 
     config = CodexWorkerConfig.from_env()
@@ -7113,7 +7113,7 @@ def test_resolve_skills_cache_root_uses_worker_workdir_for_relative_paths(
 ) -> None:
     worker, _, _ = codex_worker_components
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "skills_cache_root",
         "var/skill_cache",
         raising=False,

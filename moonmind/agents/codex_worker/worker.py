@@ -84,7 +84,7 @@ from moonmind.workflows.skills.workspace_links import (
     SkillWorkspaceError,
     ensure_shared_skill_links,
 )
-from moonmind.workflows.spec_automation.workspace import generate_branch_name
+from moonmind.workflows.automation.workspace import generate_branch_name
 
 logger = logging.getLogger(__name__)
 
@@ -538,7 +538,7 @@ class CodexWorkerConfig:
                 source.get(
                     "WORKFLOW_DEFAULT_SKILL",
                     source.get(
-                        "SPEC_WORKFLOW_DEFAULT_SKILL",
+                        "WORKFLOW_DEFAULT_SKILL",
                         source.get("MOONMIND_DEFAULT_SKILL", "speckit"),
                     ),
                 )
@@ -550,7 +550,7 @@ class CodexWorkerConfig:
                 source.get(
                     "WORKFLOW_SKILL_POLICY_MODE",
                     source.get(
-                        "SPEC_WORKFLOW_SKILL_POLICY_MODE",
+                        "WORKFLOW_SKILL_POLICY_MODE",
                         source.get(
                             "MOONMIND_SKILL_POLICY_MODE",
                             source.get("SKILL_POLICY_MODE", "permissive"),
@@ -570,7 +570,7 @@ class CodexWorkerConfig:
             source.get(
                 "WORKFLOW_ALLOWED_SKILLS",
                 source.get(
-                    "SPEC_WORKFLOW_ALLOWED_SKILLS",
+                    "WORKFLOW_ALLOWED_SKILLS",
                     source.get("MOONMIND_ALLOWED_SKILLS", default_skill),
                 ),
             )
@@ -787,17 +787,17 @@ class CodexWorkerConfig:
             source.get(
                 "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
                 source.get(
-                    "SPEC_WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
+                    "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
                     source.get(
                         "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-                        str(settings.spec_workflow.stage_command_timeout_seconds),
+                        str(settings.workflow.stage_command_timeout_seconds),
                     ),
                 ),
             )
         ).strip()
         if not stage_command_timeout_raw:
             stage_command_timeout_raw = str(
-                settings.spec_workflow.stage_command_timeout_seconds
+                settings.workflow.stage_command_timeout_seconds
             )
         try:
             stage_command_timeout_seconds = int(stage_command_timeout_raw)
@@ -843,10 +843,10 @@ class CodexWorkerConfig:
                 source.get(
                     "WORKFLOW_GIT_USER_NAME",
                     source.get(
-                        "SPEC_WORKFLOW_GIT_USER_NAME",
+                        "WORKFLOW_GIT_USER_NAME",
                         source.get(
                             "MOONMIND_GIT_USER_NAME",
-                            settings.spec_workflow.git_user_name or "",
+                            settings.workflow.git_user_name or "",
                         ),
                     ),
                 )
@@ -858,10 +858,10 @@ class CodexWorkerConfig:
                 source.get(
                     "WORKFLOW_GIT_USER_EMAIL",
                     source.get(
-                        "SPEC_WORKFLOW_GIT_USER_EMAIL",
+                        "WORKFLOW_GIT_USER_EMAIL",
                         source.get(
                             "MOONMIND_GIT_USER_EMAIL",
-                            settings.spec_workflow.git_user_email or "",
+                            settings.workflow.git_user_email or "",
                         ),
                     ),
                 )
@@ -894,7 +894,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",
-                    str(settings.spec_workflow.live_session_enabled_default),
+                    str(settings.workflow.live_session_enabled_default),
                 )
             )
             .strip()
@@ -911,7 +911,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_LIVE_SESSION_PROVIDER",
-                    settings.spec_workflow.live_session_provider,
+                    settings.workflow.live_session_provider,
                 )
             )
             .strip()
@@ -924,7 +924,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_LIVE_SESSION_TTL_MINUTES",
-                    str(settings.spec_workflow.live_session_ttl_minutes),
+                    str(settings.workflow.live_session_ttl_minutes),
                 )
             ).strip()
         )
@@ -934,7 +934,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
-                    str(settings.spec_workflow.live_session_rw_grant_ttl_minutes),
+                    str(settings.workflow.live_session_rw_grant_ttl_minutes),
                 )
             ).strip()
         )
@@ -944,7 +944,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_LIVE_SESSION_ALLOW_WEB",
-                    str(settings.spec_workflow.live_session_allow_web),
+                    str(settings.workflow.live_session_allow_web),
                 )
             )
             .strip()
@@ -961,7 +961,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_TMATE_SERVER_HOST",
-                    settings.spec_workflow.tmate_server_host or "",
+                    settings.workflow.tmate_server_host or "",
                 )
             ).strip()
             or None
@@ -970,7 +970,7 @@ class CodexWorkerConfig:
             str(
                 source.get(
                     "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
-                    str(settings.spec_workflow.live_session_max_concurrent_per_worker),
+                    str(settings.workflow.live_session_max_concurrent_per_worker),
                 )
             ).strip()
         )
@@ -984,7 +984,7 @@ class CodexWorkerConfig:
                     "MOONMIND_ENABLE_TASK_PROPOSALS",
                     source.get(
                         "ENABLE_TASK_PROPOSALS",
-                        str(settings.spec_workflow.enable_task_proposals),
+                        str(settings.workflow.enable_task_proposals),
                     ),
                 )
             )
@@ -4140,7 +4140,7 @@ class CodexWorker:
                         selection=selection,
                         run_root=job_root,
                         cache_root=self._resolve_skills_cache_root(),
-                        verify_signatures=settings.spec_workflow.skills_verify_signatures,
+                        verify_signatures=settings.workflow.skills_verify_signatures,
                     )
                     materialized_skill_payload = materialized_workspace.to_payload()
                     self._append_stage_log(
@@ -7563,7 +7563,7 @@ class CodexWorker:
         return "gh"
 
     def _resolve_skills_cache_root(self) -> Path:
-        cache_root = Path(settings.spec_workflow.skills_cache_root).expanduser()
+        cache_root = Path(settings.workflow.skills_cache_root).expanduser()
         if not cache_root.is_absolute():
             cache_root = (self._config.workdir / cache_root).resolve()
         else:
@@ -8056,7 +8056,7 @@ class CodexWorker:
                 selection=selection,
                 run_root=prepared.job_root,
                 cache_root=self._resolve_skills_cache_root(),
-                verify_signatures=settings.spec_workflow.skills_verify_signatures,
+                verify_signatures=settings.workflow.skills_verify_signatures,
             )
         except (SkillResolutionError, SkillMaterializationError):
             logger.warning(
@@ -10941,7 +10941,7 @@ class CodexWorker:
                     job.id,
                 )
 
-        defaults = settings.spec_workflow
+        defaults = settings.workflow
         effective_policy = build_effective_proposal_policy(
             policy=task_policy,
             default_targets=defaults.proposal_targets_default,

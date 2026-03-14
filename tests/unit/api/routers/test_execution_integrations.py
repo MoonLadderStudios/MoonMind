@@ -317,9 +317,9 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
     shared_user_id = uuid4()
     monkeypatch.setattr(settings.jules, "jules_callback_token", None)
     monkeypatch.setattr(settings.jules, "jules_callback_artifact_capture_enabled", True)
-    monkeypatch.setattr(settings.spec_workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "temporal_artifact_root",
         str(tmp_path / "artifacts"),
     )

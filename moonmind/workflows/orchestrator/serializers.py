@@ -18,7 +18,7 @@ from moonmind.schemas.workflow_models import (
     OrchestratorTaskStepSkillModel,
     OrchestratorTaskStepStatus,
 )
-from moonmind.workflows.spec_automation import models as workflow_models
+from moonmind.workflows.automation import models as workflow_models
 
 if TYPE_CHECKING:  # pragma: no cover - import used for type checking only
     from moonmind.schemas.workflow_models import OrchestratorApprovalStatus

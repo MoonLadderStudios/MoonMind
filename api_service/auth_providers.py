@@ -68,7 +68,7 @@ def get_current_user():
 
         async def _current_user_fallback():  # pragma: no cover – simple helper
             if (
-                settings.spec_workflow.test_mode
+                settings.workflow.test_mode
                 or os.getenv("PYTEST_CURRENT_TEST")
                 or os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1"
             ):

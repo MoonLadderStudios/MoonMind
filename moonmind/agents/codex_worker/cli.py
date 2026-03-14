@@ -84,7 +84,7 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_DEFAULT_SKILL",
-            "SPEC_WORKFLOW_DEFAULT_SKILL",
+            "WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
         default="speckit",
@@ -93,7 +93,7 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_DISCOVER_SKILL",
-            "SPEC_WORKFLOW_DISCOVER_SKILL",
+            "WORKFLOW_DISCOVER_SKILL",
             "MOONMIND_DISCOVER_SKILL",
         ),
         default=default_skill,
@@ -102,7 +102,7 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_SUBMIT_SKILL",
-            "SPEC_WORKFLOW_SUBMIT_SKILL",
+            "WORKFLOW_SUBMIT_SKILL",
             "MOONMIND_SUBMIT_SKILL",
         ),
         default=default_skill,
@@ -111,7 +111,7 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
         source,
         (
             "WORKFLOW_PUBLISH_SKILL",
-            "SPEC_WORKFLOW_PUBLISH_SKILL",
+            "WORKFLOW_PUBLISH_SKILL",
             "MOONMIND_PUBLISH_SKILL",
         ),
         default=default_skill,
@@ -126,10 +126,10 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
 
 
 def _configured_skills_require_speckit(source: Mapping[str, str]) -> bool:
-    """Return whether current worker config requires Speckit executable checks."""
+    """Return whether current worker config requires Workflow executable checks."""
 
     if not _env_flag(
-        _first_non_empty(source, ("WORKFLOW_USE_SKILLS", "SPEC_WORKFLOW_USE_SKILLS")),
+        _first_non_empty(source, ("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS")),
         default=True,
     ):
         return False
@@ -245,7 +245,7 @@ def _verify_speckit_cli(
     *,
     redaction_values: Sequence[str] = (),
 ) -> None:
-    """Validate Speckit CLI across legacy and shimmed command variants."""
+    """Validate Workflow CLI across legacy and shimmed command variants."""
 
     try:
         _run_checked_command(

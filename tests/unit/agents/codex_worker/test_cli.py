@@ -185,7 +185,7 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
 
 
 def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -> None:
-    """Non-speckit stage skill configuration should not require Speckit preflight."""
+    """Non-speckit stage skill configuration should not require Workflow preflight."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -206,10 +206,10 @@ def test_run_preflight_skips_speckit_for_non_speckit_stage_skills(monkeypatch) -
     cli.run_preflight(
         env={
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-            "SPEC_WORKFLOW_DEFAULT_SKILL": "custom-skill",
-            "SPEC_WORKFLOW_DISCOVER_SKILL": "custom-skill",
-            "SPEC_WORKFLOW_SUBMIT_SKILL": "custom-skill",
-            "SPEC_WORKFLOW_PUBLISH_SKILL": "custom-skill",
+            "WORKFLOW_DEFAULT_SKILL": "custom-skill",
+            "WORKFLOW_DISCOVER_SKILL": "custom-skill",
+            "WORKFLOW_SUBMIT_SKILL": "custom-skill",
+            "WORKFLOW_PUBLISH_SKILL": "custom-skill",
         }
     )
 
@@ -257,7 +257,7 @@ def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
 
 
 def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
-    """WORKFLOW_USE_SKILLS=false should skip Speckit checks."""
+    """WORKFLOW_USE_SKILLS=false should skip Workflow checks."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -279,7 +279,7 @@ def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
         env={
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             "WORKFLOW_USE_SKILLS": "false",
-            "SPEC_WORKFLOW_DEFAULT_SKILL": "speckit",
+            "WORKFLOW_DEFAULT_SKILL": "speckit",
         }
     )
 
@@ -511,7 +511,7 @@ def test_run_preflight_speckit_version_fallback_to_help(monkeypatch) -> None:
 
 
 def test_run_preflight_speckit_non_version_error_raises(monkeypatch) -> None:
-    """Fallback should not mask unrelated Speckit execution failures."""
+    """Fallback should not mask unrelated Workflow execution failures."""
 
     monkeypatch.setattr(
         cli,

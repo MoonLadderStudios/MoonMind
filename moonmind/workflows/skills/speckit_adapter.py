@@ -1,4 +1,4 @@
-"""Speckit stage adapter.
+"""Workflow stage adapter.
 
 Current behavior intentionally delegates to the existing direct executor to keep
 backward compatibility while routing through the skills policy layer.

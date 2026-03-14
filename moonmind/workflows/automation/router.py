@@ -126,11 +126,11 @@ def get_codex_shard_router(
 ) -> CodexShardRouter:
     if codex_queue is None:
         codex_queue = (
-            settings.spec_workflow.codex_queue or settings.celery.default_queue
+            settings.workflow.codex_queue or settings.celery.default_queue
         )
     if codex_queue:
         return CodexShardRouter(shard_count=1, codex_queue=codex_queue)
-    count = shard_count or settings.spec_workflow.codex_shards
+    count = shard_count or settings.workflow.codex_shards
     return CodexShardRouter(shard_count=count)
 
 

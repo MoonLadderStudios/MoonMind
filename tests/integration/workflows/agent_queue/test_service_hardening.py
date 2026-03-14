@@ -562,12 +562,12 @@ async def test_create_task_job_applies_settings_defaults_for_missing_fields(
     """Task creation should resolve missing repository/model/effort from settings."""
 
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "github_repository",
         "MoonLadderStudios/MoonMind",
     )
-    monkeypatch.setattr(settings.spec_workflow, "codex_model", "gpt-5.3-codex")
-    monkeypatch.setattr(settings.spec_workflow, "codex_effort", "high")
+    monkeypatch.setattr(settings.workflow, "codex_model", "gpt-5.3-codex")
+    monkeypatch.setattr(settings.workflow, "codex_effort", "high")
 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
@@ -597,7 +597,7 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
 ) -> None:
     """Missing runtime fields should use configured default task runtime."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "claude")
     monkeypatch.setattr(settings.anthropic, "anthropic_api_key", "test-key")
 
     async with queue_db(tmp_path) as session_maker:
@@ -627,7 +627,7 @@ async def test_create_task_job_uses_default_model_for_configured_runtime(
 ) -> None:
     """Missing runtime model should resolve from the configured default runtime."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "gemini")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "gemini")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
 
     async with queue_db(tmp_path) as session_maker:
@@ -686,7 +686,7 @@ async def test_create_task_job_explicit_runtime_overrides_default_runtime(
 ) -> None:
     """Explicit payload runtime should take precedence over configured default."""
 
-    monkeypatch.setattr(settings.spec_workflow, "default_task_runtime", "claude")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "claude")
 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:

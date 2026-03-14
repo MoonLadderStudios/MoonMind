@@ -11,7 +11,7 @@
 - Per-job artifacts for those runs are under `/work/agent_jobs/<job_id>/artifacts`, and the checked-out repo is at `/work/agent_jobs/<job_id>/repo`.
 - To inspect a run from the host, use the Docker volume directly:  
   `docker run --rm -v agent_workspaces:/work/agent_jobs -it -v /tmp:/host_tmp alpine sh -lc 'ls /work/agent_jobs/<job_id> | head'`.
-- In the repository code/docs path, durable workflow artifacts for workflow automation are typically written to `var/artifacts/<scope>/<run_id>` (for example `var/artifacts/spec_workflows/<run_id>`).
+- In the repository code/docs path, durable workflow artifacts for workflow automation are typically written to `var/artifacts/<scope>/<run_id>` (for example `var/artifacts/workflows/<run_id>`).
 
 ## Tool Execution Guardrails
 - **Strict Verification of Tool Results**: Never hallucinate success or fabricate data when a tool execution fails. If a tool (e.g., `read_file`, `run_shell_command`) returns an error such as 'File not found', you must correctly identify the failure and take appropriate remediating action instead of silently bypassing it.
@@ -41,8 +41,8 @@ When creating a new spec folder/feature ID:
 
 ## Active Technologies
 - Python 3.11 (matches existing MoonMind services and supported pyproject range) + Celery 5.4, RabbitMQ 3.x (broker), PostgreSQL (result backend & existing MoonMind DB for run persistence), Codex CLI, GitHub CLI (001-celery-chain-workflow), Gemini CLI (006-add-gemini-cli)
-- PostgreSQL `spec_workflow_runs` + `spec_workflow_task_states` (Celery result backend and workflow history); RabbitMQ broker for task dispatch & state callbacks; object storage optional for large artifacts (initially local filesystem under `var/artifacts/spec_workflows/<run_id>`) (001-celery-chain-workflow)
-- Docker Compose hosted mm-orchestrator service (Python 3.11 + Celery task chain) mounting `/workspace` and `/var/run/docker.sock`, emitting StatsD metrics and writing artifacts to `var/artifacts/spec_workflows/<run_id>` (005-orchestrator-architecture)
+- PostgreSQL `spec_workflow_runs` + `spec_workflow_task_states` (Celery result backend and workflow history); RabbitMQ broker for task dispatch & state callbacks; object storage optional for large artifacts (initially local filesystem under `var/artifacts/workflows/<run_id>`) (001-celery-chain-workflow)
+- Docker Compose hosted mm-orchestrator service (Python 3.11 + Celery task chain) mounting `/workspace` and `/var/run/docker.sock`, emitting StatsD metrics and writing artifacts to `var/artifacts/workflows/<run_id>` (005-orchestrator-architecture)
 
 ## Recent Changes
 - 001-celery-chain-workflow: Added Python 3.11 (matches existing MoonMind services and supported pyproject range) + Celery 5.4, RabbitMQ 3.x (broker), PostgreSQL (result backend & existing MoonMind DB for run persistence), Codex CLI, GitHub CLI
@@ -58,5 +58,5 @@ When creating a new spec folder/feature ID:
 ## Spec Workflow Verification Checklist
 - Bring up RabbitMQ and the dedicated Celery worker alongside the API service when validating the Spec Kit workflow: `docker compose up rabbitmq celery-worker api`.
 - Confirm the worker logs include `Spec workflow task ...` entries for discover, submit, and publish steps; these messages include per-task summaries and should align with repository state transitions.
-- Optional metrics: set `STATSD_HOST`/`STATSD_PORT` or `SPEC_WORKFLOW_METRICS_HOST`/`SPEC_WORKFLOW_METRICS_PORT` to capture task counters and durations emitted via StatsD before running end-to-end tests.
-- For orchestrator validation runs, also start the `orchestrator` service, watch for `ActionPlan` step logs (analyze → patch → build → restart → verify), and confirm artifacts land under `var/artifacts/spec_workflows/<run_id>/`.
+- Optional metrics: set `STATSD_HOST`/`STATSD_PORT` or `WORKFLOW_METRICS_HOST`/`WORKFLOW_METRICS_PORT` to capture task counters and durations emitted via StatsD before running end-to-end tests.
+- For orchestrator validation runs, also start the `orchestrator` service, watch for `ActionPlan` step logs (analyze → patch → build → restart → verify), and confirm artifacts land under `var/artifacts/workflows/<run_id>/`.

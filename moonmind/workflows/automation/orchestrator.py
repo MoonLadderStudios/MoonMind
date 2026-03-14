@@ -12,7 +12,7 @@ from typing import Iterable, Optional
 from uuid import UUID
 
 from moonmind.schemas.workflow_models import RetryWorkflowMode
-from moonmind.workflows.spec_automation import models
+from moonmind.workflows.automation import models
 
 
 @dataclass(slots=True)
@@ -81,7 +81,7 @@ async def trigger_spec_workflow_run(
     """
 
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.spec_automation.repositories import SpecWorkflowRepository
+    from moonmind.workflows.automation.repositories import SpecWorkflowRepository
 
     if not feature_key:
         raise ValueError("feature_key is required to trigger a workflow run")
@@ -118,7 +118,7 @@ async def retry_spec_workflow_run(
     """
 
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.spec_automation.repositories import SpecWorkflowRepository
+    from moonmind.workflows.automation.repositories import SpecWorkflowRepository
 
     async with get_async_session_context() as session:
         repo = SpecWorkflowRepository(session)

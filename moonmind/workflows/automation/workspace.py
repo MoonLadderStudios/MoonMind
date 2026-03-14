@@ -173,7 +173,7 @@ class SpecWorkspaceManager:
 
     RUNS_DIRNAME_DEFAULT = "runs"
     DEFAULT_RETENTION = timedelta(days=7)
-    _CONTAINER_PREFIX = "spec-automation-job-"
+    _CONTAINER_PREFIX = "workflows-job-"
     _REPO_SUBDIR = "repo"
     _HOME_SUBDIR = "home"
     _ARTIFACTS_SUBDIR = "artifacts"
@@ -197,7 +197,7 @@ class SpecWorkspaceManager:
     def from_settings(cls) -> "SpecWorkspaceManager":
         """Create a manager using the application settings configuration."""
 
-        return cls(settings.spec_workflow.workspace_root)
+        return cls(settings.workflow.workspace_root)
 
     # ------------------------------------------------------------------
     # Path resolution

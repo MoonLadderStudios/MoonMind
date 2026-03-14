@@ -115,7 +115,7 @@ def test_manifest_path_source_disabled_without_flag(
 ) -> None:
     """Path sources should be rejected when guard flag is disabled."""
 
-    monkeypatch.setattr(settings.spec_workflow, "allow_manifest_path_source", False)
+    monkeypatch.setattr(settings.workflow, "allow_manifest_path_source", False)
     payload = _payload(source_kind="path")
     payload["manifest"]["source"]["path"] = "/opt/manifests/demo.yaml"
 
@@ -131,7 +131,7 @@ def test_manifest_path_source_preserves_path_metadata(
 ) -> None:
     """Path sources should include the requested path when enabled."""
 
-    monkeypatch.setattr(settings.spec_workflow, "allow_manifest_path_source", True)
+    monkeypatch.setattr(settings.workflow, "allow_manifest_path_source", True)
     payload = _payload(source_kind="path")
     payload["manifest"]["source"]["path"] = "/opt/manifests/demo.yaml"
 
@@ -224,7 +224,7 @@ def test_manifest_capability_flags_extend_base(monkeypatch: pytest.MonkeyPatch) 
     """Configured capability flags should be prepended to derived capability lists."""
 
     monkeypatch.setattr(
-        settings.spec_workflow,
+        settings.workflow,
         "manifest_required_capabilities",
         ("manifest", "phase0", "beta"),
     )

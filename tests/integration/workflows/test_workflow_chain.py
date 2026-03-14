@@ -55,16 +55,16 @@ async def test_trigger_workflow_chain(tmp_path, monkeypatch):
     )
 
     artifacts_root = tmp_path / "artifacts"
-    monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
+    monkeypatch.setattr(settings.workflow, "test_mode", True, raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "repo_root", str(tmp_path), raising=False
+        settings.workflow, "repo_root", str(tmp_path), raising=False
     )
-    monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(settings.workflow, "tasks_root", "specs", raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
+        settings.workflow, "artifacts_root", str(artifacts_root), raising=False
     )
     monkeypatch.setattr(
-        settings.spec_workflow, "default_feature_key", feature_key, raising=False
+        settings.workflow, "default_feature_key", feature_key, raising=False
     )
 
     triggered = await trigger_spec_workflow_run(
@@ -134,16 +134,16 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
     )
 
     artifacts_root = tmp_path / "artifacts"
-    monkeypatch.setattr(settings.spec_workflow, "test_mode", True, raising=False)
+    monkeypatch.setattr(settings.workflow, "test_mode", True, raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "repo_root", str(tmp_path), raising=False
+        settings.workflow, "repo_root", str(tmp_path), raising=False
     )
-    monkeypatch.setattr(settings.spec_workflow, "tasks_root", "specs", raising=False)
+    monkeypatch.setattr(settings.workflow, "tasks_root", "specs", raising=False)
     monkeypatch.setattr(
-        settings.spec_workflow, "artifacts_root", str(artifacts_root), raising=False
+        settings.workflow, "artifacts_root", str(artifacts_root), raising=False
     )
     monkeypatch.setattr(
-        settings.spec_workflow, "default_feature_key", feature_key, raising=False
+        settings.workflow, "default_feature_key", feature_key, raising=False
     )
 
     fail_state = {"calls": 0}
