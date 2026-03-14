@@ -220,6 +220,32 @@ def test_runtime_planner_accepts_task_tool_payload():
     assert node["inputs"]["pr"] == "42"
 
 
+def test_runtime_planner_synthesizes_named_skill_inputs_without_instructions():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("f" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T8A3"
+
+    payload = planner(
+        {
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                    "version": "1.0",
+                },
+                "runtime": {"mode": "gemini"},
+            }
+        },
+        {"repository": "MoonLadderStudios/MoonMind"},
+        snapshot,
+    )
+
+    node_inputs = payload["nodes"][0]["inputs"]
+    assert "pr-resolver" in node_inputs["instructions"]
+    assert node_inputs["runtime"]["mode"] == "gemini"
+
+
 def test_runtime_planner_uses_parameter_task_fallback_when_inputs_missing():
     planner = _build_runtime_planner()
     snapshot = MagicMock()
@@ -243,6 +269,51 @@ def test_runtime_planner_uses_parameter_task_fallback_when_inputs_missing():
     node = payload["nodes"][0]
     assert node["tool"]["name"] == "auto"
     assert node["inputs"]["instructions"] == "Diagnose the failing workflow."
+
+
+def test_runtime_planner_propagates_publish_mode_for_auto_tasks():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("d" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T7Y1"
+
+    payload = planner(
+        {
+            "task": {
+                "instructions": "Prepare release notes.",
+                "runtime": {"mode": "codex"},
+            }
+        },
+        {"repository": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        snapshot,
+    )
+
+    node_inputs = payload["nodes"][0]["inputs"]
+    assert node_inputs["publishMode"] == "pr"
+
+
+def test_runtime_planner_propagates_git_branches_for_auto_tasks():
+    planner = _build_runtime_planner()
+    snapshot = MagicMock()
+    snapshot.digest = "reg:sha256:" + ("e" * 64)
+    snapshot.artifact_ref = "art_01HJ4M3Y7RM4C5S2P3Q8G6T7Z2"
+
+    payload = planner(
+        {
+            "task": {
+                "instructions": "Prepare fixes and publish.",
+                "runtime": {"mode": "gemini"},
+                "git": {"startingBranch": "main", "newBranch": "task/custom-branch"},
+            }
+        },
+        {"repository": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        snapshot,
+    )
+
+    node_inputs = payload["nodes"][0]["inputs"]
+    assert node_inputs["startingBranch"] == "main"
+    assert node_inputs["newBranch"] == "task/custom-branch"
+    assert node_inputs["repository"] == "MoonLadderStudios/MoonMind"
 
 
 @pytest.mark.asyncio
@@ -406,8 +477,20 @@ async def test_auto_skill_handler_uses_request_mapping_and_gemini_prompt_command
     assert request_payload["workspace_ref"] == "/tmp/workspace"
     assert request_payload["principal"] == "user-1"
     assert request_payload["cmd"][:2] == ["gemini", "--prompt"]
-    assert request_payload["cmd"][2] == "Inspect failing tests"
-    assert request_payload["cmd"][3:] == ["--model", "gemini-3.1-pro-preview"]
+    assert request_payload["cmd"][2].startswith("Inspect failing tests")
+    assert "--allowed-tools" in request_payload["cmd"]
+    allowed_tools_index = request_payload["cmd"].index("--allowed-tools")
+    allowed_tools = request_payload["cmd"][allowed_tools_index + 1].split(",")
+    assert "run_shell_command" in allowed_tools
+    assert "--include-directories" in request_payload["cmd"]
+    include_dir_indices = [
+        idx
+        for idx, token in enumerate(request_payload["cmd"])
+        if token == "--include-directories"
+    ]
+    include_dirs = [request_payload["cmd"][idx + 1] for idx in include_dir_indices]
+    assert "/tmp/workspace" in include_dirs
+    assert request_payload["cmd"][-2:] == ["--model", "gemini-3.1-pro-preview"]
     assert request_payload["env"]["GEMINI_API_KEY"] == "google-test-key"
     await resources.aclose()
 
@@ -475,6 +558,140 @@ async def test_auto_skill_handler_fails_zero_exit_when_cli_reports_missing_tool(
     assert "tool invocation failure" in result.outputs["error"]
     assert "run_shell_command" in result.outputs["error"]
     assert "tool failure" in result.progress["details"]
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_auto_skill_handler_fails_pr_mode_without_pull_request_url(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "sandbox"
+    mock_build_bindings.return_value = []
+    mock_sandbox_activities_cls.return_value.sandbox_run_command = AsyncMock(
+        return_value=SimpleNamespace(
+            exit_code=0,
+            stdout_tail="Finished applying patch changes.",
+            stderr_tail="",
+            diagnostics_ref=None,
+        )
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    register_kwargs = mock_dispatcher_cls.return_value.register_skill.call_args.kwargs
+    handler = register_kwargs["handler"]
+    result = await handler(
+        {
+            "instructions": "Fix regression and open a PR",
+            "workspaceRef": "/tmp/workspace",
+            "publishMode": "pr",
+            "runtime": {"mode": "gemini", "model": "gemini-3.1-pro-preview"},
+        },
+        {"workflow_id": "wf-1", "node_id": "node-1", "principal": "user-1"},
+    )
+
+    assert result.status == "FAILED"
+    assert "pull request URL" in result.outputs["error"]
+    await resources.aclose()
+
+
+@pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+async def test_auto_skill_handler_uses_repository_for_checkout_and_generates_branch_in_pr_mode(
+    mock_dispatcher_cls,
+    mock_repository_cls,
+    mock_service_cls,
+    mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_skill_activities_cls,
+    mock_sandbox_activities_cls,
+    mock_jules_activities_cls,
+    mock_build_bindings,
+):
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    topology = MagicMock()
+    topology.fleet = "sandbox"
+    mock_build_bindings.return_value = []
+    mock_sandbox_activities_cls.return_value.sandbox_checkout_repo = AsyncMock(
+        return_value="/tmp/workspace"
+    )
+    mock_sandbox_activities_cls.return_value.sandbox_run_command = AsyncMock(
+        return_value=SimpleNamespace(
+            exit_code=0,
+            stdout_tail="Opened PR: https://github.com/org/repo/pull/123",
+            stderr_tail="",
+            diagnostics_ref=None,
+        )
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.worker_runtime.get_async_session_context",
+        side_effect=_fake_session_context,
+    ):
+        resources, _handlers = await _build_runtime_activities(topology)
+
+    register_kwargs = mock_dispatcher_cls.return_value.register_skill.call_args.kwargs
+    handler = register_kwargs["handler"]
+    result = await handler(
+        {
+            "instructions": "Fix failing tests and open a PR",
+            "repository": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+            "runtime": {"mode": "gemini", "model": "gemini-3.1-pro-preview"},
+            "git": {"startingBranch": "main"},
+        },
+        {
+            "workflow_id": "mm:72597b5f-e3c3-4083-8342-787b09819b57",
+            "node_id": "node-1",
+            "principal": "user-1",
+        },
+    )
+
+    assert result.status == "SUCCEEDED"
+    mock_sandbox_activities_cls.return_value.sandbox_checkout_repo.assert_awaited_once_with(
+        repo_ref="MoonLadderStudios/MoonMind",
+        idempotency_key="auto-mm:72597b5f-e3c3-4083-8342-787b09819b57-node-1",
+        checkout_revision="main",
+    )
+    assert result.outputs["working_branch"].startswith("task/")
+    assert result.outputs["pull_request_url"] == "https://github.com/org/repo/pull/123"
     await resources.aclose()
 
 

@@ -390,6 +390,36 @@ def test_skill_dispatcher_rejects_missing_handlers():
         )
 
 
+def test_skill_dispatcher_uses_default_handler_when_specific_handler_missing():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    dispatcher = SkillActivityDispatcher()
+    invocation = parse_plan_definition(
+        _plan_payload(
+            snapshot_digest=snapshot.digest,
+            snapshot_ref=snapshot.artifact_ref,
+        )
+    ).nodes[0]
+
+    dispatcher.register_default_skill_handler(
+        handler=lambda inputs, _context: SkillResult(
+            status="SUCCEEDED",
+            outputs={"echo_repo": inputs.get("repo_ref")},
+        )
+    )
+
+    result = asyncio.run(
+        dispatcher.execute(
+            invocation=invocation,
+            snapshot=snapshot,
+            context=None,
+        )
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert result.outputs["echo_repo"] == "git:org/repo#branch"
+
+
 def test_plan_interpreter_fail_fast_skips_dependents():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)

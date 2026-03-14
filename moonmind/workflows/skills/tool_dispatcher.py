@@ -38,6 +38,7 @@ class ToolActivityDispatcher:
 
     _activity_handlers: dict[str, ActivityHandler] = field(default_factory=dict)
     _skill_handlers: dict[tuple[str, str], SkillHandler] = field(default_factory=dict)
+    _default_skill_handler: SkillHandler | None = None
 
     def register_activity(
         self, *, activity_type: str, handler: ActivityHandler
@@ -63,6 +64,16 @@ class ToolActivityDispatcher:
             )
         self._skill_handlers[key] = handler
 
+    def register_default_skill_handler(self, *, handler: SkillHandler) -> None:
+        """Register a generic fallback for mm.skill/mm.tool invocations.
+
+        This is intended for runtime families where many skills share one generic
+        execution surface (for example prompt-based CLI execution), while still
+        allowing explicit per-skill handlers to override the fallback.
+        """
+
+        self._default_skill_handler = handler
+
     async def execute(
         self,
         *,
@@ -78,6 +89,8 @@ class ToolActivityDispatcher:
 
         if activity_type in {"mm.tool.execute", "mm.skill.execute"}:
             handler = self._skill_handlers.get(invocation.skill_key)
+            if handler is None:
+                handler = self._default_skill_handler
             if handler is None:
                 raise ToolDispatchError(
                     "tool_handler_not_registered",

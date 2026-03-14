@@ -768,8 +768,13 @@
         return;
       }
       if (!forced) {
-        if (!skipAutoRefresh && !isAutoRefreshActive()) {
-          return;
+        if (!skipAutoRefresh) {
+          if (!isAutoRefreshActive()) {
+            return;
+          }
+          if (window.getSelection && window.getSelection().toString().trim().length > 0) {
+            return;
+          }
         }
         if (document.visibilityState === "hidden") {
           return;

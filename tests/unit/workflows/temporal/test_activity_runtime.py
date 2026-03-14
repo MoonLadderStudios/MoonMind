@@ -27,11 +27,13 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.activity_runtime import (
+    SandboxCommandResult,
     TemporalActivityRuntimeError,
     TemporalJulesActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
+    _default_skill_registry_payload,
     build_activity_bindings,
     build_activity_execution_context,
     build_activity_invocation_envelope,
@@ -282,6 +284,29 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
                 )
 
 
+async def test_default_skill_registry_payload_includes_selected_task_tool():
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                    "version": "1.0",
+                }
+            }
+        }
+    )
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    keyset = {
+        (str(item.get("name")), str(item.get("version")))
+        for item in skills
+        if isinstance(item, dict)
+    }
+    assert ("auto", "1.0") in keyset
+    assert ("pr-resolver", "1.0") in keyset
+
+
 async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
     tmp_path: Path,
 ):
@@ -465,6 +490,44 @@ async def test_sandbox_checkout_rejects_local_path_outside_workspace_root(
             repo_ref=source,
             idempotency_key="checkout-outside",
         )
+
+
+async def test_sandbox_checkout_repo_clones_github_slug_and_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    activities = TemporalSandboxActivities(workspace_root=tmp_path / "workspaces")
+    recorded_commands: list[list[str]] = []
+
+    async def _fake_run_command(request, /, **_kwargs):
+        cmd = [str(token) for token in request.get("cmd", [])]
+        recorded_commands.append(cmd)
+        if cmd[:2] == ["git", "clone"] and len(cmd) >= 4:
+            Path(cmd[3]).mkdir(parents=True, exist_ok=True)
+        return SandboxCommandResult(
+            exit_code=0,
+            command=tuple(cmd),
+            duration_ms=1,
+            stdout_tail="ok",
+            stderr_tail="",
+            diagnostics_ref=None,
+        )
+
+    monkeypatch.setattr(activities, "sandbox_run_command", _fake_run_command)
+
+    workspace = await activities.sandbox_checkout_repo(
+        repo_ref="MoonLadderStudios/MoonMind",
+        idempotency_key="checkout-remote",
+        checkout_revision="main",
+    )
+
+    assert Path(workspace).exists()
+    assert recorded_commands[0][:3] == [
+        "git",
+        "clone",
+        "https://github.com/MoonLadderStudios/MoonMind.git",
+    ]
+    assert recorded_commands[1] == ["git", "checkout", "main"]
 
 
 async def test_shared_envelope_helpers_build_compact_runtime_contracts():

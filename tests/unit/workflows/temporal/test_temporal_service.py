@@ -1280,7 +1280,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
             next_page_token=None,
         )
 
-        assert set(item.workflow_id for item in listed.items) == {
+        assert {item.workflow_id for item in listed.items} == {
             hidden.workflow_id,
             visible.workflow_id,
         }
