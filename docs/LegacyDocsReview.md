@@ -9,7 +9,6 @@ The following documents refer to obsolete systems (such as the legacy REST `api/
 | Document | Status | Judgment |
 |----------|--------|----------|
 | `docs/CodexCliWorkers.md` | Completely irrelevant | Delete |
-| `docs/DockerOutOfDocker.md` | Completely irrelevant | Delete |
 | `docs/GeminiCliWorkers.md` | Completely irrelevant | Delete |
 | `docs/SpecKitAutomation.md` | Completely irrelevant | Delete |
 | `docs/SpecKitAutomationInstructions.md` | Completely irrelevant | Delete |
@@ -27,6 +26,7 @@ The following documents contain valuable architectural concepts or workflows but
 | `docs/OrchestratorArchitecture.md` | Partially out-of-date | Update (Update orchestration references) |
 | `docs/OrchestratorTaskRuntime.md` | Partially out-of-date | Update (Update runtime execution references) |
 | `docs/SecretStore.md` | Partially out-of-date | Update (Refactor legacy queue payload to Temporal payload format) |
+| `docs/DockerOutOfDocker.md` | Partially out-of-date | Updated (Refactored execution model to match Temporal Managed Agents) |
 | `docs/SkillGithubPrResolver.md` | Partially out-of-date | Update (Refactor legacy payload structures to Temporal formats) |
 | `docs/WorkerGitAuth.md` | Partially out-of-date | Update (Update payload formats and worker capability mentions) |
 | `docs/WorkerPauseSystem.md` | Partially out-of-date | Update (Rewrite to use Temporal Activity pauses instead of REST API claim blocking) |
