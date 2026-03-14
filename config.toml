@@ -35,7 +35,7 @@ metrics_namespace = "automation"
 # Provide to emit StatsD metrics (optional)
 metrics_host = ""
 metrics_port = 8125
-# Attachment + vision defaults stay aligned with SpecWorkflowSettings
+# Attachment + vision defaults stay aligned with WorkflowSettings
 agent_job_attachment_enabled = true
 agent_job_attachment_max_count = 10
 agent_job_attachment_max_bytes = 10485760

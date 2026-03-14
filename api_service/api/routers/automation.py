@@ -16,27 +16,27 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config import settings
 from moonmind.schemas.workflow_models import (
-    SpecAutomationArtifactDetail,
-    SpecAutomationArtifactSummary,
-    SpecAutomationPhaseState,
-    SpecAutomationRunDetail,
+    AutomationArtifactDetail,
+    AutomationArtifactSummary,
+    AutomationPhaseState,
+    AutomationRunDetail,
 )
-from moonmind.workflows import get_spec_automation_repository
+from moonmind.workflows import get_automation_repository
 from moonmind.workflows.automation import models
-from moonmind.workflows.automation.repositories import SpecAutomationRepository
+from moonmind.workflows.automation.repositories import AutomationRepository
 
-router = APIRouter(prefix="/api/workflows", tags=["SpecAutomation"])
+router = APIRouter(prefix="/api/workflows", tags=["Automation"])
 
 
 async def _get_repository(
     session: AsyncSession = Depends(get_async_session),
-) -> SpecAutomationRepository:
+) -> AutomationRepository:
     """Dependency wiring the Spec Automation repository."""
 
-    return get_spec_automation_repository(session)
+    return get_automation_repository(session)
 
 
-def _phase_sort_key(state: models.SpecAutomationTaskState) -> tuple[datetime, str, int]:
+def _phase_sort_key(state: models.AutomationTaskState) -> tuple[datetime, str, int]:
     """Ordering helper prioritising chronological execution."""
 
     timestamp = state.created_at or state.started_at or state.completed_at
@@ -46,8 +46,8 @@ def _phase_sort_key(state: models.SpecAutomationTaskState) -> tuple[datetime, st
 
 
 def _serialize_phase_state(
-    state: models.SpecAutomationTaskState,
-) -> SpecAutomationPhaseState:
+    state: models.AutomationTaskState,
+) -> AutomationPhaseState:
     skill_meta = state.get_skill_execution_metadata() or {}
     selected_skill = skill_meta.get("selectedTool") or skill_meta.get("selectedSkill")
     used_skills = (
@@ -55,7 +55,7 @@ def _serialize_phase_state(
         if "usedTools" in skill_meta
         else skill_meta.get("usedSkills")
     )
-    return SpecAutomationPhaseState(
+    return AutomationPhaseState(
         phase=state.phase,
         status=state.status,
         attempt=state.attempt,
@@ -74,9 +74,9 @@ def _serialize_phase_state(
 
 
 def _serialize_artifact_summary(
-    artifact: models.SpecAutomationArtifact,
-) -> SpecAutomationArtifactSummary:
-    return SpecAutomationArtifactSummary(
+    artifact: models.AutomationArtifact,
+) -> AutomationArtifactSummary:
+    return AutomationArtifactSummary(
         artifact_id=artifact.id,
         name=artifact.name,
         artifact_type=artifact.artifact_type,
@@ -89,13 +89,13 @@ def _serialize_artifact_summary(
 
 
 def _artifact_download_hint(
-    request: Request, artifact: models.SpecAutomationArtifact
+    request: Request, artifact: models.AutomationArtifact
 ) -> str | None:
     """Return a download endpoint URL for the artifact."""
 
     return str(
         request.url_for(
-            "download_spec_automation_artifact",
+            "download_automation_artifact",
             run_id=str(artifact.run_id),
             artifact_id=str(artifact.id),
         )
@@ -103,22 +103,22 @@ def _artifact_download_hint(
 
 
 def _serialize_artifact_detail(
-    artifact: models.SpecAutomationArtifact,
+    artifact: models.AutomationArtifact,
     *,
     request: Request | None = None,
-) -> SpecAutomationArtifactDetail:
+) -> AutomationArtifactDetail:
     summary = _serialize_artifact_summary(artifact)
-    return SpecAutomationArtifactDetail(
+    return AutomationArtifactDetail(
         **summary.model_dump(),
         download_url=_artifact_download_hint(request, artifact) if request else None,
     )
 
 
 def _serialize_run_detail(
-    run: models.SpecAutomationRun,
-    task_states: Iterable[models.SpecAutomationTaskState],
-    artifacts: Iterable[models.SpecAutomationArtifact],
-) -> SpecAutomationRunDetail:
+    run: models.AutomationRun,
+    task_states: Iterable[models.AutomationTaskState],
+    artifacts: Iterable[models.AutomationArtifact],
+) -> AutomationRunDetail:
     phases = [
         _serialize_phase_state(state)
         for state in sorted(task_states, key=_phase_sort_key)
@@ -126,7 +126,7 @@ def _serialize_run_detail(
     artifact_summaries = [
         _serialize_artifact_summary(artifact) for artifact in artifacts
     ]
-    return SpecAutomationRunDetail(
+    return AutomationRunDetail(
         run_id=run.id,
         status=run.status,
         branch_name=run.branch_name,
@@ -173,7 +173,7 @@ def _resolve_allowed_repositories(user: User) -> set[str] | None:
     return None
 
 
-def _ensure_run_access(run: models.SpecAutomationRun, user: User) -> None:
+def _ensure_run_access(run: models.AutomationRun, user: User) -> None:
     """Guard against users accessing runs outside their allowed repositories."""
 
     allowed = _resolve_allowed_repositories(user)
@@ -213,12 +213,12 @@ def _resolve_artifact_file(storage_path: str) -> Path:
     return candidate
 
 
-@router.get("/runs/{run_id}", response_model=SpecAutomationRunDetail)
-async def get_spec_automation_run(
+@router.get("/runs/{run_id}", response_model=AutomationRunDetail)
+async def get_automation_run(
     run_id: UUID,
-    repo: SpecAutomationRepository = Depends(_get_repository),
+    repo: AutomationRepository = Depends(_get_repository),
     user: User = Depends(get_current_user()),
-) -> SpecAutomationRunDetail:
+) -> AutomationRunDetail:
     """Return run status, per-phase metadata, and artifact summaries."""
 
     run_detail = await repo.get_run_detail(run_id)
@@ -238,15 +238,15 @@ async def get_spec_automation_run(
 
 @router.get(
     "/runs/{run_id}/artifacts/{artifact_id}",
-    response_model=SpecAutomationArtifactDetail,
+    response_model=AutomationArtifactDetail,
 )
-async def get_spec_automation_artifact(
+async def get_automation_artifact(
     request: Request,
     run_id: UUID,
     artifact_id: UUID,
-    repo: SpecAutomationRepository = Depends(_get_repository),
+    repo: AutomationRepository = Depends(_get_repository),
     user: User = Depends(get_current_user()),
-) -> SpecAutomationArtifactDetail:
+) -> AutomationArtifactDetail:
     """Return detailed metadata for a specific automation artifact."""
 
     artifact = await repo.get_artifact(run_id=run_id, artifact_id=artifact_id)
@@ -279,10 +279,10 @@ async def get_spec_automation_artifact(
     "/runs/{run_id}/artifacts/{artifact_id}/download",
     response_class=FileResponse,
 )
-async def download_spec_automation_artifact(
+async def download_automation_artifact(
     run_id: UUID,
     artifact_id: UUID,
-    repo: SpecAutomationRepository = Depends(_get_repository),
+    repo: AutomationRepository = Depends(_get_repository),
     user: User = Depends(get_current_user()),
 ) -> FileResponse:
     """Return the artifact file as a streamed download."""

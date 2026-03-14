@@ -3,18 +3,18 @@
 ## Decision 1: Adapter resolution must be explicit and authoritative
 
 - **Decision**: Replace implicit compatibility behavior with explicit adapter mapping and unsupported-skill errors.
-- **Rationale**: Current behavior labels non-speckit execution as `skill` while silently using direct execution, which obscures runtime truth and weakens failure handling.
+- **Rationale**: Current behavior labels non-agentkit execution as `skill` while silently using direct execution, which obscures runtime truth and weakens failure handling.
 - **Alternatives considered**:
   - Keep silent fallback for unknown skills: rejected because it hides configuration errors.
   - Disable skills mode entirely for unknown skills: rejected because that still masks adapter registration problems.
 
-## Decision 2: Speckit executable checks should be skill-scoped, not global
+## Decision 2: Agentkit executable checks should be skill-scoped, not global
 
-- **Decision**: Run Speckit CLI verification only when the selected/effective skill set includes `speckit`.
-- **Rationale**: Non-speckit workflows should not fail startup or stage execution because Speckit is unavailable.
+- **Decision**: Run Agentkit CLI verification only when the selected/effective skill set includes `agentkit`.
+- **Rationale**: Non-agentkit workflows should not fail startup or stage execution because Agentkit is unavailable.
 - **Alternatives considered**:
-  - Keep global Speckit checks for safety: rejected because it blocks valid non-speckit workflows.
-  - Remove all Speckit checks: rejected because speckit-selected workflows still need guardrails.
+  - Keep global Agentkit checks for safety: rejected because it blocks valid non-agentkit workflows.
+  - Remove all Agentkit checks: rejected because agentkit-selected workflows still need guardrails.
 
 ## Decision 3: Introduce canonical workflow routes while keeping deprecated aliases
 

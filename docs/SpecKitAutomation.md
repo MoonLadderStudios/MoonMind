@@ -3,7 +3,7 @@ Spec Kit Automation — Architecture & Operations (Option A: Persistent Codex Au
 Status: Final
 Owners: MoonMind Eng
 Last Updated: Nov 5, 2025
-Related Artifacts: /specs/002-document-speckit-automation/*, Celery chain guidance in specs/001-celery-chain-workflow
+Related Artifacts: /specs/002-document-agentkit-automation/*, Celery chain guidance in specs/001-celery-chain-workflow
 
 ⸻
 
@@ -23,14 +23,14 @@ Key additions:
 
 1. Overview
 
-Spec Kit Automation runs the /speckit.specify, /speckit.plan, and /speckit.tasks prompts against a target repository and packages the results as a Pull Request. A Celery worker launches an ephemeral job container per run, ensuring the toolchain (git, gh, Codex CLI, prompts) executes in a predictable environment while repository metadata, artifacts, and metrics are recorded for operators.
+Spec Kit Automation runs the /agentkit.specify, /agentkit.plan, and /agentkit.tasks prompts against a target repository and packages the results as a Pull Request. A Celery worker launches an ephemeral job container per run, ensuring the toolchain (git, gh, Codex CLI, prompts) executes in a predictable environment while repository metadata, artifacts, and metrics are recorded for operators.
 
 New in Option A: A small set of stateful Codex auth volumes is injected into each job container so Codex can reuse interactive ChatGPT authentication without re-logging every run.
 
 Key responsibilities (unchanged in spirit):
-1. Accept automation requests via Celery (celery_worker/speckit_worker.py).
-2. Use moonmind/workflows/speckit_celery/tasks.py to orchestrate run phases.
-3. Manage Docker job containers with moonmind/workflows/speckit_celery/job_container.py, now with Codex auth mounts.
+1. Accept automation requests via Celery (celery_worker/agentkit_worker.py).
+2. Use moonmind/workflows/agentkit_celery/tasks.py to orchestrate run phases.
+3. Manage Docker job containers with moonmind/workflows/agentkit_celery/job_container.py, now with Codex auth mounts.
 4. Persist metadata with repositories.py and Alembic migrations.
 5. Surface results through FastAPI.
 
@@ -42,7 +42,7 @@ Key responsibilities (unchanged in spirit):
 - Containerized Celery process with Docker SDK.
 - Mounts:
   - /var/run/docker.sock to control job containers.
-  - Named volume speckit_workspaces → /work for shared workspaces.
+  - Named volume agentkit_workspaces → /work for shared workspaces.
 - New (Option A):
   - Three dedicated worker services (celery-codex-0/1/2) each set:
     - CODEX_QUEUE to one of codex-0|1|2
@@ -147,24 +147,24 @@ entries include a `message` that should match the Celery exception output.
 
 ### Health Checks for Bundled CLIs
 
-- Celery worker bootstrap should invoke `codex --version` and runtime-auth checks once when the process starts; `speckit --version` runs only when configured stage skills require the Speckit adapter.
+- Celery worker bootstrap should invoke `codex --version` and runtime-auth checks once when the process starts; `agentkit --version` runs only when configured stage skills require the Agentkit adapter.
 - Missing binaries or non-zero exit codes must mark the worker unhealthy before it accepts jobs.
-- Log messages should record the detected versions and point to rebuild instructions when versions drift from the pinned Docker build args (`CODEX_CLI_VERSION`, `SPEC_KIT_VERSION`).
+- Log messages should record the detected versions and point to rebuild instructions when versions drift from the pinned Docker build args (`CODEX_CLI_VERSION`, `AGENT_KIT_VERSION`).
 
 #### Quick Troubleshooting – CLI Install Summary
 
 | CLI | Where it is installed | Verification command(s) | When to rebuild |
 |-----|------------------------|-------------------------|-----------------|
 | Codex (`codex`) | `api_service/Dockerfile` Node builder stage via `npm install -g @openai/codex@${CODEX_CLI_VERSION}`; binary copied into `/usr/local/bin/` during runtime stage assembly. | `docker compose run --rm cli-tooling-smoke` or `codex --version` inside the worker container; check Celery bootstrap logs for `Codex CLI version:`. | Version mismatch with pinned `CODEX_CLI_VERSION`, missing binary during smoke check, or CLI upgrade announcement. |
-| Spec Kit (`speckit`) | Same builder stage using `npm install -g @githubnext/spec-kit@${SPEC_KIT_VERSION}`; runtime layer copies binary and Node modules. | `docker compose run --rm cli-tooling-smoke` or `speckit --version`; verify worker startup logs emit `Spec Kit CLI detected`. | PATH resolution fails in health check, CLI emits upgrade warning, or npm audit flags vulnerabilities. |
+| Spec Kit (`agentkit`) | Same builder stage using `npm install -g @githubnext/spec-kit@${AGENT_KIT_VERSION}`; runtime layer copies binary and Node modules. | `docker compose run --rm cli-tooling-smoke` or `agentkit --version`; verify worker startup logs emit `Spec Kit CLI detected`. | PATH resolution fails in health check, CLI emits upgrade warning, or npm audit flags vulnerabilities. |
 | Codex config merge script | `api_service/scripts/ensure_codex_config.py` invoked by runtime entrypoint to enforce `approval_policy = "never"`. | `docker run --rm moonmind/api-service:tooling bash -lc 'cat ~/.codex/config.toml'` (should show enforced policy); worker logs should not report config drift. | Policy deviates from "never", merge script errors during startup, or base image changes HOME layout. |
 
 #### Troubleshooting Spec Kit CLI Failures
 
-- **`speckit: command not found` during worker startup** – confirm the Docker build log includes both `codex --version` and `speckit --version`. If the latter is missing, rebuild the image without cache so the tooling builder stage re-runs `npm install -g @githubnext/spec-kit@${SPEC_KIT_VERSION}`.
-- **`Spec Kit CLI is unavailable` log from `moonmind.workflows.speckit_celery.tasks`** – the worker could not resolve the binary on PATH. Inspect `/usr/local/bin/` inside the container; if the file exists but is not executable, ensure the Dockerfile sets `chmod 0755 /usr/local/bin/speckit` and re-publish the image.
-- **`Spec Kit CLI health check failed` error** – indicates `speckit --version` returned a non-zero exit code when run as the non-root `app` user. Check the Celery worker logs for the detailed exception and verify the runtime layer copied `/usr/local/lib/node_modules/@githubnext/spec-kit` from the builder stage.
-- When in doubt, run `docker compose run --rm celery-worker bash -lc 'which speckit && speckit --help'` to manually confirm PATH resolution and execution under the worker user profile.
+- **`agentkit: command not found` during worker startup** – confirm the Docker build log includes both `codex --version` and `agentkit --version`. If the latter is missing, rebuild the image without cache so the tooling builder stage re-runs `npm install -g @githubnext/spec-kit@${AGENT_KIT_VERSION}`.
+- **`Spec Kit CLI is unavailable` log from `moonmind.workflows.agentkit_celery.tasks`** – the worker could not resolve the binary on PATH. Inspect `/usr/local/bin/` inside the container; if the file exists but is not executable, ensure the Dockerfile sets `chmod 0755 /usr/local/bin/agentkit` and re-publish the image.
+- **`Spec Kit CLI health check failed` error** – indicates `agentkit --version` returned a non-zero exit code when run as the non-root `app` user. Check the Celery worker logs for the detailed exception and verify the runtime layer copied `/usr/local/lib/node_modules/@githubnext/spec-kit` from the builder stage.
+- When in doubt, run `docker compose run --rm celery-worker bash -lc 'which agentkit && agentkit --help'` to manually confirm PATH resolution and execution under the worker user profile.
 
 ⸻
 
@@ -205,7 +205,7 @@ CODEX_AUTH_SERVICE=codex-worker \
    ```
 
    A `status: "passed"` response updates the run and marks the auth volume `ready`. If it returns `failed`, re-run `codex login --device-auth` for the reported `volumeName` before retrying the workflow.
-7. Cleanup – speckit_workspaces still prunes per TTL; Codex volumes persist and should not be removed unless you intend to re-authenticate.
+7. Cleanup – agentkit_workspaces still prunes per TTL; Codex volumes persist and should not be removed unless you intend to re-authenticate.
 
 ⸻
 
@@ -261,7 +261,7 @@ def _codex_shard(key: str) -> str:
 
 def route_task(name, args, kwargs, options, task=None, **kw):
     # Route all Codex-bound tasks to the sharded codex-* queues
-    if name.startswith("speckit.codex."):
+    if name.startswith("agentkit.codex."):
         # Pick a stable affinity key if available
         key = (kwargs.get("project_id")
                or kwargs.get("repo")
@@ -282,7 +282,7 @@ If you prefer explicit routing, you can set queue="codex-0|1|2" from the caller 
 
 12.2 Job container: mount ~/.codex from the worker’s volume
 
-Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
+Update moonmind/workflows/agentkit_celery/job_container.py (creation path only):
 
 ```diff
 @@
@@ -294,7 +294,7 @@ Update moonmind/workflows/speckit_celery/job_container.py (creation path only):
      def start(self, run_id: str, environment: dict) -> Container:
          home = f"/work/runs/{run_id}/home"
          mounts = [
-             Mount(target="/work", source="speckit_workspaces", type="volume"),
+             Mount(target="/work", source="agentkit_workspaces", type="volume"),
          ]
 +        # Option A: persistent Codex auth volume for this worker
 +        codex_volume = os.getenv("CODEX_VOLUME_NAME")
@@ -363,7 +363,7 @@ services:
   celery-codex-0:
     image: your/app:latest
     command: >
-      celery -A moonmind.workflows.speckit_celery.app worker
+      celery -A moonmind.workflows.agentkit_celery.app worker
       -n codex0@%h -Q codex-0 --concurrency=2
     environment:
       - CODEX_QUEUE=codex-0
@@ -371,13 +371,13 @@ services:
       - WORKFLOW_JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - speckit_workspaces:/work
+      - agentkit_workspaces:/work
     depends_on: [rabbitmq]
 
   celery-codex-1:
     image: your/app:latest
     command: >
-      celery -A moonmind.workflows.speckit_celery.app worker
+      celery -A moonmind.workflows.agentkit_celery.app worker
       -n codex1@%h -Q codex-1 --concurrency=2
     environment:
       - CODEX_QUEUE=codex-1
@@ -385,13 +385,13 @@ services:
       - WORKFLOW_JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - speckit_workspaces:/work
+      - agentkit_workspaces:/work
     depends_on: [rabbitmq]
 
   celery-codex-2:
     image: your/app:latest
     command: >
-      celery -A moonmind.workflows.speckit_celery.app worker
+      celery -A moonmind.workflows.agentkit_celery.app worker
       -n codex2@%h -Q codex-2 --concurrency=2
     environment:
       - CODEX_QUEUE=codex-2
@@ -399,11 +399,11 @@ services:
       - WORKFLOW_JOB_IMAGE=${WORKFLOW_JOB_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - speckit_workspaces:/work
+      - agentkit_workspaces:/work
     depends_on: [rabbitmq]
 
 volumes:
-  speckit_workspaces:
+  agentkit_workspaces:
   codex_auth_0:
   codex_auth_1:
   codex_auth_2:
@@ -418,8 +418,8 @@ The worker services themselves do not need the codex_auth_* volumes mounted; tho
 Keep your non-interactive Codex execution pattern and ensure prompts don’t require approvals:
 
 ```python
-# moonmind/workflows/speckit_celery/tasks.py
-@shared_task(name="speckit.codex.exec_plan", bind=True)
+# moonmind/workflows/agentkit_celery/tasks.py
+@shared_task(name="agentkit.codex.exec_plan", bind=True)
 def exec_plan(self, repo_path: str, plan_prompt: str):
     _assert_codex_logged_in()  # optional check from 12.2
     cmd = [

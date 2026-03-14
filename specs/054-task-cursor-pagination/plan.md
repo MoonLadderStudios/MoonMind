@@ -158,7 +158,7 @@ Research outcomes in `specs/043-task-cursor-pagination/research.md` establish:
 - Every `DOC-REQ-*` row must map to at least one FR, implementation surface, and validation strategy.
 - Cursor semantics across repository, service, router, and dashboard must remain consistent on ordering and token handling.
 - Pagination defaults/clamps must be server-enforced so old clients cannot request unbounded data.
-- Tasks generated in `/speckit.tasks` must include runtime code changes and test validation entries.
+- Tasks generated in `/agentkit.tasks` must include runtime code changes and test validation entries.
 
 ## Prompt B Remediation Application (Step 12/16)
 

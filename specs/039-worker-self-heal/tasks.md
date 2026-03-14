@@ -11,7 +11,7 @@
 
 **Purpose**: Align feature artifacts and runtime guardrails with current Phase 1 strategy before coding changes.
 
-- [X] T001 Align self-heal budget/default configuration wiring in `celery_worker/speckit_worker.py` and `moonmind/agents/codex_worker/self_heal.py` for DOC-REQ-002 and DOC-REQ-013.
+- [X] T001 Align self-heal budget/default configuration wiring in `celery_worker/agentkit_worker.py` and `moonmind/agents/codex_worker/self_heal.py` for DOC-REQ-002 and DOC-REQ-013.
 - [X] T002 [P] Refresh phase-aligned requirement mapping in `specs/034-worker-self-heal/spec.md` and `specs/034-worker-self-heal/contracts/requirements-traceability.md` with explicit DOC-REQ-005/DOC-REQ-006/DOC-REQ-009 deferred status.
 - [X] T003 [P] Update runtime verification steps in `specs/034-worker-self-heal/quickstart.md` to require `./tools/test_unit.sh` and scope validation gates for DOC-REQ-013.
 

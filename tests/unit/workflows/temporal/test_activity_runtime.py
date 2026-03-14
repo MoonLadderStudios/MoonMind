@@ -52,7 +52,7 @@ from moonmind.workflows.temporal.artifacts import (
     build_artifact_ref,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @asynccontextmanager

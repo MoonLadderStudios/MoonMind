@@ -1,6 +1,6 @@
 """Workspace helpers for Spec Kit automation runs.
 
-The Spec Kit automation pipeline allocates a shared volume (``speckit_workspaces``)
+The Spec Kit automation pipeline allocates a shared volume (``agentkit_workspaces``)
 that is mounted into both Celery workers and ephemeral job containers.  Each run
 receives an isolated directory tree rooted at ``/work/runs/<run_id>`` with
 dedicated ``repo`` (git checkout), ``home`` (Codex CLI / Spec Kit state), and
@@ -164,7 +164,7 @@ class SpecWorkspaceManager:
     ----------
     workspace_root:
         Root directory shared between the Celery worker and job containers.
-        Typically this is the mount point for the ``speckit_workspaces`` Docker
+        Typically this is the mount point for the ``agentkit_workspaces`` Docker
         volume (defaults to ``/work`` in local development).
     runs_dirname:
         Name of the subdirectory under ``workspace_root`` where run folders are
@@ -531,7 +531,7 @@ def sanitize_branch_component(component: str) -> str:
 def generate_branch_name(
     run_id: UUID | str,
     *,
-    prefix: str = "speckit",
+    prefix: str = "agentkit",
     timestamp: Optional[datetime] = None,
     suffix: Optional[str] = None,
 ) -> str:

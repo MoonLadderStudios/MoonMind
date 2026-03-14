@@ -3,7 +3,7 @@
 **Feature Branch**: `001-celery-oauth-volumes`  
 **Created**: 2025-11-05  
 **Status**: Draft  
-**Input**: User description: "Celery OAuth: Spec out implementing the celery OAuth and volume approach documented by docsSpecKitAutomation.md"
+**Input**: User description: "Celery OAuth: Spec out implementing the celery OAuth and volume approach documented by docsAgentKitAutomation.md"
 
 ## User Scenarios & Testing *(mandatory)*
 

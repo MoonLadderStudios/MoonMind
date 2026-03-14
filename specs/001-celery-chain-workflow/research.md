@@ -21,7 +21,7 @@
 - Alternatives considered: Moving to Redis or S3 for artifacts, but that increases operational load and is outside the current scope.
 
 ## Codex CLI / Codex Cloud Authentication
-- Decision: Enforce `codex login status` + `speckit --version` checks at worker startup and before submission tasks, using the persistent Codex auth volume mounted at `~/.codex` for every Codex phase.
+- Decision: Enforce `codex login status` + `agentkit --version` checks at worker startup and before submission tasks, using the persistent Codex auth volume mounted at `~/.codex` for every Codex phase.
 - Rationale: Aligns with AGENTS.md guidance and FR-010 credential validation so Codex submissions fail fast with actionable errors.
 - Alternatives considered: Lazy authentication inside each task, but that would reintroduce mid-run prompts and race conditions.
 
@@ -36,7 +36,7 @@
 - Alternatives considered: Adding a new service entrypoint or CLI command, but operators trigger runs via the MoonMind UI/API so FastAPI is the correct surface.
 
 ## API → Celery Integration Pattern
-- Decision: Use application-level helper in `moonmind/workflows/speckit_celery` to build the Celery signature (chain) and enqueue via the shared Celery app, capturing the returned async result ID in `WorkflowRun`.
+- Decision: Use application-level helper in `moonmind/workflows/agentkit_celery` to build the Celery signature (chain) and enqueue via the shared Celery app, capturing the returned async result ID in `WorkflowRun`.
 - Rationale: Centralizes queue names, serialization, and auditing to a single module and makes retries/resumes reuse the same orchestration helper.
 - Alternatives considered: Directly instantiating Celery tasks per API call, but that would duplicate routing logic and hinder retries.
 
@@ -52,13 +52,13 @@
 
 ## 015 Umbrella Alignment: Skills-First Stage Routing
 - Decision: Add a skills policy layer (`moonmind/workflows/skills`) that resolves the selected stage skill, canary gating, and fallback behavior before invoking direct stage executors.
-- Rationale: Supports skills-first orchestration while preserving existing Speckit behavior and route compatibility.
+- Rationale: Supports skills-first orchestration while preserving existing Agentkit behavior and route compatibility.
 - Alternatives considered: Replacing direct stage code immediately with a brand-new executor model, but that would increase migration risk and break parity with existing runs.
 
-## 015 Umbrella Alignment: Speckit Always Available
-- Decision: Run `speckit --version` startup checks in both Codex and Gemini worker entrypoints, in addition to existing Codex/Gemini readiness checks.
-- Rationale: Enforces "workers always have Speckit" as an invariant independent of selected stage skill.
-- Alternatives considered: Checking Speckit only in Spec Kit task execution paths, but that would delay failures and create non-deterministic startup behavior.
+## 015 Umbrella Alignment: Agentkit Always Available
+- Decision: Run `agentkit --version` startup checks in both Codex and Gemini worker entrypoints, in addition to existing Codex/Gemini readiness checks.
+- Rationale: Enforces "workers always have Agentkit" as an invariant independent of selected stage skill.
+- Alternatives considered: Checking Agentkit only in Spec Kit task execution paths, but that would delay failures and create non-deterministic startup behavior.
 
 ## 015 Umbrella Alignment: Fastest Path Runtime Profile
 - Decision: Document and test a compose-first startup path that uses one-time Codex auth volume login and Google Gemini embedding defaults (`DEFAULT_EMBEDDING_PROVIDER=google`, `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`).

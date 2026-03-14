@@ -10,12 +10,12 @@
 
 | Requirement ID | Source Citation | Requirement Summary |
 | --- | --- | --- |
-| DOC-REQ-001 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 1 | Canonical naming updates replace legacy `SPEC_WORKFLOW_*` with `WORKFLOW_*`. |
-| DOC-REQ-002 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 2 | Settings and path naming `spec_workflow` must move to `workflow`. |
+| DOC-REQ-001 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 1 | Canonical naming updates replace legacy `WORKFLOW_*` with `WORKFLOW_*`. |
+| DOC-REQ-002 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 2 | Settings and path naming `workflow` must move to `workflow`. |
 | DOC-REQ-003 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 3 | API route canonicalization uses `/api/workflows/*` in place of legacy workflow route families. |
-| DOC-REQ-004 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 4 | Contract/data model identifiers normalize `SpecWorkflow*` to `Workflow*`. |
-| DOC-REQ-005 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 5 | Metric namespaces normalize `moonmind.spec_workflow*` to `moonmind.workflow*`; legacy automation metric prefixes are removed. |
-| DOC-REQ-006 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 6 | Artifact directories under `var/artifacts/spec_workflows` are renamed to canonical workflow artifact roots. |
+| DOC-REQ-004 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 4 | Contract/data model identifiers normalize `Workflow*` to `Workflow*`. |
+| DOC-REQ-005 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 5 | Metric namespaces normalize `moonmind.workflow*` to `moonmind.workflow*`; legacy automation metric prefixes are removed. |
+| DOC-REQ-006 | `docs/SpecRemovalPlan.md` - "Canonical naming target", item 6 | Artifact directories under `var/artifacts/workflows` are renamed to canonical workflow artifact roots. |
 | DOC-REQ-007 | `docs/SpecRemovalPlan.md` - "Hard Rules for this migration pass", items 1-3 | Canonical terminology applies consistently with no new aliasing language outside dedicated historical traceability sections. |
 | DOC-REQ-008 | `docs/SpecRemovalPlan.md` - "Workstreams and sequencing", "Verification pass" | A verification pass must confirm legacy token removal except for explicitly documented migration exceptions. |
 | DOC-REQ-009 | `docs/SpecRemovalPlan.md` - "Scope", item 3 | The source plan frames a docs/spec-only migration pass and excludes runtime code changes in that plan slice. |
@@ -74,7 +74,7 @@ As an operator, I want runtime assets and configuration to adopt canonical workf
 
 **Acceptance Scenarios**:
 
-1. **Given** a runtime surface with `SPEC_WORKFLOW_*` or `spec_workflow` naming, **When** the migration is executed, **Then** equivalent `WORKFLOW_*`/`workflow` names are present.
+1. **Given** a runtime surface with `WORKFLOW_*` or `workflow` naming, **When** the migration is executed, **Then** equivalent `WORKFLOW_*`/`workflow` names are present.
 2. **Given** migrated workflow endpoints and metrics, **When** existing tests and sanity checks run, **Then** naming changes remain behaviorally equivalent.
 ---
 
@@ -137,7 +137,7 @@ As a reviewer, I want an auditable verification step, so no unintentional legacy
 ### Measurable Outcomes
 
 - **SC-001**: 100% of targeted legacy tokens in listed files are replaced with canonical forms except those explicitly listed in a migration appendix.
-- **SC-002**: Legacy naming checks report zero unintentional matches for `SPEC_WORKFLOW_*`, `/api/spec-automation/*`, `/api/workflows/speckit/*`, `SpecWorkflow*`, `spec_workflow.*`, and `moonmind.spec_workflow*` across migrated surface.
+- **SC-002**: Legacy naming checks report zero unintentional matches for `WORKFLOW_*`, `/api/spec-automation/*`, `/api/workflows/agentkit/*`, `Workflow*`, `workflow.*`, and `moonmind.workflow*` across migrated surface.
 - **SC-003**: Production runtime code changes for canonical naming are present in the implementation diff and cover environment/config, API, metrics, and artifact surfaces described by this spec.
 - **SC-004**: A migration verification report is attached to the plan/spec runbook with a documented list of any follow-up naming items outside this pass.
 - **SC-005**: Manual reviewer sign-off confirms no aliasing language remains in active operational guidance except the historical section.

@@ -14,7 +14,7 @@ from moonmind.agents.codex_worker.secret_refs import (
     parse_vault_reference,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 async def test_parse_vault_reference_accepts_valid_ref() -> None:

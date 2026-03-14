@@ -12,7 +12,7 @@ Represents the shared `api_service` container image that packages Codex CLI, Git
 | `codex_cli_version` | string | Semver string injected via `CODEX_CLI_VERSION` build arg | Cannot be empty; must match `npm view @openai/codex versions` |
 | `spec_kit_version` | string | Semver string for `@githubnext/spec-kit` CLI | Same validation as above |
 | `codex_config_template_path` | path | Location of the baked template (e.g., `/etc/codex/config.toml`) | File must exist in final layer and be readable by worker UID |
-| `install_logs` | text array | Captured logs/hashes proving CLI install + checksum | Must include at least `codex --version` and `speckit --version` outputs |
+| `install_logs` | text array | Captured logs/hashes proving CLI install + checksum | Must include at least `codex --version` and `agentkit --version` outputs |
 
 ### CodexConfigProfile
 Represents the effective `~/.codex/config.toml` managed for the Celery worker user.
@@ -33,7 +33,7 @@ Captures the verification state that workers log/emit after validating the packa
 |-------|------|-------------|------------|
 | `worker_name` | string | Celery worker identifier (e.g., `codex-0`) | Non-empty; matches Celery config |
 | `codex_cli_status` | enum | `passed`, `failed`, or `skipped` result of `codex --version && codex login status` | Must be `passed` before worker accepts jobs |
-| `spec_kit_status` | enum | Result of `speckit --help` smoke test | Same as above |
+| `spec_kit_status` | enum | Result of `agentkit --help` smoke test | Same as above |
 | `config_hash` | string | Hash of the resolved `~/.codex/config.toml` to detect drift | Recomputed whenever config changes |
 | `last_checked_at` | timestamp | When the health check last ran | Cannot be null; used to enforce freshness |
 | `failure_message` | string | Detailed log when either CLI/config check fails | Required when statuses are `failed` |

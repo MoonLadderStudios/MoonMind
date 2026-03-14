@@ -403,7 +403,7 @@ class AgentQueueService:
 
         default_model, default_effort = resolve_runtime_defaults(
             runtime_mode,
-            spec_workflow_settings=settings.workflow,
+            workflow_settings=settings.workflow,
         )
         if self._clean_optional_str(runtime.get("model")) is None and default_model:
             runtime["model"] = default_model

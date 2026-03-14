@@ -116,7 +116,7 @@ Expected result: runtime scope gates pass only when production runtime changes a
 
 ## 10. Planning artifact completion gate
 
-Before `/speckit.tasks`, ensure these artifacts exist:
+Before `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/048-temporal-dashboard-integration/plan.md`
 - `specs/048-temporal-dashboard-integration/research.md`

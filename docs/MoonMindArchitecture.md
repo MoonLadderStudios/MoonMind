@@ -103,7 +103,7 @@ MoonMind explicitly separates **persistent volume/bootstrap concerns** (permissi
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pytest`             | Runs unit tests inside the project image with test dependencies enabled. ([GitHub][6])                                                         |
 | `orchestrator-tests` | Runs integration tests focused on orchestrator workflows. ([GitHub][6])                                                                        |
-| `cli-tooling-smoke`  | Verifies CLI tooling is present (`codex --version`, `speckit --version`), which is important because workers rely on these CLIs. ([GitHub][6]) |
+| `cli-tooling-smoke`  | Verifies CLI tooling is present (`codex --version`, `agentkit --version`), which is important because workers rely on these CLIs. ([GitHub][6]) |
 
 ---
 

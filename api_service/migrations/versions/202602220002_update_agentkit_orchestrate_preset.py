@@ -1,4 +1,4 @@
-"""Align speckit-orchestrate preset capabilities with runtime-agnostic execution."""
+"""Align agentkit-orchestrate preset capabilities with runtime-agnostic execution."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _seed_file_path() -> Path:
         Path(__file__).resolve().parents[2]
         / "data"
         / "task_step_templates"
-        / "speckit-orchestrate.yaml"
+        / "agentkit-orchestrate.yaml"
     )
 
 

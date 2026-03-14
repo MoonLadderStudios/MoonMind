@@ -16,7 +16,7 @@ class SkillAdapterError(RuntimeError):
     """Raised when a skill adapter cannot execute its stage contract."""
 
 
-def run_speckit_stage(*, execute_direct: Callable[[], T]) -> T:
+def run_agentkit_stage(*, execute_direct: Callable[[], T]) -> T:
     """Execute the stage via existing direct implementation."""
 
     return execute_direct()

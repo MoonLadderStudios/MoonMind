@@ -14,7 +14,7 @@ from moonmind.workflows.agent_queue.manifest_contract import (
     sanitize_manifest_payload,
 )
 
-pytestmark = [pytest.mark.speckit]
+pytestmark = [pytest.mark.agentkit]
 
 
 def _tests_root() -> Path:

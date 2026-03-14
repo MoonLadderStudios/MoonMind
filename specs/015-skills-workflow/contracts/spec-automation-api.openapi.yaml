@@ -11,7 +11,7 @@ paths:
   /api/spec-automation/runs/{run_id}:
     get:
       summary: Get Spec Automation run detail
-      operationId: getSpecAutomationRun
+      operationId: getAutomationRun
       parameters:
         - in: path
           name: run_id
@@ -25,12 +25,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SpecAutomationRunDetail"
+                $ref: "#/components/schemas/AutomationRunDetail"
         "404":
           description: Run not found
 components:
   schemas:
-    SpecAutomationRunDetail:
+    AutomationRunDetail:
       type: object
       required:
         - run_id
@@ -63,12 +63,12 @@ components:
         phases:
           type: array
           items:
-            $ref: "#/components/schemas/SpecAutomationPhaseState"
+            $ref: "#/components/schemas/AutomationPhaseState"
         artifacts:
           type: array
           items:
-            $ref: "#/components/schemas/SpecAutomationArtifactSummary"
-    SpecAutomationPhaseState:
+            $ref: "#/components/schemas/AutomationArtifactSummary"
+    AutomationPhaseState:
       type: object
       required:
         - phase
@@ -119,7 +119,7 @@ components:
         shadow_mode_requested:
           type: boolean
           nullable: true
-    SpecAutomationArtifactSummary:
+    AutomationArtifactSummary:
       type: object
       required:
         - artifact_id

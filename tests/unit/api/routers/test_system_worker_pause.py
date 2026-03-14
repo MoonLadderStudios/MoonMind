@@ -26,7 +26,7 @@ from moonmind.workflows.agent_queue.service import (
     WorkerPauseSnapshot,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 def _build_snapshot(paused: bool = False) -> WorkerPauseSnapshot:

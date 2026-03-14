@@ -8,14 +8,14 @@ from typing import Any
 import yaml
 
 
-def _load_speckit_orchestrate_seed() -> dict[str, Any]:
+def _load_agentkit_orchestrate_seed() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[3]
     seed_path = (
         repo_root
         / "api_service"
         / "data"
         / "task_step_templates"
-        / "speckit-orchestrate.yaml"
+        / "agentkit-orchestrate.yaml"
     )
     document = yaml.safe_load(seed_path.read_text(encoding="utf-8")) or {}
     assert isinstance(document, dict)
@@ -23,14 +23,14 @@ def _load_speckit_orchestrate_seed() -> dict[str, Any]:
 
 
 def test_seed_required_capabilities_are_runtime_neutral() -> None:
-    document = _load_speckit_orchestrate_seed()
+    document = _load_agentkit_orchestrate_seed()
     assert document["requiredCapabilities"] == ["git"]
 
 
 def test_seed_shape_fields_required_for_alignment_migration() -> None:
-    document = _load_speckit_orchestrate_seed()
+    document = _load_agentkit_orchestrate_seed()
 
-    assert document.get("slug") == "speckit-orchestrate"
+    assert document.get("slug") == "agentkit-orchestrate"
     assert document.get("scope") == "global"
     assert document.get("version") == "1.0.0"
 
@@ -47,7 +47,7 @@ def test_seed_shape_fields_required_for_alignment_migration() -> None:
 
 
 def test_seed_final_step_defers_publish_actions_to_wrapper_stage() -> None:
-    document = _load_speckit_orchestrate_seed()
+    document = _load_agentkit_orchestrate_seed()
     steps = document.get("steps") or []
     assert isinstance(steps, list) and steps
 
@@ -65,7 +65,7 @@ def test_seed_final_step_defers_publish_actions_to_wrapper_stage() -> None:
 
 
 def test_seed_final_step_does_not_require_github_capability() -> None:
-    document = _load_speckit_orchestrate_seed()
+    document = _load_agentkit_orchestrate_seed()
     steps = document.get("steps") or []
     final_step = steps[-1]
     skill = final_step.get("skill") or {}

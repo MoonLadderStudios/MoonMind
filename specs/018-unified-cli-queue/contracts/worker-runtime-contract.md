@@ -19,7 +19,7 @@ Define startup behavior for runtime mode selection, CLI health checks, and queue
    - `codex --version`
    - `gemini --version`
    - `claude --version`
-   - `speckit --version`
+   - `agentkit --version`
 3. Worker binds to `MOONMIND_QUEUE`/effective queue.
 4. Worker exits before polling if runtime mode or CLI checks fail.
 

@@ -1,6 +1,6 @@
 """SQLAlchemy models for Spec Automation workflow persistence.
 
-This module was formerly part of moonmind.workflows.speckit_celery.models
+This module was formerly part of moonmind.workflows.agentkit_celery.models
 and has been moved here as part of the Celery removal.
 """
 
@@ -34,11 +34,11 @@ from api_service.db.models import (
     CodexCredentialStatus,
     CodexPreflightStatus,
     GitHubCredentialStatus,
-    SpecWorkflowRun,
-    SpecWorkflowRunPhase,
-    SpecWorkflowRunStatus,
-    SpecWorkflowTaskState,
-    SpecWorkflowTaskStatus,
+    WorkflowRun,
+    WorkflowRunPhase,
+    WorkflowRunStatus,
+    WorkflowTaskState,
+    WorkflowTaskStatus,
     WorkflowArtifact,
     WorkflowArtifactType,
     WorkflowCredentialAudit,
@@ -128,10 +128,10 @@ class CodexAuthVolume(Base):
     shard: Mapped[Optional["CodexWorkerShard"]] = relationship(
         "CodexWorkerShard", back_populates="volume", uselist=False
     )
-    runs: Mapped[list[SpecWorkflowRun]] = relationship(
-        SpecWorkflowRun,
+    runs: Mapped[list[WorkflowRun]] = relationship(
+        WorkflowRun,
         back_populates="codex_auth_volume",
-        primaryjoin="CodexAuthVolume.name == SpecWorkflowRun.codex_volume",
+        primaryjoin="CodexAuthVolume.name == WorkflowRun.codex_volume",
     )
 
 
@@ -177,14 +177,14 @@ class CodexWorkerShard(Base):
     volume: Mapped[CodexAuthVolume] = relationship(
         CodexAuthVolume, back_populates="shard", foreign_keys=[volume_name]
     )
-    runs: Mapped[list[SpecWorkflowRun]] = relationship(
-        SpecWorkflowRun,
+    runs: Mapped[list[WorkflowRun]] = relationship(
+        WorkflowRun,
         back_populates="codex_shard",
-        primaryjoin="CodexWorkerShard.queue_name == SpecWorkflowRun.codex_queue",
+        primaryjoin="CodexWorkerShard.queue_name == WorkflowRun.codex_queue",
     )
 
 
-class SpecAutomationRunStatus(str, enum.Enum):
+class AutomationRunStatus(str, enum.Enum):
     """Lifecycle states for Spec Automation runs."""
 
     QUEUED = "queued"
@@ -194,17 +194,17 @@ class SpecAutomationRunStatus(str, enum.Enum):
     NO_CHANGES = "no_changes"
 
 
-class SpecAutomationPhase(str, enum.Enum):
+class AutomationPhase(str, enum.Enum):
     """Phases executed during the Spec Automation pipeline."""
 
     PREPARE_JOB = "prepare_job"
     START_JOB_CONTAINER = "start_job_container"
     GIT_CLONE = "git_clone"
-    SPECIFY = "speckit_specify"
-    PLAN = "speckit_plan"
-    TASKS = "speckit_tasks"
-    ANALYZE = "speckit_analyze"
-    IMPLEMENT = "speckit_implement"
+    SPECIFY = "agentkit_specify"
+    PLAN = "agentkit_plan"
+    TASKS = "agentkit_tasks"
+    ANALYZE = "agentkit_analyze"
+    IMPLEMENT = "agentkit_implement"
     # Backward-compatible aliases for persisted values and legacy clients.
     SPECKIT_SPECIFY = SPECIFY
     SPECKIT_PLAN = PLAN
@@ -216,7 +216,7 @@ class SpecAutomationPhase(str, enum.Enum):
     CLEANUP = "cleanup"
 
 
-class SpecAutomationTaskStatus(str, enum.Enum):
+class AutomationTaskStatus(str, enum.Enum):
     """Per-phase task status values for Spec Automation."""
 
     PENDING = "pending"
@@ -227,7 +227,7 @@ class SpecAutomationTaskStatus(str, enum.Enum):
     RETRYING = "retrying"
 
 
-class SpecAutomationArtifactType(str, enum.Enum):
+class AutomationArtifactType(str, enum.Enum):
     """Artifact classifications produced by Spec Automation."""
 
     STDOUT_LOG = "stdout_log"
@@ -238,15 +238,15 @@ class SpecAutomationArtifactType(str, enum.Enum):
     ENVIRONMENT_INFO = "environment_info"
 
 
-class SpecAutomationRun(Base):
+class AutomationRun(Base):
     """Represents a Spec Kit automation execution."""
 
-    __tablename__ = "spec_automation_runs"
+    __tablename__ = "automation_runs"
     __table_args__ = (
-        Index("ix_spec_automation_runs_status", "status"),
-        Index("ix_spec_automation_runs_repository", "repository"),
-        Index("ix_spec_automation_runs_created_at", "created_at"),
-        Index("ix_spec_automation_runs_external_ref", "external_ref"),
+        Index("ix_automation_runs_status", "status"),
+        Index("ix_automation_runs_repository", "repository"),
+        Index("ix_automation_runs_created_at", "created_at"),
+        Index("ix_automation_runs_external_ref", "external_ref"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -257,16 +257,16 @@ class SpecAutomationRun(Base):
     )
     branch_name: Mapped[Optional[str]] = mapped_column(String(255))
     pull_request_url: Mapped[Optional[str]] = mapped_column(String(512))
-    status: Mapped[SpecAutomationRunStatus] = mapped_column(
+    status: Mapped[AutomationRunStatus] = mapped_column(
         Enum(
-            SpecAutomationRunStatus,
+            AutomationRunStatus,
             name="specautomationrunstatus",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=SpecAutomationRunStatus.QUEUED,
+        default=AutomationRunStatus.QUEUED,
     )
     result_summary: Mapped[Optional[str]] = mapped_column(Text)
     requested_spec_input: Mapped[str] = mapped_column(Text, nullable=False)
@@ -286,21 +286,21 @@ class SpecAutomationRun(Base):
         server_onupdate=text("CURRENT_TIMESTAMP"),
     )
 
-    task_states: Mapped[list["SpecAutomationTaskState"]] = relationship(
-        "SpecAutomationTaskState",
+    task_states: Mapped[list["AutomationTaskState"]] = relationship(
+        "AutomationTaskState",
         back_populates="run",
         cascade="all, delete-orphan",
-        order_by="SpecAutomationTaskState.created_at",
+        order_by="AutomationTaskState.created_at",
     )
-    artifacts: Mapped[list["SpecAutomationArtifact"]] = relationship(
-        "SpecAutomationArtifact",
+    artifacts: Mapped[list["AutomationArtifact"]] = relationship(
+        "AutomationArtifact",
         back_populates="run",
         cascade="all, delete-orphan",
-        order_by="SpecAutomationArtifact.created_at",
+        order_by="AutomationArtifact.created_at",
     )
-    agent_configuration: Mapped[Optional["SpecAutomationAgentConfiguration"]] = (
+    agent_configuration: Mapped[Optional["AutomationAgentConfiguration"]] = (
         relationship(
-            "SpecAutomationAgentConfiguration",
+            "AutomationAgentConfiguration",
             back_populates="run",
             cascade="all, delete-orphan",
             single_parent=True,
@@ -309,27 +309,27 @@ class SpecAutomationRun(Base):
     )
 
 
-class SpecAutomationTaskState(Base):
+class AutomationTaskState(Base):
     """State captured for each automation phase attempt."""
 
-    __tablename__ = "spec_automation_task_states"
+    __tablename__ = "automation_task_states"
     __table_args__ = (
         UniqueConstraint(
             "run_id",
             "phase",
             "attempt",
-            name="uq_spec_automation_task_state_attempt",
+            name="uq_automation_task_state_attempt",
         ),
-        Index("ix_spec_automation_task_states_run_id", "run_id"),
+        Index("ix_automation_task_states_run_id", "run_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_automation_runs.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("automation_runs.id", ondelete="CASCADE"), nullable=False
     )
-    phase: Mapped[SpecAutomationPhase] = mapped_column(
+    phase: Mapped[AutomationPhase] = mapped_column(
         Enum(
-            SpecAutomationPhase,
+            AutomationPhase,
             name="specautomationphase",
             native_enum=True,
             validate_strings=True,
@@ -337,9 +337,9 @@ class SpecAutomationTaskState(Base):
         ),
         nullable=False,
     )
-    status: Mapped[SpecAutomationTaskStatus] = mapped_column(
+    status: Mapped[AutomationTaskStatus] = mapped_column(
         Enum(
-            SpecAutomationTaskStatus,
+            AutomationTaskStatus,
             name="specautomationtaskstatus",
             native_enum=True,
             validate_strings=True,
@@ -367,11 +367,11 @@ class SpecAutomationTaskState(Base):
         server_onupdate=text("CURRENT_TIMESTAMP"),
     )
 
-    run: Mapped[SpecAutomationRun] = relationship(
-        "SpecAutomationRun", back_populates="task_states"
+    run: Mapped[AutomationRun] = relationship(
+        "AutomationRun", back_populates="task_states"
     )
-    artifacts: Mapped[list["SpecAutomationArtifact"]] = relationship(
-        "SpecAutomationArtifact",
+    artifacts: Mapped[list["AutomationArtifact"]] = relationship(
+        "AutomationArtifact",
         back_populates="task_state",
     )
 
@@ -410,11 +410,11 @@ class SpecAutomationTaskState(Base):
         used_fallback = metadata.get("usedFallback")
         shadow_mode_requested = metadata.get("shadowModeRequested")
 
-        if selected_skill is None and self.phase.value.startswith("speckit_"):
-            selected_skill = "speckit"
-        if adapter_id is None and selected_skill == "speckit":
-            adapter_id = "speckit"
-        if execution_path is None and selected_skill == "speckit":
+        if selected_skill is None and self.phase.value.startswith("agentkit_"):
+            selected_skill = "agentkit"
+        if adapter_id is None and selected_skill == "agentkit":
+            adapter_id = "agentkit"
+        if execution_path is None and selected_skill == "agentkit":
             execution_path = "skill"
 
         def _coerce_bool(value: Any) -> Optional[bool]:
@@ -451,32 +451,32 @@ class SpecAutomationTaskState(Base):
         }
 
 
-class SpecAutomationArtifact(Base):
+class AutomationArtifact(Base):
     """Artifacts emitted during automation (logs, diffs, metrics snapshots)."""
 
-    __tablename__ = "spec_automation_artifacts"
+    __tablename__ = "automation_artifacts"
     __table_args__ = (
         UniqueConstraint(
             "run_id",
             "artifact_type",
             "storage_path",
-            name="uq_spec_automation_artifact_path",
+            name="uq_automation_artifact_path",
         ),
-        Index("ix_spec_automation_artifacts_run_id", "run_id"),
+        Index("ix_automation_artifacts_run_id", "run_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_automation_runs.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("automation_runs.id", ondelete="CASCADE"), nullable=False
     )
     task_state_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
-        ForeignKey("spec_automation_task_states.id", ondelete="SET NULL"),
+        ForeignKey("automation_task_states.id", ondelete="SET NULL"),
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    artifact_type: Mapped[SpecAutomationArtifactType] = mapped_column(
+    artifact_type: Mapped[AutomationArtifactType] = mapped_column(
         Enum(
-            SpecAutomationArtifactType,
+            AutomationArtifactType,
             name="specautomationartifacttype",
             native_enum=True,
             validate_strings=True,
@@ -490,9 +490,9 @@ class SpecAutomationArtifact(Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    source_phase: Mapped[Optional[SpecAutomationPhase]] = mapped_column(
+    source_phase: Mapped[Optional[AutomationPhase]] = mapped_column(
         Enum(
-            SpecAutomationPhase,
+            AutomationPhase,
             name="specautomationphase",
             native_enum=True,
             validate_strings=True,
@@ -505,25 +505,25 @@ class SpecAutomationArtifact(Base):
         server_default=text("CURRENT_TIMESTAMP"),
     )
 
-    run: Mapped[SpecAutomationRun] = relationship(
-        "SpecAutomationRun", back_populates="artifacts"
+    run: Mapped[AutomationRun] = relationship(
+        "AutomationRun", back_populates="artifacts"
     )
-    task_state: Mapped[Optional[SpecAutomationTaskState]] = relationship(
-        "SpecAutomationTaskState", back_populates="artifacts"
+    task_state: Mapped[Optional[AutomationTaskState]] = relationship(
+        "AutomationTaskState", back_populates="artifacts"
     )
 
 
-class SpecAutomationAgentConfiguration(Base):
+class AutomationAgentConfiguration(Base):
     """Snapshot of the agent configuration used for a run."""
 
-    __tablename__ = "spec_automation_agent_configs"
+    __tablename__ = "automation_agent_configs"
     __table_args__ = (
-        UniqueConstraint("run_id", name="uq_spec_automation_agent_config_run"),
+        UniqueConstraint("run_id", name="uq_automation_agent_config_run"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("spec_automation_runs.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("automation_runs.id", ondelete="CASCADE"), nullable=False
     )
     agent_backend: Mapped[str] = mapped_column(String(128), nullable=False)
     agent_version: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -535,17 +535,17 @@ class SpecAutomationAgentConfiguration(Base):
         server_default=text("CURRENT_TIMESTAMP"),
     )
 
-    run: Mapped[SpecAutomationRun] = relationship(
-        "SpecAutomationRun", back_populates="agent_configuration"
+    run: Mapped[AutomationRun] = relationship(
+        "AutomationRun", back_populates="agent_configuration"
     )
 
 
 __all__ = [
-    "SpecWorkflowRun",
-    "SpecWorkflowRunStatus",
-    "SpecWorkflowRunPhase",
-    "SpecWorkflowTaskState",
-    "SpecWorkflowTaskStatus",
+    "WorkflowRun",
+    "WorkflowRunStatus",
+    "WorkflowRunPhase",
+    "WorkflowTaskState",
+    "WorkflowTaskStatus",
     "WorkflowCredentialAudit",
     "CodexCredentialStatus",
     "CodexPreflightStatus",
@@ -557,12 +557,12 @@ __all__ = [
     "CodexAuthVolumeStatus",
     "CodexWorkerShard",
     "CodexWorkerShardStatus",
-    "SpecAutomationRun",
-    "SpecAutomationRunStatus",
-    "SpecAutomationPhase",
-    "SpecAutomationTaskState",
-    "SpecAutomationTaskStatus",
-    "SpecAutomationArtifact",
-    "SpecAutomationArtifactType",
-    "SpecAutomationAgentConfiguration",
+    "AutomationRun",
+    "AutomationRunStatus",
+    "AutomationPhase",
+    "AutomationTaskState",
+    "AutomationTaskStatus",
+    "AutomationArtifact",
+    "AutomationArtifactType",
+    "AutomationAgentConfiguration",
 ]

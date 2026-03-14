@@ -79,7 +79,7 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app:/app/moonmind
-    command: ["bash", "-lc", "codex --version && speckit --version"]
+    command: ["bash", "-lc", "codex --version && agentkit --version"]
     networks:
       - local-network
 

@@ -3,7 +3,7 @@
 **Branch**: `026-tailwind-dark-mode` | **Date**: 2026-02-19 | **Spec**: [`spec.md`](./spec.md)
 **Input**: Feature specification from `/specs/026-tailwind-dark-mode/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
+**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
 
@@ -43,7 +43,7 @@ specs/026-tailwind-dark-mode/
 ├── contracts/
 │   ├── theme-runtime-contract.md
 │   └── requirements-traceability.md
-└── tasks.md                          # Generated later by /speckit.tasks
+└── tasks.md                          # Generated later by /agentkit.tasks
 ```
 
 ### Source Code (repository root)

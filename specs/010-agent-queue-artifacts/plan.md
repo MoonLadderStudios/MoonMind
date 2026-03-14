@@ -73,7 +73,7 @@ tests/
 
 ## Phase 0: Research Plan
 
-1. Review existing `ArtifactStorage` traversal protection pattern in `moonmind/workflows/speckit_celery/storage.py` and adapt for job-scoped queue artifacts.
+1. Review existing `ArtifactStorage` traversal protection pattern in `moonmind/workflows/agentkit_celery/storage.py` and adapt for job-scoped queue artifacts.
 2. Define artifact metadata schema and relationship to `agent_jobs`.
 3. Define upload size enforcement strategy and where to validate before persistence.
 4. Define API behavior for artifact ownership (`jobId` + `artifactId` pairing) and download response headers.

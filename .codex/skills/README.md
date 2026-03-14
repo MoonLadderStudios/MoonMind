@@ -1,4 +1,4 @@
-# speckit-agent-skills
+# agentkit-agent-skills
 
 Agent skills for [Spec Kit](https://github.com/github/spec-kit)
 
@@ -11,7 +11,7 @@ This repository provides reusable skills and templates for multiple agent runtim
 - **Codex CLI** - Prompt files in `.codex/prompts/` (skills via the symlinked `.codex/skills`)
 - **GitHub Copilot CLI** - Agent files in `.github/agents/`, prompt files in `.github/prompts/`, skills via `.github/skills`
 - **Gemini CLI** - Command files in `.gemini/commands/`
-- **Spec Kit** - Spec-Driven Development workflow skills (`speckit-*`) across all runtimes
+- **Spec Kit** - Spec-Driven Development workflow skills (`agentkit-*`) across all runtimes
 - **DnD Docs** - DnD system documentation workflows (`dnd-review`, `dnd-design`)
 - **Host Runtime Docs** - Host runtime system documentation workflows (`runtime-design`, `runtime-design-all`)
 
@@ -22,7 +22,7 @@ Each skill directory has a `SKILL.md` with YAML front matter that includes the s
 1.  Clone this repository and change into it.
 
     ```bash
-    git clone https://github.com/github/speckit-agent-skills.git
+    git clone https://github.com/github/agentkit-agent-skills.git
     ```
 
 2.  Install [Spec Kit](https://github.com/github/spec-kit).
@@ -32,7 +32,7 @@ Each skill directory has a `SKILL.md` with YAML front matter that includes the s
 4.  Copy the `skills/` directory into the project's agent skills directory (e.g., `.claude/skills/`).
 
     ```bash
-    cp -a speckit-agent-skills/skills/* /path/to/a/project/agent/directory/skills/
+    cp -a agentkit-agent-skills/skills/* /path/to/a/project/agent/directory/skills/
     ```
 
 5.  Use the skills on your preferred agent (e.g., Claude Code).
@@ -54,36 +54,36 @@ See **[AGENTS.md](./AGENTS.md#spec-kit-workflow)** for the complete workflow gui
 
 Optional one-pass orchestration:
 
-- **Orchestrate** → `speckit-orchestrate` runs `speckit-specify` → `speckit-plan` → `speckit-tasks` → `speckit-analyze` → remediation prompts → `speckit-implement`, making best-effort remediation passes, bypassing checklist confirmation prompts, and hard-stopping only on `Safe to Implement: NO DETERMINATION`.
+- **Orchestrate** → `agentkit-orchestrate` runs `agentkit-specify` → `agentkit-plan` → `agentkit-tasks` → `agentkit-analyze` → remediation prompts → `agentkit-implement`, making best-effort remediation passes, bypassing checklist confirmation prompts, and hard-stopping only on `Safe to Implement: NO DETERMINATION`.
 
 #### Visual workflow
 
 ```mermaid
 flowchart TD
   %% Core (recommended order)
-  C0["speckit-constitution"] --> C1["speckit-specify"] --> C2["speckit-plan"] --> C3["speckit-tasks"] --> C4["speckit-implement"]
+  C0["agentkit-constitution"] --> C1["agentkit-specify"] --> C2["agentkit-plan"] --> C3["agentkit-tasks"] --> C4["agentkit-implement"]
 
   %% Alternative entry for existing code
-  C0 --> FC["speckit-baseline"]
+  C0 --> FC["agentkit-baseline"]
   FC --> C2
 
   %% Optional (dashed = insert/assist)
-  C1 -.-> O1["speckit-clarify"]
+  C1 -.-> O1["agentkit-clarify"]
   FC -.-> O1
   O1 -.-> C2
 
-  C3 -.-> O2["speckit-analyze"]
+  C3 -.-> O2["agentkit-analyze"]
   O2 -.-> C4
 
-  C3 -.-> O4["speckit-taskstoissues"]
+  C3 -.-> O4["agentkit-taskstoissues"]
 
-  C1 -.-> O3["speckit-checklist"]
+  C1 -.-> O3["agentkit-checklist"]
   FC -.-> O3
   C2 -.-> O3
   C3 -.-> O3
 
   %% Optional one-pass pipeline (wrapper around core stages)
-  OR["speckit-orchestrate"] -.-> C1
+  OR["agentkit-orchestrate"] -.-> C1
   OR -.-> C2
   OR -.-> C3
   OR -.-> O2
@@ -94,7 +94,7 @@ flowchart TD
 
 ### Shared skills (`skills/`)
 
-- `speckit-*` - Spec Kit workflow skills
+- `agentkit-*` - Spec Kit workflow skills
 - `dnd-review` and `dnd-design` - DnD system-doc review/design workflows
 - `runtime-design` and `runtime-design-all` - Host runtime system-doc design workflows (single-row and bulk)
 
@@ -109,18 +109,18 @@ flowchart TD
 
 ```
 .
-├── skills/              # Source skills (speckit-*, dnd-*, and runtime-*)
+├── skills/              # Source skills (agentkit-*, dnd-*, and runtime-*)
 ├── .claude/
-│   ├── commands/        # Claude Code command prompts (speckit.*)
+│   ├── commands/        # Claude Code command prompts (agentkit.*)
 │   └── skills -> ../skills
 ├── .codex/
-│   ├── prompts/         # Codex CLI prompt files (speckit.*)
+│   ├── prompts/         # Codex CLI prompt files (agentkit.*)
 │   └── skills -> ../skills
 ├── .gemini/
-│   └── commands/        # Gemini CLI prompt files (speckit.*.toml)
+│   └── commands/        # Gemini CLI prompt files (agentkit.*.toml)
 ├── .github/
-│   ├── agents/          # GitHub Copilot CLI agents (speckit.*.agent.md)
-│   ├── prompts/         # GitHub Copilot CLI prompts (speckit.*.prompt.md)
+│   ├── agents/          # GitHub Copilot CLI agents (agentkit.*.agent.md)
+│   ├── prompts/         # GitHub Copilot CLI prompts (agentkit.*.prompt.md)
 │   ├── skills -> ../skills
 │   └── workflows/       # CI workflows (ci.yml)
 └── .specify/            # Spec Kit templates and memory files

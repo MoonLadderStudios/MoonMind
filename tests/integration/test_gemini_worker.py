@@ -10,8 +10,8 @@ from celery_worker.gemini_tasks import (
     gemini_generate,
     gemini_process_response,
 )
-from moonmind.workflows.speckit_celery import celery_app
-from moonmind.workflows.speckit_celery.utils import CliVerificationError
+from moonmind.workflows.agentkit_celery import celery_app
+from moonmind.workflows.agentkit_celery.utils import CliVerificationError
 
 
 @pytest.fixture(autouse=True)
@@ -186,7 +186,7 @@ def test_gemini_worker_preflight_missing_api_key():
 
     with patch.dict(os.environ, {}, clear=True):
         with patch(
-            "moonmind.workflows.speckit_celery.utils.verify_cli_is_executable"
+            "moonmind.workflows.agentkit_celery.utils.verify_cli_is_executable"
         ) as mock_verify:
             mock_verify.return_value = "/bin/gemini"
             with patch("subprocess.run") as mock_run:
@@ -217,7 +217,7 @@ def test_gemini_worker_preflight_invalid_gemini_home():
         clear=True,
     ):
         with patch(
-            "moonmind.workflows.speckit_celery.utils.verify_cli_is_executable"
+            "moonmind.workflows.agentkit_celery.utils.verify_cli_is_executable"
         ) as mock_verify:
             mock_verify.return_value = "/bin/gemini"
             with patch("subprocess.run") as mock_run:
@@ -246,7 +246,7 @@ def test_gemini_worker_preflight_oauth_requires_writable_gemini_home():
         clear=True,
     ):
         with patch(
-            "moonmind.workflows.speckit_celery.utils.verify_cli_is_executable"
+            "moonmind.workflows.agentkit_celery.utils.verify_cli_is_executable"
         ) as mock_verify:
             mock_verify.return_value = "/bin/gemini"
             with patch("subprocess.run") as mock_run:

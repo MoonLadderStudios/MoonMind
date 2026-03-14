@@ -16,9 +16,9 @@ from moonmind.workflows.skills.workspace_links import (
 def test_ensure_shared_skill_links_points_both_adapters_to_same_path(tmp_path):
     run_root = tmp_path / "runs" / "run-1"
     skills_active = run_root / "skills_active"
-    skill_dir = skills_active / "speckit"
+    skill_dir = skills_active / "agentkit"
     skills_active.mkdir(parents=True)
-    target = tmp_path / "cache" / "hash" / "speckit"
+    target = tmp_path / "cache" / "hash" / "agentkit"
     target.mkdir(parents=True)
     skill_dir.symlink_to(target)
 

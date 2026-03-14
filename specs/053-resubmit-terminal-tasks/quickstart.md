@@ -71,7 +71,7 @@ Expected outcome: runtime/task checks pass with production runtime files and val
 
 ## 8. Planning artifact completion gate
 
-Before moving to `/speckit.tasks`, ensure these artifacts are present:
+Before moving to `/agentkit.tasks`, ensure these artifacts are present:
 
 - `specs/043-resubmit-terminal-tasks/plan.md`
 - `specs/043-resubmit-terminal-tasks/research.md`

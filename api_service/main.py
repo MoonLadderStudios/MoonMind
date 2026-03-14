@@ -39,7 +39,7 @@ from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
-from api_service.api.routers.automation import router as spec_automation_router
+from api_service.api.routers.automation import router as automation_router
 from api_service.api.routers.system_worker_pause import (
     router as system_worker_pause_router,
 )
@@ -298,7 +298,7 @@ app.include_router(
 app.include_router(workflows_router)
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
-app.include_router(spec_automation_router)
+app.include_router(automation_router)
 app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
 app.include_router(system_worker_pause_router)

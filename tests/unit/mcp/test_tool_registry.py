@@ -23,7 +23,7 @@ from moonmind.workflows.agent_queue.service import (
     QueueSystemResponse,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 def _build_job(status: models.AgentJobStatus = models.AgentJobStatus.QUEUED):

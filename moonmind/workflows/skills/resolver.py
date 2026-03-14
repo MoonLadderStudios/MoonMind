@@ -262,7 +262,7 @@ def list_available_skill_names() -> tuple[str, ...]:
 
     raw_candidates.extend(_discover_local_skill_names())
 
-    # Include explicit allowlist entries so builtin skills (for example `speckit`)
+    # Include explicit allowlist entries so builtin skills (for example `agentkit`)
     # still surface even when they are not mirrored locally.
     raw_candidates.extend(str(item).strip() for item in (cfg.allowed_skills or ()))
 
@@ -333,7 +333,7 @@ def _resolve_source_uri(
         return local_source
 
     # Deprecated compatibility path: prefer local/shared skill mirrors instead.
-    if skill_name == "speckit":
+    if skill_name == "agentkit":
         if skill_name not in _BUILTIN_FALLBACK_WARNED:
             logger.warning(
                 "Skill '%s' resolved through deprecated builtin source fallback. "
@@ -341,7 +341,7 @@ def _resolve_source_uri(
                 skill_name,
             )
             _BUILTIN_FALLBACK_WARNED.add(skill_name)
-        return "builtin://speckit"
+        return "builtin://agentkit"
 
     raise SkillResolutionError(
         f"No source URI resolved for skill '{skill_name}:{version}'. "

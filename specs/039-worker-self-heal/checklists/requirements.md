@@ -34,6 +34,6 @@
 Checklist re-reviewed against the Phase 1-aligned spec on 2026-03-02.
 Deferred hard-reset/operator-control items are explicitly tracked as follow-up phases,
 not as current-phase acceptance gaps.
-Canonical feature request re-applied for speckit-specify Step 2/16 with runtime scope guard:
+Canonical feature request re-applied for agentkit-specify Step 2/16 with runtime scope guard:
 "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
 All user-provided constraints were preserved in `spec.md` input context.

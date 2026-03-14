@@ -10,7 +10,7 @@ from moonmind.config.settings import (
     OIDCSettings,
     OllamaSettings,
     OpenAISettings,
-    SpecWorkflowSettings,
+    WorkflowSettings,
     TemporalDashboardSettings,
 )
 
@@ -231,7 +231,7 @@ class TestFeatureFlagsSettings:
         monkeypatch.delenv("DISABLE_TASK_TEMPLATE_CATALOG", raising=False)
 
 
-class TestSpecWorkflowSettings:
+class TestWorkflowSettings:
     @pytest.fixture(autouse=True)
     def _clear_spec_env(self, monkeypatch):
         for key in (
@@ -260,11 +260,11 @@ class TestSpecWorkflowSettings:
         """Milestone 2 artifact settings should keep stable defaults."""
 
         assert (
-            SpecWorkflowSettings.model_fields["agent_job_artifact_root"].default
+            WorkflowSettings.model_fields["agent_job_artifact_root"].default
             == "var/artifacts/agent_jobs"
         )
         assert (
-            SpecWorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
+            WorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
             == 50 * 1024 * 1024
         )
 
@@ -273,7 +273,7 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.setenv("AGENT_JOB_ARTIFACT_ROOT", "/tmp/queue-artifacts")
         monkeypatch.setenv("AGENT_JOB_ARTIFACT_MAX_BYTES", "2048")
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.agent_job_artifact_root == "/tmp/queue-artifacts"
         assert settings.agent_job_artifact_max_bytes == 2048
@@ -284,7 +284,7 @@ class TestSpecWorkflowSettings:
     def test_agent_job_attachment_defaults(self):
         """Attachment-related settings should expose stable defaults."""
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.agent_job_attachment_enabled is False
         assert settings.agent_job_attachment_max_count == 10
         assert settings.agent_job_attachment_max_bytes == 10 * 1024 * 1024
@@ -307,7 +307,7 @@ class TestSpecWorkflowSettings:
             " image/png , image/jpeg ",
         )
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.agent_job_attachment_enabled is False
         assert settings.agent_job_attachment_max_count == 2
         assert settings.agent_job_attachment_max_bytes == 1024
@@ -326,7 +326,7 @@ class TestSpecWorkflowSettings:
     def test_vision_defaults(self):
         """Vision settings should expose stable defaults."""
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.vision_context_enabled is True
         assert settings.vision_provider == "gemini"
         assert settings.vision_model == "models/gemini-2.5-flash"
@@ -342,7 +342,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("MOONMIND_VISION_MAX_TOKENS", "2048")
         monkeypatch.setenv("MOONMIND_VISION_OCR_ENABLED", "false")
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.vision_context_enabled is False
         assert settings.vision_provider == "openai"
         assert settings.vision_model == "gpt-4o-mini"
@@ -358,7 +358,7 @@ class TestSpecWorkflowSettings:
     def test_task_default_baselines(self):
         """Task defaults should provide stable queue execution baselines."""
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.codex_model == "gpt-5.3-codex"
         assert settings.codex_effort == "high"
         assert settings.default_task_runtime == "codex"
@@ -383,7 +383,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
         monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.codex_model == "gpt-custom-codex"
         assert settings.codex_effort == "medium"
@@ -413,7 +413,7 @@ class TestSpecWorkflowSettings:
         """Legacy WORKFLOW_GITHUB_REPOSITORY should remain supported."""
 
         monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.github_repository == "Legacy/Repo"
 
@@ -422,14 +422,14 @@ class TestSpecWorkflowSettings:
     def test_manifest_required_capabilities_supports_legacy_spec_prefix(
         self, monkeypatch
     ):
-        """Legacy SPEC_WORKFLOW manifest capability env var should remain supported."""
+        """Legacy WORKFLOW manifest capability env var should remain supported."""
 
         monkeypatch.delenv("WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False)
         monkeypatch.setenv(
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", '["manifest", "planner"]'
         )
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.manifest_required_capabilities == ("manifest", "planner")
 
@@ -444,7 +444,7 @@ class TestSpecWorkflowSettings:
         with pytest.raises(
             ValidationError, match="default_publish_mode must be one of"
         ):
-            SpecWorkflowSettings(_env_file=None)
+            WorkflowSettings(_env_file=None)
         monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
 
     def test_default_task_runtime_rejects_invalid_value(self, monkeypatch):
@@ -454,11 +454,11 @@ class TestSpecWorkflowSettings:
         with pytest.raises(
             ValidationError, match="default_task_runtime must be one of"
         ):
-            SpecWorkflowSettings(_env_file=None)
+            WorkflowSettings(_env_file=None)
         monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
 
     def test_git_user_accepts_legacy_spec_env_vars(self, monkeypatch):
-        """Legacy SPEC_WORKFLOW git user env vars should remain supported."""
+        """Legacy WORKFLOW git user env vars should remain supported."""
 
         monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
         monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
@@ -467,7 +467,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Legacy User  ")
         monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  legacy@example.com  ")
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.git_user_name == "Legacy User"
         assert settings.git_user_email == "legacy@example.com"
@@ -478,7 +478,7 @@ class TestSpecWorkflowSettings:
     def test_git_user_env_precedence_prefers_workflow_then_spec_then_moonmind(
         self, monkeypatch
     ):
-        """Git user resolution should follow WORKFLOW > SPEC_WORKFLOW > MOONMIND."""
+        """Git user resolution should follow WORKFLOW > WORKFLOW > MOONMIND."""
 
         monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
         monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
@@ -487,7 +487,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Workflow Name")
         monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "workflow@example.com")
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.git_user_name == "Workflow Name"
         assert settings.git_user_email == "workflow@example.com"
@@ -502,12 +502,12 @@ class TestSpecWorkflowSettings:
     def test_skills_defaults(self):
         """Skills-first settings should have stable defaults."""
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.skills_enabled is True
         assert settings.skills_canary_percent == 100
-        assert settings.default_skill == "speckit"
+        assert settings.default_skill == "agentkit"
         assert settings.skill_policy_mode == "permissive"
-        assert settings.allowed_skills == ("speckit",)
+        assert settings.allowed_skills == ("agentkit",)
         assert settings.skills_local_mirror_root == ".agents/skills/local"
         assert settings.skills_legacy_mirror_root == ".agents/skills"
         assert settings.live_session_enabled_default is True
@@ -519,19 +519,19 @@ class TestSpecWorkflowSettings:
     def test_skills_overrides(self):
         """Skill settings should accept explicit override values."""
 
-        settings = SpecWorkflowSettings(
+        settings = WorkflowSettings(
             _env_file=None,
             skills_enabled=False,
             skills_canary_percent=25,
             default_skill="custom",
-            allowed_skills=("speckit", "custom"),
+            allowed_skills=("agentkit", "custom"),
             submit_skill="custom",
         )
 
         assert settings.skills_enabled is False
         assert settings.skills_canary_percent == 25
         assert settings.default_skill == "custom"
-        assert settings.allowed_skills == ("speckit", "custom")
+        assert settings.allowed_skills == ("agentkit", "custom")
         assert settings.submit_skill == "custom"
 
     def test_skills_mirror_env_overrides(self, monkeypatch):
@@ -539,7 +539,7 @@ class TestSpecWorkflowSettings:
 
         monkeypatch.setenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT", "/tmp/skills-local")
         monkeypatch.setenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT", "/tmp/skills-legacy")
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.skills_local_mirror_root == "/tmp/skills-local"
         assert settings.skills_legacy_mirror_root == "/tmp/skills-legacy"
@@ -553,7 +553,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("WORKFLOW_SKILLS_CACHE_ROOT", "/tmp/workflow-cache")
         monkeypatch.setenv("WORKFLOW_SKILLS_WORKSPACE_ROOT", "workflow-runs")
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.skills_cache_root == "/tmp/workflow-cache"
         assert settings.skills_workspace_root == "workflow-runs"
@@ -567,7 +567,7 @@ class TestSpecWorkflowSettings:
         monkeypatch.setenv("SPEC_SKILLS_CACHE_ROOT", "/tmp/spec-cache")
         monkeypatch.setenv("SPEC_SKILLS_WORKSPACE_ROOT", "spec-runs")
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
 
         assert settings.skills_cache_root == "var/skill_cache"
         assert settings.skills_workspace_root == "runs"
@@ -579,7 +579,7 @@ class TestSpecWorkflowSettings:
         """Spec workflow repo root should honor WORKFLOW_REPO_ROOT override."""
 
         monkeypatch.setenv("WORKFLOW_REPO_ROOT", "/tmp/workspace-root")
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.repo_root == "/tmp/workspace-root"
         monkeypatch.delenv("WORKFLOW_REPO_ROOT", raising=False)
 
@@ -601,7 +601,7 @@ class TestSpecWorkflowSettings:
             "7",
         )
 
-        settings = SpecWorkflowSettings(_env_file=None)
+        settings = WorkflowSettings(_env_file=None)
         assert settings.live_session_enabled_default is False
         assert settings.live_session_provider == "tmate"
         assert settings.live_session_ttl_minutes == 90
@@ -713,28 +713,28 @@ class TestSpecWorkflowSettings:
     def test_default_skill_is_added_to_allowlist(self):
         """Allowlist mode should include default skill in allowlist."""
 
-        settings = SpecWorkflowSettings(
+        settings = WorkflowSettings(
             _env_file=None,
             skill_policy_mode="allowlist",
             default_skill="custom-default",
-            allowed_skills=("speckit",),
+            allowed_skills=("agentkit",),
         )
 
         assert settings.default_skill == "custom-default"
-        assert settings.allowed_skills == ("speckit", "custom-default")
+        assert settings.allowed_skills == ("agentkit", "custom-default")
 
     def test_permissive_mode_does_not_modify_allowlist(self):
         """Permissive mode should not force default skill into allowlist."""
 
-        settings = SpecWorkflowSettings(
+        settings = WorkflowSettings(
             _env_file=None,
             skill_policy_mode="permissive",
             default_skill="custom-default",
-            allowed_skills=("speckit",),
+            allowed_skills=("agentkit",),
         )
 
         assert settings.default_skill == "custom-default"
-        assert settings.allowed_skills == ("speckit",)
+        assert settings.allowed_skills == ("agentkit",)
 
     def test_app_settings_defaults_codex_queue_to_celery_default(
         self, app_settings_defaults

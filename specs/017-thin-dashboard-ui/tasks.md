@@ -83,7 +83,7 @@
 ### Implementation for User Story 3
 
 - [X] T021 [US3] Implement queue detail data, incremental event polling, and artifact list/download-link rendering in `api_service/static/task_dashboard/dashboard.js`.
-- [X] T022 [US3] Remove dedicated SpecKit detail/list/submit views and expose SpecKit workloads through queue skill metadata in `api_service/static/task_dashboard/dashboard.js`.
+- [X] T022 [US3] Remove dedicated AgentKit detail/list/submit views and expose AgentKit workloads through queue skill metadata in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T023 [US3] Implement Orchestrator detail step/artifact metadata rendering in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T024 [US3] Add detail-page layout and artifact/download styling in `api_service/static/task_dashboard/dashboard.css` and `api_service/templates/task_dashboard.html`.
 
@@ -93,13 +93,13 @@
 
 ## Phase 7: Category Consolidation Remediation
 
-**Purpose**: Remove SpecKit as a standalone dashboard category and complete queue-skill migration UX/docs.
+**Purpose**: Remove AgentKit as a standalone dashboard category and complete queue-skill migration UX/docs.
 
-- [X] T028 [P] Remove SpecKit navigation copy/routes from `api_service/templates/task_dashboard.html` and `api_service/api/routers/task_dashboard.py`.
-- [X] T029 [P] Remove SpecKit dashboard source/status config from `api_service/api/routers/task_dashboard_view_model.py`.
+- [X] T028 [P] Remove AgentKit navigation copy/routes from `api_service/templates/task_dashboard.html` and `api_service/api/routers/task_dashboard.py`.
+- [X] T029 [P] Remove AgentKit dashboard source/status config from `api_service/api/routers/task_dashboard_view_model.py`.
 - [X] T030 Update consolidated/list/route rendering to queue + orchestrator and add queue skill column/filter in `api_service/static/task_dashboard/dashboard.js`.
 - [X] T031 Add optional queue submit `skillArgs` JSON handling and validation in `api_service/static/task_dashboard/dashboard.js`.
-- [X] T032 Update documentation/spec artifacts to remove legacy SpecKit category route references and document queue skill launch path in `docs/TaskUiArchitecture.md`, `docs/TaskArchitecture.md`, and `specs/017-thin-dashboard-ui/*`.
+- [X] T032 Update documentation/spec artifacts to remove legacy AgentKit category route references and document queue skill launch path in `docs/TaskUiArchitecture.md`, `docs/TaskArchitecture.md`, and `specs/017-thin-dashboard-ui/*`.
 
 ---
 

@@ -22,9 +22,9 @@
 
 **CRITICAL**: No user story implementation starts until this phase is complete.
 
-- [X] T003 Normalize canonical runtime stage constants in `moonmind/workflows/speckit_celery/tasks.py` and `moonmind/workflows/speckit_celery/models.py` for `discover_next_phase`, `submit_codex_job`, and `apply_and_publish` (`DOC-REQ-001`, `DOC-REQ-007`).
+- [X] T003 Normalize canonical runtime stage constants in `moonmind/workflows/agentkit_celery/tasks.py` and `moonmind/workflows/agentkit_celery/models.py` for `discover_next_phase`, `submit_codex_job`, and `apply_and_publish` (`DOC-REQ-001`, `DOC-REQ-007`).
 - [X] T004 [P] Add foundational phase-state schema fields for `selected_skill`, `adapter_id`, and `execution_path` in `moonmind/schemas/workflow_models.py` (`DOC-REQ-004`, `DOC-REQ-005`).
-- [X] T005 [P] Create reusable metadata fixture coverage for explicit and legacy payloads in `tests/unit/workflows/test_spec_automation_env.py` (`DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T005 [P] Create reusable metadata fixture coverage for explicit and legacy payloads in `tests/unit/workflows/test_automation_env.py` (`DOC-REQ-006`, `DOC-REQ-007`).
 
 **Checkpoint**: Canonical stage + metadata foundations are in place for story-level implementation.
 
@@ -34,17 +34,17 @@
 
 **Goal**: Surface canonical stage metadata and adapter observability in runtime/API payloads.
 
-**Independent Test**: `tests/unit/workflows/test_spec_automation_env.py` and `tests/unit/api/test_spec_automation.py` prove explicit metadata and legacy defaults expose `selected_skill`, `adapter_id`, and `execution_path`.
+**Independent Test**: `tests/unit/workflows/test_automation_env.py` and `tests/unit/api/test_automation.py` prove explicit metadata and legacy defaults expose `selected_skill`, `adapter_id`, and `execution_path`.
 
 ### Tests for User Story 1
 
-- [X] T006 [P] [US1] Add normalization regression tests for explicit metadata and Speckit legacy defaults in `tests/unit/workflows/test_spec_automation_env.py` (`DOC-REQ-005`, `DOC-REQ-006`).
-- [X] T007 [P] [US1] Add API serialization tests for `selected_skill`, `adapter_id`, and `execution_path` in `tests/unit/api/test_spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`).
+- [X] T006 [P] [US1] Add normalization regression tests for explicit metadata and Agentkit legacy defaults in `tests/unit/workflows/test_automation_env.py` (`DOC-REQ-005`, `DOC-REQ-006`).
+- [X] T007 [P] [US1] Add API serialization tests for `selected_skill`, `adapter_id`, and `execution_path` in `tests/unit/api/test_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-006`).
 
 ### Implementation for User Story 1
 
-- [X] T008 [US1] Implement backward-compatible stage metadata normalization (`selectedSkill`, `adapterId`, `executionPath`) in `moonmind/workflows/speckit_celery/models.py` (`DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`).
-- [X] T009 [US1] Project adapter-aware phase fields through API schema and serializer code in `moonmind/schemas/workflow_models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-007`).
+- [X] T008 [US1] Implement backward-compatible stage metadata normalization (`selectedSkill`, `adapterId`, `executionPath`) in `moonmind/workflows/agentkit_celery/models.py` (`DOC-REQ-005`, `DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T009 [US1] Project adapter-aware phase fields through API schema and serializer code in `moonmind/schemas/workflow_models.py` and `api_service/api/routers/automation.py` (`DOC-REQ-004`, `DOC-REQ-005`, `DOC-REQ-007`).
 - [X] T010 [US1] Align stage/metadata documentation contracts in `specs/015-skills-workflow/contracts/skills-stage-contract.md` and `specs/015-skills-workflow/contracts/spec-automation-api.openapi.yaml` (`DOC-REQ-001`, `DOC-REQ-005`).
 
 **Checkpoint**: User Story 1 is independently testable with canonical runtime stage metadata and adapter observability.
@@ -55,15 +55,15 @@
 
 **Goal**: Ensure `015` artifacts match the shared-skills workspace strategy and current worker startup/auth flow.
 
-**Independent Test**: Contracts and quickstart reflect one shared `skills_active` workspace, required auth scripts, and conditional Speckit verification behavior.
+**Independent Test**: Contracts and quickstart reflect one shared `skills_active` workspace, required auth scripts, and conditional Agentkit verification behavior.
 
 ### Tests for User Story 2
 
-- [X] T011 [P] [US2] Add stage-routing and conditional Speckit verification tests in `tests/unit/workflows/test_tasks.py` (`DOC-REQ-001`, `DOC-REQ-004`).
+- [X] T011 [P] [US2] Add stage-routing and conditional Agentkit verification tests in `tests/unit/workflows/test_tasks.py` (`DOC-REQ-001`, `DOC-REQ-004`).
 
 ### Implementation for User Story 2
 
-- [X] T012 [US2] Implement conditional Speckit verification based on configured stage skills in `moonmind/workflows/skills/registry.py` and `moonmind/workflows/speckit_celery/tasks.py` (`DOC-REQ-004`, `DOC-REQ-007`).
+- [X] T012 [US2] Implement conditional Agentkit verification based on configured stage skills in `moonmind/workflows/skills/registry.py` and `moonmind/workflows/agentkit_celery/tasks.py` (`DOC-REQ-004`, `DOC-REQ-007`).
 - [X] T013 [US2] Update shared-skills workspace contract details in `specs/015-skills-workflow/contracts/compose-fast-path.md` and `specs/015-skills-workflow/contracts/skills-stage-contract.md` (`DOC-REQ-002`).
 - [X] T014 [US2] Update worker auth/startup fast-path steps in `specs/015-skills-workflow/quickstart.md` and `specs/015-skills-workflow/contracts/compose-fast-path.md` to use `./tools/auth-codex-volume.sh` and `./tools/auth-gemini-volume.sh` (`DOC-REQ-003`).
 - [X] T015 [US2] Validate docs-to-runtime parity and traceability entries in `specs/015-skills-workflow/contracts/requirements-traceability.md` for shared skills and conditional checks (`DOC-REQ-002`, `DOC-REQ-003`, `DOC-REQ-004`).
@@ -80,16 +80,16 @@
 
 ### Tests for User Story 3
 
-- [X] T016 [P] [US3] Expand compatibility regression coverage for missing metadata keys in `tests/unit/workflows/test_spec_automation_env.py` and `tests/unit/api/test_spec_automation.py` (`DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T016 [P] [US3] Expand compatibility regression coverage for missing metadata keys in `tests/unit/workflows/test_automation_env.py` and `tests/unit/api/test_automation.py` (`DOC-REQ-006`, `DOC-REQ-007`).
 
 ### Implementation for User Story 3
 
-- [X] T017 [US3] Harden legacy-safe phase projection behavior in `moonmind/workflows/speckit_celery/models.py` and `api_service/api/routers/spec_automation.py` for absent skill metadata keys (`DOC-REQ-006`, `DOC-REQ-007`).
+- [X] T017 [US3] Harden legacy-safe phase projection behavior in `moonmind/workflows/agentkit_celery/models.py` and `api_service/api/routers/automation.py` for absent skill metadata keys (`DOC-REQ-006`, `DOC-REQ-007`).
 
 ### Validation for User Story 3
 
-- [X] T018 [US3] Run `./tools/test_unit.sh` validating updates in `tests/unit/workflows/test_spec_automation_env.py`, `tests/unit/workflows/test_tasks.py`, and `tests/unit/api/test_spec_automation.py` (`DOC-REQ-008`, `DOC-REQ-007`).
-- [X] T019 [US3] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` against runtime files in `moonmind/workflows/speckit_celery/models.py` and `api_service/api/routers/spec_automation.py` (`DOC-REQ-007`).
+- [X] T018 [US3] Run `./tools/test_unit.sh` validating updates in `tests/unit/workflows/test_automation_env.py`, `tests/unit/workflows/test_tasks.py`, and `tests/unit/api/test_automation.py` (`DOC-REQ-008`, `DOC-REQ-007`).
+- [X] T019 [US3] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime` against runtime files in `moonmind/workflows/agentkit_celery/models.py` and `api_service/api/routers/automation.py` (`DOC-REQ-007`).
 
 **Checkpoint**: Runtime mode scope and backward-compatible behavior are validated.
 
@@ -133,8 +133,8 @@
 
 ```bash
 # Parallel US1 validation authoring:
-Task: "T006 [US1] Add normalization regression tests in tests/unit/workflows/test_spec_automation_env.py"
-Task: "T007 [US1] Add API serialization tests in tests/unit/api/test_spec_automation.py"
+Task: "T006 [US1] Add normalization regression tests in tests/unit/workflows/test_automation_env.py"
+Task: "T007 [US1] Add API serialization tests in tests/unit/api/test_automation.py"
 ```
 
 ## Parallel Example: User Story 2
@@ -149,8 +149,8 @@ Task: "T014 [US2] Update auth/startup quickstart steps in specs/015-skills-workf
 
 ```bash
 # Parallel US3 compatibility hardening and test expansion:
-Task: "T016 [US3] Expand compatibility regressions in tests/unit/workflows/test_spec_automation_env.py and tests/unit/api/test_spec_automation.py"
-Task: "T017 [US3] Harden legacy-safe phase projection in moonmind/workflows/speckit_celery/models.py and api_service/api/routers/spec_automation.py"
+Task: "T016 [US3] Expand compatibility regressions in tests/unit/workflows/test_automation_env.py and tests/unit/api/test_automation.py"
+Task: "T017 [US3] Harden legacy-safe phase projection in moonmind/workflows/agentkit_celery/models.py and api_service/api/routers/automation.py"
 ```
 
 ---
@@ -166,7 +166,7 @@ Task: "T017 [US3] Harden legacy-safe phase projection in moonmind/workflows/spec
 ### Incremental Delivery
 
 1. Deliver US1 (metadata observability).
-2. Deliver US2 (shared-skills runtime parity and conditional Speckit behavior).
+2. Deliver US2 (shared-skills runtime parity and conditional Agentkit behavior).
 3. Deliver US3 (runtime validation and compatibility hardening).
 4. Finish with cross-cutting scope + traceability gates.
 

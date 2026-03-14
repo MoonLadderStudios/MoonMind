@@ -2,7 +2,7 @@
 
 ## Decision 1: Keep one shared tooling image and extend `api_service/Dockerfile`
 
-- Decision: Extend existing `api_service/Dockerfile` to install Claude CLI in the same builder stage that already installs `codex`, `gemini`, and `speckit`.
+- Decision: Extend existing `api_service/Dockerfile` to install Claude CLI in the same builder stage that already installs `codex`, `gemini`, and `agentkit`.
 - Rationale: The repository already uses one shared image for API and workers; extending this path minimizes operational divergence and preserves existing fallback/stub install behavior.
 - Alternatives considered:
   - Separate runtime image for Claude: rejected because it violates single-image goal and increases drift.
@@ -33,7 +33,7 @@
 
 ## Decision 5: Health checks include all bundled CLIs
 
-- Decision: Worker startup checks for `codex`, `gemini`, `claude`, and `speckit` availability and blocks consumption on failure.
+- Decision: Worker startup checks for `codex`, `gemini`, `claude`, and `agentkit` availability and blocks consumption on failure.
 - Rationale: Ensures image/tooling integrity before jobs are claimed.
 - Alternatives considered:
   - Check only active runtime CLI: rejected because bundled image correctness could still be broken for other runtime modes.

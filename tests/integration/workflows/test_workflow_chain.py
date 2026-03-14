@@ -10,13 +10,13 @@ from api_service.db import base as db_base
 from api_service.db.models import Base
 from moonmind.config.settings import settings
 from moonmind.workflows import (
-    SpecWorkflowRepository,
-    retry_spec_workflow_run,
-    trigger_spec_workflow_run,
+    WorkflowRepository,
+    retry_workflow_run,
+    trigger_workflow_run,
 )
 from moonmind.workflows.adapters.github_client import GitHubPublishResult
-from moonmind.workflows.speckit_celery import celery_app
-from moonmind.workflows.speckit_celery import models as workflow_models
+from moonmind.workflows.agentkit_celery import celery_app
+from moonmind.workflows.agentkit_celery import models as workflow_models
 
 TEST_REPOSITORY = "MoonLadderStudios/MoonMind"
 
@@ -67,17 +67,17 @@ async def test_trigger_workflow_chain(tmp_path, monkeypatch):
         settings.workflow, "default_feature_key", feature_key, raising=False
     )
 
-    triggered = await trigger_spec_workflow_run(
+    triggered = await trigger_workflow_run(
         feature_key=feature_key, repository=TEST_REPOSITORY
     )
 
     async with db_base.async_session_maker() as session:
-        repo = SpecWorkflowRepository(session)
+        repo = WorkflowRepository(session)
         run = await repo.get_run(triggered.run_id, with_relations=True)
 
     assert run is not None
-    assert run.status is workflow_models.SpecWorkflowRunStatus.SUCCEEDED
-    assert run.phase is workflow_models.SpecWorkflowRunPhase.COMPLETE
+    assert run.status is workflow_models.WorkflowRunStatus.SUCCEEDED
+    assert run.phase is workflow_models.WorkflowRunPhase.COMPLETE
     assert run.branch_name is not None
     assert run.pr_url is not None
     assert run.codex_task_id is not None
@@ -87,15 +87,15 @@ async def test_trigger_workflow_chain(tmp_path, monkeypatch):
     state_names = {state.task_name: state.status for state in run.task_states}
     assert (
         state_names["discover_next_phase"]
-        is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+        is workflow_models.WorkflowTaskStatus.SUCCEEDED
     )
     assert (
         state_names["submit_codex_job"]
-        is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+        is workflow_models.WorkflowTaskStatus.SUCCEEDED
     )
     assert (
         state_names["apply_and_publish"]
-        is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+        is workflow_models.WorkflowTaskStatus.SUCCEEDED
     )
 
     # Artifacts should be written to the configured directory
@@ -177,20 +177,20 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
         return _Client()
 
     monkeypatch.setattr(
-        "moonmind.workflows.speckit_celery.tasks._build_github_client",
+        "moonmind.workflows.agentkit_celery.tasks._build_github_client",
         _fake_github_client,
     )
 
-    triggered = await trigger_spec_workflow_run(
+    triggered = await trigger_workflow_run(
         feature_key=feature_key, repository=TEST_REPOSITORY
     )
 
     async with db_base.async_session_maker() as session:
-        repo = SpecWorkflowRepository(session)
+        repo = WorkflowRepository(session)
         failed_run = await repo.get_run(triggered.run_id, with_relations=True)
 
     assert failed_run is not None
-    assert failed_run.status is workflow_models.SpecWorkflowRunStatus.FAILED
+    assert failed_run.status is workflow_models.WorkflowRunStatus.FAILED
     publish_attempts = [
         state
         for state in failed_run.task_states
@@ -198,21 +198,21 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
     ]
     assert publish_attempts
     assert any(
-        state.status is workflow_models.SpecWorkflowTaskStatus.FAILED
+        state.status is workflow_models.WorkflowTaskStatus.FAILED
         for state in publish_attempts
     )
     assert fail_state["calls"] == 1
 
-    retried = await retry_spec_workflow_run(
+    retried = await retry_workflow_run(
         failed_run.id, notes="Retry after fixing credentials"
     )
 
     async with db_base.async_session_maker() as session:
-        repo = SpecWorkflowRepository(session)
+        repo = WorkflowRepository(session)
         completed = await repo.get_run(retried.run_id, with_relations=True)
 
     assert completed is not None
-    assert completed.status is workflow_models.SpecWorkflowRunStatus.SUCCEEDED
+    assert completed.status is workflow_models.WorkflowRunStatus.SUCCEEDED
     publish_attempts = [
         state
         for state in completed.task_states
@@ -221,12 +221,12 @@ async def test_retry_failed_workflow_chain(tmp_path, monkeypatch):
     assert any(state.attempt == 2 for state in publish_attempts)
     assert any(
         state.attempt == 1
-        and state.status is workflow_models.SpecWorkflowTaskStatus.FAILED
+        and state.status is workflow_models.WorkflowTaskStatus.FAILED
         for state in publish_attempts
     )
     assert any(
         state.attempt == 2
-        and state.status is workflow_models.SpecWorkflowTaskStatus.SUCCEEDED
+        and state.status is workflow_models.WorkflowTaskStatus.SUCCEEDED
         for state in publish_attempts
     )
     assert completed.credential_audit is not None

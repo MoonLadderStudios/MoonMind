@@ -34,7 +34,7 @@ As an authenticated user, I want to submit Agent Queue jobs and Orchestrator run
 **Acceptance Scenarios**:
 
 1. **Given** a valid queue job payload, **When** the user submits it, **Then** the UI creates the job and navigates to the created job detail.
-2. **Given** a queue request with `task.skill.id` set to a SpecKit skill and JSON args, **When** the user submits it, **Then** the UI creates a queue task and the list view can filter by skill id.
+2. **Given** a queue request with `task.skill.id` set to a AgentKit skill and JSON args, **When** the user submits it, **Then** the UI creates a queue task and the list view can filter by skill id.
 3. **Given** a valid Orchestrator run request, **When** the user submits it, **Then** the UI creates the run and exposes plan status in the detail view.
 4. **Given** an invalid request payload, **When** submission is attempted, **Then** the UI shows actionable validation or API error feedback and does not lose entered form data.
 
@@ -78,7 +78,7 @@ As a MoonMind operator, I want detail pages for queue jobs and Orchestrator runs
 - **FR-009**: System MUST poll list and detail pages at configurable intervals and pause polling while the browser tab is hidden.
 - **FR-010**: System MUST call MoonMind APIs with user authentication context and MUST NOT use worker tokens in dashboard user flows.
 - **FR-011**: System MUST preserve submitted form values after failed submission attempts and show actionable validation messages.
-- **FR-012**: System MUST allow optional `task.skill.id` and JSON `task.skill.args` entry in queue submit so SpecKit workflows can be launched as queue tasks.
+- **FR-012**: System MUST allow optional `task.skill.id` and JSON `task.skill.args` entry in queue submit so AgentKit workflows can be launched as queue tasks.
 - **FR-013**: System MUST include production runtime code changes that implement dashboard routes, data fetching adapters, and UI rendering logic.
 - **FR-014**: System MUST include validation tests covering route responses and key UI/data-normalization behavior.
 - **FR-015**: Unit test execution for this feature MUST run through `./tools/test_unit.sh`.
@@ -102,6 +102,6 @@ As a MoonMind operator, I want detail pages for queue jobs and Orchestrator runs
 
 ## Assumptions
 
-- Existing API endpoints under `/api/queue/*` and `/orchestrator/*` remain the dashboard integration surface for MVP; SpecKit behavior is launched through queue skill selection.
+- Existing API endpoints under `/api/queue/*` and `/orchestrator/*` remain the dashboard integration surface for MVP; AgentKit behavior is launched through queue skill selection.
 - A thin dashboard can be hosted from the current MoonMind API service templates/static mechanism for initial rollout.
 - Realtime push protocols are deferred; polling is acceptable for first production release.

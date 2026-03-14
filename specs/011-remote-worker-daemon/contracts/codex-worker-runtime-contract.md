@@ -60,8 +60,8 @@
 Startup must fail fast unless all checks pass:
 
 1. `verify_cli_is_executable("codex")`
-2. `verify_cli_is_executable("speckit")`
-3. `speckit --version`
+2. `verify_cli_is_executable("agentkit")`
+3. `agentkit --version`
 4. `codex login status`
 5. If `DEFAULT_EMBEDDING_PROVIDER=google`: require `GOOGLE_API_KEY` or `GEMINI_API_KEY`
 
@@ -104,8 +104,8 @@ Construction rule:
 
 Execution behavior:
 
-- `skillId=speckit` -> skills path (`executionPath=skill`)
-- allowlisted non-Speckit skill -> compatibility fallback (`executionPath=direct_fallback`)
+- `skillId=agentkit` -> skills path (`executionPath=skill`)
+- allowlisted non-Agentkit skill -> compatibility fallback (`executionPath=direct_fallback`)
 - non-allowlisted skill -> immediate job failure
 
 ## Event Payload Execution Metadata Contract

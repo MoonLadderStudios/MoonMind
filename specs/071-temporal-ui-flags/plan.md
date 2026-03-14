@@ -3,7 +3,7 @@
 **Branch**: `071-temporal-ui-flags` | **Date**: 2026-03-08 | **Spec**: [specs/071-temporal-ui-flags/spec.md](spec.md)
 **Input**: Feature specification from `/specs/071-temporal-ui-flags/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
@@ -42,12 +42,12 @@ Enable feature flags for Temporal UI task actions and submissions to directly ro
 
 ```text
 specs/071-temporal-ui-flags/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+├── plan.md              # This file (/agentkit.plan command output)
+├── research.md          # Phase 0 output (/agentkit.plan command)
+├── data-model.md        # Phase 1 output (/agentkit.plan command)
+├── quickstart.md        # Phase 1 output (/agentkit.plan command)
+├── contracts/           # Phase 1 output (/agentkit.plan command)
+└── tasks.md             # Phase 2 output (/agentkit.tasks command - NOT created by /agentkit.plan)
 ```
 
 ### Source Code (repository root)

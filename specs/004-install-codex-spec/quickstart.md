@@ -13,22 +13,22 @@ Follow these steps to build the updated `api_service` image, confirm Codex + Spe
 
 ```bash
 # From the repo root
-CODEX_CLI_VERSION=latest SPEC_KIT_VERSION=0.4.0 \
+CODEX_CLI_VERSION=latest AGENT_KIT_VERSION=0.4.0 \
   docker build -t moonmind/api-service:tooling \
   --build-arg CODEX_CLI_VERSION \
-  --build-arg SPEC_KIT_VERSION \
+  --build-arg AGENT_KIT_VERSION \
   -f api_service/Dockerfile .
 ```
 
-- The Dockerfile installs Node.js in a builder stage, runs `npm install -g @openai/codex@${CODEX_CLI_VERSION}` and `@githubnext/spec-kit@${SPEC_KIT_VERSION}`, then copies the binaries into the final runtime layer.
-- Build logs should show `codex --version` and `speckit --version` checks before the image finalizes.
+- The Dockerfile installs Node.js in a builder stage, runs `npm install -g @openai/codex@${CODEX_CLI_VERSION}` and `@githubnext/spec-kit@${AGENT_KIT_VERSION}`, then copies the binaries into the final runtime layer.
+- Build logs should show `codex --version` and `agentkit --version` checks before the image finalizes.
 
 ## 3. Verify CLI availability in a container
 
 ```bash
 docker run --rm moonmind/api-service:tooling bash -lc '
   which codex && codex --version && 
-  which speckit && speckit --help >/dev/null'
+  which agentkit && agentkit --help >/dev/null'
 ```
 
 - Both `which` commands must resolve to `/usr/local/bin/...` for the non-root `app` user.
@@ -48,13 +48,13 @@ docker run --rm -e HOME=/home/app moonmind/api-service:tooling bash -lc '
 
 ```bash
 docker compose run --rm celery-worker bash -lc '
-  speckit --version && codex login status && \
-  python -m moonmind.workflows.speckit_celery.tasks --help'
+  agentkit --version && codex login status && \
+  python -m moonmind.workflows.agentkit_celery.tasks --help'
 ```
 
 - Confirms the Celery worker (which reuses the api_service image) can access both CLIs and that Codex authentication remains non-interactive.
-- Watch the worker logs for `Spec Kit CLI detected` entries before task output; these come from the new bootstrap check inside `moonmind/workflows/speckit_celery/tasks.py` and confirm the binary is executable for the `app` user.
-- The command should exit with status zero; if the `speckit` invocation fails, rebuild the image and confirm the Dockerfile logs `speckit --version` during the builder stage.
+- Watch the worker logs for `Spec Kit CLI detected` entries before task output; these come from the new bootstrap check inside `moonmind/workflows/agentkit_celery/tasks.py` and confirm the binary is executable for the `app` user.
+- The command should exit with status zero; if the `agentkit` invocation fails, rebuild the image and confirm the Dockerfile logs `agentkit --version` during the builder stage.
 
 ## 6. Troubleshooting
 
@@ -62,6 +62,6 @@ docker compose run --rm celery-worker bash -lc '
 |---------|--------------|-----|
 | `codex: command not found` | Builder layer binaries not copied into runtime image | Ensure Dockerfile copies `/usr/local/bin/codex` from the Node stage and sets executable perms |
 | `approval_policy` missing from config | Merge script failed or HOME not writable | Verify entrypoint runs under the correct UID/GID and HOME resolves to `/home/app` |
-| `speckit` exits due to missing Node deps | npm global install skipped dev deps | Re-run build with clean cache and confirm `npm config set fund false` doesn’t block dependencies |
+| `agentkit` exits due to missing Node deps | npm global install skipped dev deps | Re-run build with clean cache and confirm `npm config set fund false` doesn’t block dependencies |
 
-Once all checks pass, tag/push the image and proceed to `/speckit.tasks` planning.
+Once all checks pass, tag/push the image and proceed to `/agentkit.tasks` planning.

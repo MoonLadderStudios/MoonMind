@@ -31,7 +31,7 @@
   - `task_name` (enum/string: `discover`, `submit`, `apply`, `publish`, `finalize`, `retry-hook`).
   - `state` (enum: `waiting`, `received`, `started`, `succeeded`, `failed`, `retrying`).
   - `message` (JSON / text) – structured payload describing result or failure context.
-  - `selected_skill` (derived from payload field `selectedSkill`) – selected skill identifier used for this stage attempt (default `speckit`).
+  - `selected_skill` (derived from payload field `selectedSkill`) – selected skill identifier used for this stage attempt (default `agentkit`).
   - `execution_path` (derived from payload field `executionPath`) – stage path (`skill`, `direct_fallback`, `direct_only`).
   - `artifact_paths` (JSON array) – relative paths to artifacts produced by the task (e.g., Codex logs, patches).
   - `started_at`, `finished_at` (timestamps, nullable) – used for runtime charts.

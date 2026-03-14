@@ -12,7 +12,7 @@ The selected orchestration mode for this feature is **runtime implementation**, 
 
 **Language/Version**: Python 3.11 runtime target (project range `>=3.10,<3.14`)  
 **Primary Dependencies**: FastAPI, Pydantic v2, Celery, SQLAlchemy, Docker SDK  
-**Storage**: PostgreSQL (`spec_automation_runs` / `spec_automation_task_states`), filesystem artifacts under `var/artifacts/spec_workflows`  
+**Storage**: PostgreSQL (`automation_runs` / `automation_task_states`), filesystem artifacts under `var/artifacts/workflows`  
 **Testing**: `./tools/test_unit.sh` (canonical unit-test entrypoint)  
 **Target Platform**: Docker Compose services on Linux (`api`, `codex-worker`, `gemini-worker`, `rabbitmq`)  
 **Project Type**: Backend monorepo (API + workers + workflow engine)  
@@ -44,7 +44,7 @@ The selected orchestration mode for this feature is **runtime implementation**, 
 | Principle | Status | Notes |
 |-----------|--------|-------|
 | I. One-Click Deployment with Smart Defaults | PASS | Fast-path docs remain consistent with auth scripts and current service names. |
-| II. Powerful Runtime Configurability | PASS | Contracts document conditional Speckit verification based on configured stage skills. |
+| II. Powerful Runtime Configurability | PASS | Contracts document conditional Agentkit verification based on configured stage skills. |
 | III. Modular and Extensible Architecture | PASS | API schema contract and workflow metadata model remain separated by module boundaries. |
 | IV. Avoid Exclusive Proprietary Vendor Lock-In | PASS | Adapter metadata is explicit and portable in structured payloads. |
 | V. Self-Healing by Default | PASS | Legacy default derivation rules are preserved and testable. |
@@ -78,7 +78,7 @@ specs/015-skills-workflow/
 api_service/
 └── api/
     └── routers/
-        └── spec_automation.py
+        └── automation.py
 
 moonmind/
 ├── schemas/
@@ -87,23 +87,23 @@ moonmind/
     ├── skills/
     │   ├── registry.py
     │   └── runner.py
-    └── speckit_celery/
+    └── agentkit_celery/
         ├── models.py
         └── tasks.py
 
 tests/
 └── unit/
     ├── api/
-    │   └── test_spec_automation.py
+    │   └── test_automation.py
     └── workflows/
-        ├── test_spec_automation_env.py
+        ├── test_automation_env.py
         └── test_tasks.py
 
 tools/
 └── test_unit.sh
 ```
 
-**Structure Decision**: Use the existing backend monorepo structure, with workflow normalization in `moonmind/workflows/speckit_celery/`, API schema/serialization in `moonmind/schemas/` and `api_service/api/routers/`, and regression validation in `tests/unit/`.
+**Structure Decision**: Use the existing backend monorepo structure, with workflow normalization in `moonmind/workflows/agentkit_celery/`, API schema/serialization in `moonmind/schemas/` and `api_service/api/routers/`, and regression validation in `tests/unit/`.
 
 ## Complexity Tracking
 

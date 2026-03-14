@@ -33,7 +33,7 @@ This is the normalized payload persisted by `normalize_manifest_job_payload()`.
 | `registry` | `name`, `content` (for normalization input) | `kind`, `name`, `contentHash`, `version` (`content` removed before persistence) |
 | `path` (guarded) | `path`, `content` | `kind`, `path`, `content`, `contentHash`, `version` |
 
-`path` support is gated by `spec_workflow.allow_manifest_path_source` and defaults to disabled.
+`path` support is gated by `workflow.allow_manifest_path_source` and defaults to disabled.
 
 ## Entity: Sanitized Queue API Payload (`JobModel.payload` for `type="manifest"`)
 
@@ -91,7 +91,7 @@ Notably absent from API responses: `manifest.source.content` and source-level ha
 
 | Manifest input | Mapping |
 |----------------|---------|
-| Base capability config | `settings.spec_workflow.manifest_required_capabilities` (default `manifest`) |
+| Base capability config | `settings.workflow.manifest_required_capabilities` (default `manifest`) |
 | `embeddings.provider` | Adds `embeddings` and provider token (`openai`, `google`, `ollama`) |
 | `vectorStore.type` | Adds mapped token (`qdrant`, `pgvector`, `milvus`) |
 | `dataSources[].type` | Adds mapped token (`github`, `gdrive`, `confluence`, `local_fs`) |

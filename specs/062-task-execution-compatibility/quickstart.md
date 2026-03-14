@@ -101,7 +101,7 @@ Expected outcome: runtime scope checks confirm both production runtime code and 
 
 ## 10. Planning completion gate
 
-Before running `/speckit.tasks`, ensure these artifacts exist:
+Before running `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/047-task-execution-compatibility/plan.md`
 - `specs/047-task-execution-compatibility/research.md`

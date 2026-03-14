@@ -81,7 +81,7 @@ moonmind/
     │   └── workers.py                                # planned
     ├── recurring_tasks/
     │   └── scheduler.py                              # planned migration/removal
-    └── speckit_celery/                               # planned de-scope of runtime execution ownership
+    └── agentkit_celery/                               # planned de-scope of runtime execution ownership
 
 api_service/
 ├── api/routers/

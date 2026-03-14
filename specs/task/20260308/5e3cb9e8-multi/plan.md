@@ -3,7 +3,7 @@
 **Branch**: `task/20260308/5e3cb9e8-multi` | **Date**: 2026-03-08 | **Spec**: [Link to Spec](./spec.md)
 **Input**: Feature specification from `/specs/task/20260308/5e3cb9e8-multi/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command.
+**Note**: This template is filled in by the `/agentkit.plan` command.
 
 ## Summary
 

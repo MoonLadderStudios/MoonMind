@@ -9,8 +9,8 @@
   - *Install at container runtime*: rejected because Spec workflow tasks must start instantly and sandboxed nodes often lack outbound network access.
 
 ## Decision 2: GitHub Spec Kit CLI installation approach
-- **Decision**: Install the GitHub Spec Kit CLI from its npm package (`@githubnext/spec-kit`) within the Docker build, controlled by a `SPEC_KIT_VERSION` build arg so Spec platform operators can align the CLI version with repo expectations.
-- **Rationale**: Spec Kit’s own documentation prescribes the npm CLI; using a versioned build arg keeps Celery workers consistent with other environments and simplifies upgrades (single Docker build). Installing globally exposes the `speckit` binary on PATH for both FastAPI and Celery processes.
+- **Decision**: Install the GitHub Spec Kit CLI from its npm package (`@githubnext/spec-kit`) within the Docker build, controlled by a `AGENT_KIT_VERSION` build arg so Spec platform operators can align the CLI version with repo expectations.
+- **Rationale**: Spec Kit’s own documentation prescribes the npm CLI; using a versioned build arg keeps Celery workers consistent with other environments and simplifies upgrades (single Docker build). Installing globally exposes the `agentkit` binary on PATH for both FastAPI and Celery processes.
 - **Alternatives considered**:
   - *Vendoring source files into the repo*: increases maintenance overhead and risks divergence from upstream CLI behavior.
   - *Using `npx` to download on demand*: blocked by offline/headless Celery runs and increases per-task startup time.
@@ -25,7 +25,7 @@
   - *Document manual steps only*: fails the requirement to ensure unattended Celery tasks never stall; automation is mandatory.
 
 ## Decision 4: Verification & health checks
-- **Decision**: Extend worker bootstrap/health scripts to run `codex --version`, `codex login status`, and `speckit --help` once at startup, failing fast if binaries or the managed config are missing.
+- **Decision**: Extend worker bootstrap/health scripts to run `codex --version`, `codex login status`, and `agentkit --help` once at startup, failing fast if binaries or the managed config are missing.
 - **Rationale**: Early detection prevents the Celery queue from accepting jobs that are guaranteed to fail later, aligns with spec FR-005, and surfaces actionable errors in logs. Running the commands once avoids runtime cost while still confirming installations.
 - **Alternatives considered**:
   - *Rely solely on Docker build success*: insufficient because credentials/config might be wiped between deployments.
@@ -44,9 +44,9 @@
 
 | Step | Command | Key Output |
 |------|---------|------------|
-| Build image with pinned CLIs | `CODEX_CLI_VERSION=latest SPEC_KIT_VERSION=0.4.0 docker build -t moonmind/api-service:tooling --build-arg CODEX_CLI_VERSION --build-arg SPEC_KIT_VERSION -f api_service/Dockerfile .` | `codex@latest` and `@githubnext/spec-kit@0.4.0` install logs, followed by `codex --version` → `codex latest` and `speckit --version` → `0.4.0`. |
-| Smoke CLI versions via compose | `docker compose -f docker-compose.test.yaml run --rm cli-tooling-smoke` | `codex latest` newline `speckit 0.4.0`. |
+| Build image with pinned CLIs | `CODEX_CLI_VERSION=latest AGENT_KIT_VERSION=0.4.0 docker build -t moonmind/api-service:tooling --build-arg CODEX_CLI_VERSION --build-arg AGENT_KIT_VERSION -f api_service/Dockerfile .` | `codex@latest` and `@githubnext/spec-kit@0.4.0` install logs, followed by `codex --version` → `codex latest` and `agentkit --version` → `0.4.0`. |
+| Smoke CLI versions via compose | `docker compose -f docker-compose.test.yaml run --rm cli-tooling-smoke` | `codex latest` newline `agentkit 0.4.0`. |
 | Validate approval policy merge | `docker run --rm -e HOME=/home/app moonmind/api-service:tooling bash -lc 'cat ~/.codex/config.toml'` | TOML snippet containing `approval_policy = "never"`. |
-| Worker smoke test | `docker compose run --rm celery-worker bash -lc 'speckit --version && codex login status'` | `speckit 0.4.0` followed by `Login status: authenticated` and Celery bootstrap log `Codex CLI version: latest`. |
+| Worker smoke test | `docker compose run --rm celery-worker bash -lc 'agentkit --version && codex login status'` | `agentkit 0.4.0` followed by `Login status: authenticated` and Celery bootstrap log `Codex CLI version: latest`. |
 
 > **Note**: Commands executed on a workstation with Docker Engine 24.0 and docker compose v2.27. Logs above capture successful end-to-end quickstart validation for the bundled CLIs and Codex config policy enforcement.

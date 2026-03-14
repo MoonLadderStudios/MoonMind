@@ -12,7 +12,7 @@
 ## 2. Baseline discovery (docs/spec surfaces)
 
 ```bash
-rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec[-_]automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
+rg -n "WORKFLOW_|AUTOMATION_|/api/spec-automation|/api/workflows/agentkit|Workflow|workflow|workflows|spec[-_]automation|moonmind\.workflow|var/artifacts/workflows" \
   docs specs \
   --glob '*.md' --glob '*.yaml' --glob '*.yml'
 ```
@@ -20,7 +20,7 @@ rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speck
 ## 3. Baseline discovery (runtime surfaces)
 
 ```bash
-rg -n "SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec[-_]automation|moonmind\.spec_workflow|var/artifacts/spec_workflows" \
+rg -n "WORKFLOW_|AUTOMATION_|/api/spec-automation|/api/workflows/agentkit|Workflow|workflow|workflows|spec[-_]automation|moonmind\.workflow|var/artifacts/workflows" \
   api_service services tests celery_worker \
   --glob '*.py' --glob '*.md' --glob '*.yaml' --glob '*.yml' --glob '*.sh'
 ```
@@ -74,6 +74,6 @@ Expected criteria:
 - Command: `./tools/verify_workflow_naming.sh --mode docs-spec --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
   - Result: `PASS` (`[docs-spec] PASS: No unapproved legacy naming matches found.`)
 - Command: `./tools/verify_workflow_naming.sh --mode runtime --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
-  - Result: `FAIL` (legacy tokens still present across runtime surfaces, including `moonmind/config/settings.py`, `api_service/api/routers/spec_automation.py`, and `api_service/main.py`)
+  - Result: `FAIL` (legacy tokens still present across runtime surfaces, including `moonmind/config/settings.py`, `api_service/api/routers/automation.py`, and `api_service/main.py`)
 - Command: `./tools/test_unit.sh`
   - Result: `PASS` (`895 passed, 8 subtests passed`)

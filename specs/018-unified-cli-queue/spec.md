@@ -9,8 +9,8 @@
 
 | Requirement ID | Source Citation | Requirement Summary |
 | --- | --- | --- |
-| DOC-REQ-001 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary | The platform must use one shared worker image that includes `codex`, `gemini`, `claude`, and `speckit`. |
-| DOC-REQ-002 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary, §5.1 | `speckit` must remain bundled in the same worker Dockerfile and not be separated into another image pipeline. |
+| DOC-REQ-001 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary | The platform must use one shared worker image that includes `codex`, `gemini`, `claude`, and `agentkit`. |
+| DOC-REQ-002 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary, §5.1 | `agentkit` must remain bundled in the same worker Dockerfile and not be separated into another image pipeline. |
 | DOC-REQ-003 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary, §5.2 | Worker execution jobs must use a single queue named `moonmind.jobs`. |
 | DOC-REQ-004 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary, §5.3 | Worker runtime mode must be selected by `MOONMIND_WORKER_RUNTIME` with allowed values `codex`, `gemini`, `claude`, and `universal`. |
 | DOC-REQ-005 | `docs/UnifiedCliSingleQueueArchitecture.md` §1 Summary, §5.4 | Job payloads must be runtime-neutral by default so any runtime worker can execute the same payload. |
@@ -78,15 +78,15 @@ As a maintainer, I can rely on startup health checks, runtime-neutral payload co
 
 ### Functional Requirements
 
-- **FR-001**: The worker image build pipeline MUST produce one image that includes executable `codex`, `gemini`, `claude`, and `speckit` CLIs. (Maps: DOC-REQ-001)
-- **FR-002**: The worker image build pipeline MUST keep `speckit` installation in `api_service/Dockerfile` and MUST NOT move `speckit` to a separate image pipeline. (Maps: DOC-REQ-002)
+- **FR-001**: The worker image build pipeline MUST produce one image that includes executable `codex`, `gemini`, `claude`, and `agentkit` CLIs. (Maps: DOC-REQ-001)
+- **FR-002**: The worker image build pipeline MUST keep `agentkit` installation in `api_service/Dockerfile` and MUST NOT move `agentkit` to a separate image pipeline. (Maps: DOC-REQ-002)
 - **FR-003**: Celery producer and worker configuration MUST default to one shared queue named `moonmind.jobs` for AI execution jobs. (Maps: DOC-REQ-003)
 - **FR-004**: Worker boot logic MUST enforce `MOONMIND_WORKER_RUNTIME` values `codex`, `gemini`, `claude`, or `universal`, and fail fast on invalid values. (Maps: DOC-REQ-004)
 - **FR-005**: Job payload schema MUST support runtime-neutral execution semantics and MUST avoid requiring runtime-specific command fields for baseline execution. (Maps: DOC-REQ-005)
 - **FR-006**: Optional targeted runtime execution MUST be supported through payload metadata and processed through universal worker mode without queue changes. (Maps: DOC-REQ-006)
 - **FR-007**: Compose/service configuration MUST support both homogeneous and mixed runtime fleets while all runtime workers subscribe to `moonmind.jobs`. (Maps: DOC-REQ-007)
 - **FR-008**: Runtime auth material MUST be provided through mounted config/secrets or runtime environment variables and MUST NOT be embedded in built images. (Maps: DOC-REQ-008)
-- **FR-009**: Worker startup MUST verify required CLI availability (`codex --version`, `gemini --version`, `claude --version`, `speckit --version`) and MUST block job consumption on failed checks. (Maps: DOC-REQ-009)
+- **FR-009**: Worker startup MUST verify required CLI availability (`codex --version`, `gemini --version`, `claude --version`, `agentkit --version`) and MUST block job consumption on failed checks. (Maps: DOC-REQ-009)
 - **FR-010**: The migration path MUST support phased cutover with compatibility handling before deprecating legacy queue env vars. (Maps: DOC-REQ-010)
 - **FR-011**: Worker telemetry MUST expose runtime-tagged job counters and latencies plus queue wait and execution duration metrics. (Maps: DOC-REQ-011)
 - **FR-012**: Final implementation MUST satisfy all source acceptance criteria for single-image + single-queue + env-selected runtime mode with no requeue thrash for runtime-neutral jobs. (Maps: DOC-REQ-012)

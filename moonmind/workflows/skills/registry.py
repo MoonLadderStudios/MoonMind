@@ -22,9 +22,9 @@ from .tool_registry import validate_tool_registry as validate_contract_tool_regi
 SkillRegistryError = ToolRegistryError
 SkillRegistrySnapshot = ToolRegistrySnapshot
 
-_SPECKIT_ADAPTER_ID = "speckit"
+_SPECKIT_ADAPTER_ID = "agentkit"
 _SKILL_ADAPTERS: dict[str, str] = {
-    "speckit": _SPECKIT_ADAPTER_ID,
+    "agentkit": _SPECKIT_ADAPTER_ID,
 }
 
 
@@ -102,7 +102,7 @@ def get_stage_adapter(skill_name: str) -> Optional[str]:
     return _SKILL_ADAPTERS.get(normalized)
 
 
-def skill_requires_speckit(skill_name: str) -> bool:
+def skill_requires_agentkit(skill_name: str) -> bool:
     """Return whether the provided stage skill uses the Workflow adapter."""
 
     return get_stage_adapter(skill_name) == _SPECKIT_ADAPTER_ID
@@ -124,11 +124,11 @@ def configured_stage_skills() -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def configured_stage_skills_require_speckit() -> bool:
+def configured_stage_skills_require_agentkit() -> bool:
     """Return whether current stage configuration requires Workflow CLI checks."""
 
     return any(
-        skill_requires_speckit(skill_name) for skill_name in configured_stage_skills()
+        skill_requires_agentkit(skill_name) for skill_name in configured_stage_skills()
     )
 
 
@@ -199,7 +199,7 @@ __all__ = [
     "SkillRegistryError",
     "SkillRegistrySnapshot",
     "configured_stage_skills",
-    "configured_stage_skills_require_speckit",
+    "configured_stage_skills_require_agentkit",
     "create_registry_snapshot",
     "get_stage_adapter",
     "load_registry_snapshot_from_artifact",
@@ -208,7 +208,7 @@ __all__ = [
     "parse_skill_registry",
     "parse_tool_registry",
     "resolve_stage_execution",
-    "skill_requires_speckit",
+    "skill_requires_agentkit",
     "validate_skill_registry",
     "validate_tool_registry",
 ]

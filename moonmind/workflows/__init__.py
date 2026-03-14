@@ -10,12 +10,12 @@ from moonmind.workflows.automation.orchestrator import (
     TriggeredWorkflow,
     WorkflowConflictError,
     WorkflowRetryError,
-    retry_spec_workflow_run,
-    trigger_spec_workflow_run,
+    retry_workflow_run,
+    trigger_workflow_run,
 )
 from moonmind.workflows.automation.repositories import (
-    SpecAutomationRepository,
-    SpecWorkflowRepository,
+    AutomationRepository,
+    WorkflowRepository,
 )
 from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
 from moonmind.workflows.task_proposals.service import TaskProposalService
@@ -25,16 +25,16 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
 )
 
-def get_spec_workflow_repository(session: AsyncSession) -> SpecWorkflowRepository:
+def get_workflow_repository(session: AsyncSession) -> WorkflowRepository:
     """Factory helper used by FastAPI dependencies to access workflow repositories."""
 
-    return SpecWorkflowRepository(session)
+    return WorkflowRepository(session)
 
 
-def get_spec_automation_repository(session: AsyncSession) -> SpecAutomationRepository:
+def get_automation_repository(session: AsyncSession) -> AutomationRepository:
     """Factory helper returning the Spec Automation repository."""
 
-    return SpecAutomationRepository(session)
+    return AutomationRepository(session)
 
 
 
@@ -89,8 +89,8 @@ __all__ = sorted(
     [
         "AgentQueueRepository",
         "AgentQueueService",
-        "SpecAutomationRepository",
-        "SpecWorkflowRepository",
+        "AutomationRepository",
+        "WorkflowRepository",
         "TaskProposalRepository",
         "TaskProposalService",
         "TemporalArtifactRepository",
@@ -101,14 +101,14 @@ __all__ = sorted(
         "WorkflowRetryError",
         "get_agent_queue_repository",
         "get_agent_queue_service",
-        "get_spec_automation_repository",
-        "get_spec_workflow_repository",
+        "get_automation_repository",
+        "get_workflow_repository",
         "get_task_proposal_repository",
         "get_task_proposal_service",
         "get_temporal_artifact_repository",
         "get_temporal_artifact_service",
         "get_temporal_execution_service",
-        "retry_spec_workflow_run",
-        "trigger_spec_workflow_run",
+        "retry_workflow_run",
+        "trigger_workflow_run",
     ]
 )

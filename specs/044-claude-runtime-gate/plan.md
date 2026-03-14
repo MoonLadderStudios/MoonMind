@@ -80,7 +80,7 @@ No constitution violations anticipated; additional abstractions (e.g., `moonmind
 1. Remove `_run_claude_auth_status_check` and the legacy auth-status hook so no OAuth-related subprocesses are invoked.  
 2. In `run_preflight`, determine `claude_required = runtime == "claude" or "claude" in _worker_capabilities(...)`. When true, call `resolve_anthropic_api_key(env=source)` and raise `RuntimeError("ANTHROPIC_API_KEY must be configured when Claude runtime is enabled")` if empty (keep message consistent with spec/tests).  
 3. Only verify the Claude CLI (`verify_cli_is_executable` + `claude --version`) when `claude_required` is true; skip the command entirely otherwise.  
-4. Maintain existing Codex, Gemini, Speckit, and GitHub validation order to avoid regressions.  
+4. Maintain existing Codex, Gemini, Agentkit, and GitHub validation order to avoid regressions.  
 5. Tests (`tests/unit/agents/codex_worker/test_cli.py`): 
    - `runtime=claude` without key -> raises `RuntimeError` containing missing-key message.  
    - `runtime=claude` with key -> verifies `claude --version` and skips legacy auth-status checks.  

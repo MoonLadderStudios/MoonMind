@@ -3,7 +3,7 @@
 **Branch**: `006-add-gemini-cli` | **Date**: 2025-11-23 | **Spec**: [specs/006-add-gemini-cli/spec.md](specs/006-add-gemini-cli/spec.md)
 **Input**: Feature specification from `/specs/006-add-gemini-cli/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
@@ -36,12 +36,12 @@ The feature involves adding the official `@google/gemini-cli` tool to the Docker
 
 ```text
 specs/006-add-gemini-cli/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+├── plan.md              # This file (/agentkit.plan command output)
+├── research.md          # Phase 0 output (/agentkit.plan command)
+├── data-model.md        # Phase 1 output (/agentkit.plan command)
+├── quickstart.md        # Phase 1 output (/agentkit.plan command)
+├── contracts/           # Phase 1 output (/agentkit.plan command)
+└── tasks.md             # Phase 2 output (/agentkit.tasks command - NOT created by /agentkit.plan)
 ```
 
 ### Source Code (repository root)

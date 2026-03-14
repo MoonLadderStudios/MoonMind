@@ -3,7 +3,7 @@
 **Branch**: `001-temporal-run-workflow` | **Date**: 2026-03-08 | **Spec**: `/specs/001-temporal-run-workflow/spec.md`
 **Input**: Feature specification from `/specs/001-temporal-run-workflow/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 

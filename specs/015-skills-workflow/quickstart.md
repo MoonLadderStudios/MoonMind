@@ -27,19 +27,19 @@ This persists auth state in `codex_auth_volume` and `gemini_auth_volume` for sta
 docker compose up -d rabbitmq api codex-worker gemini-worker
 ```
 
-## 3) Confirm whether configured stage skills require Speckit checks
+## 3) Confirm whether configured stage skills require Agentkit checks
 
 ```bash
 docker compose exec api python - <<'PY'
-from moonmind.workflows.skills.registry import configured_stage_skills_require_speckit
-print(configured_stage_skills_require_speckit())
+from moonmind.workflows.skills.registry import configured_stage_skills_require_agentkit
+print(configured_stage_skills_require_agentkit())
 PY
 ```
 
 Expected output:
 
-- `True` when at least one configured stage skill resolves to a Speckit adapter.
-- `False` when stage skills are configured to non-Speckit adapters.
+- `True` when at least one configured stage skill resolves to a Agentkit adapter.
+- `False` when stage skills are configured to non-Agentkit adapters.
 
 ## 4) Verify codex-worker readiness
 
@@ -50,7 +50,7 @@ docker compose logs --tail=200 codex-worker
 Expected signals:
 
 - runtime mode resolves and queue bindings are logged
-- Speckit CLI check appears only when Step 3 returned `True`
+- Agentkit CLI check appears only when Step 3 returned `True`
 - shared skills mirror validation logs appear when strict mode is enabled
 
 ## 5) Verify gemini-worker readiness

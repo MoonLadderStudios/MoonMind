@@ -14,7 +14,7 @@ Queue jobs will be stored in a first-class table with lifecycle fields and owner
 
 - Milestone 1 explicitly requires a dedicated queue table and migration.
 - Existing project conventions already separate persistence and orchestration logic.
-- Keeping queue logic isolated avoids coupling to Speckit-specific workflow tables.
+- Keeping queue logic isolated avoids coupling to Agentkit-specific workflow tables.
 
 ### Alternatives Considered
 

@@ -82,7 +82,7 @@ def _convert_artifacts(
 
 
 def _convert_task_states(
-    states: Iterable[workflow_models.SpecWorkflowTaskState],
+    states: Iterable[workflow_models.WorkflowTaskState],
 ) -> list[OrchestratorPlanStepStateModel]:
     serialized: list[OrchestratorPlanStepStateModel] = []
     for state in states:

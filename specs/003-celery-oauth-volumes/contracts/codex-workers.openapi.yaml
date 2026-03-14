@@ -11,7 +11,7 @@ paths:
   /spec-workflows/codex/shards:
     get:
       summary: List Codex worker shards and associated auth volume health
-      tags: [SpecAutomation]
+      tags: [Automation]
       responses:
         '200':
           description: Codex worker shard inventory
@@ -22,7 +22,7 @@ paths:
   /spec-workflows/runs/{run_id}/codex/preflight:
     post:
       summary: Trigger Codex pre-flight login status check for a specific run context
-      tags: [SpecAutomation]
+      tags: [Automation]
       parameters:
         - name: run_id
           in: path
@@ -48,7 +48,7 @@ paths:
   /spec-workflows/runs/{run_id}:
     get:
       summary: Retrieve Spec automation run details (augmented with Codex metadata)
-      tags: [SpecAutomation]
+      tags: [Automation]
       parameters:
         - name: run_id
           in: path
@@ -61,7 +61,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SpecAutomationRun'
+                $ref: '#/components/schemas/AutomationRun'
 components:
   schemas:
     CodexShardList:
@@ -121,7 +121,7 @@ components:
         message:
           type: string
       required: [run_id, queue_name, volume_name, status]
-    SpecAutomationRun:
+    AutomationRun:
       type: object
       properties:
         id:

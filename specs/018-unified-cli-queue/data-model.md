@@ -59,7 +59,7 @@
   - `codex_ok`
   - `gemini_ok`
   - `claude_ok`
-  - `speckit_ok`
+  - `agentkit_ok`
   - `status`
   - `message`
 - Rule:

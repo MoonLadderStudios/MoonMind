@@ -10,7 +10,7 @@
   - `status` (enum: `ready`, `needs_auth`, `error`) – reflects latest health check result.
   - `notes` (text, optional) – operator-supplied remediation or context.
 - **Relationships**:
-  - One-to-many with `SpecAutomationRun` (a volume may serve many runs over time).
+  - One-to-many with `AutomationRun` (a volume may serve many runs over time).
   - One-to-one logical mapping with `CodexWorkerShard` (each shard references exactly one volume).
 - **Validation Rules**:
   - `status=ready` requires `last_verified_at` within configured freshness window (default 24h).
@@ -27,12 +27,12 @@
   - `worker_hostname` (string) – runtime identifier of the Celery worker instance.
 - **Relationships**:
   - One-to-one with `CodexAuthVolume` during active service.
-  - One-to-many with `SpecAutomationRun` as runs are routed to the shard.
+  - One-to-many with `AutomationRun` as runs are routed to the shard.
 - **Validation Rules**:
   - `status=active` requires a mounted volume and heartbeat from Celery worker.
   - `hash_modulo` must match global routing configuration to keep deterministic mapping consistent.
 
-## Entity: SpecAutomationRun (extended fields)
+## Entity: AutomationRun (extended fields)
 - **Purpose**: Existing record for Spec Kit executions augmented with Codex routing metadata.
 - **Key Attributes (additions)**:
   - `codex_queue` (string) – queue the Codex phase executed on.
@@ -58,7 +58,7 @@
 - `active` → `draining`: Maintenance mode or planned rotation.
 - `draining` → `offline`: Worker stopped; routing should rebalance once hash configuration updates.
 
-### SpecAutomationRun
+### AutomationRun
 - On entering Codex phase, record `codex_queue`, `codex_volume`, and `codex_preflight_status`.
 - If pre-flight fails, run transitions to terminal error state with remediation message and does not execute Codex steps.
 - Successful Codex execution logs artifacts referencing the same queue/volume for audit trails.

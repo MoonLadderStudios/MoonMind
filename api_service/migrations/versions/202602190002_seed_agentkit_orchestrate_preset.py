@@ -1,4 +1,4 @@
-"""Seed global speckit-orchestrate task preset."""
+"""Seed global agentkit-orchestrate task preset."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ down_revision: Union[str, None] = "202602190001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_SLUG = "speckit-orchestrate"
+_SLUG = "agentkit-orchestrate"
 _SCOPE = "global"
 _SCOPE_REF = None
 _VERSION = "1.0.0"
@@ -32,7 +32,7 @@ def _seed_file_path() -> Path:
         Path(__file__).resolve().parents[2]
         / "data"
         / "task_step_templates"
-        / "speckit-orchestrate.yaml"
+        / "agentkit-orchestrate.yaml"
     )
 
 

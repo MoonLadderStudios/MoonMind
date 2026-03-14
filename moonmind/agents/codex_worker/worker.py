@@ -385,9 +385,9 @@ class CodexWorkerConfig:
     legacy_job_types_enabled: bool = True
     pause_poll_interval_ms: int = 5000
     worker_runtime: str = "codex"
-    default_skill: str = "speckit"
+    default_skill: str = "agentkit"
     skill_policy_mode: str = "permissive"
-    allowed_skills: tuple[str, ...] = ("speckit",)
+    allowed_skills: tuple[str, ...] = ("agentkit",)
     default_codex_model: str | None = None
     default_codex_effort: str | None = None
     default_gemini_model: str | None = _DEFAULT_GEMINI_MODEL
@@ -539,11 +539,11 @@ class CodexWorkerConfig:
                     "WORKFLOW_DEFAULT_SKILL",
                     source.get(
                         "WORKFLOW_DEFAULT_SKILL",
-                        source.get("MOONMIND_DEFAULT_SKILL", "speckit"),
+                        source.get("MOONMIND_DEFAULT_SKILL", "agentkit"),
                     ),
                 )
             ).strip()
-            or "speckit"
+            or "agentkit"
         )
         skill_policy_mode = (
             str(
@@ -3920,14 +3920,14 @@ class CodexWorker:
             }
         )
         used_skills = bool(selected_skills)
-        used_fallback = any(skill != "speckit" for skill in selected_skills)
+        used_fallback = any(skill != "agentkit" for skill in selected_skills)
         if not used_skills:
             selected_skill = "auto"
             execution_path = "direct_only"
         elif len(selected_skills) == 1:
             selected_skill = selected_skills[0]
             execution_path = (
-                "skill" if selected_skill == "speckit" else "direct_fallback"
+                "skill" if selected_skill == "agentkit" else "direct_fallback"
             )
         else:
             selected_skill = "multiple"
@@ -8690,7 +8690,7 @@ class CodexWorker:
                 job_id=job_id,
                 payload=skill_payload,
                 selected_skill=step.effective_skill_id,
-                fallback=step.effective_skill_id != "speckit",
+                fallback=step.effective_skill_id != "agentkit",
                 cancel_event=cancel_event,
                 output_chunk_callback=output_chunk_callback,
             )

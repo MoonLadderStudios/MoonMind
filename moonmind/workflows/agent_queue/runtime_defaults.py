@@ -39,14 +39,14 @@ def _clean_optional_string(value: object) -> str | None:
 
 
 def resolve_default_task_runtime(
-    spec_workflow_settings: Any,
+    workflow_settings: Any,
     *,
     fallback: str = DEFAULT_TASK_RUNTIME,
 ) -> str:
     """Return the configured queue default runtime with a stable fallback."""
 
     configured = _clean_optional_string(
-        getattr(spec_workflow_settings, "default_task_runtime", None)
+        getattr(workflow_settings, "default_task_runtime", None)
     )
     return (configured or fallback).lower()
 
@@ -54,7 +54,7 @@ def resolve_default_task_runtime(
 def resolve_runtime_defaults(
     runtime: object,
     *,
-    spec_workflow_settings: Any | None = None,
+    workflow_settings: Any | None = None,
     env: Mapping[str, str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Return default model/effort values for a normalized runtime."""
@@ -62,12 +62,12 @@ def resolve_runtime_defaults(
     runtime_key = (_clean_optional_string(runtime) or DEFAULT_TASK_RUNTIME).lower()
     resolved_env = env if env is not None else os.environ
 
-    if runtime_key == "codex" and spec_workflow_settings is not None:
+    if runtime_key == "codex" and workflow_settings is not None:
         configured_model = _clean_optional_string(
-            getattr(spec_workflow_settings, "codex_model", None)
+            getattr(workflow_settings, "codex_model", None)
         )
         configured_effort = _clean_optional_string(
-            getattr(spec_workflow_settings, "codex_effort", None)
+            getattr(workflow_settings, "codex_effort", None)
         )
         if configured_model or configured_effort:
             return (

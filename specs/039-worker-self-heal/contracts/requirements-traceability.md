@@ -3,7 +3,7 @@
 | Source Requirement | Spec Mapping | Runtime Surface | Validation Strategy | Status |
 | --- | --- | --- | --- | --- |
 | DOC-REQ-001 Detect stuck states (wall/idle/no-progress) | FR-001, FR-002 | `moonmind/agents/codex_worker/self_heal.py`, `moonmind/agents/codex_worker/worker.py` | Worker unit tests for retry/no-progress paths and timeout primitives; full `./tools/test_unit.sh` run | Implemented |
-| DOC-REQ-002 Enforce bounded budgets/defaults | FR-001 | `SelfHealConfig.from_env`, `celery_worker/speckit_worker.py` env defaults | `test_self_heal_config_from_env_defaults/overrides` + full unit suite | Implemented |
+| DOC-REQ-002 Enforce bounded budgets/defaults | FR-001 | `SelfHealConfig.from_env`, `celery_worker/agentkit_worker.py` env defaults | `test_self_heal_config_from_env_defaults/overrides` + full unit suite | Implemented |
 | DOC-REQ-003 Failure classification buckets | FR-003 | `_classify_step_failure`, `is_failure_retryable` | Worker unit tests for retryable vs deterministic behavior | Implemented |
 | DOC-REQ-004 Soft reset retries | FR-004 | `_run_codex_step_with_self_heal` attempt loop | `test_run_once_self_heal_soft_resets_retryable_step_and_recovers` | Implemented |
 | DOC-REQ-005 Hard reset + replay | FR-013 (Deferred), DR-001 | `HardResetWorkspaceBuilder` scaffold only | Phase 2 activation gate: add runtime-path worker tests validating hard-reset replay/resume behavior before marking implemented. | Deferred |

@@ -31,4 +31,4 @@
 
 ## Notes
 
-Spec maps each DOC-REQ to functional requirements, encodes the runtime deliverable guard, and documents validation (unit tests + responsive QA), so it is ready for speckit-clarify or planning.
+Spec maps each DOC-REQ to functional requirements, encodes the runtime deliverable guard, and documents validation (unit tests + responsive QA), so it is ready for agentkit-clarify or planning.

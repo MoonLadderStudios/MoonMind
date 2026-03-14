@@ -1,6 +1,6 @@
 """Workflow orchestration for Spec Automation runs.
 
-This module replaces the Celery-based orchestrator from speckit_celery.
+This module replaces the Celery-based orchestrator from agentkit_celery.
 The trigger/retry functions previously dispatched Celery task chains;
 they are now stubs that will be wired to Temporal or another executor.
 """
@@ -19,7 +19,7 @@ from moonmind.workflows.automation import models
 class TriggeredWorkflow:
     """Represents a workflow run triggered via the orchestrator."""
 
-    run: models.SpecWorkflowRun
+    run: models.WorkflowRun
 
     @property
     def run_id(self) -> UUID:
@@ -49,11 +49,11 @@ class WorkflowRetryError(RuntimeError):
 
 
 def _latest_task_state(
-    states: Iterable[models.SpecWorkflowTaskState], task_name: str
-) -> Optional[models.SpecWorkflowTaskState]:
+    states: Iterable[models.WorkflowTaskState], task_name: str
+) -> Optional[models.WorkflowTaskState]:
     """Return the most recent attempt for the given task name."""
 
-    latest: Optional[models.SpecWorkflowTaskState] = None
+    latest: Optional[models.WorkflowTaskState] = None
     for state in states:
         if state.task_name != task_name:
             continue
@@ -66,7 +66,7 @@ def _latest_task_state(
     return latest
 
 
-async def trigger_spec_workflow_run(
+async def trigger_workflow_run(
     *,
     feature_key: Optional[str],
     created_by: Optional[UUID] = None,
@@ -81,13 +81,13 @@ async def trigger_spec_workflow_run(
     """
 
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.automation.repositories import SpecWorkflowRepository
+    from moonmind.workflows.automation.repositories import WorkflowRepository
 
     if not feature_key:
         raise ValueError("feature_key is required to trigger a workflow run")
 
     async with get_async_session_context() as session:
-        repo = SpecWorkflowRepository(session)
+        repo = WorkflowRepository(session)
 
         existing = await repo.find_active_run_for_feature(feature_key)
         if existing is not None:
@@ -98,14 +98,14 @@ async def trigger_spec_workflow_run(
             created_by=created_by,
             requested_by_user_id=requested_by_user_id,
             repository=repository,
-            status=models.SpecWorkflowRunStatus.PENDING,
+            status=models.WorkflowRunStatus.PENDING,
         )
         await repo.commit()
 
     return TriggeredWorkflow(run=run)
 
 
-async def retry_spec_workflow_run(
+async def retry_workflow_run(
     run_id: UUID,
     *,
     notes: Optional[str] = None,
@@ -118,10 +118,10 @@ async def retry_spec_workflow_run(
     """
 
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.automation.repositories import SpecWorkflowRepository
+    from moonmind.workflows.automation.repositories import WorkflowRepository
 
     async with get_async_session_context() as session:
-        repo = SpecWorkflowRepository(session)
+        repo = WorkflowRepository(session)
         run = await repo.get_run(run_id, with_relations=True)
 
         if run is None:
@@ -132,8 +132,8 @@ async def retry_spec_workflow_run(
             )
 
         terminal_statuses = {
-            models.SpecWorkflowRunStatus.FAILED,
-            models.SpecWorkflowRunStatus.CANCELLED,
+            models.WorkflowRunStatus.FAILED,
+            models.WorkflowRunStatus.CANCELLED,
         }
         if run.status not in terminal_statuses:
             raise WorkflowRetryError(
@@ -144,7 +144,7 @@ async def retry_spec_workflow_run(
 
         await repo.update_run(
             run_id,
-            status=models.SpecWorkflowRunStatus.PENDING,
+            status=models.WorkflowRunStatus.PENDING,
         )
         await repo.commit()
 
@@ -155,6 +155,6 @@ __all__ = [
     "TriggeredWorkflow",
     "WorkflowConflictError",
     "WorkflowRetryError",
-    "retry_spec_workflow_run",
-    "trigger_spec_workflow_run",
+    "retry_workflow_run",
+    "trigger_workflow_run",
 ]

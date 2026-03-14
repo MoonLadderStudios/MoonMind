@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=0.104.0
-ARG SPEC_KIT_VERSION=0.4.0
+ARG AGENT_KIT_VERSION=0.4.0
 ARG CLAUDE_CLI_VERSION=2.1.50
 # Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
 # the API, orchestrator, and Celery workers can run from the same image tag.
@@ -20,7 +20,7 @@ FROM node:20-bookworm AS tooling-builder
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ARG CODEX_CLI_VERSION
-ARG SPEC_KIT_VERSION
+ARG AGENT_KIT_VERSION
 ARG INSTALL_CODEX_CLI=true
 ARG GITHUBNEXT_NPM_REGISTRY=https://npm.pkg.github.com
 ARG INSTALL_TEST_DEPS
@@ -68,8 +68,8 @@ RUN /bin/bash -euo pipefail <<'BASH'
 case "${CODEX_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid CODEX_CLI_VERSION: ${CODEX_CLI_VERSION}" >&2; exit 1;;
 esac
-case "${SPEC_KIT_VERSION}" in
-    (""|*[!0-9A-Za-z._-]*) echo "Invalid SPEC_KIT_VERSION: ${SPEC_KIT_VERSION}" >&2; exit 1;;
+case "${AGENT_KIT_VERSION}" in
+    (""|*[!0-9A-Za-z._-]*) echo "Invalid AGENT_KIT_VERSION: ${AGENT_KIT_VERSION}" >&2; exit 1;;
 esac
 case "${GEMINI_CLI_VERSION}" in
     (""|*[!0-9A-Za-z._-]*) echo "Invalid GEMINI_CLI_VERSION: ${GEMINI_CLI_VERSION}" >&2; exit 1;;
@@ -85,13 +85,13 @@ stub_codex() {
                    "exit 0" > /usr/local/bin/codex
     chmod +x /usr/local/bin/codex
 }
-stub_speckit() {
+stub_agentkit() {
     mkdir -p /usr/local/lib/node_modules/@githubnext/spec-kit
     printf 'spec-kit stub installed during fallback.\n' > /usr/local/lib/node_modules/@githubnext/spec-kit/LICENSE
     printf '%s\n' "#!/usr/bin/env bash" \
                    "echo \"spec-kit stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/speckit
-    chmod +x /usr/local/bin/speckit
+                   "exit 0" > /usr/local/bin/agentkit
+    chmod +x /usr/local/bin/agentkit
 }
 stub_gemini() {
     mkdir -p /usr/local/lib/node_modules/@google/gemini-cli
@@ -113,7 +113,7 @@ stub_claude() {
 if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
     echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex/Spec Kit install and using stubs" >&2
     stub_codex
-    stub_speckit
+    stub_agentkit
     npm cache clean --force || true
 else
     # Try installing Codex from public registry (OpenAI)
@@ -137,9 +137,9 @@ EOF
     fi
 
     # Try installing Spec Kit (Github Next) - might fail if private/no token
-    if ! npm install -g @githubnext/spec-kit@"${SPEC_KIT_VERSION}"; then
+    if ! npm install -g @githubnext/spec-kit@"${AGENT_KIT_VERSION}"; then
         echo "Warning: Failed to install Spec Kit; installing stub" >&2
-        stub_speckit
+        stub_agentkit
     fi
 fi
 
@@ -206,14 +206,14 @@ RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
         fi; \
     fi \
     && codex --version \
-    && speckit --version \
+    && agentkit --version \
     && gemini --version \
     && claude --version
 
 FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
-ARG SPEC_KIT_VERSION
+ARG AGENT_KIT_VERSION
 ARG INSTALL_TEST_DEPS
 ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
@@ -227,7 +227,7 @@ ARG INSTALL_CLAUDE_CLI
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 ENV CODEX_CLI_VERSION=${CODEX_CLI_VERSION} \
-    SPEC_KIT_VERSION=${SPEC_KIT_VERSION} \
+    AGENT_KIT_VERSION=${AGENT_KIT_VERSION} \
     PATH="/usr/local/bin:${PATH}"
 
 WORKDIR /app
@@ -237,7 +237,7 @@ WORKDIR /app
 # execute them.
 COPY --from=tooling-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
-COPY --from=tooling-builder /usr/local/bin/speckit /usr/local/bin/speckit
+COPY --from=tooling-builder /usr/local/bin/agentkit /usr/local/bin/agentkit
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -288,11 +288,11 @@ RUN apt-get update && \
 # Ensure the non-root ``app`` user exists for Celery workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/speckit /usr/local/bin/gemini /usr/local/bin/claude
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
 # repository search tooling expected by Codex runtime defaults.
-RUN runuser -u app -- sh -c 'codex --version && speckit --version && gemini --version && claude --version && rg --version'
+RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at

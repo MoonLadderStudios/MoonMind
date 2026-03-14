@@ -19,7 +19,7 @@ from moonmind.workflows.agent_queue.repositories import (
     AgentQueueRepository,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @asynccontextmanager

@@ -21,7 +21,7 @@ from api_service.db.models import (
     OrchestratorTaskStepStatus,
 )
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
-from moonmind.workflows.speckit_celery import models as workflow_models
+from moonmind.workflows.agentkit_celery import models as workflow_models
 
 
 @pytest.mark.asyncio
@@ -102,12 +102,12 @@ async def test_get_run_with_relations_returns_details(tmp_path) -> None:
         session.add(artifact)
         await session.flush()
 
-        task_state = workflow_models.SpecWorkflowTaskState(
+        task_state = workflow_models.WorkflowTaskState(
             id=uuid4(),
             orchestrator_run_id=run.id,
             workflow_run_id=None,
             task_name="verify",
-            status=workflow_models.SpecWorkflowTaskStatus.SUCCEEDED,
+            status=workflow_models.WorkflowTaskStatus.SUCCEEDED,
             attempt=1,
             plan_step=OrchestratorPlanStep.VERIFY,
             plan_step_status=OrchestratorPlanStepStatus.SUCCEEDED,

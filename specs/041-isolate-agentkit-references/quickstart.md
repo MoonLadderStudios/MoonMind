@@ -6,16 +6,16 @@
 
 ## 2. Validate adapter resolution behavior
 
-- Configure a non-speckit skill override for a workflow stage.
+- Configure a non-agentkit skill override for a workflow stage.
 - Run stage dispatch.
 - Verify stage execution records skill-path execution through adapter resolution.
 - Configure unsupported skill and verify fast failure with adapter-missing error.
 
-## 3. Validate Speckit dependency isolation
+## 3. Validate Agentkit dependency isolation
 
-- In an environment without Speckit installed, execute non-speckit runtime preflight and stage flow.
-- Verify startup and stage flow do not fail due to missing Speckit.
-- Configure speckit-selected flow and verify missing Speckit fails with clear error.
+- In an environment without Agentkit installed, execute non-agentkit runtime preflight and stage flow.
+- Verify startup and stage flow do not fail due to missing Agentkit.
+- Configure agentkit-selected flow and verify missing Agentkit fails with clear error.
 
 ## 4. Run unit tests
 

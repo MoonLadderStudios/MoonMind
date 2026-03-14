@@ -47,7 +47,7 @@ specs/041-task-recurring-schedules/
 ├── contracts/
 │   ├── recurring-tasks.openapi.yaml
 │   └── requirements-traceability.md
-└── tasks.md                # Created later by /speckit.tasks
+└── tasks.md                # Created later by /agentkit.tasks
 ```
 
 ### Source Code (repository root)

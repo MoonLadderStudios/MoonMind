@@ -18,7 +18,7 @@
 
 ## Source-Kind Strategy for Phase 0
 
-- **Decision**: Model supported kinds as `inline` and `registry` by default, with `path` gated by `spec_workflow.allow_manifest_path_source` (default `false`).
+- **Decision**: Model supported kinds as `inline` and `registry` by default, with `path` gated by `workflow.allow_manifest_path_source` (default `false`).
 - **Rationale**: This matches current runtime behavior and preserves a fail-fast posture for unsupported modes while retaining a guarded dev/test path option (FR-007).
 - **Alternatives considered**: Enabling `path` by default or adding `repo` support in this phase was rejected to avoid widening the trust/runtime surface before dedicated controls exist.
 

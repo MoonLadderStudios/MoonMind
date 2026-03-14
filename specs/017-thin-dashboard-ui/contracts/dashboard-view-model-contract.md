@@ -27,7 +27,7 @@ Define client-side model normalization and endpoint usage for consolidated and s
 
 - Queue submit: `POST /api/queue/jobs`
 - Orchestrator submit: `POST /orchestrator/runs`
-- Queue skill-based SpecKit launch: emitted as queue submit payload (`type="task"`) with `task.skill.id=speckit-*` and optional `task.skill.args` JSON object.
+- Queue skill-based AgentKit launch: emitted as queue submit payload (`type="task"`) with `task.skill.id=agentkit-*` and optional `task.skill.args` JSON object.
 
 ## Normalized Status Contract
 
@@ -46,4 +46,4 @@ Define client-side model normalization and endpoint usage for consolidated and s
 1. A failed source request must not clear successful data from other sources.
 2. Source errors are displayed as scoped warnings on relevant views.
 3. Submit failures keep current form values and surface API error message.
-4. Queue list supports filtering by task skill id so SpecKit-backed queue tasks are discoverable without a dedicated SpecKit category.
+4. Queue list supports filtering by task skill id so AgentKit-backed queue tasks are discoverable without a dedicated AgentKit category.

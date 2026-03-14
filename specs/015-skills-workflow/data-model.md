@@ -35,11 +35,11 @@ Normalized skill-routing metadata surfaced for each phase.
   - `used_fallback` (bool | null)
   - `shadow_mode_requested` (bool | null)
 - **Validation rules**:
-  - For legacy Speckit phases, missing `selected_skill` defaults to `speckit`.
-  - If `selected_skill=speckit` and `adapter_id` is missing, default `adapter_id` to `speckit`.
+  - For legacy Agentkit phases, missing `selected_skill` defaults to `agentkit`.
+  - If `selected_skill=agentkit` and `adapter_id` is missing, default `adapter_id` to `agentkit`.
   - `used_fallback=true` implies `execution_path=direct_fallback` when execution path is present.
 
-## Value Object: SpecAutomationPhaseState (API payload view)
+## Value Object: AutomationPhaseState (API payload view)
 
 Normalized API contract for phase details returned by `/api/spec-automation/runs/{run_id}`.
 

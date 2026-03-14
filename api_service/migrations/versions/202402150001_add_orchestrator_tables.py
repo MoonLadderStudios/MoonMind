@@ -319,17 +319,17 @@ def upgrade() -> None:  # noqa: D401
     )
 
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("orchestrator_run_id", sa.Uuid(), nullable=True),
     )
     op.alter_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         "workflow_run_id",
         existing_type=sa.Uuid(),
         nullable=True,
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "plan_step",
             ORCHESTRATOR_PLAN_STEP,
@@ -337,7 +337,7 @@ def upgrade() -> None:  # noqa: D401
         ),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "plan_step_status",
             ORCHESTRATOR_PLAN_STEP_STATUS,
@@ -345,7 +345,7 @@ def upgrade() -> None:  # noqa: D401
         ),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "celery_state",
             ORCHESTRATOR_TASK_STATE,
@@ -353,15 +353,15 @@ def upgrade() -> None:  # noqa: D401
         ),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("celery_task_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column("message", sa.Text(), nullable=True),
     )
     op.add_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         sa.Column(
             "artifact_refs",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -371,7 +371,7 @@ def upgrade() -> None:  # noqa: D401
 
     op.create_foreign_key(
         "fk_task_states_orchestrator_run",
-        "spec_workflow_task_states",
+        "workflow_task_states",
         "orchestrator_runs",
         ["orchestrator_run_id"],
         ["id"],
@@ -379,14 +379,14 @@ def upgrade() -> None:  # noqa: D401
     )
 
     op.create_index(
-        "ix_spec_workflow_task_states_orchestrator_run_id",
-        "spec_workflow_task_states",
+        "ix_workflow_task_states_orchestrator_run_id",
+        "workflow_task_states",
         ["orchestrator_run_id"],
     )
 
     op.create_unique_constraint(
         "uq_orchestrator_task_state_attempt",
-        "spec_workflow_task_states",
+        "workflow_task_states",
         ["orchestrator_run_id", "plan_step", "attempt"],
     )
 
@@ -396,27 +396,27 @@ def downgrade() -> None:  # noqa: D401
 
     op.drop_constraint(
         "uq_orchestrator_task_state_attempt",
-        "spec_workflow_task_states",
+        "workflow_task_states",
         type_="unique",
     )
     op.drop_index(
-        "ix_spec_workflow_task_states_orchestrator_run_id",
-        table_name="spec_workflow_task_states",
+        "ix_workflow_task_states_orchestrator_run_id",
+        table_name="workflow_task_states",
     )
     op.drop_constraint(
         "fk_task_states_orchestrator_run",
-        "spec_workflow_task_states",
+        "workflow_task_states",
         type_="foreignkey",
     )
-    op.drop_column("spec_workflow_task_states", "artifact_refs")
-    op.drop_column("spec_workflow_task_states", "message")
-    op.drop_column("spec_workflow_task_states", "celery_task_id")
-    op.drop_column("spec_workflow_task_states", "celery_state")
-    op.drop_column("spec_workflow_task_states", "plan_step_status")
-    op.drop_column("spec_workflow_task_states", "plan_step")
-    op.drop_column("spec_workflow_task_states", "orchestrator_run_id")
+    op.drop_column("workflow_task_states", "artifact_refs")
+    op.drop_column("workflow_task_states", "message")
+    op.drop_column("workflow_task_states", "celery_task_id")
+    op.drop_column("workflow_task_states", "celery_state")
+    op.drop_column("workflow_task_states", "plan_step_status")
+    op.drop_column("workflow_task_states", "plan_step")
+    op.drop_column("workflow_task_states", "orchestrator_run_id")
     op.alter_column(
-        "spec_workflow_task_states",
+        "workflow_task_states",
         "workflow_run_id",
         existing_type=sa.Uuid(),
         nullable=False,

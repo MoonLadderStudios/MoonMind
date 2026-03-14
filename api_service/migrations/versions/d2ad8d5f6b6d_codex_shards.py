@@ -109,15 +109,15 @@ def upgrade() -> None:
     )
 
     op.add_column(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column("codex_queue", sa.String(length=64), nullable=True),
     )
     op.add_column(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column("codex_volume", sa.String(length=64), nullable=True),
     )
     op.add_column(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column(
             "codex_preflight_status",
             postgresql.ENUM(name="codexpreflightstatus", create_type=False),
@@ -125,21 +125,21 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "spec_workflow_runs",
+        "workflow_runs",
         sa.Column("codex_preflight_message", sa.Text(), nullable=True),
     )
 
     op.create_foreign_key(
-        "fk_spec_workflow_runs_codex_queue",
-        "spec_workflow_runs",
+        "fk_workflow_runs_codex_queue",
+        "workflow_runs",
         "codex_worker_shards",
         ["codex_queue"],
         ["queue_name"],
         ondelete="SET NULL",
     )
     op.create_foreign_key(
-        "fk_spec_workflow_runs_codex_volume",
-        "spec_workflow_runs",
+        "fk_workflow_runs_codex_volume",
+        "workflow_runs",
         "codex_auth_volumes",
         ["codex_volume"],
         ["name"],
@@ -195,16 +195,16 @@ def downgrade() -> None:
     )
 
     op.drop_constraint(
-        "fk_spec_workflow_runs_codex_volume", "spec_workflow_runs", type_="foreignkey"
+        "fk_workflow_runs_codex_volume", "workflow_runs", type_="foreignkey"
     )
     op.drop_constraint(
-        "fk_spec_workflow_runs_codex_queue", "spec_workflow_runs", type_="foreignkey"
+        "fk_workflow_runs_codex_queue", "workflow_runs", type_="foreignkey"
     )
 
-    op.drop_column("spec_workflow_runs", "codex_preflight_message")
-    op.drop_column("spec_workflow_runs", "codex_preflight_status")
-    op.drop_column("spec_workflow_runs", "codex_volume")
-    op.drop_column("spec_workflow_runs", "codex_queue")
+    op.drop_column("workflow_runs", "codex_preflight_message")
+    op.drop_column("workflow_runs", "codex_preflight_status")
+    op.drop_column("workflow_runs", "codex_volume")
+    op.drop_column("workflow_runs", "codex_queue")
 
     op.drop_table("codex_worker_shards")
     op.drop_table("codex_auth_volumes")

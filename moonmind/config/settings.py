@@ -328,7 +328,7 @@ class TemporalDashboardSettings(BaseSettings):
     )
 
 
-class SpecWorkflowSettings(BaseSettings):
+class WorkflowSettings(BaseSettings):
     """Settings specific to Spec Kit Celery workflows."""
 
     repo_root: str = Field(
@@ -809,7 +809,7 @@ class SpecWorkflowSettings(BaseSettings):
         le=100,
     )
     default_skill: str = Field(
-        "speckit",
+        "agentkit",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_SKILL",
             "WORKFLOW_DEFAULT_SKILL",
@@ -855,7 +855,7 @@ class SpecWorkflowSettings(BaseSettings):
         description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces allowed skills list.",
     )
     allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("speckit",),
+        ("agentkit",),
         validation_alias=AliasChoices(
             "WORKFLOW_ALLOWED_SKILLS",
             "WORKFLOW_ALLOWED_SKILLS",
@@ -1340,7 +1340,7 @@ class SpecWorkflowSettings(BaseSettings):
                 setattr(self, attr, normalized or None)
 
         if not self.default_skill:
-            self.default_skill = "speckit"
+            self.default_skill = "agentkit"
         if (
             self.skill_policy_mode == "allowlist"
             and self.default_skill
@@ -1374,7 +1374,7 @@ class SpecWorkflowSettings(BaseSettings):
 # ``AppSettings.model_post_init`` to populate sensible defaults.
 
 
-class AppSpecWorkflowSettings(SpecWorkflowSettings):
+class AppWorkflowSettings(WorkflowSettings):
     """App-level variant used by `AppSettings` to avoid legacy alias overrides."""
 
     github_repository: Optional[str] = Field(
@@ -1815,8 +1815,8 @@ class AppSettings(BaseSettings):
     temporal_dashboard: TemporalDashboardSettings = Field(
         default_factory=TemporalDashboardSettings
     )
-    workflow: AppSpecWorkflowSettings = Field(
-        default_factory=AppSpecWorkflowSettings
+    workflow: AppWorkflowSettings = Field(
+        default_factory=AppWorkflowSettings
     )
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
@@ -2164,7 +2164,7 @@ class AppSettings(BaseSettings):
         ):
             repo = self.workflow_github_repository.strip()
             if repo:
-                self.workflow = AppSpecWorkflowSettings(
+                self.workflow = AppWorkflowSettings(
                     _env_file=None,
                     **self.workflow.model_dump(exclude={"github_repository"}),
                     github_repository=repo,

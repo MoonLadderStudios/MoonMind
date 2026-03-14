@@ -98,7 +98,7 @@ Expected outcome: runtime scope gates pass with production runtime implementatio
 
 ## 8. Planning artifact completion gate
 
-Before advancing to `/speckit.tasks`, ensure these artifacts exist:
+Before advancing to `/agentkit.tasks`, ensure these artifacts exist:
 
 - `specs/044-temporal-compose-foundation/plan.md`
 - `specs/044-temporal-compose-foundation/research.md`

@@ -103,7 +103,7 @@ tools/
 
 ## Implementation Readiness
 
-- Planning artifacts are complete for `/speckit.tasks` generation and implementation execution.
+- Planning artifacts are complete for `/agentkit.tasks` generation and implementation execution.
 - No unresolved clarifications remain.
 - `DOC-REQ-*` coverage is explicit and includes runtime-intent requirement `DOC-REQ-011`.
 
@@ -138,7 +138,7 @@ tools/
   - Notes: Approved historical exceptions were limited to `docs/SpecRemovalPlan.md` and `specs/040-spec-removal/*`.
 - `./tools/verify_workflow_naming.sh --mode runtime --exceptions-file specs/040-spec-removal/contracts/legacy-naming-exceptions.regex`
   - Status: FAIL
-  - Notes: Legacy naming remains in runtime surfaces (for example `moonmind/config/settings.py`, `api_service/api/routers/spec_automation.py`, and `api_service/main.py`), so runtime parity tasks remain open.
+  - Notes: Legacy naming remains in runtime surfaces (for example `moonmind/config/settings.py`, `api_service/api/routers/automation.py`, and `api_service/main.py`), so runtime parity tasks remain open.
 - `./tools/test_unit.sh`
   - Status: PASS
   - Notes: `895 passed, 8 subtests passed`.

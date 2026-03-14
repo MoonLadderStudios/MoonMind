@@ -32,13 +32,13 @@ Implement the mm-orchestrator service inside the MoonMind docker-compose stack s
 
 ```text
 specs/005-orchestrator-architecture/
-├── plan.md              # /speckit.plan output (this file)
+├── plan.md              # /agentkit.plan output (this file)
 ├── spec.md              # Approved feature specification
 ├── research.md          # Phase 0 research log
 ├── data-model.md        # Phase 1 entity + validation design
 ├── quickstart.md        # Phase 1 operational onboarding guide
 ├── contracts/           # Phase 1 API contracts (OpenAPI)
-└── checklists/          # Specification quality artifacts from /speckit.specify
+└── checklists/          # Specification quality artifacts from /agentkit.specify
 ```
 
 ### Source Code (repository root)

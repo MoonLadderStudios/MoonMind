@@ -1,9 +1,9 @@
 # Research: Remote Worker Daemon (015 Alignment)
 
-## Decision 1: Startup preflight now enforces Speckit capability
+## Decision 1: Startup preflight now enforces Agentkit capability
 
-- **Decision**: Extend daemon preflight to verify `speckit` executable and run `speckit --version` before claim loop start.
-- **Rationale**: 015 umbrella requires Speckit to be present across worker runtimes, not only Celery workers.
+- **Decision**: Extend daemon preflight to verify `agentkit` executable and run `agentkit --version` before claim loop start.
+- **Rationale**: 015 umbrella requires Agentkit to be present across worker runtimes, not only Celery workers.
 - **Alternative rejected**: Deferred check after claim was rejected because it allows unready workers to claim jobs.
 
 ## Decision 2: Embedding readiness check is part of startup gate

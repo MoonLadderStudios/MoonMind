@@ -5,14 +5,14 @@
 Startup preflight diagnostics for standalone worker runtime.
 
 - `codex_cli_available` (bool)
-- `speckit_cli_available` (bool)
+- `agentkit_cli_available` (bool)
 - `codex_login_status` (`passed` | `failed`)
 - `embedding_provider` (str)
 - `embedding_model` (str)
 - `embedding_credentials_available` (bool)
 
 Validation rules:
-- startup readiness requires `codex_cli_available=true`, `speckit_cli_available=true`, and `codex_login_status=passed`.
+- startup readiness requires `codex_cli_available=true`, `agentkit_cli_available=true`, and `codex_login_status=passed`.
 - when `embedding_provider=google`, `embedding_credentials_available` must be true.
 
 ## Value Object: RemoteWorkerSkillPolicy
@@ -84,8 +84,8 @@ Handler output used by daemon terminal transitions.
 1. Job is claimed (`queued` -> `running`) with local execution metadata computed.
 2. Handler path is selected:
    - `codex_exec` -> `direct_only`
-   - `codex_skill` + `skillId=speckit` -> `skill`
-   - `codex_skill` + allowlisted non-speckit -> `direct_fallback`
+   - `codex_skill` + `skillId=agentkit` -> `skill`
+   - `codex_skill` + allowlisted non-agentkit -> `direct_fallback`
 3. Artifacts upload (best effort per artifact) while job remains running.
 4. Terminal transition:
    - success -> `succeeded`

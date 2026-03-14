@@ -51,7 +51,7 @@ fi
 
 export MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP=1
 
-# Clear worker-specific overrides so SpecWorkflowSettings-based tests use
+# Clear worker-specific overrides so WorkflowSettings-based tests use
 # repository defaults instead of container env hints.
 unset WORKFLOW_GITHUB_REPOSITORY
 unset WORKFLOW_REPO_ROOT

@@ -5,7 +5,7 @@
 Start MoonMind workflow services on the fastest path so Celery stages run with:
 
 - persistent Codex authentication,
-- Speckit always available on workers,
+- Agentkit always available on workers,
 - Google Gemini embeddings as the vector default.
 
 ## Prerequisites
@@ -20,10 +20,10 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
   - `CODEX_MODEL=gpt-5-codex`
   - `GITHUB_TOKEN=<token_with_repo_access>`
   - `CODEX_VOLUME_NAME=codex_auth_volume` (or your override)
-- Optional skills policy overrides (defaults keep Speckit-first parity):
+- Optional skills policy overrides (defaults keep Agentkit-first parity):
   - `WORKFLOW_USE_SKILLS=true`
-  - `WORKFLOW_DEFAULT_SKILL=speckit`
-  - `WORKFLOW_ALLOWED_SKILLS=speckit`
+  - `WORKFLOW_DEFAULT_SKILL=agentkit`
+  - `WORKFLOW_ALLOWED_SKILLS=agentkit`
 
 ## Fastest Path (Docker Compose)
 
@@ -46,7 +46,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
    Expected signals:
    - Spec Kit CLI detection logs are present.
    - Codex preflight status is `passed`.
-   - Queue bindings include `speckit` and `codex`.
+   - Queue bindings include `agentkit` and `codex`.
 
 4. **Verify Gemini worker readiness**
    ```bash
@@ -88,7 +88,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
    curl http://localhost:5000/api/workflows/runs/{run_id}/tasks | jq
    ```
    Stage payloads should include:
-   - `selectedSkill` (default `speckit` unless overridden),
+   - `selectedSkill` (default `agentkit` unless overridden),
    - `executionPath` (`skill`, `direct_fallback`, or `direct_only`).
 
 3. **Inspect artifacts**

@@ -105,7 +105,7 @@ def _serialize_datetime(value: datetime | None) -> str | None:
     return value.isoformat()
 
 
-def serialize_task_state(state: models.SpecWorkflowTaskState) -> SerializedTaskState:
+def serialize_task_state(state: models.WorkflowTaskState) -> SerializedTaskState:
     """Convert a task state model into a serializable dictionary."""
 
     return SerializedTaskState(
@@ -124,7 +124,7 @@ def serialize_task_state(state: models.SpecWorkflowTaskState) -> SerializedTaskS
 
 
 def _task_state_latest_timestamp(
-    state: models.SpecWorkflowTaskState,
+    state: models.WorkflowTaskState,
 ) -> datetime | None:
     """Return the most recent timestamp associated with a task state."""
 
@@ -132,11 +132,11 @@ def _task_state_latest_timestamp(
 
 
 def _latest_task_states(
-    states: Iterable[models.SpecWorkflowTaskState],
-) -> list[models.SpecWorkflowTaskState]:
+    states: Iterable[models.WorkflowTaskState],
+) -> list[models.WorkflowTaskState]:
     """Collapse multiple attempts down to the most recent per task."""
 
-    latest: dict[str, models.SpecWorkflowTaskState] = {}
+    latest: dict[str, models.WorkflowTaskState] = {}
     for state in states:
         existing = latest.get(state.task_name)
         if existing is None:
@@ -166,7 +166,7 @@ def _latest_task_states(
 
 
 def serialize_task_summary(
-    states: Iterable[models.SpecWorkflowTaskState],
+    states: Iterable[models.WorkflowTaskState],
 ) -> list[SerializedTaskSummary]:
     """Serialize only the latest attempt for each workflow task."""
 
@@ -199,7 +199,7 @@ def serialize_artifact(artifact: models.WorkflowArtifact) -> SerializedArtifact:
 
 
 def serialize_task_collection(
-    run_id: UUID, states: Iterable[models.SpecWorkflowTaskState]
+    run_id: UUID, states: Iterable[models.WorkflowTaskState]
 ) -> dict[str, object]:
     """Serialize task states grouped under a workflow run identifier."""
 
@@ -234,12 +234,12 @@ def _serialize_credential_audit(
 
 
 def serialize_run(
-    run: models.SpecWorkflowRun,
+    run: models.WorkflowRun,
     *,
     include_tasks: bool = False,
     include_artifacts: bool = False,
     include_credential_audit: bool = False,
-    task_states: Iterable[models.SpecWorkflowTaskState] | None = None,
+    task_states: Iterable[models.WorkflowTaskState] | None = None,
 ) -> SerializedRun:
     """Serialize a workflow run and optionally its related entities."""
 
@@ -272,7 +272,7 @@ def serialize_run(
         updatedAt=_serialize_datetime(run.updated_at),
     )
 
-    task_state_list: list[models.SpecWorkflowTaskState] = []
+    task_state_list: list[models.WorkflowTaskState] = []
     if task_states is not None:
         task_state_list = list(task_states)
     elif "task_states" in run.__dict__:

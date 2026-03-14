@@ -28,10 +28,10 @@
 
 - [x] T004 Create Alembic migration `api_service/migrations/versions/<timestamp>_workflow_chain.py` adding `workflow_runs`, `workflow_task_states`, `workflow_credential_audits`, and `workflow_artifacts` per `data-model.md`.
 - [x] T005 Update ORM models in `api_service/db/models.py` so SQLAlchemy knows about the new tables, FKs, and relationships.
-- [x] T006 Implement persistence helpers in `moonmind/workflows/speckit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
-- [x] T007 Expand Pydantic schemas in `moonmind/schemas/workflow_models.py` and serializers in `moonmind/workflows/speckit_celery/serializers.py` to match the contract outputs.
-- [x] T008 Add artifact storage utilities in `moonmind/workflows/speckit_celery/storage.py` (new file) that normalize `var/artifacts/workflow_runs/<run_id>` paths, file metadata, and digests.
-- [x] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/speckit_celery/celeryconfig.py` and ensure `celery_worker/speckit_worker.py` consumes those settings on startup.
+- [x] T006 Implement persistence helpers in `moonmind/workflows/agentkit_celery/repositories.py` to insert/update runs, task states, artifacts, and credential audits transactionally.
+- [x] T007 Expand Pydantic schemas in `moonmind/schemas/workflow_models.py` and serializers in `moonmind/workflows/agentkit_celery/serializers.py` to match the contract outputs.
+- [x] T008 Add artifact storage utilities in `moonmind/workflows/agentkit_celery/storage.py` (new file) that normalize `var/artifacts/workflow_runs/<run_id>` paths, file metadata, and digests.
+- [x] T009 Configure the single `codex` queue plus QoS defaults inside `moonmind/workflows/agentkit_celery/celeryconfig.py` and ensure `celery_worker/agentkit_worker.py` consumes those settings on startup.
 
 **Checkpoint**: Database + serialization + Celery plumbing ready for user stories.
 
@@ -46,11 +46,11 @@
 - [x] T011 [P] [US1] Add contract coverage for `POST /api/workflows/runs` in `tests/contract/test_workflow_api.py`, checking 202 payload shape and idempotent branch names.
 
 ### Implementation
-- [x] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/speckit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `WorkflowRun`.
-- [x] T013 [US1] Implement discovery, submit, apply/poll, publish, and finalize tasks with artifact writes inside `moonmind/workflows/speckit_celery/tasks.py`.
-- [x] T014 [US1] Create Codex/GitHub helper functions in `moonmind/workflows/speckit_celery/services.py` to enforce idempotent branch naming, push commits, and capture JSONL log paths.
+- [x] T012 [US1] Build the Celery chain/orchestrator in `moonmind/workflows/agentkit_celery/__init__.py`, composing immutable signatures and saving `AsyncResult` IDs onto `WorkflowRun`.
+- [x] T013 [US1] Implement discovery, submit, apply/poll, publish, and finalize tasks with artifact writes inside `moonmind/workflows/agentkit_celery/tasks.py`.
+- [x] T014 [US1] Create Codex/GitHub helper functions in `moonmind/workflows/agentkit_celery/services.py` to enforce idempotent branch naming, push commits, and capture JSONL log paths.
 - [x] T015 [US1] Wire `POST /api/workflows/runs` inside `api_service/api/routers/workflows.py` to validate input, create `WorkflowRun`, and enqueue the chain.
-- [x] T016 [US1] Update worker bootstrap scripts (`celery_worker/speckit_worker.py` and `celery_worker/scripts/codex_login_proxy.py`) to run Codex preflight checks and mount the configured auth volume before tasks start.
+- [x] T016 [US1] Update worker bootstrap scripts (`celery_worker/agentkit_worker.py` and `celery_worker/scripts/codex_login_proxy.py`) to run Codex preflight checks and mount the configured auth volume before tasks start.
 
 **Checkpoint**: Triggering a run now creates branches/PRs and stores Codex artifacts automatically.
 
@@ -65,11 +65,11 @@
 - [x] T018 [P] [US2] Add contract tests for `GET /api/workflows/runs`, `/runs/{id}`, `/runs/{id}/tasks`, and `/runs/{id}/artifacts` in `tests/contract/test_workflow_api.py`.
 
 ### Implementation
-- [x] T019 [US2] Implement run listing/filtering + task-state fetchers in `moonmind/workflows/speckit_celery/repositories.py`, including cursor pagination and error handling.
-- [x] T020 [US2] Enhance `moonmind/workflows/speckit_celery/serializers.py` to embed task states, credential audit info, and artifacts per the OpenAPI schema.
+- [x] T019 [US2] Implement run listing/filtering + task-state fetchers in `moonmind/workflows/agentkit_celery/repositories.py`, including cursor pagination and error handling.
+- [x] T020 [US2] Enhance `moonmind/workflows/agentkit_celery/serializers.py` to embed task states, credential audit info, and artifacts per the OpenAPI schema.
 - [x] T021 [US2] Add GET handlers for runs, run detail, task states, and artifacts inside `api_service/api/routers/workflows.py`, enforcing auth + query validation.
-- [x] T022 [US2] Update `moonmind/workflows/speckit_celery/tasks.py` to emit structured status snapshots (state, timestamps, payload refs) into `WorkflowTaskState`.
-- [x] T023 [US2] Document monitoring workflows (API polling + expected logs) in `specs/001-celery-chain-workflow/quickstart.md` and `docs/SpecKitAutomation.md`.
+- [x] T022 [US2] Update `moonmind/workflows/agentkit_celery/tasks.py` to emit structured status snapshots (state, timestamps, payload refs) into `WorkflowTaskState`.
+- [x] T023 [US2] Document monitoring workflows (API polling + expected logs) in `specs/001-celery-chain-workflow/quickstart.md` and `docs/AgentKitAutomation.md`.
 
 **Checkpoint**: Operators can rely on the API to observe progress and download artifacts.
 
@@ -85,9 +85,9 @@
 
 ### Implementation
 - [x] T026 [US3] Implement retry orchestration helpers (`retry_workflow_run`, guard rails) in `moonmind/workflows/__init__.py` to locate failing task outputs and enqueue resumes.
-- [x] T027 [US3] Update `moonmind/workflows/speckit_celery/tasks.py` to accept resume tokens, skip completed tasks, and reload artifacts/logs as inputs.
+- [x] T027 [US3] Update `moonmind/workflows/agentkit_celery/tasks.py` to accept resume tokens, skip completed tasks, and reload artifacts/logs as inputs.
 - [x] T028 [US3] Add the retry endpoint + validation to `api_service/api/routers/workflows.py`, surfacing guidance when retries are unsafe.
-- [x] T029 [US3] Persist retry metadata (attempt counters, operator notes, extra artifacts) in `moonmind/workflows/speckit_celery/repositories.py` and `moonmind/workflows/speckit_celery/storage.py`.
+- [x] T029 [US3] Persist retry metadata (attempt counters, operator notes, extra artifacts) in `moonmind/workflows/agentkit_celery/repositories.py` and `moonmind/workflows/agentkit_celery/storage.py`.
 
 **Checkpoint**: Failed runs can be resumed safely with complete audit trails.
 
@@ -96,19 +96,19 @@
 ## Phase 6: Polish & Cross-Cutting Concerns
 **Purpose**: Hardening, documentation, and observability after core stories ship.
 
-- [x] T030 [P] Refresh operator runbooks in `docs/ops-runbook.md` and `docs/SpecKitAutomationInstructions.md` with queue setup, retry procedures, and artifact locations.
-- [x] T031 Add structured logging + StatsD hooks for each Celery phase in `moonmind/config/logging.py` and `moonmind/workflows/speckit_celery/tasks.py`.
+- [x] T030 [P] Refresh operator runbooks in `docs/ops-runbook.md` and `docs/AgentKitAutomationInstructions.md` with queue setup, retry procedures, and artifact locations.
+- [x] T031 Add structured logging + StatsD hooks for each Celery phase in `moonmind/config/logging.py` and `moonmind/workflows/agentkit_celery/tasks.py`.
 - [x] T032 Validate the end-to-end flow via `specs/001-celery-chain-workflow/quickstart.md`, capturing sample run IDs/artifacts for documentation.
 
 ---
 
 ## Phase 7: 015 Skills-First Alignment (Cross-Story)
-**Purpose**: Align 001 runtime and docs to the 015 umbrella direction (Speckit always available + skills-first orchestration).
+**Purpose**: Align 001 runtime and docs to the 015 umbrella direction (Agentkit always available + skills-first orchestration).
 
-- [x] T033 [P] Add skills-first runtime package scaffolding in `moonmind/workflows/skills/__init__.py`, `moonmind/workflows/skills/contracts.py`, `moonmind/workflows/skills/registry.py`, `moonmind/workflows/skills/runner.py`, and `moonmind/workflows/skills/speckit_adapter.py`.
+- [x] T033 [P] Add skills-first runtime package scaffolding in `moonmind/workflows/skills/__init__.py`, `moonmind/workflows/skills/contracts.py`, `moonmind/workflows/skills/registry.py`, `moonmind/workflows/skills/runner.py`, and `moonmind/workflows/skills/agentkit_adapter.py`.
 - [x] T034 Extend workflow settings with skills policy flags and per-stage overrides in `moonmind/config/settings.py`.
-- [x] T035 Integrate skills policy resolution + stage execution metadata into discover/submit/publish tasks in `moonmind/workflows/speckit_celery/tasks.py`.
-- [x] T036 Ensure Speckit capability checks run at startup for both `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py`.
+- [x] T035 Integrate skills policy resolution + stage execution metadata into discover/submit/publish tasks in `moonmind/workflows/agentkit_celery/tasks.py`.
+- [x] T036 Ensure Agentkit capability checks run at startup for both `celery_worker/agentkit_worker.py` and `celery_worker/gemini_worker.py`.
 - [x] T037 Add unit coverage for skills runner decisions and fallback behavior in `tests/unit/workflows/test_skills_runner.py`.
 - [x] T038 Update existing task-flow tests to assert `selectedSkill` and `executionPath` payload fields in `tests/unit/workflows/test_tasks.py`.
 - [x] T039 Update 001 spec artifacts (`spec.md`, `plan.md`, `quickstart.md`, `tasks.md`) to explicitly reflect the 015 umbrella alignment contract.

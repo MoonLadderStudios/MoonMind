@@ -4,7 +4,7 @@
 
 - **Description**: Maps a workflow skill identifier to a concrete adapter implementation identifier.
 - **Fields**:
-  - `skill_name` (string): selected skill ID (for example `speckit`, `custom`).
+  - `skill_name` (string): selected skill ID (for example `agentkit`, `custom`).
   - `adapter_id` (string): adapter implementation key resolved from registry.
   - `supports_stage` (set[string]): stage names supported by the adapter.
 - **Rules**:
@@ -16,10 +16,10 @@
 - **Description**: Runtime preflight decision for which external CLI dependencies are required for current execution context.
 - **Fields**:
   - `selected_skills` (set[string]): effective skills in scope for startup/task execution.
-  - `requires_speckit` (bool): true only when selected skills include `speckit`.
+  - `requires_agentkit` (bool): true only when selected skills include `agentkit`.
   - `missing_dependencies` (list[string]): required dependencies that failed verification.
 - **Rules**:
-  - Non-speckit-only contexts must not require Speckit.
+  - Non-agentkit-only contexts must not require Agentkit.
   - Any missing required dependency fails preflight with actionable error message.
 
 ## Entity: WorkflowRouteAliasUsage
@@ -27,7 +27,7 @@
 - **Description**: Captures use of deprecated workflow API aliases.
 - **Fields**:
   - `request_path` (string): invoked route path.
-  - `alias_type` (string): deprecated alias class (`legacy_speckit_prefix`).
+  - `alias_type` (string): deprecated alias class (`legacy_agentkit_prefix`).
   - `timestamp` (datetime): request handling time.
   - `run_id` (UUID | null): optional run identifier extracted from route params.
 - **Rules**:

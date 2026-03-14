@@ -50,7 +50,7 @@ Notes:
 
 ## 7. Planning artifact completion gate
 
-Ensure these files are present and coherent before moving to `/speckit.tasks`:
+Ensure these files are present and coherent before moving to `/agentkit.tasks`:
 
 - `specs/041-task-finish-summary/plan.md`
 - `specs/041-task-finish-summary/research.md`

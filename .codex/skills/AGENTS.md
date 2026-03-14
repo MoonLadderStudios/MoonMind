@@ -10,22 +10,22 @@ Guidelines for editing agent definitions, skills, and prompts in this repository
 
 ### Claude Code Runtime (`.claude/`)
 
-- `.claude/commands/` - Command prompt files for Spec Kit workflow (speckit.\*.md)
+- `.claude/commands/` - Command prompt files for Spec Kit workflow (agentkit.\*.md)
 - `.claude/skills` - Symlink to `../skills` (shared skills)
 
 ### Codex CLI Runtime (`.codex/`)
 
-- `.codex/prompts/` - Prompt files for Spec Kit workflow (speckit.\*.md)
+- `.codex/prompts/` - Prompt files for Spec Kit workflow (agentkit.\*.md)
 - `.codex/skills` - Symlink to `../skills` (shared skills)
 
 ### Gemini CLI Runtime (`.gemini/`)
 
-- `.gemini/commands/` - Command prompt files for Spec Kit workflow (speckit.\*.toml)
+- `.gemini/commands/` - Command prompt files for Spec Kit workflow (agentkit.\*.toml)
 
 ### GitHub Copilot CLI Runtime (`.github/`)
 
-- `.github/agents/` - Spec Kit agent definitions for Copilot CLI (speckit.\*.agent.md)
-- `.github/prompts/` - Prompt files for Copilot CLI (speckit.\*.prompt.md)
+- `.github/agents/` - Spec Kit agent definitions for Copilot CLI (agentkit.\*.agent.md)
+- `.github/prompts/` - Prompt files for Copilot CLI (agentkit.\*.prompt.md)
 - `.github/skills/` - Symlink to `../skills` (shared skills)
 - `.github/workflows/` - CI workflow definitions (ci.yml)
 
@@ -61,9 +61,9 @@ Install and authenticate the required CLI tools before running skills. See `READ
 
 **File Naming**
 
-- Skills: `<tool>-<action>` directories (e.g., `codex-ask/`, `speckit-plan/`)
+- Skills: `<tool>-<action>` directories (e.g., `codex-ask/`, `agentkit-plan/`)
 - Agents: `<tool>-<action>.md` (e.g., `codex-ask.md`)
-- Commands: `<tool>.<action>.md` (e.g., `speckit.plan.md`)
+- Commands: `<tool>.<action>.md` (e.g., `agentkit.plan.md`)
 - Prompts: `<tool>.<action>.prompt.md` or `<tool>.<action>.agent.md`
 - Use kebab-case for multi-word names
 
@@ -84,7 +84,7 @@ This repository uses symlinks to share skills across runtimes:
 
 **Source Skills** (`skills/`)
 
-- Primary location for Spec Kit skills (speckit-\*)
+- Primary location for Spec Kit skills (agentkit-\*)
 - Contains actual skill directories with `SKILL.md` (front matter + documentation)
 
 **Symlinked Skills**
@@ -143,7 +143,7 @@ This repository uses symlinks to share skills across runtimes:
 
 ## Runtime Assets
 
-- **Skills**: All skills live in `skills/` (including `speckit-*`, `dnd-*`, and `runtime-*`) and are shared via symlinks in `.claude/skills`, `.codex/skills`, and `.github/skills`.
+- **Skills**: All skills live in `skills/` (including `agentkit-*`, `dnd-*`, and `runtime-*`) and are shared via symlinks in `.claude/skills`, `.codex/skills`, and `.github/skills`.
 - **Claude Code**: Spec Kit command prompts in `.claude/commands/`; uses shared skills via the symlinked `.claude/skills`.
 - **Codex CLI**: Spec Kit prompt files in `.codex/prompts/`; uses shared skills via the symlinked `.codex/skills`.
 - **GitHub Copilot CLI**: Spec Kit agents in `.github/agents/`, prompts in `.github/prompts/`, and shared skills via `.github/skills`.
@@ -152,15 +152,15 @@ This repository uses symlinks to share skills across runtimes:
 ### Current skill inventory
 
 - Shared skills include:
-  - Spec Kit workflow: `speckit-constitution`, `speckit-specify`, `speckit-baseline`, `speckit-clarify`, `speckit-plan`, `speckit-analyze`, `speckit-tasks`, `speckit-implement`, `speckit-checklist`, `speckit-taskstoissues`, `speckit-orchestrate`.
+  - Spec Kit workflow: `agentkit-constitution`, `agentkit-specify`, `agentkit-baseline`, `agentkit-clarify`, `agentkit-plan`, `agentkit-analyze`, `agentkit-tasks`, `agentkit-implement`, `agentkit-checklist`, `agentkit-taskstoissues`, `agentkit-orchestrate`.
   - DnD docs workflow: `dnd-review`, `dnd-design`.
   - Host runtime docs workflow: `runtime-design`, `runtime-design-all`.
 - File patterns by runtime:
   - Source configs: `skills/*/SKILL.md`
-  - Claude commands: `.claude/commands/speckit.<name>.md`
-  - Codex prompts: `.codex/prompts/speckit.<name>.md`
-  - Copilot prompts/agents: `.github/prompts/speckit.<name>.prompt.md` and `.github/agents/speckit.<name>.agent.md`
-  - Gemini commands: `.gemini/commands/speckit.<name>.toml`
+  - Claude commands: `.claude/commands/agentkit.<name>.md`
+  - Codex prompts: `.codex/prompts/agentkit.<name>.md`
+  - Copilot prompts/agents: `.github/prompts/agentkit.<name>.prompt.md` and `.github/agents/agentkit.<name>.agent.md`
+  - Gemini commands: `.gemini/commands/agentkit.<name>.toml`
   - Note: `dnd-*` and `runtime-*` skills are invoked directly from `skills/*/SKILL.md` and do not require runtime-specific command wrappers.
 
 ## Spec Kit Workflow
@@ -194,22 +194,22 @@ The canonical Spec Kit workflow follows these phases in order:
 
 | Phase | Agent skill            | Purpose                                  | Output Files                                    | Required        |
 | ----- | ---------------------- | ---------------------------------------- | ----------------------------------------------- | --------------- |
-| 1     | `speckit-constitution` | Define project principles and governance | `.specify/memory/constitution.md`               | First time only |
-| 2     | `speckit-specify`      | Capture feature requirements             | `specs/N-name/spec.md`, branch `N-name`         | Yes             |
-| 3     | `speckit-clarify`      | Resolve specification ambiguities        | Updated `spec.md`                               | Optional        |
-| 4     | `speckit-plan`         | Create technical implementation strategy | `plan.md`, `research.md`, `data-model.md`, etc. | Yes             |
-| 5     | `speckit-tasks`        | Break work into actionable units         | `specs/N-name/tasks.md`                         | Yes             |
-| 6     | `speckit-analyze`      | Validate cross-artifact consistency      | Analysis report                                 | Optional        |
-| 7     | `speckit-implement`    | Execute all tasks to build feature       | Implementation code/files                       | Yes             |
+| 1     | `agentkit-constitution` | Define project principles and governance | `.specify/memory/constitution.md`               | First time only |
+| 2     | `agentkit-specify`      | Capture feature requirements             | `specs/N-name/spec.md`, branch `N-name`         | Yes             |
+| 3     | `agentkit-clarify`      | Resolve specification ambiguities        | Updated `spec.md`                               | Optional        |
+| 4     | `agentkit-plan`         | Create technical implementation strategy | `plan.md`, `research.md`, `data-model.md`, etc. | Yes             |
+| 5     | `agentkit-tasks`        | Break work into actionable units         | `specs/N-name/tasks.md`                         | Yes             |
+| 6     | `agentkit-analyze`      | Validate cross-artifact consistency      | Analysis report                                 | Optional        |
+| 7     | `agentkit-implement`    | Execute all tasks to build feature       | Implementation code/files                       | Yes             |
 
 **Additional Agent skills:**
 
 | Agent skill             | Purpose                               | When to Use                      |
 | ----------------------- | ------------------------------------- | -------------------------------- |
-| `speckit-baseline`      | Generate specs from existing code     | Documenting legacy/existing code |
-| `speckit-checklist`     | Generate custom validation checklists | Quality assurance at any phase   |
-| `speckit-taskstoissues` | Convert tasks to GitHub issues        | Project management integration   |
-| `speckit-orchestrate`   | Run specify → plan → tasks → analyze → remediation → implement as one flow | End-to-end single-command feature delivery |
+| `agentkit-baseline`      | Generate specs from existing code     | Documenting legacy/existing code |
+| `agentkit-checklist`     | Generate custom validation checklists | Quality assurance at any phase   |
+| `agentkit-taskstoissues` | Convert tasks to GitHub issues        | Project management integration   |
+| `agentkit-orchestrate`   | Run specify → plan → tasks → analyze → remediation → implement as one flow | End-to-end single-command feature delivery |
 
 ### Skill Dependencies
 
@@ -259,46 +259,46 @@ src/                              # Implementation (Phase 7)
 
 Building a new project from scratch:
 
-1. Run the `speckit-constitution` agent skill (project setup, once)
+1. Run the `agentkit-constitution` agent skill (project setup, once)
 2. For each feature:
-   - `speckit-specify` - Create spec
-   - `speckit-clarify` - Optional, resolve ambiguities
-   - `speckit-plan` - Design implementation
-   - `speckit-tasks` - Break down work
-   - `speckit-implement` - Build feature
+   - `agentkit-specify` - Create spec
+   - `agentkit-clarify` - Optional, resolve ambiguities
+   - `agentkit-plan` - Design implementation
+   - `agentkit-tasks` - Break down work
+   - `agentkit-implement` - Build feature
 
 #### Brownfield Enhancement (Adding to Existing Code)
 
 Adding features to existing codebase:
 
-1. `speckit-constitution` - Define principles if not already done
-2. `speckit-baseline src/existing-feature/` - Generate specs from existing code (optional, for documentation)
-3. `speckit-specify` - Feature spec with integration notes
-4. `speckit-plan` - Integration strategy considering existing architecture
-5. `speckit-tasks` - Incremental changes
-6. `speckit-analyze` - Validate compatibility
-7. `speckit-implement` - Update existing + add new files
+1. `agentkit-constitution` - Define principles if not already done
+2. `agentkit-baseline src/existing-feature/` - Generate specs from existing code (optional, for documentation)
+3. `agentkit-specify` - Feature spec with integration notes
+4. `agentkit-plan` - Integration strategy considering existing architecture
+5. `agentkit-tasks` - Incremental changes
+6. `agentkit-analyze` - Validate compatibility
+7. `agentkit-implement` - Update existing + add new files
 
 #### Legacy Code Documentation
 
 Documenting existing code before refactoring:
 
-1. `speckit-constitution` - Define principles if not already done
-2. `speckit-baseline src/legacy-module/` - Generate specs from code
-3. `speckit-clarify` - Review and validate generated requirements
-4. `speckit-plan` - Plan modernization or refactoring
-5. `speckit-tasks` - Break down changes
-6. `speckit-implement` - Execute refactoring
+1. `agentkit-constitution` - Define principles if not already done
+2. `agentkit-baseline src/legacy-module/` - Generate specs from code
+3. `agentkit-clarify` - Review and validate generated requirements
+4. `agentkit-plan` - Plan modernization or refactoring
+5. `agentkit-tasks` - Break down changes
+6. `agentkit-implement` - Execute refactoring
 
 #### Creative Exploration (Parallel Approaches)
 
 Testing multiple technical approaches:
 
-1. `speckit-specify` - Single feature spec
-2. `speckit-plan` - Multiple times with different tech stacks
+1. `agentkit-specify` - Single feature spec
+2. `agentkit-plan` - Multiple times with different tech stacks
 3. Compare research and contracts from each approach
 4. Choose best approach
-5. `speckit-tasks` and `speckit-implement` - Build selected approach
+5. `agentkit-tasks` and `agentkit-implement` - Build selected approach
 
 ### Best Practices
 
@@ -324,7 +324,7 @@ Testing multiple technical approaches:
 ### Troubleshooting
 
 **"No constitution found"**
-Solution: Run the `speckit-constitution` agent skill first (project initialization).
+Solution: Run the `agentkit-constitution` agent skill first (project initialization).
 
 **"Spec has too many [NEEDS CLARIFICATION] markers"**
 Solution: Make informed guesses for non-critical items, document assumptions. Only flag critical decisions.
@@ -336,7 +336,7 @@ Solution: Revise plan to align with constitution or justify exception with expli
 Solution: Review task dependencies, break circular chains by introducing intermediate tasks.
 
 **"Implementation doesn't match spec"**
-Solution: Validate spec, plan, and tasks first with `speckit-analyze` before implementing.
+Solution: Validate spec, plan, and tasks first with `agentkit-analyze` before implementing.
 
 ### Integration with AI Coding Assistants
 

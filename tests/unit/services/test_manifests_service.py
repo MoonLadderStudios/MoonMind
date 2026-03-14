@@ -29,7 +29,7 @@ from moonmind.workflows.temporal import (
     TemporalExecutionService,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 def _tests_root() -> Path:

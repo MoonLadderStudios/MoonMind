@@ -20,7 +20,7 @@ Define the MoonMind "Task Presets" system: a server-hosted catalog of step templ
 ### Non-Goals
 
 - Changing Temporal Workflow execution behavior or allowing parameter substitutions during runtime (remains an anti-pattern).
-- Replacing SpecKit skills or orchestrator workflows (templates are complementary UI conveniences).
+- Replacing AgentKit skills or orchestrator workflows (templates are complementary UI conveniences).
 
 ## 3. System Overview
 

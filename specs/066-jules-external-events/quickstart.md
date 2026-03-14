@@ -84,7 +84,7 @@ Expected outcome: runtime scope passes only when production runtime code and val
 
 ## 9. Planning artifact completion gate
 
-Before moving to `/speckit.tasks`, ensure these artifacts are present:
+Before moving to `/agentkit.tasks`, ensure these artifacts are present:
 
 - `specs/048-jules-external-events/plan.md`
 - `specs/048-jules-external-events/research.md`

@@ -5,7 +5,7 @@
 
 | Requirement ID | Mapped FR(s) | Implementation Surface | Validation Strategy |
 |----------------|--------------|------------------------|--------------------|
-| `UMB-011-001` Startup enforces Speckit + Codex readiness | `FR-001`, `FR-002` | `moonmind/agents/codex_worker/cli.py` preflight checks | `tests/unit/agents/codex_worker/test_cli.py` |
+| `UMB-011-001` Startup enforces Agentkit + Codex readiness | `FR-001`, `FR-002` | `moonmind/agents/codex_worker/cli.py` preflight checks | `tests/unit/agents/codex_worker/test_cli.py` |
 | `UMB-011-002` Google embedding profile requires key material | `FR-003` | `moonmind/agents/codex_worker/cli.py::_validate_embedding_profile` | `tests/unit/agents/codex_worker/test_cli.py::test_run_preflight_google_embedding_requires_credential` |
 | `UMB-011-003` Worker handles `codex_exec` + `codex_skill` claims | `FR-004`, `FR-005`, `FR-006` | `moonmind/agents/codex_worker/worker.py`, `moonmind/agents/codex_worker/handlers.py` | `tests/unit/agents/codex_worker/test_worker.py`, `tests/unit/agents/codex_worker/test_handlers.py` |
 | `UMB-011-004` Skill allowlist policy is enforced locally | `FR-006` | `CodexWorkerConfig.from_env` + `CodexWorker.run_once` skill gate | `tests/unit/agents/codex_worker/test_worker.py::test_run_once_codex_skill_disallowed_skill_fails` |

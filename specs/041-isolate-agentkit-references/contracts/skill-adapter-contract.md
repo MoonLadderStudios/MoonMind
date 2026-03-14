@@ -23,5 +23,5 @@ Unsupported skill adapter error payload/log fields include:
 
 ## Dependency Check Contract
 
-- Speckit dependency verification runs only when effective skills include `speckit`.
-- Non-speckit-only contexts must skip Speckit checks and proceed.
+- Agentkit dependency verification runs only when effective skills include `agentkit`.
+- Non-agentkit-only contexts must skip Agentkit checks and proceed.

@@ -38,7 +38,7 @@ from moonmind.agents.codex_worker.worker import (
 )
 from moonmind.config.settings import settings
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 class FakeQueueClient:
@@ -1107,7 +1107,7 @@ async def test_run_once_redacts_task_context_payload(
             "targetRuntime": "codex",
             "task": {
                 "instructions": "run",
-                "skill": {"id": "speckit", "args": {"api_token": secret_value}},
+                "skill": {"id": "agentkit", "args": {"api_token": secret_value}},
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "main", "newBranch": None},
                 "publish": {"mode": "none"},
@@ -1171,7 +1171,7 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
         id=uuid4(),
         type="codex_skill",
         payload={
-            "skillId": "speckit",
+            "skillId": "agentkit",
             "inputs": {"repo": "MoonLadderStudios/MoonMind", "instruction": "run"},
         },
     )
@@ -1193,7 +1193,7 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
 
     assert processed is True
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:speckit:False"]
+    assert handler.calls == ["codex_skill:agentkit:False"]
     claimed = next(
         event for event in queue.events if event["message"] == "Worker claimed job"
     )
@@ -1275,7 +1275,7 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
             "task": {
                 "instructions": "run",
                 "skill": {
-                    "id": "speckit",
+                    "id": "agentkit",
                     "args": {"repo": "MoonLadderStudios/MoonMind"},
                 },
                 "runtime": {"mode": "codex"},
@@ -1304,7 +1304,7 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
 
     assert processed is True
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:speckit:False"]
+    assert handler.calls == ["codex_skill:agentkit:False"]
     assert "ref" not in handler.skill_payloads[0]
     inputs = handler.skill_payloads[0].get("inputs")
     assert isinstance(inputs, dict)
@@ -1353,7 +1353,7 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
                     {
                         "id": "patch",
                         "instructions": "Patch code",
-                        "skill": {"id": "speckit", "args": {"phase": "patch"}},
+                        "skill": {"id": "agentkit", "args": {"phase": "patch"}},
                     },
                 ],
             },
@@ -1397,7 +1397,7 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert processed is True
     assert len(queue.completed) == 1
     assert queue.failed == []
-    assert handler.calls == ["codex_exec", "codex_skill:speckit:False"]
+    assert handler.calls == ["codex_exec", "codex_skill:agentkit:False"]
     assert "logs/steps/step-0000.log" in queue.uploaded
     assert "logs/steps/step-0001.log" in queue.uploaded
     assert "patches/steps/step-0000.patch" in queue.uploaded
@@ -3817,7 +3817,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
                         "id": "quality-gate",
                         "instructions": "Execute gated skill",
                         "skill": {
-                            "id": "speckit",
+                            "id": "agentkit",
                             "args": {
                                 "gateType": "quality-gate",
                                 "resultsSubdir": ".artifacts/skill-gates/quality-gate",
@@ -3889,7 +3889,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     assert queue.completed == []
     assert len(queue.failed) == 1
     assert "quality-gate gate failed" in queue.failed[0]
-    assert handler.calls == ["codex_skill:speckit:False"]
+    assert handler.calls == ["codex_skill:agentkit:False"]
     assert "gates/steps/step-0000.json" in queue.uploaded
     assert not any(
         event["message"] == "moonmind.task.publish" for event in queue.events
@@ -3926,7 +3926,7 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
                         "id": "quality-gate",
                         "instructions": "Execute gated skill",
                         "skill": {
-                            "id": "speckit",
+                            "id": "agentkit",
                             "args": {
                                 "gateType": "quality-gate",
                                 "resultsSubdir": ".artifacts/skill-gates/quality-gate",
@@ -4002,7 +4002,7 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
     assert processed is True
     assert queue.failed == []
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:speckit:False"]
+    assert handler.calls == ["codex_skill:agentkit:False"]
     assert "gates/steps/step-0000.json" in queue.uploaded
     finished_events = [
         event for event in queue.events if event["message"] == "task.step.finished"
@@ -4036,7 +4036,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_
                         "id": "quality-gate",
                         "instructions": "Execute gated skill",
                         "skill": {
-                            "id": "speckit",
+                            "id": "agentkit",
                             "args": {
                                 "gateType": "quality-gate",
                                 "gateFile": "/tmp/quality-gate.json",
@@ -4075,7 +4075,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_
         "quality-gate gate failed: quality-gate gate artifact path is outside allowed "
         "artifacts directories" in queue.failed[0]
     )
-    assert handler.calls == ["codex_skill:speckit:False"]
+    assert handler.calls == ["codex_skill:agentkit:False"]
     assert "gates/steps/step-0000.json" in queue.uploaded
 
 
@@ -4104,7 +4104,7 @@ async def test_run_once_skill_gate_step_treats_missing_status_as_invalid(
                         "id": "quality-gate",
                         "instructions": "Execute gated skill",
                         "skill": {
-                            "id": "speckit",
+                            "id": "agentkit",
                             "args": {
                                 "gateType": "quality-gate",
                                 "resultsSubdir": ".artifacts/skill-gates/quality-gate",
@@ -4248,7 +4248,7 @@ async def test_compose_step_instruction_keeps_distinct_step_text(
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
-    step_text = "Run speckit-specify and preserve user constraints."
+    step_text = "Run agentkit-specify and preserve user constraints."
     instruction = worker._compose_step_instruction_for_runtime(
         canonical_payload={
             "task": {
@@ -4463,13 +4463,13 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
             "targetRuntime": "codex",
             "task": {
                 "instructions": "run",
-                "skill": {"id": "speckit", "args": {}},
+                "skill": {"id": "agentkit", "args": {}},
                 "runtime": {"mode": "codex"},
                 "git": {"startingBranch": "main", "newBranch": None},
                 "publish": {"mode": "none"},
                 "steps": [
                     {"id": "one", "instructions": "First", "skill": {"id": "custom"}},
-                    {"id": "two", "instructions": "Second", "skill": {"id": "speckit"}},
+                    {"id": "two", "instructions": "Second", "skill": {"id": "agentkit"}},
                 ],
             },
         },
@@ -4498,7 +4498,7 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        allowed_skills=("speckit", "custom"),
+        allowed_skills=("agentkit", "custom"),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -4506,8 +4506,8 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
 
     assert processed is True
     assert len(queue.completed) == 1
-    assert set(captured["skills"]) == {"custom", "speckit"}
-    assert handler.calls == ["codex_skill:custom:True", "codex_skill:speckit:False"]
+    assert set(captured["skills"]) == {"custom", "agentkit"}
+    assert handler.calls == ["codex_skill:custom:True", "codex_skill:agentkit:False"]
 
 
 async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
@@ -5369,7 +5369,7 @@ async def test_run_once_codex_skill_disallowed_skill_fails(tmp_path: Path) -> No
         lease_seconds=120,
         workdir=tmp_path,
         skill_policy_mode="allowlist",
-        allowed_skills=("speckit",),
+        allowed_skills=("agentkit",),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -5420,7 +5420,7 @@ async def test_run_once_codex_skill_permissive_mode_allows_non_allowlisted_skill
         lease_seconds=120,
         workdir=tmp_path,
         skill_policy_mode="permissive",
-        allowed_skills=("speckit",),
+        allowed_skills=("agentkit",),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -5926,7 +5926,7 @@ async def test_config_from_env_rejects_excessive_step_log_max_bytes(
 
 
 async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) -> None:
-    """Legacy SPEC_WORKFLOW git user env vars should remain supported by worker config."""
+    """Legacy WORKFLOW git user env vars should remain supported by worker config."""
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
@@ -5943,7 +5943,7 @@ async def test_config_from_env_supports_legacy_spec_git_user_env(monkeypatch) ->
 
 
 async def test_config_from_env_git_user_precedence(monkeypatch) -> None:
-    """Worker config should resolve git user vars as WORKFLOW > SPEC_WORKFLOW > MOONMIND."""
+    """Worker config should resolve git user vars as WORKFLOW > WORKFLOW > MOONMIND."""
 
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
@@ -5982,11 +5982,11 @@ async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
     monkeypatch.setenv("MOONMIND_URL", "http://localhost:5000")
     monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
     monkeypatch.delenv("WORKFLOW_ALLOWED_SKILLS", raising=False)
-    monkeypatch.setenv("MOONMIND_ALLOWED_SKILLS", "custom,speckit")
+    monkeypatch.setenv("MOONMIND_ALLOWED_SKILLS", "custom,agentkit")
 
     config = CodexWorkerConfig.from_env()
 
-    assert config.allowed_skills == ("custom", "speckit")
+    assert config.allowed_skills == ("custom", "agentkit")
 
 
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
@@ -6021,9 +6021,9 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.poll_interval_ms == 1500
     assert config.lease_seconds == 120
     assert str(config.workdir) == "var/worker"
-    assert config.default_skill == "speckit"
+    assert config.default_skill == "agentkit"
     assert config.skill_policy_mode == "permissive"
-    assert config.allowed_skills == ("speckit",)
+    assert config.allowed_skills == ("agentkit",)
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
     assert config.legacy_job_types_enabled is True

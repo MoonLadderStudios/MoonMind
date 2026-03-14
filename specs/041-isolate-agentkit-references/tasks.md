@@ -1,12 +1,12 @@
 # Tasks: Isolate Spec Kit References and Skill-First Runtime
 
-**Input**: Design documents from `/specs/036-isolate-speckit-references/`  
+**Input**: Design documents from `/specs/036-isolate-agentkit-references/`  
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/, quickstart.md
 
 ## Phase 1: Setup (Shared Infrastructure)
 
 - [X] T001 Establish shared adapter/dependency decision helpers (FR-001, FR-003) in `moonmind/workflows/skills/registry.py` and `moonmind/workflows/skills/contracts.py` to support explicit adapter resolution and dependency checks.
-- [X] T002 [P] Add migration-facing documentation updates for canonical workflow route naming and legacy alias behavior (FR-009) in `specs/036-isolate-speckit-references/contracts/workflow-runs-api.md` and `README.md`.
+- [X] T002 [P] Add migration-facing documentation updates for canonical workflow route naming and legacy alias behavior (FR-009) in `specs/036-isolate-agentkit-references/contracts/workflow-runs-api.md` and `README.md`.
 
 ---
 
@@ -20,18 +20,18 @@
 
 ---
 
-## Phase 3: User Story 1 - Run Skill Workflows Without Installed Speckit Dependency (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 - Run Skill Workflows Without Installed Agentkit Dependency (Priority: P1) 🎯 MVP
 
-**Goal**: Non-speckit workflows execute successfully without global Speckit installation requirements.
+**Goal**: Non-agentkit workflows execute successfully without global Agentkit installation requirements.
 
-**Independent Test**: Configure a non-speckit selected skill and verify workflow stage execution and worker preflight skip Speckit verification while preserving failure for speckit-selected paths.
+**Independent Test**: Configure a non-agentkit selected skill and verify workflow stage execution and worker preflight skip Agentkit verification while preserving failure for agentkit-selected paths.
 
-- [X] T006 [US1] Scope Speckit verification to speckit-required stages (FR-002, FR-003) in `moonmind/workflows/speckit_celery/tasks.py` by gating `_log_spec_kit_cli_availability()` on adapter requirements.
-- [X] T007 [US1] Scope worker preflight Speckit verification (FR-002, FR-003) in `moonmind/agents/codex_worker/cli.py` to only run when selected skills require Speckit.
-- [X] T008 [P] [US1] Scope startup Speckit CLI checks (FR-002, FR-003) in `celery_worker/speckit_worker.py` and `celery_worker/gemini_worker.py` to speckit-required configurations.
-- [X] T009 [US1] Add/adjust preflight tests for scoped Speckit checks (FR-010) in `tests/unit/agents/codex_worker/test_cli.py`.
+- [X] T006 [US1] Scope Agentkit verification to agentkit-required stages (FR-002, FR-003) in `moonmind/workflows/agentkit_celery/tasks.py` by gating `_log_spec_kit_cli_availability()` on adapter requirements.
+- [X] T007 [US1] Scope worker preflight Agentkit verification (FR-002, FR-003) in `moonmind/agents/codex_worker/cli.py` to only run when selected skills require Agentkit.
+- [X] T008 [P] [US1] Scope startup Agentkit CLI checks (FR-002, FR-003) in `celery_worker/agentkit_worker.py` and `celery_worker/gemini_worker.py` to agentkit-required configurations.
+- [X] T009 [US1] Add/adjust preflight tests for scoped Agentkit checks (FR-010) in `tests/unit/agents/codex_worker/test_cli.py`.
 
-**Checkpoint**: Non-speckit runtime paths are decoupled from Speckit executable requirements.
+**Checkpoint**: Non-agentkit runtime paths are decoupled from Agentkit executable requirements.
 
 ---
 
@@ -56,7 +56,7 @@
 
 **Independent Test**: Request an unregistered skill for a stage and verify deterministic adapter-missing failure payload/logs with no direct execution.
 
-- [X] T014 [US3] Add actionable unsupported-skill error messaging and payload fields (FR-004, FR-010) in `moonmind/workflows/skills/runner.py` and `moonmind/workflows/speckit_celery/tasks.py`.
+- [X] T014 [US3] Add actionable unsupported-skill error messaging and payload fields (FR-004, FR-010) in `moonmind/workflows/skills/runner.py` and `moonmind/workflows/agentkit_celery/tasks.py`.
 - [X] T015 [US3] Add/adjust stage execution tests for unsupported-skill failures and fallback rules (FR-010) in `tests/unit/workflows/test_skills_runner.py`.
 
 **Checkpoint**: Unsupported-skill behavior is explicit, deterministic, and test-validated.
@@ -65,7 +65,7 @@
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [X] T016 [P] Update migration guidance docs for canonical workflow routes and deprecation headers (FR-009) in `docs/SpecKitAutomation.md`.
+- [X] T016 [P] Update migration guidance docs for canonical workflow routes and deprecation headers (FR-009) in `docs/AgentKitAutomation.md`.
 - [X] T017 Run targeted unit/contract validation for modified suites (FR-010) via `./tools/test_unit.sh`.
 - [X] T018 Run runtime scope validation against implementation diff (FR-010) with `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main`.
 

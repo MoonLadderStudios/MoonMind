@@ -1,24 +1,24 @@
 # Feature Specification: Isolate Spec Kit References and Skill-First Runtime
 
-**Feature Branch**: `[036-isolate-speckit-references]`  
+**Feature Branch**: `[036-isolate-agentkit-references]`  
 **Created**: 2026-02-20  
 **Status**: Draft  
 **Input**: User description: "Create a spec on isolating spec kit references and modernizing to avoid using the installed version in favor of spec kit as a skill. Clean up mentions and remove legacy logic so the codebase is clear and consistent."
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Run Skill Workflows Without Installed Speckit Dependency (Priority: P1)
+### User Story 1 - Run Skill Workflows Without Installed Agentkit Dependency (Priority: P1)
 
-A workflow operator can run non-speckit skills even when the Speckit CLI is not installed, because execution depends on the selected skill adapter instead of a global Speckit prerequisite.
+A workflow operator can run non-agentkit skills even when the Agentkit CLI is not installed, because execution depends on the selected skill adapter instead of a global Agentkit prerequisite.
 
 **Why this priority**: This removes the highest-impact operational blocker and aligns runtime behavior with the intended skill-first architecture.
 
-**Independent Test**: Can be fully tested by running a workflow that uses a non-speckit skill in an environment without Speckit installed and confirming end-to-end completion.
+**Independent Test**: Can be fully tested by running a workflow that uses a non-agentkit skill in an environment without Agentkit installed and confirming end-to-end completion.
 
 **Acceptance Scenarios**:
 
-1. **Given** a workflow requests a non-speckit skill and required runtime dependencies are available, **When** the workflow starts, **Then** it completes without requiring Speckit installation.
-2. **Given** Speckit is not installed and a service startup or preflight check runs, **When** only non-speckit skills are in scope, **Then** health checks pass without Speckit-specific failure.
+1. **Given** a workflow requests a non-agentkit skill and required runtime dependencies are available, **When** the workflow starts, **Then** it completes without requiring Agentkit installation.
+2. **Given** Agentkit is not installed and a service startup or preflight check runs, **When** only non-agentkit skills are in scope, **Then** health checks pass without Agentkit-specific failure.
 
 ---
 
@@ -56,7 +56,7 @@ A contributor can rely on explicit adapter resolution behavior because unsupport
 
 - A deployment only defines legacy SPEC-prefixed configuration keys and no canonical replacements yet.
 - A mixed-version client fleet uses both canonical and legacy interfaces during the migration window.
-- Speckit-specific workflows are requested when Speckit adapter prerequisites are missing.
+- Agentkit-specific workflows are requested when Agentkit adapter prerequisites are missing.
 - Historical persistence remains on SPEC-prefixed tables that must stay stable while external naming is modernized.
 
 ## Requirements *(mandatory)*
@@ -64,8 +64,8 @@ A contributor can rely on explicit adapter resolution behavior because unsupport
 ### Functional Requirements
 
 - **FR-001**: The system MUST resolve workflow skill stages through an explicit adapter registry and treat adapter execution as the authoritative path.
-- **FR-002**: The system MUST allow non-speckit skill workflows to execute when Speckit is not installed.
-- **FR-003**: The system MUST restrict Speckit executable checks to operations that explicitly require the Speckit adapter.
+- **FR-002**: The system MUST allow non-agentkit skill workflows to execute when Agentkit is not installed.
+- **FR-003**: The system MUST restrict Agentkit executable checks to operations that explicitly require the Agentkit adapter.
 - **FR-004**: The system MUST fail fast with a clear, actionable error when a requested skill lacks a registered adapter.
 - **FR-005**: The system MUST provide canonical, neutral naming for workflow APIs and configuration while maintaining legacy SPEC-prefixed aliases for backward compatibility.
 - **FR-006**: The system MUST mark legacy SPEC-prefixed workflow interfaces and settings as deprecated and include migration guidance.
@@ -86,10 +86,10 @@ A contributor can rely on explicit adapter resolution behavior because unsupport
 
 ### Measurable Outcomes
 
-- **SC-001**: In validation environments without Speckit installed, 100% of non-speckit workflow regression scenarios complete successfully.
+- **SC-001**: In validation environments without Agentkit installed, 100% of non-agentkit workflow regression scenarios complete successfully.
 - **SC-002**: 100% of workflow requests for unregistered skills fail before execution begins and return a standardized adapter-missing error.
 - **SC-003**: 100% of currently supported legacy SPEC-prefixed workflow interfaces continue to function during the migration window while exposing deprecation signaling.
-- **SC-004**: 0 runtime startup or preflight failures are caused solely by missing Speckit when the requested workflows are non-speckit.
+- **SC-004**: 0 runtime startup or preflight failures are caused solely by missing Agentkit when the requested workflows are non-agentkit.
 - **SC-005**: Workflow-related codebase guidance reflects canonical neutral terminology in at least 95% of new and updated references introduced by this feature.
 
 ## Scope Boundaries
@@ -97,7 +97,7 @@ A contributor can rely on explicit adapter resolution behavior because unsupport
 ### In Scope
 
 - Establishing skill-adapter-first execution for workflow stages.
-- Removing mandatory global Speckit dependency checks from non-speckit workflow paths.
+- Removing mandatory global Agentkit dependency checks from non-agentkit workflow paths.
 - Introducing canonical neutral workflow naming with backward-compatible legacy aliases.
 - Updating validation coverage and documentation to reflect the modernized workflow model.
 
@@ -111,5 +111,5 @@ A contributor can rely on explicit adapter resolution behavior because unsupport
 
 - Existing consumers can transition to canonical naming during a defined deprecation window while retaining temporary alias support.
 - Persisted SPEC-prefixed storage names remain stable for this feature; data-model renaming is deferred to a separate migration effort.
-- Validation environments can run workflow regression tests with Speckit intentionally absent to confirm dependency decoupling.
+- Validation environments can run workflow regression tests with Agentkit intentionally absent to confirm dependency decoupling.
 - Teams maintaining API and worker surfaces will coordinate on consistent canonical naming and deprecation messaging.

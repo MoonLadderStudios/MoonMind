@@ -24,7 +24,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.speckit]
+pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
 @asynccontextmanager

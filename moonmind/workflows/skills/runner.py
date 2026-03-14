@@ -7,7 +7,7 @@ from typing import TypeVar
 
 from .contracts import StageExecutionOutcome
 from .registry import resolve_stage_execution
-from .speckit_adapter import SkillAdapterError, run_speckit_stage
+from .agentkit_adapter import SkillAdapterError, run_agentkit_stage
 
 T = TypeVar("T")
 
@@ -82,7 +82,7 @@ def execute_stage(
             f"while executing stage '{stage_name}'. Register a skill adapter or "
             "select a supported skill."
         )
-    if adapter_id != "speckit":
+    if adapter_id != "agentkit":
         raise SkillAdapterError(
             "skill_adapter_not_registered: "
             f"Adapter '{adapter_id}' for skill '{decision.selected_skill}' "
@@ -100,7 +100,7 @@ def execute_stage(
             used_fallback=False,
             shadow_mode_requested=decision.shadow_mode,
         )
-        result = run_speckit_stage(execute_direct=execute_direct)
+        result = run_agentkit_stage(execute_direct=execute_direct)
         return StageExecutionOutcome(
             stage_name=stage_name,
             selected_skill=decision.selected_skill,

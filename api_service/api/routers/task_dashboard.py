@@ -67,7 +67,7 @@ _PATH_ALIASES = {
     "new": "queue/new",
     "create": "queue/new",
 }
-_BLOCKED_TOP_LEVEL_TASK_IDS = {"speckit"}
+_BLOCKED_TOP_LEVEL_TASK_IDS = {"agentkit"}
 
 
 class DashboardSkillOption(BaseModel):

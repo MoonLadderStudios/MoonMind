@@ -31,4 +31,4 @@
 
 ## Notes
 
-- Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`
+- Items marked incomplete require spec updates before `/agentkit.clarify` or `/agentkit.plan`

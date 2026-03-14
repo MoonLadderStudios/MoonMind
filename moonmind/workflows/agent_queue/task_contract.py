@@ -921,7 +921,7 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
     input_codex_raw = inputs.get("codex")
     input_codex = input_codex_raw if isinstance(input_codex_raw, Mapping) else {}
 
-    skill_id = _clean_optional_str(payload.get("skillId")) or "speckit"
+    skill_id = _clean_optional_str(payload.get("skillId")) or "agentkit"
     repository = (
         _clean_optional_str(inputs.get("repo"))
         or _clean_optional_str(inputs.get("repository"))

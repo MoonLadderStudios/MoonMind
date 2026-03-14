@@ -63,7 +63,7 @@ moonmind/
 └── workflows/agent_queue/storage.py
 
 celery_worker/
-└── speckit_worker.py
+└── agentkit_worker.py
 
 tests/
 ├── unit/agents/codex_worker/

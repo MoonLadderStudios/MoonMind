@@ -16,7 +16,7 @@ This state is transient (no persistence) and is computed anywhere runtime gating
 | `capabilities` | tuple[str,...] | Parsed from `MOONMIND_WORKER_CAPABILITIES` (comma-delimited, lowercase). |
 | `claude_required` | bool | `runtime == "claude" or "claude" in capabilities`. |
 | `anthropic_api_key` | str | Comes from `RuntimeGateState`.
-| `cli_paths` | dict[str,str] | Outputs of `verify_cli_is_executable` for codex/gemini/claude/speckit as needed. |
+| `cli_paths` | dict[str,str] | Outputs of `verify_cli_is_executable` for codex/gemini/claude/agentkit as needed. |
 
 This model feeds `run_preflight` to determine which CLIs to validate.
 

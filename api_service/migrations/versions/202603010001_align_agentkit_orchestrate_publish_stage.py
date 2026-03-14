@@ -1,4 +1,4 @@
-"""Align speckit-orchestrate preset with publish-stage handoff strategy."""
+"""Align agentkit-orchestrate preset with publish-stage handoff strategy."""
 
 from __future__ import annotations
 
@@ -16,20 +16,20 @@ branch_labels: Union[str, Sequence[str], None] = None  # noqa: F401
 depends_on: Union[str, Sequence[str], None] = None  # noqa: F401
 
 
-_ALIGNMENT_TEMPLATE_YAML = """slug: speckit-orchestrate
+_ALIGNMENT_TEMPLATE_YAML = """slug: agentkit-orchestrate
 title: Spec Kit Orchestrate
 description: Run the full Spec Kit pipeline from one feature request, including remediation loops, scope validation, and implementation/PR handoff.
 scope: global
 version: 1.0.0
 tags:
-  - speckit
+  - agentkit
   - orchestration
   - runtime
   - docs
 requiredCapabilities:
   - git
 annotations:
-  sourceSkill: speckit-orchestrate
+  sourceSkill: agentkit-orchestrate
   profile: runtime-first
 inputs:
   - name: feature_request
@@ -70,21 +70,21 @@ steps:
     skill:
       id: auto
       args: {}
-  - title: Invoke speckit-specify
+  - title: Invoke agentkit-specify
     instructions: |-
-      Run speckit-specify with the canonical feature request.
+      Run agentkit-specify with the canonical feature request.
       In runtime mode, append this scope guard:
       "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
       Preserve all user-provided constraints.
     skill:
-      id: speckit-specify
+      id: agentkit-specify
       args: {}
   - title: Resolve clarify blockers
     instructions: |-
-      Resolve any clarification blockers from speckit-specify before continuing.
+      Resolve any clarification blockers from agentkit-specify before continuing.
       If blocking context is missing, ask targeted questions and update spec artifacts.
     skill:
-      id: speckit-clarify
+      id: agentkit-clarify
       args: {}
   - title: Run DOC-REQ pre-plan gate when doc-backed
     instructions: |-
@@ -95,12 +95,12 @@ steps:
     skill:
       id: auto
       args: {}
-  - title: Invoke speckit-plan
+  - title: Invoke agentkit-plan
     instructions: |-
-      Run speckit-plan using the current feature artifacts.
+      Run agentkit-plan using the current feature artifacts.
       Keep runtime vs docs mode behavior aligned with the selected orchestration mode.
     skill:
-      id: speckit-plan
+      id: agentkit-plan
       args: {}
   - title: Enforce requirements traceability contract
     instructions: |-
@@ -109,11 +109,11 @@ steps:
     skill:
       id: auto
       args: {}
-  - title: Invoke speckit-tasks
+  - title: Invoke agentkit-tasks
     instructions: |-
-      Run speckit-tasks and generate dependency-ordered tasks.md from the planned artifacts.
+      Run agentkit-tasks and generate dependency-ordered tasks.md from the planned artifacts.
     skill:
-      id: speckit-tasks
+      id: agentkit-tasks
       args: {}
   - title: Validate task implementation scope
     instructions: |-
@@ -132,15 +132,15 @@ steps:
     skill:
       id: auto
       args: {}
-  - title: Invoke speckit-analyze
+  - title: Invoke agentkit-analyze
     instructions: |-
-      Run speckit-analyze against spec.md, plan.md, and tasks.md.
+      Run agentkit-analyze against spec.md, plan.md, and tasks.md.
     skill:
-      id: speckit-analyze
+      id: agentkit-analyze
       args: {}
   - title: Prompt A remediation discovery
     instructions: |-
-      Run Prompt A (Remediation Discovery) over spec.md, plan.md, tasks.md, and latest speckit-analyze output.
+      Run Prompt A (Remediation Discovery) over spec.md, plan.md, tasks.md, and latest agentkit-analyze output.
       Output must include:
       - Severity (CRITICAL/HIGH/MEDIUM/LOW)
       - Artifact
@@ -173,21 +173,21 @@ steps:
       args: {}
   - title: Re-run analysis and remediation loop gate
     instructions: |-
-      Re-run speckit-analyze once, then re-run Prompt A.
+      Re-run agentkit-analyze once, then re-run Prompt A.
       Stop and report required context if Prompt A returns NO DETERMINATION.
       If Prompt A returns NO, run one extra best-effort cycle:
-      Prompt B -> speckit-analyze -> Prompt A.
+      Prompt B -> agentkit-analyze -> Prompt A.
       Continue unless result changes to NO.
     skill:
-      id: speckit-analyze
+      id: agentkit-analyze
       args: {}
-  - title: Invoke speckit-implement with auto-proceed gate
+  - title: Invoke agentkit-implement with auto-proceed gate
     instructions: |-
-      Run speckit-implement with checklist gate mode set to auto-proceed.
+      Run agentkit-implement with checklist gate mode set to auto-proceed.
       Do not pause for manual yes/no checklist confirmations in this orchestration.
       Ensure completed work is marked [X] in tasks.md.
     skill:
-      id: speckit-implement
+      id: agentkit-implement
       args:
         checklistGateMode: auto-proceed
       requiredCapabilities:
@@ -230,7 +230,7 @@ def _seed_file_path() -> Path:
         Path(__file__).resolve().parents[2]
         / "data"
         / "task_step_templates"
-        / "speckit-orchestrate.yaml"
+        / "agentkit-orchestrate.yaml"
     )
 
 

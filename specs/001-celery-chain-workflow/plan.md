@@ -3,11 +3,11 @@
 **Branch**: `001-celery-chain-workflow` | **Date**: 2025-11-12 (updated 2026-02-14) | **Spec**: `specs/001-celery-chain-workflow/spec.md`
 **Input**: Feature specification from `/specs/001-celery-chain-workflow/spec.md`
 
-**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+**Note**: This template is filled in by the `/agentkit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
 
 ## Summary
 
-Implement a Celery chain that drives Spec Kit phases end-to-end: discover the next actionable task, submit it to Codex Cloud, poll for diffs, and publish GitHub branches/PRs while persisting artifacts and emitting structured status for MoonMind’s UI. Align runtime behavior with the 015 umbrella direction by routing stages through a skills-first policy layer (Speckit default with fallback), keeping Speckit always available on workers, and documenting the fastest startup path for authenticated Codex workers with Gemini embeddings.
+Implement a Celery chain that drives Spec Kit phases end-to-end: discover the next actionable task, submit it to Codex Cloud, poll for diffs, and publish GitHub branches/PRs while persisting artifacts and emitting structured status for MoonMind’s UI. Align runtime behavior with the 015 umbrella direction by routing stages through a skills-first policy layer (Agentkit default with fallback), keeping Agentkit always available on workers, and documenting the fastest startup path for authenticated Codex workers with Gemini embeddings.
 
 ## Technical Context
 
@@ -36,12 +36,12 @@ Implement a Celery chain that drives Spec Kit phases end-to-end: discover the ne
 
 ```text
 specs/[###-feature]/
-├── plan.md              # This file (/speckit.plan command output)
-├── research.md          # Phase 0 output (/speckit.plan command)
-├── data-model.md        # Phase 1 output (/speckit.plan command)
-├── quickstart.md        # Phase 1 output (/speckit.plan command)
-├── contracts/           # Phase 1 output (/speckit.plan command)
-└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+├── plan.md              # This file (/agentkit.plan command output)
+├── research.md          # Phase 0 output (/agentkit.plan command)
+├── data-model.md        # Phase 1 output (/agentkit.plan command)
+├── quickstart.md        # Phase 1 output (/agentkit.plan command)
+├── contracts/           # Phase 1 output (/agentkit.plan command)
+└── tasks.md             # Phase 2 output (/agentkit.tasks command - NOT created by /agentkit.plan)
 ```
 
 ### Source Code (repository root)
@@ -52,11 +52,11 @@ api_service/
 └── scripts/ensure_codex_config.py  # credential enforcement utilities
 
 celery_worker/
-├── speckit_worker.py               # Celery worker bootstrap + Codex helpers
+├── agentkit_worker.py               # Celery worker bootstrap + Codex helpers
 └── scripts/codex_login_proxy.py    # Codex CLI auth proxy in worker pods
 
 moonmind/
-├── workflows/speckit_celery/       # workflow orchestration + repositories
+├── workflows/agentkit_celery/       # workflow orchestration + repositories
 ├── workflows/skills/               # skills-first stage policy and adapter layer
 ├── config/settings.py              # runtime configuration for queues/backends
 └── schemas/workflow_models.py      # serialization of workflow entities

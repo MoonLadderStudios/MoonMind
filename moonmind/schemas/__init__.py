@@ -44,7 +44,7 @@ from .temporal_models import (
 )
 from .workflow_models import (
     CreateWorkflowRunRequest,
-    SpecWorkflowRunModel,
+    WorkflowRunModel,
     WorkflowArtifactModel,
     WorkflowCredentialAuditModel,
     WorkflowRunCollectionResponse,
@@ -88,7 +88,7 @@ __all__ = [
     "WorkerTokenModel",
     "WorkerTokenCreateResponse",
     "WorkerTokenListResponse",
-    "SpecWorkflowRunModel",
+    "WorkflowRunModel",
     "WorkflowTaskStateModel",
     "WorkflowArtifactModel",
     "WorkflowCredentialAuditModel",

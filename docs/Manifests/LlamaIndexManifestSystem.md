@@ -51,7 +51,7 @@ We need repeatable, auditable, **declarative** pipelines for bringing text/code 
 * Ingest/indexing: `moonmind/indexers/*` (Jira, Google Drive, Local, GitHub)
 * Retrieval/query: `moonmind/rag/retriever.py`
 * API: `api_service/api/routers/chat.py`, DI in `api_service/api/dependencies.py`
-* Orchestration substrate: `moonmind/workflows/speckit_celery/*` (+ DB migration for workflow state/artifacts)
+* Orchestration substrate: `moonmind/workflows/agentkit_celery/*` (+ DB migration for workflow state/artifacts)
 
 ```mermaid
 flowchart LR
@@ -454,7 +454,7 @@ moonmind manifest plan -f examples/readers-full-example.yaml
 # Local run
 moonmind manifest run -f examples/readers-full-example.yaml
 
-# Submit to Celery (uses speckit_celery app)
+# Submit to Celery (uses agentkit_celery app)
 moonmind manifest submit -f examples/readers-full-example.yaml --queue=ingest
 
 # Evaluate a manifest's retriever against a dataset
@@ -471,7 +471,7 @@ moonmind manifest evaluate -f examples/readers-full-example.yaml --dataset smoke
 
 ## Orchestration (Celery)
 
-Manifests can be **submitted** for queued execution using the `speckit_celery` application:
+Manifests can be **submitted** for queued execution using the `agentkit_celery` application:
 
 * **Workflow:** `Validate → Fetch → Split → Embed → Upsert → (Summarize) → (Evaluate)`
 * **Persistence:** new tables store **workflow runs**, **task states**, and **artifacts** (logs, patches, PR responses).
@@ -480,7 +480,7 @@ Manifests can be **submitted** for queued execution using the `speckit_celery` a
 
 **Operational knobs**
 
-* Queue name, retries/backoff, worker concurrency; configurable via settings in `moonmind/workflows/speckit_celery/__init__.py`.
+* Queue name, retries/backoff, worker concurrency; configurable via settings in `moonmind/workflows/agentkit_celery/__init__.py`.
 * Use `WorkflowRepository` to query and display run state/history.
 
 ---

@@ -15,7 +15,7 @@ Normalized row model used by consolidated and source list views.
 | `startedAt` | string \| null | Start timestamp |
 | `finishedAt` | string \| null | Completion timestamp |
 | `link` | string | Route to the source detail page |
-| `skillId` | string \| null | Queue task skill identifier (`auto` or `speckit-*`) |
+| `skillId` | string \| null | Queue task skill identifier (`auto` or `agentkit-*`) |
 
 ### Status Mapping Rules
 

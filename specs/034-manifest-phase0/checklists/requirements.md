@@ -33,4 +33,4 @@
 
 - Validated on 2026-03-02 after rebaselining `031-manifest-phase0` to current MoonMind strategy.
 - Runtime-intent guard confirmed in `spec.md`: "Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
-- No clarification blockers remain; spec is ready for `speckit-plan`.
+- No clarification blockers remain; spec is ready for `agentkit-plan`.

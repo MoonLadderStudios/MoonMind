@@ -1,7 +1,7 @@
 """add Spec Automation persistence tables
 
 Revision ID: b3c0bb1d69d7
-Revises: add_spec_workflow_tables
+Revises: add_workflow_tables
 Create Date: 2025-11-05 00:00:00.000000
 
 """
@@ -16,12 +16,12 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "b3c0bb1d69d7"
-down_revision: Union[str, None] = "add_spec_workflow_tables"
+down_revision: Union[str, None] = "add_workflow_tables"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-SPEC_AUTOMATION_RUN_STATUS = postgresql.ENUM(
+AUTOMATION_RUN_STATUS = postgresql.ENUM(
     "queued",
     "in_progress",
     "succeeded",
@@ -31,13 +31,13 @@ SPEC_AUTOMATION_RUN_STATUS = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_AUTOMATION_PHASE = postgresql.ENUM(
+AUTOMATION_PHASE = postgresql.ENUM(
     "prepare_job",
     "start_job_container",
     "git_clone",
-    "speckit_specify",
-    "speckit_plan",
-    "speckit_tasks",
+    "agentkit_specify",
+    "agentkit_plan",
+    "agentkit_tasks",
     "commit_push",
     "open_pr",
     "cleanup",
@@ -45,7 +45,7 @@ SPEC_AUTOMATION_PHASE = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_AUTOMATION_TASK_STATUS = postgresql.ENUM(
+AUTOMATION_TASK_STATUS = postgresql.ENUM(
     "pending",
     "running",
     "succeeded",
@@ -56,7 +56,7 @@ SPEC_AUTOMATION_TASK_STATUS = postgresql.ENUM(
     create_type=False,
 )
 
-SPEC_AUTOMATION_ARTIFACT_TYPE = postgresql.ENUM(
+AUTOMATION_ARTIFACT_TYPE = postgresql.ENUM(
     "stdout_log",
     "stderr_log",
     "diff_summary",
@@ -94,13 +94,13 @@ def upgrade() -> None:  # noqa: D401
             """
         )
 
-    _create_enum_if_missing(SPEC_AUTOMATION_RUN_STATUS)
-    _create_enum_if_missing(SPEC_AUTOMATION_PHASE)
-    _create_enum_if_missing(SPEC_AUTOMATION_TASK_STATUS)
-    _create_enum_if_missing(SPEC_AUTOMATION_ARTIFACT_TYPE)
+    _create_enum_if_missing(AUTOMATION_RUN_STATUS)
+    _create_enum_if_missing(AUTOMATION_PHASE)
+    _create_enum_if_missing(AUTOMATION_TASK_STATUS)
+    _create_enum_if_missing(AUTOMATION_ARTIFACT_TYPE)
 
     op.create_table(
-        "spec_automation_runs",
+        "automation_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("external_ref", sa.String(length=255), nullable=True),
         sa.Column("repository", sa.String(length=255), nullable=False),
@@ -111,7 +111,7 @@ def upgrade() -> None:  # noqa: D401
         sa.Column("pull_request_url", sa.String(length=512), nullable=True),
         sa.Column(
             "status",
-            SPEC_AUTOMATION_RUN_STATUS,
+            AUTOMATION_RUN_STATUS,
             nullable=False,
             server_default="queued",
         ),
@@ -137,37 +137,37 @@ def upgrade() -> None:  # noqa: D401
     )
 
     op.create_index(
-        "ix_spec_automation_runs_status",
-        "spec_automation_runs",
+        "ix_automation_runs_status",
+        "automation_runs",
         ["status"],
     )
     op.create_index(
-        "ix_spec_automation_runs_repository",
-        "spec_automation_runs",
+        "ix_automation_runs_repository",
+        "automation_runs",
         ["repository"],
     )
     op.create_index(
-        "ix_spec_automation_runs_created_at",
-        "spec_automation_runs",
+        "ix_automation_runs_created_at",
+        "automation_runs",
         ["created_at"],
     )
     op.create_index(
-        "ix_spec_automation_runs_external_ref",
-        "spec_automation_runs",
+        "ix_automation_runs_external_ref",
+        "automation_runs",
         ["external_ref"],
     )
 
     op.create_table(
-        "spec_automation_task_states",
+        "automation_task_states",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
             "run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_automation_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("automation_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("phase", SPEC_AUTOMATION_PHASE, nullable=False),
-        sa.Column("status", SPEC_AUTOMATION_TASK_STATUS, nullable=False),
+        sa.Column("phase", AUTOMATION_PHASE, nullable=False),
+        sa.Column("status", AUTOMATION_TASK_STATUS, nullable=False),
         sa.Column("attempt", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
@@ -195,38 +195,38 @@ def upgrade() -> None:  # noqa: D401
             "run_id",
             "phase",
             "attempt",
-            name="uq_spec_automation_task_state_attempt",
+            name="uq_automation_task_state_attempt",
         ),
     )
 
     op.create_index(
-        "ix_spec_automation_task_states_run_id",
-        "spec_automation_task_states",
+        "ix_automation_task_states_run_id",
+        "automation_task_states",
         ["run_id"],
     )
 
     op.create_table(
-        "spec_automation_artifacts",
+        "automation_artifacts",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
             "run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_automation_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("automation_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
             "task_state_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_automation_task_states.id", ondelete="SET NULL"),
+            sa.ForeignKey("automation_task_states.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("artifact_type", SPEC_AUTOMATION_ARTIFACT_TYPE, nullable=False),
+        sa.Column("artifact_type", AUTOMATION_ARTIFACT_TYPE, nullable=False),
         sa.Column("storage_path", sa.String(length=1024), nullable=False),
         sa.Column("content_type", sa.String(length=128), nullable=True),
         sa.Column("size_bytes", sa.Integer(), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("source_phase", SPEC_AUTOMATION_PHASE, nullable=True),
+        sa.Column("source_phase", AUTOMATION_PHASE, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -237,23 +237,23 @@ def upgrade() -> None:  # noqa: D401
             "run_id",
             "artifact_type",
             "storage_path",
-            name="uq_spec_automation_artifact_path",
+            name="uq_automation_artifact_path",
         ),
     )
 
     op.create_index(
-        "ix_spec_automation_artifacts_run_id",
-        "spec_automation_artifacts",
+        "ix_automation_artifacts_run_id",
+        "automation_artifacts",
         ["run_id"],
     )
 
     op.create_table(
-        "spec_automation_agent_configs",
+        "automation_agent_configs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column(
             "run_id",
             sa.Uuid(),
-            sa.ForeignKey("spec_automation_runs.id", ondelete="CASCADE"),
+            sa.ForeignKey("automation_runs.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("agent_backend", sa.String(length=128), nullable=False),
@@ -272,7 +272,7 @@ def upgrade() -> None:  # noqa: D401
         ),
         sa.UniqueConstraint(
             "run_id",
-            name="uq_spec_automation_agent_config_run",
+            name="uq_automation_agent_config_run",
         ),
     )
 
@@ -280,37 +280,37 @@ def upgrade() -> None:  # noqa: D401
 def downgrade() -> None:  # noqa: D401
     """Drop Spec Automation tables and enums."""
 
-    op.drop_table("spec_automation_agent_configs")
+    op.drop_table("automation_agent_configs")
     op.drop_index(
-        "ix_spec_automation_artifacts_run_id",
-        table_name="spec_automation_artifacts",
+        "ix_automation_artifacts_run_id",
+        table_name="automation_artifacts",
     )
-    op.drop_table("spec_automation_artifacts")
+    op.drop_table("automation_artifacts")
     op.drop_index(
-        "ix_spec_automation_task_states_run_id",
-        table_name="spec_automation_task_states",
+        "ix_automation_task_states_run_id",
+        table_name="automation_task_states",
     )
-    op.drop_table("spec_automation_task_states")
+    op.drop_table("automation_task_states")
     op.drop_index(
-        "ix_spec_automation_runs_external_ref",
-        table_name="spec_automation_runs",
-    )
-    op.drop_index(
-        "ix_spec_automation_runs_created_at",
-        table_name="spec_automation_runs",
+        "ix_automation_runs_external_ref",
+        table_name="automation_runs",
     )
     op.drop_index(
-        "ix_spec_automation_runs_repository",
-        table_name="spec_automation_runs",
+        "ix_automation_runs_created_at",
+        table_name="automation_runs",
     )
     op.drop_index(
-        "ix_spec_automation_runs_status",
-        table_name="spec_automation_runs",
+        "ix_automation_runs_repository",
+        table_name="automation_runs",
     )
-    op.drop_table("spec_automation_runs")
+    op.drop_index(
+        "ix_automation_runs_status",
+        table_name="automation_runs",
+    )
+    op.drop_table("automation_runs")
 
     bind = op.get_bind()
-    SPEC_AUTOMATION_ARTIFACT_TYPE.drop(bind, checkfirst=True)
-    SPEC_AUTOMATION_TASK_STATUS.drop(bind, checkfirst=True)
-    SPEC_AUTOMATION_PHASE.drop(bind, checkfirst=True)
-    SPEC_AUTOMATION_RUN_STATUS.drop(bind, checkfirst=True)
+    AUTOMATION_ARTIFACT_TYPE.drop(bind, checkfirst=True)
+    AUTOMATION_TASK_STATUS.drop(bind, checkfirst=True)
+    AUTOMATION_PHASE.drop(bind, checkfirst=True)
+    AUTOMATION_RUN_STATUS.drop(bind, checkfirst=True)

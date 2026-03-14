@@ -32,7 +32,7 @@ Rebaseline Manifest Phase 0 artifacts to the current MoonMind runtime contract, 
 | V. Self-Healing by Default | PASS | Queue lifecycle/retry/claim semantics remain unchanged; manifest contract keeps deterministic normalization for safe retries. |
 | VI. Facilitate Continuous Improvement | PASS | Plan includes explicit traceability updates plus regression-test requirements tied to runtime behavior. |
 | VII. Spec-Driven Development Is the Source of Truth | PASS | This rebaseline aligns plan/research/data-model/contracts/quickstart with current runtime and spec requirements. |
-| VIII. Skills Are First-Class and Easy to Add | PASS | Work remains adapter-neutral and skill-driven (`speckit-plan`) without runtime-specific contract divergence. |
+| VIII. Skills Are First-Class and Easy to Add | PASS | Work remains adapter-neutral and skill-driven (`agentkit-plan`) without runtime-specific contract divergence. |
 
 ## Project Structure
 

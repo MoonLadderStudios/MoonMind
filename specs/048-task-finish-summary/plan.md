@@ -38,7 +38,7 @@ specs/041-task-finish-summary/
 ├── contracts/
 │   ├── task-finish-summary.openapi.yaml
 │   └── requirements-traceability.md
-└── tasks.md                # Generated later by /speckit.tasks
+└── tasks.md                # Generated later by /agentkit.tasks
 ```
 
 ### Source Code (repository root)

@@ -28,17 +28,17 @@ def mock_settings(monkeypatch):
     _set_setting(
         "allowed_skills",
         (
-            "speckit",
+            "agentkit",
             "test-skill",
-            "speckit-discover",
-            "speckit-submit",
-            "speckit-publish",
+            "agentkit-discover",
+            "agentkit-submit",
+            "agentkit-publish",
         ),
     )
-    _set_setting("default_skill", "speckit")
-    _set_setting("discover_skill", "speckit-discover")
-    _set_setting("submit_skill", "speckit-submit")
-    _set_setting("publish_skill", "speckit-publish")
+    _set_setting("default_skill", "agentkit")
+    _set_setting("discover_skill", "agentkit-discover")
+    _set_setting("submit_skill", "agentkit-submit")
+    _set_setting("publish_skill", "agentkit-publish")
 
     return _set_setting
 
@@ -60,22 +60,22 @@ def test_select_stage_skill_uses_override(mock_settings):
     # Ignores empty/whitespace overrides
     context2 = {"skill_overrides": {"stage-a": "   "}}
     skill2 = registry._select_stage_skill("stage-a", context2)
-    assert skill2 == "speckit"  # Falls back to default
+    assert skill2 == "agentkit"  # Falls back to default
 
 
 def test_select_stage_skill_uses_stage_mappings(mock_settings):
-    assert registry._select_stage_skill("discover_next_phase", {}) == "speckit-discover"
-    assert registry._select_stage_skill("submit_codex_job", {}) == "speckit-submit"
-    assert registry._select_stage_skill("apply_and_publish", {}) == "speckit-publish"
-    assert registry._select_stage_skill("unknown_stage", {}) == "speckit"
+    assert registry._select_stage_skill("discover_next_phase", {}) == "agentkit-discover"
+    assert registry._select_stage_skill("submit_codex_job", {}) == "agentkit-submit"
+    assert registry._select_stage_skill("apply_and_publish", {}) == "agentkit-publish"
+    assert registry._select_stage_skill("unknown_stage", {}) == "agentkit"
 
 
 def test_skill_allowed(mock_settings):
     # Allowlist mode
     mock_settings("skill_policy_mode", "allowlist")
-    mock_settings("allowed_skills", ("speckit", "docs-lint"))
+    mock_settings("allowed_skills", ("agentkit", "docs-lint"))
 
-    assert registry._skill_allowed("speckit") is True
+    assert registry._skill_allowed("agentkit") is True
     assert registry._skill_allowed("docs-lint") is True
     assert registry._skill_allowed("unknown") is False
 
@@ -85,7 +85,7 @@ def test_skill_allowed(mock_settings):
 
     # Permissive mode
     mock_settings("skill_policy_mode", "permissive")
-    mock_settings("allowed_skills", ("speckit",))
+    mock_settings("allowed_skills", ("agentkit",))
     assert registry._skill_allowed("unknown") is True
 
 
@@ -100,7 +100,7 @@ def test_resolve_stage_execution_uses_skills(mock_settings):
     )
 
     assert decision.stage_name == "discover_next_phase"
-    assert decision.selected_skill == "speckit-discover"
+    assert decision.selected_skill == "agentkit-discover"
     assert decision.use_skills is True
     assert decision.execution_path == "skill"
     assert decision.fallback_enabled is True
@@ -133,8 +133,8 @@ def test_resolve_stage_execution_direct_only_outside_canary(mock_settings):
 
 def test_resolve_stage_execution_unallowed_skill_fallback(mock_settings):
     mock_settings("skill_policy_mode", "allowlist")
-    mock_settings("allowed_skills", ("speckit",))
-    mock_settings("default_skill", "speckit")
+    mock_settings("allowed_skills", ("agentkit",))
+    mock_settings("default_skill", "agentkit")
 
     # Try an unallowed skill override
     decision = registry.resolve_stage_execution(
@@ -144,41 +144,41 @@ def test_resolve_stage_execution_unallowed_skill_fallback(mock_settings):
     )
 
     # Should fall back to the default allowed skill
-    assert decision.selected_skill == "speckit"
+    assert decision.selected_skill == "agentkit"
 
 
 def test_get_stage_adapter():
-    assert registry.get_stage_adapter("speckit") == "speckit"
-    assert registry.get_stage_adapter("  speckit  ") == "speckit"
+    assert registry.get_stage_adapter("agentkit") == "agentkit"
+    assert registry.get_stage_adapter("  agentkit  ") == "agentkit"
     assert registry.get_stage_adapter("unknown") is None
     assert registry.get_stage_adapter("") is None
     assert registry.get_stage_adapter(None) is None
 
 
-def test_skill_requires_speckit():
-    assert registry.skill_requires_speckit("speckit") is True
-    assert registry.skill_requires_speckit("unknown") is False
-    assert registry.skill_requires_speckit("") is False
+def test_skill_requires_agentkit():
+    assert registry.skill_requires_agentkit("agentkit") is True
+    assert registry.skill_requires_agentkit("unknown") is False
+    assert registry.skill_requires_agentkit("") is False
 
 
 def test_configured_stage_skills(mock_settings):
-    mock_settings("default_skill", "speckit")
-    mock_settings("discover_skill", "speckit-discover")
-    mock_settings("submit_skill", " speckit-submit ")
+    mock_settings("default_skill", "agentkit")
+    mock_settings("discover_skill", "agentkit-discover")
+    mock_settings("submit_skill", " agentkit-submit ")
     mock_settings("publish_skill", "")
 
     skills = registry.configured_stage_skills()
-    assert skills == ("speckit", "speckit-discover", "speckit-submit")
+    assert skills == ("agentkit", "agentkit-discover", "agentkit-submit")
 
 
 def test_configured_stage_skills_deduplicates(mock_settings):
-    mock_settings("default_skill", "speckit")
-    mock_settings("discover_skill", "speckit")
-    mock_settings("submit_skill", "speckit")
-    mock_settings("publish_skill", "speckit-publish")
+    mock_settings("default_skill", "agentkit")
+    mock_settings("discover_skill", "agentkit")
+    mock_settings("submit_skill", "agentkit")
+    mock_settings("publish_skill", "agentkit-publish")
 
     skills = registry.configured_stage_skills()
-    assert skills == ("speckit", "speckit-publish")
+    assert skills == ("agentkit", "agentkit-publish")
 
 
 def test_configured_stage_skills_empty(mock_settings):
@@ -190,15 +190,15 @@ def test_configured_stage_skills_empty(mock_settings):
     assert registry.configured_stage_skills() == ()
 
 
-def test_configured_stage_skills_require_speckit(mock_settings):
-    mock_settings("default_skill", "speckit")
-    assert registry.configured_stage_skills_require_speckit() is True
+def test_configured_stage_skills_require_agentkit(mock_settings):
+    mock_settings("default_skill", "agentkit")
+    assert registry.configured_stage_skills_require_agentkit() is True
 
     mock_settings("default_skill", "other-tool")
     mock_settings("discover_skill", "another-tool")
     mock_settings("submit_skill", "")
     mock_settings("publish_skill", "")
-    assert registry.configured_stage_skills_require_speckit() is False
+    assert registry.configured_stage_skills_require_agentkit() is False
 
 
 def test_contract_registry_helpers_roundtrip_snapshot():

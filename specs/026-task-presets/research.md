@@ -1,6 +1,6 @@
 # Research: Task Presets Strategy Alignment
 
-## Decision: Treat `speckit-orchestrate.yaml` as source of truth for seeded behavior
+## Decision: Treat `agentkit-orchestrate.yaml` as source of truth for seeded behavior
 - **Decision**: Use the YAML seed file as the authoritative runtime instruction contract and synchronize existing DB rows from it via migration.
 - **Rationale**: Existing environments already contain seeded rows; seed file edits alone do not propagate after initial migrations.
 - **Alternatives considered**:

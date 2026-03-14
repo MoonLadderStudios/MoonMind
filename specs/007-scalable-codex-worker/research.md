@@ -7,15 +7,15 @@
 
 ### 1. Queue Compatibility vs Codex Isolation
 
-- **Decision**: Keep `celery_codex_worker` bound to both `speckit` and `codex` queues in Compose for backward-compatible discovery + Codex stage handling.
+- **Decision**: Keep `celery_codex_worker` bound to both `agentkit` and `codex` queues in Compose for backward-compatible discovery + Codex stage handling.
 - **Rationale**: 015 umbrella requires preserving existing queue behavior while introducing skills-first semantics.
 - **Impact**: 007 language is updated from strict "codex-only" worker behavior to compatibility queue bindings.
 
-### 2. Speckit Always-On Capability
+### 2. Agentkit Always-On Capability
 
-- **Decision**: Treat Speckit CLI verification as a mandatory startup check for Codex and Gemini workers.
-- **Rationale**: 015 umbrella requires workers to always have Speckit capability regardless of selected skill policy.
-- **Impact**: Worker startup diagnostics explicitly surface Speckit availability before task processing.
+- **Decision**: Treat Agentkit CLI verification as a mandatory startup check for Codex and Gemini workers.
+- **Rationale**: 015 umbrella requires workers to always have Agentkit capability regardless of selected skill policy.
+- **Impact**: Worker startup diagnostics explicitly surface Agentkit availability before task processing.
 
 ### 3. Startup Embedding Prerequisite Validation
 
@@ -29,10 +29,10 @@
 - **Rationale**: This preserves compatibility while satisfying umbrella telemetry needs.
 - **Impact**: API consumers retain existing fields and gain explicit stage-path diagnostics.
 
-### 5. Non-Speckit Skill Overrides
+### 5. Non-Agentkit Skill Overrides
 
-- **Decision**: Preserve allowlist-driven skill selection (`WORKFLOW_ALLOWED_SKILLS`) with Speckit as default.
-- **Rationale**: Umbrella policy requires skills-based orchestration without requiring separate Speckit-only mode.
+- **Decision**: Preserve allowlist-driven skill selection (`WORKFLOW_ALLOWED_SKILLS`) with Agentkit as default.
+- **Rationale**: Umbrella policy requires skills-based orchestration without requiring separate Agentkit-only mode.
 - **Impact**: Stage overrides remain policy-controlled and backward compatible.
 
 ## Validation/Tooling Notes

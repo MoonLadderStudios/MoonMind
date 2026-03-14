@@ -1,6 +1,6 @@
 # Feature Specification: Skills-First Workflow Pipeline
 
-**Feature Branch**: `002-document-speckit-automation`  
+**Feature Branch**: `002-document-agentkit-automation`  
 **Created**: 2025-11-03  
 **Status**: Draft (Updated 2026-02-14 for 015 umbrella alignment)  
 **Input**: User description: "Update the 002 spec and implementation to align with the new 015 umbrella spec."
@@ -19,21 +19,21 @@ As an operator, I want one deterministic startup path for Workflow workers so Co
 
 1. **Given** `GOOGLE_API_KEY`, `DEFAULT_EMBEDDING_PROVIDER=google`, and `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`, **When** workers and API start, **Then** runtime embedding resolution uses Google Gemini defaults.
 2. **Given** Codex auth was completed once on the configured volume, **When** automation workers restart, **Then** startup preflight succeeds without interactive login prompts.
-3. **Given** worker startup checks run, **When** logs are inspected, **Then** Speckit capability is confirmed for both Codex and Gemini automation workers.
+3. **Given** worker startup checks run, **When** logs are inspected, **Then** Agentkit capability is confirmed for both Codex and Gemini automation workers.
 
 ---
 
 ### User Story 2 - Skills-First Automation Stages (Priority: P1)
 
-As a platform engineer, I want automation phase telemetry and contracts to be skills-first so stage execution semantics are not hard-coded to a unique Speckit workflow while preserving Speckit default behavior.
+As a platform engineer, I want automation phase telemetry and contracts to be skills-first so stage execution semantics are not hard-coded to a unique Agentkit workflow while preserving Agentkit default behavior.
 
-**Why this priority**: The 015 umbrella requires a skills-first model with Speckit always available and backward compatibility.
+**Why this priority**: The 015 umbrella requires a skills-first model with Agentkit always available and backward compatibility.
 
-**Independent Test**: Serialize representative automation phase state payloads and verify selected skill/execution path metadata is present and normalized for legacy Speckit phases.
+**Independent Test**: Serialize representative automation phase state payloads and verify selected skill/execution path metadata is present and normalized for legacy Agentkit phases.
 
 **Acceptance Scenarios**:
 
-1. **Given** a legacy phase (`speckit_specify`, `speckit_plan`, `speckit_tasks`), **When** run detail is serialized, **Then** response metadata defaults to `selected_skill=speckit` and `execution_path=skill`.
+1. **Given** a legacy phase (`agentkit_specify`, `agentkit_plan`, `agentkit_tasks`), **When** run detail is serialized, **Then** response metadata defaults to `selected_skill=agentkit` and `execution_path=skill`.
 2. **Given** explicit skills metadata in phase state payload (`selectedSkill`, `executionPath`), **When** run detail is serialized, **Then** API responses expose the explicit values without loss.
 3. **Given** new stage aliases for analyze and implement, **When** phase contracts are documented, **Then** they remain backward compatible with existing persisted phase values.
 
@@ -56,22 +56,22 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 
 - Scope validation script is unavailable in the repository while orchestration requires tasks/diff scope gates.
 - Persisted legacy phase entries have no explicit skills metadata.
-- Explicit non-Speckit skill metadata is present but execution path fields are partially missing.
-- Worker startup succeeds for Codex but fails for Speckit capability checks.
+- Explicit non-Agentkit skill metadata is present but execution path fields are partially missing.
+- Worker startup succeeds for Codex but fails for Agentkit capability checks.
 - Google embeddings are configured without required API credentials.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: Worker startup MUST verify Speckit capability for automation worker processes, independent of selected stage skill.
+- **FR-001**: Worker startup MUST verify Agentkit capability for automation worker processes, independent of selected stage skill.
 - **FR-002**: Automation phase contracts MUST support skills-first metadata (`selectedSkill`, `executionPath`, fallback/shadow flags) while preserving backward compatibility with legacy phase values.
-- **FR-003**: Legacy Speckit phases MUST normalize to default skills metadata (`selectedSkill=speckit`, `executionPath=skill`) when explicit metadata is absent.
+- **FR-003**: Legacy Agentkit phases MUST normalize to default skills metadata (`selectedSkill=agentkit`, `executionPath=skill`) when explicit metadata is absent.
 - **FR-004**: API run detail responses for automation runs MUST expose normalized skills metadata fields per phase.
 - **FR-005**: Existing automation API routes and artifact download behavior MUST remain backward compatible.
 - **FR-006**: Automation data model and contracts MUST include stage aliases for analyze and implement to align with umbrella stage coverage goals.
 - **FR-007**: Quickstart and operator docs MUST include the fastest path for Codex-authenticated workers and Google Gemini embedding defaults.
-- **FR-008**: Startup checks MUST fail fast with actionable diagnostics when Speckit capability, Codex auth, or Google embedding credentials are missing.
+- **FR-008**: Startup checks MUST fail fast with actionable diagnostics when Agentkit capability, Codex auth, or Google embedding credentials are missing.
 - **FR-009**: Runtime deliverables MUST include production code updates and validation tests; docs-only updates are insufficient.
 
 ### Key Entities *(include if feature involves data)*
@@ -86,7 +86,7 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 ### Measurable Outcomes
 
 - **SC-001**: Run detail responses expose phase-level skills metadata for 100% of serialized phase records.
-- **SC-002**: Legacy phase records without explicit skills metadata serialize with deterministic defaults (`speckit` / `skill`) in 100% of cases.
+- **SC-002**: Legacy phase records without explicit skills metadata serialize with deterministic defaults (`agentkit` / `skill`) in 100% of cases.
 - **SC-003**: Existing artifact metadata/detail/download API behavior remains unchanged for current clients.
 - **SC-004**: Fast-path worker startup guidance for Codex auth + Gemini embeddings is documented and testable.
 - **SC-005**: Validation command `./tools/test_unit.sh` is executed and reported for this implementation cycle.
@@ -94,8 +94,8 @@ As an operator, I want run detail and artifact endpoints to expose phase-level m
 ## Assumptions & Dependencies
 
 - Existing `workflow_*` persistence tables remain in use; this alignment does not require destructive schema changes.
-- Legacy `speckit_*` phase values remain valid and should continue to deserialize in API responses.
-- Speckit skills are installed and exposed via shared adapters in `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` may be retained as fallback).
+- Legacy `agentkit_*` phase values remain valid and should continue to deserialize in API responses.
+- Agentkit skills are installed and exposed via shared adapters in `.agents/skills` and `.gemini/skills` (legacy `.codex/skills` may be retained as fallback).
 - Existing `/api/workflows/*` endpoints remain the compatibility surface during this migration.
 
 ### Scope Boundaries

@@ -18,7 +18,7 @@ from api_service.db.models import (
     OrchestratorRunPriority,
     OrchestratorRunStatus,
     OrchestratorTaskState,
-    SpecWorkflowTaskName,
+    WorkflowTaskName,
 )
 from moonmind.workflows.automation import models
 
@@ -48,7 +48,7 @@ class WorkflowTaskStateModel(BaseModel):
 
     id: Optional[UUID] = Field(None, alias="id")
     task_name: str = Field(..., alias="taskName")
-    status: models.SpecWorkflowTaskStatus = Field(..., alias="status")
+    status: models.WorkflowTaskStatus = Field(..., alias="status")
     attempt: int = Field(..., alias="attempt")
     payload: dict[str, Any] | None = Field(None, alias="payload")
     message: Optional[str] = Field(None, alias="message")
@@ -65,7 +65,7 @@ class WorkflowTaskSummaryModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     task_name: str = Field(..., alias="taskName")
-    status: models.SpecWorkflowTaskStatus = Field(..., alias="status")
+    status: models.WorkflowTaskStatus = Field(..., alias="status")
     attempt: int = Field(..., alias="attempt")
     started_at: datetime | None = Field(None, alias="startedAt")
     finished_at: datetime | None = Field(None, alias="finishedAt")
@@ -97,15 +97,15 @@ class WorkflowCredentialAuditModel(BaseModel):
     notes: Optional[str] = Field(None, alias="notes")
 
 
-class SpecWorkflowRunModel(BaseModel):
+class WorkflowRunModel(BaseModel):
     """Full representation of a workflow run exposed via the API."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     id: UUID = Field(..., alias="id")
     feature_key: str = Field(..., alias="featureKey")
-    status: models.SpecWorkflowRunStatus = Field(..., alias="status")
-    phase: models.SpecWorkflowRunPhase = Field(..., alias="phase")
+    status: models.WorkflowRunStatus = Field(..., alias="status")
+    phase: models.WorkflowRunPhase = Field(..., alias="phase")
     repository: Optional[str] = Field(None, alias="repository")
     branch_name: Optional[str] = Field(None, alias="branchName")
     pr_url: Optional[str] = Field(None, alias="prUrl")
@@ -121,7 +121,7 @@ class SpecWorkflowRunModel(BaseModel):
     celery_chain_id: Optional[str] = Field(None, alias="celeryChainId")
     requested_by: Optional[UUID] = Field(None, alias="requestedBy")
     created_by: Optional[UUID] = Field(None, alias="createdBy")
-    current_task_name: Optional[SpecWorkflowTaskName] = Field(
+    current_task_name: Optional[WorkflowTaskName] = Field(
         None, alias="currentTaskName"
     )
     started_at: datetime | None = Field(None, alias="startedAt")
@@ -173,7 +173,7 @@ class WorkflowRunCollectionResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    items: list[SpecWorkflowRunModel] = Field(default_factory=list, alias="items")
+    items: list[WorkflowRunModel] = Field(default_factory=list, alias="items")
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
 
 
@@ -214,7 +214,7 @@ class CodexShardHealthModel(BaseModel):
     volume_worker_affinity: Optional[str] = Field(None, alias="volumeWorkerAffinity")
     volume_notes: Optional[str] = Field(None, alias="volumeNotes")
     latest_run_id: Optional[UUID] = Field(None, alias="latestRunId")
-    latest_run_status: Optional[models.SpecWorkflowRunStatus] = Field(
+    latest_run_status: Optional[models.WorkflowRunStatus] = Field(
         None, alias="latestRunStatus"
     )
     latest_preflight_status: Optional[models.CodexPreflightStatus] = Field(
@@ -515,13 +515,13 @@ class OrchestratorRetryRequest(BaseModel):
     reason: Optional[str] = Field(None, alias="reason")
 
 
-class SpecAutomationPhaseState(BaseModel):
+class AutomationPhaseState(BaseModel):
     """Schema describing a single Spec Automation phase execution."""
 
     model_config = ConfigDict(from_attributes=True)
 
-    phase: models.SpecAutomationPhase
-    status: models.SpecAutomationTaskStatus
+    phase: models.AutomationPhase
+    status: models.AutomationTaskStatus
     attempt: int = Field(ge=1)
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -536,55 +536,55 @@ class SpecAutomationPhaseState(BaseModel):
     shadow_mode_requested: bool | None = None
 
 
-class SpecAutomationArtifactSummary(BaseModel):
+class AutomationArtifactSummary(BaseModel):
     """Summary information for an automation artifact."""
 
     model_config = ConfigDict(from_attributes=True)
 
     artifact_id: UUID
     name: str
-    artifact_type: models.SpecAutomationArtifactType
+    artifact_type: models.AutomationArtifactType
     storage_path: str | None = None
     content_type: str | None = None
     size_bytes: int | None = None
     expires_at: datetime | None = None
-    source_phase: models.SpecAutomationPhase | None = None
+    source_phase: models.AutomationPhase | None = None
 
 
-class SpecAutomationArtifactDetail(SpecAutomationArtifactSummary):
+class AutomationArtifactDetail(AutomationArtifactSummary):
     """Extended artifact detail including download metadata."""
 
     download_url: str | None = None
 
 
-class SpecAutomationRunResponse(BaseModel):
+class AutomationRunResponse(BaseModel):
     """Acknowledgement returned when a run is accepted."""
 
     model_config = ConfigDict(from_attributes=True)
 
     run_id: UUID
-    status: models.SpecAutomationRunStatus
+    status: models.AutomationRunStatus
     accepted_at: datetime | None = None
 
 
-class SpecAutomationRunDetail(BaseModel):
+class AutomationRunDetail(BaseModel):
     """Detailed representation of a Spec Automation run."""
 
     model_config = ConfigDict(from_attributes=True)
 
     run_id: UUID
-    status: models.SpecAutomationRunStatus
+    status: models.AutomationRunStatus
     branch_name: str | None = None
     pull_request_url: str | None = None
     result_summary: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    phases: list[SpecAutomationPhaseState] = Field(default_factory=list)
-    artifacts: list[SpecAutomationArtifactSummary] = Field(default_factory=list)
+    phases: list[AutomationPhaseState] = Field(default_factory=list)
+    artifacts: list[AutomationArtifactSummary] = Field(default_factory=list)
 
 
 __all__ = [
-    "SpecWorkflowRunModel",
+    "WorkflowRunModel",
     "WorkflowTaskStateModel",
     "WorkflowTaskSummaryModel",
     "WorkflowArtifactModel",
@@ -617,9 +617,9 @@ __all__ = [
     "OrchestratorApprovalRequest",
     "OrchestratorRetryStep",
     "OrchestratorRetryRequest",
-    "SpecAutomationPhaseState",
-    "SpecAutomationArtifactSummary",
-    "SpecAutomationArtifactDetail",
-    "SpecAutomationRunResponse",
-    "SpecAutomationRunDetail",
+    "AutomationPhaseState",
+    "AutomationArtifactSummary",
+    "AutomationArtifactDetail",
+    "AutomationRunResponse",
+    "AutomationRunDetail",
 ]

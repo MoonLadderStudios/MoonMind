@@ -151,7 +151,7 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
     for runtime in supported_task_runtimes:
         default_model, default_effort = resolve_runtime_defaults(
             runtime,
-            spec_workflow_settings=settings.workflow,
+            workflow_settings=settings.workflow,
         )
         if default_model:
             default_task_model_by_runtime[runtime] = default_model
