@@ -10,23 +10,24 @@ from typing import Union
 from alembic import op
 
 # revision identifiers, used by Alembic.
+revision: str = '1dd6e627fef8'
 down_revision: Union[str, None] = '202603060007'  # noqa
 
 
 def upgrade() -> None:
     # Rename tables to preserve data
-    op.rename_table('workflow_runs', 'workflow_runs')
-    op.rename_table('workflow_task_states', 'workflow_task_states')
+    op.rename_table('spec_workflow_runs', 'workflow_runs')
+    op.rename_table('spec_workflow_task_states', 'workflow_task_states')
 
     # Rename indexes
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_created_by RENAME TO ix_workflow_runs_created_by')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_feature_key RENAME TO ix_workflow_runs_feature_key')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_requested_by RENAME TO ix_workflow_runs_requested_by')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_status RENAME TO ix_workflow_runs_status')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_runs_created_by RENAME TO ix_workflow_runs_created_by')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_runs_feature_key RENAME TO ix_workflow_runs_feature_key')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_runs_requested_by RENAME TO ix_workflow_runs_requested_by')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_runs_status RENAME TO ix_workflow_runs_status')
     
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_failed RENAME TO ix_workflow_task_states_failed')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_orchestrator_run_id RENAME TO ix_workflow_task_states_orchestrator_run_id')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_run_id RENAME TO ix_workflow_task_states_run_id')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_task_states_failed RENAME TO ix_workflow_task_states_failed')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_task_states_orchestrator_run_id RENAME TO ix_workflow_task_states_orchestrator_run_id')
+    op.execute('ALTER INDEX IF EXISTS ix_spec_workflow_task_states_run_id RENAME TO ix_workflow_task_states_run_id')
 
     # Drop old foreign keys pointing to workflow_runs
     op.drop_constraint('workflow_artifacts_workflow_run_id_fkey', 'workflow_artifacts', type_='foreignkey')
@@ -49,19 +50,19 @@ def downgrade() -> None:
     # Revert foreign keys
     op.drop_constraint('workflow_credential_audits_workflow_run_id_fkey', 'workflow_credential_audits', type_='foreignkey')
     op.drop_constraint('workflow_artifacts_workflow_run_id_fkey', 'workflow_artifacts', type_='foreignkey')
-    op.create_foreign_key('workflow_credential_audits_workflow_run_id_fkey', 'workflow_credential_audits', 'workflow_runs', ['workflow_run_id'], ['id'], ondelete='CASCADE')
-    op.create_foreign_key('workflow_artifacts_workflow_run_id_fkey', 'workflow_artifacts', 'workflow_runs', ['workflow_run_id'], ['id'], ondelete='CASCADE')
+    op.create_foreign_key('workflow_credential_audits_workflow_run_id_fkey', 'workflow_credential_audits', 'spec_workflow_runs', ['workflow_run_id'], ['id'], ondelete='CASCADE')
+    op.create_foreign_key('workflow_artifacts_workflow_run_id_fkey', 'workflow_artifacts', 'spec_workflow_runs', ['workflow_run_id'], ['id'], ondelete='CASCADE')
 
     # Rename indexes back
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_created_by RENAME TO ix_workflow_runs_created_by')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_feature_key RENAME TO ix_workflow_runs_feature_key')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_requested_by RENAME TO ix_workflow_runs_requested_by')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_status RENAME TO ix_workflow_runs_status')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_created_by RENAME TO ix_spec_workflow_runs_created_by')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_feature_key RENAME TO ix_spec_workflow_runs_feature_key')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_requested_by RENAME TO ix_spec_workflow_runs_requested_by')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_runs_status RENAME TO ix_spec_workflow_runs_status')
     
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_failed RENAME TO ix_workflow_task_states_failed')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_orchestrator_run_id RENAME TO ix_workflow_task_states_orchestrator_run_id')
-    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_run_id RENAME TO ix_workflow_task_states_run_id')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_failed RENAME TO ix_spec_workflow_task_states_failed')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_orchestrator_run_id RENAME TO ix_spec_workflow_task_states_orchestrator_run_id')
+    op.execute('ALTER INDEX IF EXISTS ix_workflow_task_states_run_id RENAME TO ix_spec_workflow_task_states_run_id')
 
     # Rename tables back
-    op.rename_table('workflow_task_states', 'workflow_task_states')
-    op.rename_table('workflow_runs', 'workflow_runs')
+    op.rename_table('workflow_task_states', 'spec_workflow_task_states')
+    op.rename_table('workflow_runs', 'spec_workflow_runs')

@@ -462,6 +462,7 @@ services:
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./tools:/app/tools:ro
+      - ./api_service:/app/api_service:ro
       - ./model_data:/app/model_data:ro
       - ./api_service:/app/api_service:ro
       - ./init_db:/app/init_db
@@ -679,6 +680,7 @@ volumes:
     name: ${CODEX_VOLUME_NAME:-codex_auth_volume}
   gemini_auth_volume:
     name: ${GEMINI_VOLUME_NAME:-gemini_auth_volume}
+    external: true
   claude_auth_volume:
     name: ${CLAUDE_VOLUME_NAME:-claude_auth_volume}
 
