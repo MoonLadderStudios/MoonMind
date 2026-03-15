@@ -682,7 +682,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
             assert len(fetched) == 1
             assert fetched[0].artifact_id.startswith("art_")
-            assert fake_client.closed is True
+            # Client is now reused by the adapter (not closed per-call).
 
 
 async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
