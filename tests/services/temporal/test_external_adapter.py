@@ -6,6 +6,7 @@ from api_service.services.temporal.workflows.shared import AgentExecutionRequest
 async def test_external_adapter_start():
     adapter = ExternalAgentAdapter()
     request = AgentExecutionRequest(
+        agent_kind="external",
         agent_id="test-agent",
         execution_profile_ref="test-profile",
         instruction_ref="test-instruction",

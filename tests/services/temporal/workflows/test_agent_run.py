@@ -65,7 +65,10 @@ async def test_agent_run_workflow_cancellation():
             with pytest.raises(WorkflowFailureError) as exc_info:
                 await handle.result()
             
-            # Verifies that workflow was cancelled. The mock activity invoke_adapter_cancel
-            # should have been called in the background. In a true unit test we might mock it
-            # and verify call count.
-            assert "cancel" in str(exc_info.value).lower()
+            # Verifies that workflow was cancelled. Check the full exception chain
+            # since the top-level message may be generic.
+            exc_str = str(exc_info.value).lower()
+            cause_str = str(exc_info.value.__cause__).lower() if exc_info.value.__cause__ else ""
+            assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
+                exc_info.value.__cause__, asyncio.CancelledError
+            )
