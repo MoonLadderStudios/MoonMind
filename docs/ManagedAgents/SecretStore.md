@@ -1,60 +1,52 @@
-# Secret Store Design (HashiCorp Vault for Task Workers)
+# Secret Store Design (HashiCorp Vault for Managed Agents)
 
 Status: Proposed  
 Owners: MoonMind Engineering  
-Last Updated: 2026-02-16
+Last Updated: 2026-03-14
 
 ## 1. Purpose
 
-Define how MoonMind workers use HashiCorp Vault for sensitive values while executing canonical Task queue jobs (`type="task"`).
+Define how MoonMind Managed Agents and Temporal Workflows use HashiCorp Vault for sensitive values while executing automated tasks.
 
 ## 2. Goals
 
-1. Keep raw secrets out of queue payloads, DB rows, and logs.
-2. Let jobs reference secrets indirectly by stable IDs (for example `repoAuthRef`).
+1. Keep raw secrets out of Temporal Workflow execution history, payloads, DB rows, and logs.
+2. Let workflows reference secrets indirectly by stable IDs (for example `repoAuthRef`).
 3. Enforce least privilege per worker and per repository.
-4. Support rotation without changing queued jobs.
+4. Support rotation without changing inflight workflows.
 
 ## 3. Non-Goals (Initial Rollout)
 
 1. Replacing all existing worker auth in one release.
 2. Storing large runtime artifacts in Vault.
-3. Reworking queue APIs beyond targeted auth reference fields.
+3. Reworking Temporal data converters beyond targeted auth reference fields.
 
 ## 4. High-Level Model
 
-Producer submits a Task job with a secret reference (not a token):
+Producer submits a Temporal Workflow Execution with a secret reference (not a token) in the workflow input:
 
 ```json
 {
-  "type": "task",
-  "payload": {
-    "repository": "MoonLadderStudios/MoonMind",
-    "requiredCapabilities": ["git", "codex"],
-    "targetRuntime": "codex",
-    "auth": {
-      "repoAuthRef": "vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token",
-      "publishAuthRef": null
-    },
-    "task": {
-      "instructions": "Implement the assigned task",
-      "skill": { "id": "auto", "args": {} },
-      "runtime": { "mode": "codex", "model": null, "effort": null },
-      "git": { "startingBranch": null, "newBranch": null },
-      "publish": { "mode": "branch", "prBaseBranch": null, "commitMessage": null, "prTitle": null, "prBody": null }
-    }
+  "repository": "MoonLadderStudios/MoonMind",
+  "requiredCapabilities": ["git"],
+  "auth": {
+    "repoAuthRef": "vault://kv/moonmind/repos/MoonLadderStudios/MoonMind#github_token",
+    "publishAuthRef": null
+  },
+  "task": {
+    "instructions": "Implement the assigned task"
   }
 }
 ```
 
-Worker flow:
+Managed Agent flow:
 
-1. Claim job.
-2. Resolve `auth.repoAuthRef` from Vault when present.
-3. Configure transient git auth.
-4. Run task stages.
+1. Temporal Server schedules the `PrepareWorkspaceActivity`.
+2. Worker leases the Activity and resolves `auth.repoAuthRef` from Vault.
+3. Configure transient git auth inside the `temporal-worker-sandbox` workspace.
+4. Run task stages (LLM agent loop).
 5. Clear in-memory secret material.
-6. Complete/fail with non-secret summaries.
+6. Complete/fail the Activity and Workflow with non-secret summaries.
 
 ## 5. Vault Architecture
 
@@ -66,11 +58,10 @@ Example paths:
 
 - `kv/data/moonmind/repos/<owner>/<repo>`
 - `kv/data/moonmind/workers/<worker-id>/github`
-- `kv/data/moonmind/runtime/<env>/<runtime>`
 
 ### 5.2 Worker auth to Vault
 
-Recommended order:
+Recommended order for the `temporal-worker-sandbox` deployment:
 
 1. Kubernetes auth (k8s deployment)
 2. AppRole with short-lived SecretID (Compose/VM)
@@ -126,18 +117,18 @@ Worker default token:
 }
 ```
 
-## 7. Worker Integration Details
+## 7. Managed Agent Integration Details
 
-### 7.1 Payload extension
+### 7.1 Workflow Input extension
 
-Canonical Task payload remains unchanged except optional `auth` extension:
+The canonical Workflow Input supports the optional `auth` extension:
 
 - `auth.repoAuthRef` (string, optional)
 - `auth.publishAuthRef` (string, optional, defaults to `repoAuthRef`)
 
 ### 7.2 Runtime behavior
 
-At prepare/publish boundary:
+At prepare/publish boundary within Temporal Activities:
 
 1. If `auth.repoAuthRef` exists, resolve it before clone/fetch.
 2. If publish enabled, resolve `auth.publishAuthRef` or fallback.
@@ -157,16 +148,16 @@ Alternative:
 Never:
 
 - place tokens in repository URLs
-- persist token strings to queue payloads/events/artifacts
+- persist token strings to Temporal history, events, or artifacts
 
 ## 8. Authorization Alignment
 
-### 8.1 Queue policy
+### 8.1 Routing policy
 
-Worker token policy should enforce:
+Temporal Task Queues and worker capabilities should enforce:
 
 - allowed repositories
-- allowed job types
+- allowed workflow types
 - capability scope
 
 ### 8.2 Vault policy
@@ -185,10 +176,10 @@ path "kv/data/moonmind/repos/MoonLadderStudios/MoonMind" {
 
 Require both:
 
-1. queue claim eligibility for repository
+1. Temporal Task Queue eligibility for repository routing
 2. Vault read permission for `repoAuthRef`
 
-If either fails, fail job with non-secret reason.
+If either fails, fail the Activity with a non-secret reason string so the workflow can safely terminate or alert operators.
 
 ## 9. Implementation Plan
 
@@ -198,23 +189,23 @@ If either fails, fail job with non-secret reason.
 2. configure worker auth method
 3. create least-privilege policies
 
-### Phase 2: Task auth refs
+### Phase 2: Workflow auth refs
 
-1. extend Task payload model with optional `auth` object
+1. extend Workflow Input model with optional `auth` object
 2. add Vault client abstraction in worker runtime
-3. resolve/apply credentials during prepare/publish stages
-4. redact secret-like strings in logging paths
+3. resolve/apply credentials during prepare/publish Activities
+4. redact secret-like strings in logging interceptors
 
 ### Phase 3: Observability and resilience
 
 1. add metrics for secret resolution success/failure/latency
-2. correlate queue job ID with Vault request IDs (without secret values)
+2. correlate Temporal workflow ID with Vault request IDs (without secret values)
 3. add integration tests for denied/expired/rotated credentials
 
 ### Phase 4: Remove temporary bridge
 
-1. migrate private repo jobs away from plain `GITHUB_TOKEN`
-2. keep env-token path only for local fallback and break-glass operations
+1. migrate private repo workflows away from plain `GITHUB_TOKEN` injected from the API server.
+2. keep env-token path only for local fallback and break-glass operations.
 
 ## 10. Operational Runbook
 
@@ -223,17 +214,16 @@ When `repoAuthRef` resolution fails:
 1. validate worker Vault auth
 2. validate policy for target path
 3. validate referenced field exists
-4. retry job after remediation
+4. retry workflow/activity from the Temporal UI after remediation
 
 When Vault is degraded:
 
-1. stop claiming jobs that require Vault refs
-2. continue jobs that do not need Vault refs
-3. alert operators with non-secret failure metadata
+1. Temporal gracefully retries Activities failing with Vault timeout errors, blocking workflow progress until Vault is restored.
+2. alert operators with non-secret failure metadata.
 
 ## 11. Security Checklist
 
-1. no raw PAT/OAuth material in payloads/events/artifacts
+1. no raw PAT/OAuth material in Temporal history/events/artifacts
 2. no token-in-URL clone style
 3. short-lived renewable Vault tokens
 4. Vault audit logs enabled
@@ -242,4 +232,4 @@ When Vault is degraded:
 
 ## 12. Summary
 
-Use optional `auth.repoAuthRef`/`auth.publishAuthRef` in canonical Task jobs to decouple orchestration from secret material. Keep env-token auth (`docs/WorkerGitAuth.md`) as temporary bridge, then migrate private repo credentials to Vault-backed references with aligned queue/Vault policy.
+Use optional `auth.repoAuthRef`/`auth.publishAuthRef` in canonical Temporal Workflows to decouple orchestration from secret material. Keep env-token auth (`docs/ManagedAgents/WorkerGitAuth.md`) as temporary bridge, then migrate private repo credentials to Vault-backed references with aligned Temporal queue/Vault policy.
