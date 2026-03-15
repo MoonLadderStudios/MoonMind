@@ -51,11 +51,10 @@ class ManagedRunStore:
                 json.dump(data, f)
             os.replace(tmp_path, str(path))
         except BaseException:
-            with open(os.devnull, "w"):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass  # Best-effort cleanup; original error is re-raised below
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass  # Best-effort temp-file cleanup; original error is re-raised below
             raise
         return path
 
