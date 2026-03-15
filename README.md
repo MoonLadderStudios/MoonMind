@@ -7,8 +7,6 @@
     </picture>
 </p>
 
-**MoonMind is Kubernetes for AI agents**
-
 Instead of forcing you to build agents from scratch in a new proprietary framework, MoonMind lets you orchestrate the tools you already use—like **Claude Code, Gemini CLI, Codex, and Jules**. It wraps them in durable execution, secure sandboxing, shared context, and human-in-the-loop oversight.
 
 ## Quick Start
@@ -31,11 +29,11 @@ Go to [http://localhost:5000/tasks](http://localhost:5000/tasks) to access Missi
 
 ## Why MoonMind?
 
-### 🔌 Bring Your Own Agent
-Most agent platforms ask you to rebuild your workflows inside their SDK. MoonMind takes the opposite approach: orchestrate existing agents, don't replace them.
-* **Wrap Best-in-Class Tools:** Run Claude Code, Gemini CLI, and Codex as managed worker runtimes.
-* **Black-Box Orchestration:** Run third-party cloud agents (like Jules) under a strict operational model. MoonMind tracks their status and injects context even if you don't control their internals.
-* **Universal Integration:** Connect custom agents via MCP or standard API endpoints.
+### 🛰️ Bring Your Own Agent — or let MoonMind run it for you
+Other platforms want you to rebuild inside their SDK. MoonMind takes the opposite approach: orchestrate the agents you already use, wherever they run.
+- **Managed Runtimes:** Run Claude Code, Gemini CLI, and Codex as managed workers on your own infrastructure — full control, full visibility.
+- **Black-Box Orchestration:** Command cloud-hosted agents like Jules and Codex Cloud under a strict operational model. MoonMind tracks status and injects context even when you don't control the internals.
+- **Universal Integration:** Connect any agent through MCP or standard API endpoints.
 
 ### 🔓 Free Yourself from Vendor Lock-In
 MoonMind can manage any agent runtime and makes it easy to mix agents and models in even a single workflow.

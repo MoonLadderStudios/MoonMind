@@ -1,20 +1,3 @@
-<!--
-Sync Impact Report
-- Governance metadata changes: last amended 2026-03-06; ratification date unchanged and not tracked in this file.
-- Modified principles:
-  - I. One-Click Agent Deployment -> I. One-Click Agent Deployment
-    (amended to require local-first Docker Compose deployment with no essential
-    external public-cloud dependency)
-- Added sections: None.
-- Removed sections: None.
-- Templates requiring updates:
-  - ✅ No template changes required; `/mnt/d/code/MoonMind/.specify/templates/plan-template.md`
-    already instructs plans to derive gates from the constitution.
-  - ✅ No prompt changes required; `/mnt/d/code/MoonMind/.codex/prompts/agentkit.plan.md`
-    and `/mnt/d/code/MoonMind/.gemini/commands/agentkit.plan.toml` already load the
-    constitution directly.
-- Follow-up TODOs: None.
--->
 # MoonMind Constitution
 
 ## Core Principles
