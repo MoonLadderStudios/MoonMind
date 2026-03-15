@@ -1,28 +1,28 @@
-# Agent Skill: Github PR Resolver Technical Design
+# Managed Agent Skill: Github PR Resolver Technical Design
 
 Status: Draft
 Owners: MoonMind Engineering
-Last Updated: 2026-02-23
+Last Updated: 2026-03-14
 
 ## 1. Purpose
 
-Add a **PR Resolver** skill that can be invoked from the Mission Control (or CLI) to:
+Add a **PR Resolver** skill that can be invoked from Mission Control (triggering a Temporal Workflow) to:
 
 1. **Resolve target PR** (defaults to the PR associated with the current branch).
 2. **Fetch PR metadata + CI status + comments**.
 3. **Diagnose and Delegate**: Use the "Read-and-Execute" (Instruction Composition) pattern to dynamically load and execute specialized sub-skills (e.g., `fix-merge-conflicts`, `fix-ci`) based on the PR state.
 4. **Merge the PR** if everything is already good **and** no CI is currently running.
 
-This skill acts as an **Umbrella Skill**. It relies on existing specialized skills to do the heavy lifting, ensuring robust, context-aware execution within a single CLI agent session.
+This skill acts as an **Umbrella Skill**. It relies on existing specialized skills to do the heavy lifting, ensuring robust, context-aware execution within a single Temporal Managed Agent execution run.
 
 ---
 
 ## 2. Assumptions and Constraints
 
-* Workers already support run-scoped skills via `.agents/skills` and `.gemini/skills` symlinks to a single active set.
-* The worker environment has GitHub auth available via `GITHUB_TOKEN` for private repo operations and includes `gh` usage in existing publish flows.
+* The `temporal-worker-sandbox` environment already supports run-scoped skills via `.agents/skills` symlinks to a single active set.
+* The worker environment has GitHub auth available for private repo operations and includes `gh` usage in existing workflows.
 * Specialized sub-skills (like `fix-merge-conflicts`) are available in the `.agents/skills/` directory.
-* Because the PR Resolver performs git/PR mutations itself (via sub-skills), **tasks using this skill must set `publish.mode=none`** to avoid the system publish stage attempting a second publish/PR create.
+* Because the PR Resolver performs git/PR mutations itself (via sub-skills), **Temporal Workflows using this skill must set `publish.mode=none`** to avoid the system publish Activity attempting a second publish/PR create.
 
 ---
 
@@ -46,12 +46,12 @@ Because we use the "Read-and-Execute" pattern, we do not need complex execution 
 
 ### 3.2 Required Worker Capabilities
 
-The task that runs this skill should derive/declare:
+The Temporal Workflow Task Queue routing should derive/declare:
 
 * `git`
 * `gh`
 
-This matches the Task UI capability derivation pattern.
+This matches the standard `AgentTaskWorkflow` capability derivation pattern.
 
 ---
 
@@ -70,7 +70,7 @@ This matches the Task UI capability derivation pattern.
 
 ### 4.2 Outputs
 
-Write a machine-readable result to artifacts:
+Write a machine-readable result to the Workflow artifact directory:
 
 * `artifacts/pr_resolver_snapshot.json`
 * `artifacts/pr_resolver_result.json`
@@ -115,7 +115,7 @@ The resolver always re-evaluates from the top after each applied fix (bounded by
 
 ## 7. Fix Execution Strategies (Instruction Composition)
 
-Instead of hardcoding git commands or CI logic, the `pr-resolver` acts as an Umbrella Agent. It dynamically reads the instructions of specialized skills and executes them in the current session.
+Instead of hardcoding git commands or CI logic, the `pr-resolver` acts as an Umbrella Agent. It dynamically reads the instructions of specialized skills and executes them in the current Temporal Managed Agent session.
 
 ### 7.1 Fix Merge Conflicts
 **Action:** The agent reads `.agents/skills/fix-merge-conflicts/SKILL.md` (or equivalent location) into its context.
@@ -148,26 +148,22 @@ Execution: `gh pr merge <pr> --<mergeMethod>`
 
 ## 9. Mission Control Integration
 
-### 9.1 Task Template
+### 9.1 Temporal Workflow Template
 
-Create a Task Step Template named `Resolve PR`.
-Important: set publish mode to none, because the skill owns git pushes and merging.
+Create a Temporal `AgentTaskWorkflow` template named `Resolve PR`.
+Important: set `publish.mode` to `none`, because the skill owns git pushes and merging natively within the Agent loop.
 
 ```json
 {
-  "type": "task",
-  "priority": 0,
-  "payload": {
-    "repository": "MoonLadderStudios/MoonMind",
-    "requiredCapabilities": ["codex", "git", "gh"],
-    "task": {
-      "instructions": "Resolve the current branch PR: fix conflicts/CI/comments, then merge if green and idle.",
-      "skill": {
-        "id": "pr-resolver",
-        "args": { "mergeMethod": "squash" }
-      },
-      "publish": { "mode": "none" }
-    }
+  "repository": "MoonLadderStudios/MoonMind",
+  "requiredCapabilities": ["git", "gh"],
+  "task": {
+    "instructions": "Resolve the current branch PR: fix conflicts/CI/comments, then merge if green and idle.",
+    "skill": {
+      "id": "pr-resolver",
+      "args": { "mergeMethod": "squash" }
+    },
+    "publish": { "mode": "none" }
   }
 }
 ```
@@ -176,7 +172,7 @@ Important: set publish mode to none, because the skill owns git pushes and mergi
 
 ## 10. Observability and Artifacts
 
-Write structured artifacts under the run:
+Write structured artifacts under the Temporal Artifact directory:
 * `artifacts/pr_resolver_snapshot.json`
 * `artifacts/pr_resolver_result.json`
 
@@ -242,5 +238,5 @@ You are the master orchestrator for finishing Pull Requests. You diagnose the PR
 2. Implement `bin/pr_resolve_snapshot.py`:
    * resolves PR selector defaulting to current branch
    * emits PR metadata + CI rollup + comment summary
-3. Add a Task Step Template entry in the dashboard catalog for `Resolve PR`.
+3. Add a Workflow Template entry in the dashboard catalog for `Resolve PR`.
 4. Unit test the snapshot script JSON schema and key decision gates (mock `gh` output).
