@@ -1,7 +1,5 @@
 import asyncio
 import pytest
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from api_service.services.temporal.adapters.managed import ManagedAgentAdapter
 from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunStatus
