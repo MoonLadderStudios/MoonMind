@@ -4,6 +4,7 @@ set -euo pipefail
 NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 AUTH_SERVICE="${CODEX_AUTH_SERVICE:-temporal-worker-sandbox}"
 AUTH_PROFILE="${CODEX_AUTH_PROFILE:-}"
+export CODEX_VOLUME_NAME="${CODEX_VOLUME_NAME:-codex_auth_volume}"
 AUTH_COMMAND="${CODEX_AUTH_COMMAND:-codex login --device-auth && codex login status}"
 AUTH_COMMAND_TOKEN_RE='^[A-Za-z0-9._/:=?&%+#@!,-]+$'
 CODEX_TERM="${TERM:-xterm-256color}"

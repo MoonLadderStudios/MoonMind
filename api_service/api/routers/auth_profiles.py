@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,8 +65,8 @@ class AuthProfileResponse(BaseModel):
     cooldown_after_429_seconds: int
     rate_limit_policy: str
     enabled: bool
-    created_at: str
-    updated_at: str
+    created_at: Optional[str]
+    updated_at: Optional[str]
 
     model_config = {"from_attributes": True}
 
@@ -78,7 +78,7 @@ class AuthProfileResponse(BaseModel):
 
 def _get_session() -> Any:
     """Return the session dependency. Resolved at import-time from the app."""
-    from api_service.api.dependencies import get_async_session
+    from api_service.db.base import get_async_session
 
     return get_async_session
 
@@ -92,12 +92,8 @@ def _get_session() -> Any:
 async def list_profiles(
     runtime_id: Optional[str] = None,
     enabled_only: bool = False,
-    session: AsyncSession = None,  # type: ignore[assignment]
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
 ) -> list[dict[str, Any]]:
-    from api_service.api.dependencies import get_async_session
-
-    # NOTE: session injection depends on the app's dependency override setup.
-    # For a standalone call, we'd use Depends(get_async_session).
     stmt = select(ManagedAgentAuthProfile)
     if runtime_id:
         stmt = stmt.where(ManagedAgentAuthProfile.runtime_id == runtime_id)
@@ -112,7 +108,7 @@ async def list_profiles(
 @router.get("/{profile_id}", response_model=AuthProfileResponse)
 async def get_profile(
     profile_id: str,
-    session: AsyncSession = None,  # type: ignore[assignment]
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     row = await session.get(ManagedAgentAuthProfile, profile_id)
     if not row:
@@ -123,7 +119,7 @@ async def get_profile(
 @router.post("", response_model=AuthProfileResponse, status_code=201)
 async def create_profile(
     body: AuthProfileCreate,
-    session: AsyncSession = None,  # type: ignore[assignment]
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     existing = await session.get(ManagedAgentAuthProfile, body.profile_id)
     if existing:
@@ -152,7 +148,7 @@ async def create_profile(
 async def update_profile(
     profile_id: str,
     body: AuthProfileUpdate,
-    session: AsyncSession = None,  # type: ignore[assignment]
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
 ) -> dict[str, Any]:
     profile = await session.get(ManagedAgentAuthProfile, profile_id)
     if not profile:
@@ -166,7 +162,7 @@ async def update_profile(
             value = ManagedAgentRateLimitPolicy(value)
         setattr(profile, key, value)
 
-    profile.updated_at = datetime.now(UTC)
+    profile.updated_at = datetime.now(UTC)  # type: ignore[attr-defined]
     await session.commit()
     await session.refresh(profile)
     return _row_to_dict(profile)
@@ -175,7 +171,7 @@ async def update_profile(
 @router.delete("/{profile_id}", status_code=204)
 async def delete_profile(
     profile_id: str,
-    session: AsyncSession = None,  # type: ignore[assignment]
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
 ) -> None:
     profile = await session.get(ManagedAgentAuthProfile, profile_id)
     if not profile:

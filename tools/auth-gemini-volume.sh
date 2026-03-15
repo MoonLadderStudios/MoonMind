@@ -17,7 +17,8 @@
 #   GEMINI_CLI_HOME       Container-side Gemini CLI home (defaults to GEMINI_VOLUME_PATH)
 set -euo pipefail
 
-VOLUME_NAME="${GEMINI_VOLUME_NAME:-moonmind_gemini_auth_volume}"
+export GEMINI_VOLUME_NAME="${GEMINI_VOLUME_NAME:-moonmind_gemini_auth_volume}"
+VOLUME_NAME="${GEMINI_VOLUME_NAME}"
 HOST_GEMINI_DIR="${GEMINI_AUTH_HOST_DIR:-${HOME}/.gemini}"
 GEMINI_VOLUME_PATH="${GEMINI_VOLUME_PATH:-${GEMINI_HOME:-/var/lib/gemini-auth}}"
 GEMINI_HOME="${GEMINI_VOLUME_PATH}"
