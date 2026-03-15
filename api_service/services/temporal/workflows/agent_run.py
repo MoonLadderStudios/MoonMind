@@ -4,7 +4,7 @@ from temporalio import workflow, activity
 from temporalio.exceptions import CancelledError
 
 with workflow.unsafe.imports_passed_through():
-    from .shared import AgentExecutionRequest, AgentRunResult, AgentRunStatus
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus
     from ..adapters.base import AgentAdapter
     from ..adapters.managed import ManagedAgentAdapter
     from ..adapters.external import ExternalAgentAdapter
@@ -90,9 +90,10 @@ class MoonMindAgentRun:
         except CancelledError:
             # T016: Non-cancellable scope to call adapter's cancel
             with workflow.execute_in_background_with_shield():
-                await workflow.execute_activity(
-                    invoke_adapter_cancel,
-                    args=[self.agent_kind, self.run_id],
-                    start_to_close_timeout=timedelta(minutes=1)
-                )
+                if self.run_id and self.agent_kind:
+                    await workflow.execute_activity(
+                        invoke_adapter_cancel,
+                        args=[self.agent_kind, self.run_id],
+                        start_to_close_timeout=timedelta(minutes=1)
+                    )
             raise

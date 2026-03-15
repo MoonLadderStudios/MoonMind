@@ -18,7 +18,7 @@ from moonmind.schemas.jules_models import (
     JulesTaskResponse,
     normalize_jules_status,
 )
-from moonmind.workflows.adapters.jules_client import JulesClient
+from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
 JulesClientFactory = Callable[[], JulesClient]
 
@@ -161,7 +161,7 @@ class JulesAgentAdapter:
                         status="canceled",
                     )
                 )
-            except Exception:
+            except JulesClientError:
                 return AgentRunStatus(
                     runId=run_id,
                     agentKind="external",

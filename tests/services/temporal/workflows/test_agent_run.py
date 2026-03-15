@@ -1,10 +1,8 @@
 import pytest
-from datetime import timedelta
-import asyncio
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.client import WorkflowFailureError
-from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunResult, AgentRunStatus
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from api_service.services.temporal.workflows.agent_run import MoonMindAgentRun, publish_artifacts_activity, invoke_adapter_cancel
 
 @pytest.mark.asyncio
@@ -19,6 +17,9 @@ async def test_agent_run_workflow():
             request = AgentExecutionRequest(
                 agent_kind="managed",
                 agent_id="test-agent",
+                execution_profile_ref="prof-1",
+                correlation_id="corr-1",
+                idempotency_key="idem-1",
             )
             
             # Start workflow
@@ -50,6 +51,9 @@ async def test_agent_run_workflow_cancellation():
             request = AgentExecutionRequest(
                 agent_kind="managed",
                 agent_id="test-agent",
+                execution_profile_ref="prof-1",
+                correlation_id="corr-1",
+                idempotency_key="idem-1",
             )
             
             handle = await env.client.start_workflow(
