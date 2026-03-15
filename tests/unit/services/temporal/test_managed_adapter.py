@@ -76,12 +76,16 @@ async def test_full_start_status_fetch_result_flow(tmp_path):
     # Patch command template to use echo
     from api_service.services.temporal.adapters import managed as managed_mod
     original_profiles = managed_mod._DEFAULT_PROFILES.copy()
-    from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-    managed_mod._DEFAULT_PROFILES["default-managed"] = ManagedRuntimeProfile(
-        runtime_id="test-cli",
-        command_template=["echo", "test-output"],
-        default_timeout_seconds=30,
-    )
+    
+    managed_mod._DEFAULT_PROFILES["default-managed"] = {
+        "runtime_id": "test-cli",
+        "command_template": ["echo", "test-output"],
+        "default_model": "o4-mini",
+        "default_effort": "medium",
+        "default_timeout_seconds": 30,
+        "workspace_mode": "tempdir",
+        "env_overrides": {},
+    }
 
     try:
         request = _make_request()
@@ -120,12 +124,16 @@ async def test_idempotent_start(tmp_path):
 
     from api_service.services.temporal.adapters import managed as managed_mod
     original_profiles = managed_mod._DEFAULT_PROFILES.copy()
-    from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-    managed_mod._DEFAULT_PROFILES["default-managed"] = ManagedRuntimeProfile(
-        runtime_id="test-cli",
-        command_template=["sleep", "10"],
-        default_timeout_seconds=30,
-    )
+    
+    managed_mod._DEFAULT_PROFILES["default-managed"] = {
+        "runtime_id": "test-cli",
+        "command_template": ["sleep", "10"],
+        "default_model": "o4-mini",
+        "default_effort": "medium",
+        "default_timeout_seconds": 30,
+        "workspace_mode": "tempdir",
+        "env_overrides": {},
+    }
 
     try:
         request = _make_request()
@@ -159,12 +167,16 @@ async def test_cancel_full_flow(tmp_path):
 
     from api_service.services.temporal.adapters import managed as managed_mod
     original_profiles = managed_mod._DEFAULT_PROFILES.copy()
-    from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-    managed_mod._DEFAULT_PROFILES["default-managed"] = ManagedRuntimeProfile(
-        runtime_id="test-cli",
-        command_template=["sleep", "60"],
-        default_timeout_seconds=30,
-    )
+    
+    managed_mod._DEFAULT_PROFILES["default-managed"] = {
+        "runtime_id": "test-cli",
+        "command_template": ["sleep", "60"],
+        "default_model": "o4-mini",
+        "default_effort": "medium",
+        "default_timeout_seconds": 30,
+        "workspace_mode": "tempdir",
+        "env_overrides": {},
+    }
 
     try:
         request = _make_request()
@@ -177,3 +189,33 @@ async def test_cancel_full_flow(tmp_path):
         assert loaded.status == "cancelled"
     finally:
         managed_mod._DEFAULT_PROFILES.update(original_profiles)
+
+
+@pytest.mark.asyncio
+async def test_managed_adapter_fetch_auth_profile_activity():
+    from unittest.mock import patch, AsyncMock
+    adapter = ManagedAgentAdapter()
+    
+    with patch("api_service.services.temporal.adapters.managed.workflow.execute_activity", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = {
+            "profiles": [
+                {
+                    "profile_id": "custom-prof",
+                    "runtime_id": "test-managed",
+                    "auth_mode": "api_key",
+                    "max_parallel_runs": 2,
+                    "cooldown_after_429": 300,
+                    "rate_limit_policy": {},
+                    "enabled": True,
+                }
+            ]
+        }
+        
+        request = _make_request(execution_profile_ref="custom-prof")
+        # Start in stub mode
+        handle = await adapter.start(request)
+        
+        mock_exec.assert_called_once()
+        assert mock_exec.call_args[0][0] == "auth_profile.list"
+        assert mock_exec.call_args[0][1] == {"runtime_id": "test-managed"}
+        assert handle.status == AgentRunStatus.launching
