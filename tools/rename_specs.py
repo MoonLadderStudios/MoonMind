@@ -15,7 +15,6 @@ replacements = [
     (r'\bspec-automation\b', 'workflows'),
     (r'\bSpeckit\b', 'Workflow'),
     (r'\bSPEC_AUTOMATION_', 'WORKFLOW_'),
-    (r'/api/workflows', '/api/workflows'),
 ]
 
 def process_file(filepath):

@@ -7,10 +7,6 @@ extensions = ('.py', '.yaml', '.yml', '.sh', '.toml', '.md', '.jsonl', '.js')
 replacements = [
     (r'\bspec_workflow_runs\b', 'workflow_runs'),
     (r'\bspec_workflow_task_states\b', 'workflow_task_states'),
-    (r'ix_workflow_runs_', 'ix_workflow_runs_'),
-    (r'ix_workflow_task_states_', 'ix_workflow_task_states_'),
-    (r'ck_workflow_task_state_', 'ck_workflow_task_state_'),
-    (r'uq_workflow_task_state_', 'uq_workflow_task_state_'),
 ]
 
 def process_file(filepath):
