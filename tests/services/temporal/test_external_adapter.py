@@ -18,14 +18,16 @@ def test_external_adapter_start():
     assert handle.status == AgentRunStatus.launching
     assert handle.poll_hint_seconds == 15
 
-def test_external_adapter_status():
+@pytest.mark.asyncio
+async def test_external_adapter_status():
     adapter = ExternalAgentAdapter()
-    status = adapter.status("test-run-id")
+    status = await adapter.status("test-run-id")
     assert status == AgentRunStatus.running
 
-def test_external_adapter_fetch_result():
+@pytest.mark.asyncio
+async def test_external_adapter_fetch_result():
     adapter = ExternalAgentAdapter()
-    result = adapter.fetch_result("test-run-id")
+    result = await adapter.fetch_result("test-run-id")
     assert result.summary == "External run complete"
     assert result.diagnostics_ref == "diag-test-run-id"
 

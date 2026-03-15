@@ -182,7 +182,7 @@ async def test_heartbeat_updates(supervisor_env):
     )
 
     # Temporarily lower heartbeat interval for test
-    import api_service.services.temporal.runtime.supervisor as sup_mod
+    import api_service.services.temporal.runtime.supervisor as sup_mod  # noqa: PLC0415
     original = sup_mod.HEARTBEAT_INTERVAL
     sup_mod.HEARTBEAT_INTERVAL = 1
     try:

@@ -38,15 +38,16 @@ async def test_managed_adapter_start_stub_mode():
     assert handle.poll_hint_seconds == 5
 
 
-def test_managed_adapter_status_stub_mode():
+@pytest.mark.asyncio
+async def test_managed_adapter_status_stub_mode():
     adapter = ManagedAgentAdapter()
-    status = adapter.status("test-run-id")
+    status = await adapter.status("test-run-id")
     assert status == AgentRunStatus.running
 
-
-def test_managed_adapter_fetch_result_stub_mode():
+@pytest.mark.asyncio
+async def test_managed_adapter_fetch_result_stub_mode():
     adapter = ManagedAgentAdapter()
-    result = adapter.fetch_result("test-run-id")
+    result = await adapter.fetch_result("test-run-id")
     assert result.summary == "Managed run complete"
     assert result.output_refs == []
 
@@ -94,10 +95,10 @@ async def test_full_start_status_fetch_result_flow(tmp_path):
         # Let supervision complete
         await asyncio.sleep(1)
 
-        status = adapter.status("managed-key")
+        status = await adapter.status("managed-key")
         assert status == AgentRunStatus.completed
 
-        result = adapter.fetch_result("managed-key")
+        result = await adapter.fetch_result("managed-key")
         assert result.summary == "Managed run complete"
         assert result.diagnostics_ref is not None
     finally:
