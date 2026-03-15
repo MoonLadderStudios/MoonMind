@@ -24,6 +24,7 @@ from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
 )
+from api_service.api.routers.auth_profiles import router as auth_profiles_router
 from api_service.api.routers.agent_queue import router as agent_queue_router
 from api_service.api.routers.chat import router as chat_router
 from api_service.api.routers.context_protocol import router as context_protocol_router
@@ -296,6 +297,7 @@ app.include_router(
     profile_router, prefix="", tags=["Profile"]
 )  # Include profile router
 app.include_router(workflows_router)
+app.include_router(auth_profiles_router, prefix="/api/v1")
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)

@@ -77,6 +77,7 @@ TERMINAL_STATE_TO_CLOSE_STATUS: dict[
 WORKFLOW_ENTRY_BY_TYPE: dict[TemporalWorkflowType, str] = {
     TemporalWorkflowType.RUN: "run",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
+    TemporalWorkflowType.AUTH_PROFILE_MANAGER: "auth_profile",
 }
 
 ALLOWED_OWNER_TYPES: set[str] = {item.value for item in TemporalExecutionOwnerType}
@@ -115,6 +116,12 @@ CONTINUE_AS_NEW_CAUSES: set[str] = {
     "lifecycle_threshold",
     "major_reconfiguration",
 }
+_TERMINAL_WORKFLOW_UPDATE_ERROR_PATTERNS: tuple[str, ...] = (
+    "workflow execution already completed",
+    "execution already completed",
+    "already completed",
+    "workflow execution already closed",
+)
 
 
 class TemporalExecutionError(RuntimeError):
@@ -401,7 +408,7 @@ class TemporalExecutionService:
             integration=integration,
         )
         stmt = stmt.order_by(
-            TemporalExecutionCanonicalRecord.updated_at.desc(),
+            TemporalExecutionCanonicalRecord.started_at.desc(),
             TemporalExecutionCanonicalRecord.workflow_id.desc(),
         )
         stmt = stmt.offset(offset).limit(page_size + 1)
@@ -495,28 +502,6 @@ class TemporalExecutionService:
 
         record = await self._require_source_execution(workflow_id)
 
-        try:
-            update_arg = {
-                "input_artifact_ref": input_artifact_ref,
-                "plan_artifact_ref": plan_artifact_ref,
-                "parameters_patch": parameters_patch,
-                "title": title,
-                "new_manifest_artifact_ref": new_manifest_artifact_ref,
-                "mode": mode,
-                "max_concurrency": max_concurrency,
-                "node_ids": node_ids,
-                "idempotency_key": idempotency_key,
-            }
-            # Remove None values
-            update_arg = {k: v for k, v in update_arg.items() if v is not None}
-            await self._client_adapter.update_workflow(
-                record.workflow_id, update_name, update_arg
-            )
-        except Exception as exc:
-            raise TemporalExecutionValidationError(
-                f"Temporal update failed: {exc}"
-            ) from exc
-
         if (
             update_name in MANIFEST_UPDATE_NAMES
             and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
@@ -531,12 +516,51 @@ class TemporalExecutionService:
             if isinstance(cached, dict):
                 return dict(cached)
 
-        if record.state in TERMINAL_STATES:
+        if record.state in TERMINAL_STATES and update_name != "RequestRerun":
             return {
                 "accepted": False,
                 "applied": "immediate",
                 "message": "Workflow is in a terminal state and no longer accepts updates.",
             }
+
+        skip_temporal_update = (
+            update_name == "RequestRerun" and record.state in TERMINAL_STATES
+        )
+        if skip_temporal_update:
+            logger.info(
+                "Skipping Temporal update call for terminal rerun request on %s",
+                record.workflow_id,
+            )
+        else:
+            update_arg = {
+                "input_artifact_ref": input_artifact_ref,
+                "plan_artifact_ref": plan_artifact_ref,
+                "parameters_patch": parameters_patch,
+                "title": title,
+                "new_manifest_artifact_ref": new_manifest_artifact_ref,
+                "mode": mode,
+                "max_concurrency": max_concurrency,
+                "node_ids": node_ids,
+                "idempotency_key": idempotency_key,
+            }
+            update_arg = {k: v for k, v in update_arg.items() if v is not None}
+            try:
+                await self._client_adapter.update_workflow(
+                    record.workflow_id, update_name, update_arg
+                )
+            except Exception as exc:
+                if update_name == "RequestRerun" and self._is_terminal_update_error(
+                    exc
+                ):
+                    logger.info(
+                        "Temporal rerun update ignored for terminal workflow %s: %s",
+                        record.workflow_id,
+                        exc,
+                    )
+                else:
+                    raise TemporalExecutionValidationError(
+                        f"Temporal update failed: {exc}"
+                    ) from exc
 
         if record.workflow_type is TemporalWorkflowType.MANIFEST_INGEST and (
             update_name in MANIFEST_UPDATE_NAMES
@@ -589,6 +613,15 @@ class TemporalExecutionService:
         await self._session.refresh(record)
         await self._sync_projection_best_effort(record)
         return response
+
+    @staticmethod
+    def _is_terminal_update_error(exc: Exception) -> bool:
+        message = str(exc).strip().lower()
+        if not message:
+            return False
+        return any(
+            pattern in message for pattern in _TERMINAL_WORKFLOW_UPDATE_ERROR_PATTERNS
+        )
 
     async def describe_manifest_status(
         self,

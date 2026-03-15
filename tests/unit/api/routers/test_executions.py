@@ -414,6 +414,21 @@ def test_describe_execution_hides_foreign_workflow_visibility(
     assert str(user.id) != service.describe_execution.return_value.owner_id
 
 
+def test_describe_execution_allows_search_attribute_owner_id_fallback(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    record = _build_execution_record(owner_id=str(user.id))
+    record.owner_id = ""
+    record.search_attributes["mm_owner_id"] = [str(user.id)]
+    service.describe_execution.return_value = record
+
+    response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    assert response.json()["workflowId"] == "mm:wf-1"
+
+
 def test_update_execution_invalid_update_name_returns_contract_error(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

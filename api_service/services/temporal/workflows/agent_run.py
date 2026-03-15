@@ -47,6 +47,8 @@ class MoonMindAgentRun:
         self.agent_kind = request.agent_kind
 
         # T009: Adapter routing logic
+        # TODO: Refactor to use dependency injection (e.g., passing adapter factories
+        # into the workflow) to decouple the workflow from the concrete adapter classes.
         if request.agent_kind == "managed":
             adapter: AgentAdapter = ManagedAgentAdapter()
         elif request.agent_kind == "external":
@@ -105,11 +107,14 @@ class MoonMindAgentRun:
             return AgentRunResult(failure_class="Timeout")
 
         except CancelledError:
-            # T016: Non-cancellable scope to call adapter's cancel
-            with workflow.execute_in_background_with_shield():
-                await workflow.execute_activity(
-                    invoke_adapter_cancel,
-                    args=[self.agent_kind, self.run_id],
-                    start_to_close_timeout=timedelta(minutes=1)
-                )
+            # T016: Non-cancellable scope to call adapter's cancel.
+            # Guard against a race where cancellation arrived before run_id/agent_kind
+            # were set (i.e., before adapter.start() returned).
+            if self.run_id is not None and self.agent_kind is not None:
+                with workflow.execute_in_background_with_shield():
+                    await workflow.execute_activity(
+                        invoke_adapter_cancel,
+                        args=[self.agent_kind, self.run_id],
+                        start_to_close_timeout=timedelta(minutes=1)
+                    )
             raise

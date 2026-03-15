@@ -34,6 +34,9 @@ from moonmind.workflows.temporal.workers import (
     describe_configured_worker,
     list_registered_workflow_types,
 )
+from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+    MoonMindAuthProfileManagerWorkflow as MoonMindAuthProfileManager,
+)
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
@@ -952,7 +955,7 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        workflows = [MoonMindRun, MoonMindManifestIngest]
+        workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindAuthProfileManager]
         logger.info(
             "Temporal workflow fleet registrations: %s",
             ", ".join(list_registered_workflow_types()),

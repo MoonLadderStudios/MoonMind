@@ -19,6 +19,9 @@ async def test_agent_run_workflow():
             request = AgentExecutionRequest(
                 agent_kind="managed",
                 agent_id="test-agent",
+                execution_profile_ref="prof-1",
+                correlation_id="corr-1",
+                idempotency_key="idem-1",
             )
             
             # Start workflow
@@ -50,6 +53,9 @@ async def test_agent_run_workflow_cancellation():
             request = AgentExecutionRequest(
                 agent_kind="managed",
                 agent_id="test-agent",
+                execution_profile_ref="prof-1",
+                correlation_id="corr-1",
+                idempotency_key="idem-1",
             )
             
             handle = await env.client.start_workflow(

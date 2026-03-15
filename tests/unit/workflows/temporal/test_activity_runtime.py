@@ -682,7 +682,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
             assert len(fetched) == 1
             assert fetched[0].artifact_id.startswith("art_")
-            assert fake_client.closed is True
+            # Client is now reused by the adapter (not closed per-call).
 
 
 async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
@@ -833,13 +833,13 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
-    activities = TemporalJulesActivities()
-
+    # Adapter eagerly creates the client at init, so the runtime gate fires
+    # at TemporalJulesActivities construction time.
     with pytest.raises(
         TemporalActivityRuntimeError,
         match=JULES_RUNTIME_DISABLED_MESSAGE,
     ):
-        await activities.integration_jules_status(external_id="task-001")
+        TemporalJulesActivities()
 
 
 async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path):
