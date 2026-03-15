@@ -180,16 +180,12 @@ async def test_heartbeat_updates(supervisor_env):
         stderr=asyncio.subprocess.PIPE,
     )
 
-    # Temporarily lower heartbeat interval for test
-    import api_service.services.temporal.runtime.supervisor as sup_mod  # noqa: PLC0415
-    original = sup_mod.HEARTBEAT_INTERVAL
-    sup_mod.HEARTBEAT_INTERVAL = 1
-    try:
+    # Temporarily lower heartbeat interval for test using patch to avoid
+    # mixed import style (import + from-import of same module).
+    with patch('api_service.services.temporal.runtime.supervisor.HEARTBEAT_INTERVAL', 1):
         record = await supervisor.supervise(
             run_id="run-1", process=process, timeout_seconds=30
         )
-    finally:
-        sup_mod.HEARTBEAT_INTERVAL = original
 
     assert record.status == "completed"
     # Last heartbeat should have been set
