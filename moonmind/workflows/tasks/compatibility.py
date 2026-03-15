@@ -261,7 +261,7 @@ class TaskCompatibilityService:
             rows.extend(temporal_rows)
             total_count += temporal_count
         rows.sort(
-            key=lambda row: (row.updated_at, row.created_at, row.task_id),
+            key=lambda row: (row.created_at, row.updated_at, row.task_id),
             reverse=True,
         )
         return rows[:window_end], total_count
@@ -295,8 +295,8 @@ class TaskCompatibilityService:
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         stmt = stmt.order_by(
-            queue_models.AgentJob.updated_at.desc(),
             queue_models.AgentJob.created_at.desc(),
+            queue_models.AgentJob.updated_at.desc(),
             queue_models.AgentJob.id.desc(),
         ).limit(limit)
         jobs = list((await self._session.execute(stmt)).scalars().all())
@@ -327,8 +327,8 @@ class TaskCompatibilityService:
             )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         stmt = stmt.order_by(
-            db_models.OrchestratorRun.updated_at.desc(),
             db_models.OrchestratorRun.queued_at.desc(),
+            db_models.OrchestratorRun.updated_at.desc(),
             db_models.OrchestratorRun.id.desc(),
         ).limit(limit)
         runs = list((await self._session.execute(stmt)).scalars().all())
@@ -378,8 +378,8 @@ class TaskCompatibilityService:
             )
         count_stmt = select(func.count()).select_from(stmt.subquery())
         stmt = stmt.order_by(
-            db_models.TemporalExecutionRecord.updated_at.desc(),
             db_models.TemporalExecutionRecord.started_at.desc(),
+            db_models.TemporalExecutionRecord.updated_at.desc(),
             db_models.TemporalExecutionRecord.workflow_id.desc(),
         ).limit(limit)
         records = list((await self._session.execute(stmt)).scalars().all())
