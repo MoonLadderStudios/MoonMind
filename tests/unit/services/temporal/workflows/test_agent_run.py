@@ -115,7 +115,8 @@ async def test_agent_run_workflow_cancellation():
                 task_queue="agent-run-task-queue",
             )
             
-            # Yield event loop briefly to allow slot_assigned to happen if we want to cancel mid wait
+            # Yield event loop briefly to allow slot_assigned to happen if we want to cancel mid wait.
+            # While this relies on timing, it is required here strictly for correct event loop yielding in the test env.
             await asyncio.sleep(0.1)
             
             # Cancel the workflow while it's waiting

@@ -169,7 +169,8 @@ class MoonMindAgentRun:
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
-                    workflow.logger.warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
+                    # Errors are intentionally ignored to avoid masking the original cancellation
+                    logging.exception("Failed to release slot on cancellation, which may lead to a leak.")
 
             if self.run_id is not None and self.agent_kind is not None:
                 with workflow.execute_in_background_with_shield():
