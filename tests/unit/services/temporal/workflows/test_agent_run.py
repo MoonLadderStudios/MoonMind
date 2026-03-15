@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from typing import Any, Dict
+from typing import Any
 from temporalio import workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker

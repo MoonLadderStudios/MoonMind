@@ -3,7 +3,6 @@ import inspect
 import api_service.db.models  # Preload models to break circular import cycle
 
 import pytest
-import api_service.db.models
 
 from moonmind.config.settings import settings
 

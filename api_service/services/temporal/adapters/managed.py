@@ -5,7 +5,7 @@ from typing import Dict
 from temporalio import workflow
 from datetime import timedelta
 
-from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile, ManagedAgentAuthProfile
+from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 
 from .base import AgentAdapter
 from ..workflows.shared import AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult
@@ -61,9 +61,6 @@ class ManagedAgentAdapter(AgentAdapter):
             
             if matched_profile_data is None:
                 raise ValueError(f"Unknown execution profile: {profile_ref}")
-                
-            from moonmind.schemas.agent_runtime_models import ManagedAgentAuthProfile
-            auth_profile = ManagedAgentAuthProfile(**matched_profile_data)
             
             command_template = ["codex", "run"]
             if runtime_id == "gemini_cli":
@@ -82,6 +79,7 @@ class ManagedAgentAdapter(AgentAdapter):
                 env_overrides={},
             )
         except Exception as e:
+            workflow.logger.warning(f"Failed to fetch auth profile '{profile_ref}', falling back to default: {e}", exc_info=True)
             if isinstance(e, ValueError):
                 raise
             # Fallback legacy behavior

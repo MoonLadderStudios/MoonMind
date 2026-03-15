@@ -9,6 +9,8 @@ with workflow.unsafe.imports_passed_through():
     from ..adapters.managed import ManagedAgentAdapter
     from ..adapters.external import ExternalAgentAdapter
 
+PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
+
 # Note: In a real temporal app, adapters might be activities or standard classes
 # accessed via DI. We simulate them here based on the request.
 
@@ -128,7 +130,7 @@ class MoonMindAgentRun:
                     self.final_result = await adapter.fetch_result(self.run_id)
 
                 # Check for 429
-                if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == "429":
+                if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
                     await manager_handle.signal("report_cooldown", {"profile_id": request.execution_profile_ref, "cooldown_seconds": 300})
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                     self.completion_event.clear()
@@ -151,24 +153,15 @@ class MoonMindAgentRun:
         except asyncio.TimeoutError:
             self.run_status = AgentRunStatus.timed_out
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
-                # Need to run signal via background block inside except block ideally 
-                # but TimeoutError shouldn't be thrown by standard logic natively when we bound wait condition using remaining_timeout.
-                pass 
+                try:
+                    manager_id = f"auth-profile-manager:{request.agent_id}"
+                    manager_handle = workflow.get_external_workflow_handle(manager_id)
+                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                except Exception:
+                    workflow.logger.warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
             return AgentRunResult(failure_class="Timeout")
 
         except CancelledError:
-            # Shield cancellation and run cleanup
-            with workflow.execute_in_background_with_shield():
-                if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
-                    manager_id = f"auth-profile-manager:{request.agent_id}"
-                    manager_handle = workflow.get_external_workflow_handle(manager_id)
-                    # asyncio.create_task for temporal signal in cancel handler
-                    workflow.execute_activity(
-                        invoke_adapter_cancel, # Temp reuse to not block waiting async signal natively? Just run async signal over temporal.
-                        # Wait, signal doesn't take start to close. We can await manager_handle.signal inline here via background executing async func
-                        start_to_close_timeout=timedelta(minutes=1)
-                    )
-            
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 try:
                     with workflow.execute_in_background_with_shield():
@@ -176,7 +169,7 @@ class MoonMindAgentRun:
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
-                    pass
+                    workflow.logger.warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
 
             if self.run_id is not None and self.agent_kind is not None:
                 with workflow.execute_in_background_with_shield():
