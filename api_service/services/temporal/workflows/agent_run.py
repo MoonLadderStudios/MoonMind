@@ -4,7 +4,7 @@ from temporalio import workflow, activity
 from temporalio.exceptions import CancelledError
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus
+    from .shared import AgentExecutionRequest, AgentRunResult, AgentRunStatus
     from ..adapters.base import AgentAdapter
     from ..adapters.managed import ManagedAgentAdapter
     from ..adapters.external import ExternalAgentAdapter
@@ -25,7 +25,7 @@ async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
         adapter = ExternalAgentAdapter()
     else:
         return
-    adapter.cancel(run_id)
+    await adapter.cancel(run_id)
 
 @workflow.defn
 class MoonMindAgentRun:
@@ -45,9 +45,9 @@ class MoonMindAgentRun:
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
-        
+
         # T009: Adapter routing logic
-        # TODO: Refactor to use dependency injection (e.g., passing adapter factories 
+        # TODO: Refactor to use dependency injection (e.g., passing adapter factories
         # into the workflow) to decouple the workflow from the concrete adapter classes.
         if request.agent_kind == "managed":
             adapter: AgentAdapter = ManagedAgentAdapter()
@@ -55,8 +55,8 @@ class MoonMindAgentRun:
             adapter: AgentAdapter = ExternalAgentAdapter()
         else:
             raise ValueError(f"Unknown agent kind: {request.agent_kind}")
-            
-        handle = adapter.start(request)
+
+        handle = await adapter.start(request)
         self.run_id = handle.run_id
         self.run_status = handle.status
 
@@ -71,7 +71,7 @@ class MoonMindAgentRun:
             # T011: Timeout handling
             poll_interval = handle.poll_hint_seconds or 10
             elapsed = 0
-            
+
             while elapsed < timeout_seconds:
                 try:
                     await asyncio.wait_for(self.completion_event.wait(), timeout=poll_interval)
@@ -79,19 +79,19 @@ class MoonMindAgentRun:
                 except asyncio.TimeoutError:
                     # Bounded status polling fallback
                     elapsed += poll_interval
-                    current_status = adapter.status(self.run_id)
+                    current_status = await adapter.status(self.run_id)
                     self.run_status = current_status
-                    if current_status.status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
+                    if current_status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
                         break
-                        
+
             if elapsed >= timeout_seconds and not self.completion_event.is_set():
                 self.run_status = AgentRunStatus.timed_out
                 return AgentRunResult(failure_class="Timeout")
-            
+
             if self.final_result is None:
                 # Fallback to fetching
-                self.final_result = adapter.fetch_result(self.run_id)
-                
+                self.final_result = await adapter.fetch_result(self.run_id)
+
             # T012: Post-run artifact publishing logic
             await workflow.execute_activity(
                 publish_artifacts_activity,
@@ -101,7 +101,11 @@ class MoonMindAgentRun:
 
             # T013: Return normalized AgentRunResult
             return self.final_result
-            
+
+        except asyncio.TimeoutError:
+            self.run_status = AgentRunStatus.timed_out
+            return AgentRunResult(failure_class="Timeout")
+
         except CancelledError:
             # T016: Non-cancellable scope to call adapter's cancel.
             # Guard against a race where cancellation arrived before run_id/agent_kind

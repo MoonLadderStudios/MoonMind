@@ -41,6 +41,7 @@ async def test_managed_adapter_status_stub_mode():
     status = await adapter.status("test-run-id")
     assert status == AgentRunStatus.running
 
+
 @pytest.mark.asyncio
 async def test_managed_adapter_fetch_result_stub_mode():
     adapter = ManagedAgentAdapter()

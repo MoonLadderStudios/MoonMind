@@ -71,11 +71,19 @@ class JulesAgentAdapter:
         *within the same Activity attempt*.  Cross-attempt deduplication
         is the responsibility of the Temporal Workflow and the provider's
         own idempotency semantics.
+
+        Known limitation: if the Activity worker process restarts mid-attempt
+        (before the Activity completes), the in-memory cache is lost.  A
+        subsequent retry could issue a duplicate request to Jules.  This risk
+        is accepted because the Jules API exposes its own idempotency key
+        (passed via ``idempotencyKey`` in the payload), so the provider is
+        responsible for deduplication at the API layer across retries.
     """
 
     def __init__(self, *, client_factory: JulesClientFactory) -> None:
         self._client: JulesClient = client_factory()
         self._starts_by_idempotency: dict[str, AgentRunHandle] = {}
+
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         if request.agent_kind != "external":
             raise ValueError("JulesAgentAdapter only supports external agent_kind")

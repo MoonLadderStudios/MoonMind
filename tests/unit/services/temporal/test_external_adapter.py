@@ -2,7 +2,8 @@ import pytest
 from api_service.services.temporal.adapters.external import ExternalAgentAdapter
 from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunStatus
 
-def test_external_adapter_start():
+@pytest.mark.asyncio
+async def test_external_adapter_start():
     adapter = ExternalAgentAdapter()
     request = AgentExecutionRequest(
         agent_kind="external",
@@ -12,7 +13,7 @@ def test_external_adapter_start():
         input_refs=["input-1"],
         idempotency_key="test-key"
     )
-    handle = adapter.start(request)
+    handle = await adapter.start(request)
     assert handle.run_id == "test-key"
     assert handle.agent_kind == "external"
     assert handle.status == AgentRunStatus.launching
