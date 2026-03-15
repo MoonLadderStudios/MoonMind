@@ -19,10 +19,11 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
-from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.utils.logging import SecretRedactor
+from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
@@ -61,6 +62,7 @@ PlanGenerator = Callable[
     Mapping[str, Any] | PlanDefinition | Awaitable[Mapping[str, Any] | PlanDefinition],
 ]
 JulesClientFactory = Callable[[], JulesClient]
+JulesAgentAdapterFactory = Callable[[], JulesAgentAdapter]
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -1292,10 +1294,15 @@ class TemporalJulesActivities:
         *,
         artifact_service: TemporalArtifactService | None = None,
         client_factory: JulesClientFactory | None = None,
+        adapter_factory: JulesAgentAdapterFactory | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._client_factory = client_factory or self._build_default_client
-        self._starts_by_idempotency: dict[str, IntegrationStartResult] = {}
+        self._adapter = (
+            adapter_factory()
+            if adapter_factory is not None
+            else JulesAgentAdapter(client_factory=self._client_factory)
+        )
 
     @staticmethod
     def _build_default_client() -> JulesClient:
@@ -1375,11 +1382,6 @@ class TemporalJulesActivities:
             if idempotency_key is None:
                 idempotency_key = request_payload.get("idempotency_key")
 
-        if idempotency_key is not None:
-            existing = self._starts_by_idempotency.get(idempotency_key)
-            if existing is not None:
-                return existing
-
         parameters = dict(parameters or {})
         title = str(parameters.get("title") or "MoonMind Integration Task").strip()
         description = str(parameters.get("description") or "").strip()
@@ -1405,37 +1407,67 @@ class TemporalJulesActivities:
             raise TemporalActivityRuntimeError("integration metadata must be an object")
 
         metadata_payload = dict(metadata or {})
-        if correlation_id is not None:
-            normalized_correlation_id = str(correlation_id).strip()
-            if not normalized_correlation_id:
-                raise TemporalActivityRuntimeError(
-                    "integration.jules.start correlation_id must not be blank"
-                )
-            metadata_payload.setdefault("correlationId", normalized_correlation_id)
-        if idempotency_key is not None:
-            metadata_payload.setdefault("idempotencyKey", idempotency_key)
-            metadata_payload.setdefault("requestId", idempotency_key)
-
-        client = self._client_factory()
-        try:
-            response = await client.create_task(
-                JulesCreateTaskRequest(
-                    title=title,
-                    description=description,
-                    metadata=metadata_payload,
-                )
+        if correlation_id is not None and not str(correlation_id).strip():
+            raise TemporalActivityRuntimeError(
+                "integration.jules.start correlation_id must not be blank"
             )
-        finally:
-            await client.aclose()
+        resolved_correlation_id = str(
+            correlation_id
+            or metadata_payload.get("correlationId")
+            or f"integration:jules:{title}"
+        ).strip()
+        if not resolved_correlation_id:
+            raise TemporalActivityRuntimeError(
+                "integration.jules.start requires a non-empty correlation id"
+            )
+        resolved_idempotency_key = str(
+            idempotency_key
+            or metadata_payload.get("idempotencyKey")
+            or f"jules:{resolved_correlation_id}:{title}"
+        ).strip()
+        if not resolved_idempotency_key:
+            raise TemporalActivityRuntimeError(
+                "integration.jules.start requires a non-empty idempotency key"
+            )
+        metadata_payload.setdefault("correlationId", resolved_correlation_id)
+        metadata_payload.setdefault("idempotencyKey", resolved_idempotency_key)
+        metadata_payload.setdefault("requestId", resolved_idempotency_key)
 
-        status_snapshot = self._status_snapshot(response.status)
+        adapter_request = AgentExecutionRequest(
+            agentKind="external",
+            agentId="jules",
+            executionProfileRef=str(
+                parameters.get("execution_profile_ref") or "profile:jules-default"
+            ),
+            correlationId=resolved_correlation_id,
+            idempotencyKey=resolved_idempotency_key,
+            instructionRef=_artifact_locator(inputs_ref),
+            inputRefs=[]
+            if inputs_ref is None
+            else [_artifact_id_from_ref(inputs_ref)],
+            parameters={
+                "title": title,
+                "description": description,
+                "metadata": metadata_payload,
+            },
+        )
+        handle = await self._adapter.start(adapter_request)
+        status_snapshot = self._status_snapshot(
+            str(handle.metadata.get("providerStatus") or "unknown")
+        )
+        external_url = str(handle.metadata.get("externalUrl") or "").strip() or None
 
         tracking_ref = None
         if self._artifact_service is not None and principal is not None:
             tracking_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal=principal,
-                payload=response.model_dump(by_alias=True, mode="json"),
+                payload={
+                    "taskId": handle.run_id,
+                    "status": status_snapshot.provider_status,
+                    "url": external_url,
+                    "metadata": dict(handle.metadata),
+                },
                 execution_ref=execution_ref,
                 metadata_json={
                     "name": "jules_start.json",
@@ -1445,16 +1477,14 @@ class TemporalJulesActivities:
             )
 
         result = IntegrationStartResult(
-            external_id=response.task_id,
+            external_id=handle.run_id,
             status=status_snapshot.provider_status,
             tracking_ref=tracking_ref,
-            url=response.url,
+            url=external_url,
             normalized_status=status_snapshot.normalized_status,
             provider_status=status_snapshot.provider_status,
             callback_supported=False,
         )
-        if idempotency_key is not None:
-            self._starts_by_idempotency[idempotency_key] = result
         return result
 
     async def integration_jules_status(
@@ -1464,20 +1494,22 @@ class TemporalJulesActivities:
         principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
-        client = self._client_factory()
-        try:
-            response = await client.get_task(JulesGetTaskRequest(task_id=external_id))
-        finally:
-            await client.aclose()
-
-        status_snapshot = self._status_snapshot(response.status)
+        status = await self._adapter.status(external_id)
+        provider_status = str(status.metadata.get("providerStatus") or "unknown")
+        external_url = str(status.metadata.get("externalUrl") or "").strip() or None
+        status_snapshot = self._status_snapshot(provider_status)
 
         tracking_ref = None
         if self._artifact_service is not None and principal is not None:
             tracking_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal=principal,
-                payload=response.model_dump(by_alias=True, mode="json"),
+                payload={
+                    "taskId": status.run_id,
+                    "status": provider_status,
+                    "url": external_url,
+                    "metadata": dict(status.metadata),
+                },
                 execution_ref=execution_ref,
                 metadata_json={
                     "name": "jules_status.json",
@@ -1487,13 +1519,13 @@ class TemporalJulesActivities:
             )
 
         return IntegrationStatusResult(
-            external_id=response.task_id,
+            external_id=status.run_id,
             status=status_snapshot.provider_status,
             tracking_ref=tracking_ref,
-            url=response.url,
+            url=external_url,
             normalized_status=status_snapshot.normalized_status,
             provider_status=status_snapshot.provider_status,
-            terminal=status_snapshot.terminal,
+            terminal=status.terminal,
         )
 
     async def integration_jules_fetch_result(

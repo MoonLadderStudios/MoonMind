@@ -17,6 +17,14 @@ from .agent_queue_models import (
     WorkerTokenListResponse,
     WorkerTokenModel,
 )
+from .agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunHandle,
+    AgentRunResult,
+    AgentRunStatus,
+    ManagedAgentAuthProfile,
+    is_terminal_agent_run_state,
+)
 from .manifest_models import (
     AuthItem,
     Defaults,
@@ -88,6 +96,12 @@ __all__ = [
     "WorkerTokenModel",
     "WorkerTokenCreateResponse",
     "WorkerTokenListResponse",
+    "AgentExecutionRequest",
+    "AgentRunHandle",
+    "AgentRunStatus",
+    "AgentRunResult",
+    "ManagedAgentAuthProfile",
+    "is_terminal_agent_run_state",
     "WorkflowRunModel",
     "WorkflowTaskStateModel",
     "WorkflowArtifactModel",

@@ -682,7 +682,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
             assert len(fetched) == 1
             assert fetched[0].artifact_id.startswith("art_")
-            assert fake_client.closed is True
+            # Client is now reused by the adapter (not closed per-call).
 
 
 async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
@@ -802,6 +802,29 @@ async def test_jules_fetch_result_writes_failure_summary_artifact(tmp_path: Path
             assert summary["externalId"] == "task-001"
 
 
+async def test_jules_status_unknown_provider_state_is_non_terminal(tmp_path: Path):
+    fake_client = _FakeJulesClient(get_status="mystery")
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalJulesActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            status = await activities.integration_jules_status(
+                external_id="task-001",
+                principal="user-1",
+            )
+            assert status.provider_status == "mystery"
+            assert status.normalized_status == "unknown"
+            assert status.terminal is False
+
+
 async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch):
     monkeypatch.delenv("JULES_ENABLED", raising=False)
     monkeypatch.delenv("JULES_API_URL", raising=False)
@@ -810,13 +833,13 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
-    activities = TemporalJulesActivities()
-
+    # Adapter eagerly creates the client at init, so the runtime gate fires
+    # at TemporalJulesActivities construction time.
     with pytest.raises(
         TemporalActivityRuntimeError,
         match=JULES_RUNTIME_DISABLED_MESSAGE,
     ):
-        await activities.integration_jules_status(external_id="task-001")
+        TemporalJulesActivities()
 
 
 async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path):
