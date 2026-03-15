@@ -183,7 +183,7 @@ class AgentRunResult(BaseModel):
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
     failure_class: FailureClass | None = Field(None, alias="failureClass")
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
-    retry_recommendation: str | None = Field(None, alias="retryRecommendation")
+    retry_recommendation: bool | None = Field(None, alias="retryRecommendation")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
     @model_validator(mode="after")

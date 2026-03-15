@@ -1996,3 +1996,44 @@ class TemporalArtifactActivities:
             artifact_id=artifact_id,
             principal=principal,
         )
+
+    async def auth_profile_list(
+        self,
+        *,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """List enabled auth profiles for a runtime family.
+
+        Returns a dict with a ``profiles`` key containing a list of profile
+        dicts suitable for the AuthProfileManager workflow.
+        """
+        from sqlalchemy import select
+
+        from api_service.db.models import ManagedAgentAuthProfile
+
+        async with self._service._session_factory() as session:
+            stmt = select(ManagedAgentAuthProfile).where(
+                ManagedAgentAuthProfile.runtime_id == runtime_id,
+                ManagedAgentAuthProfile.enabled.is_(True),
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+
+        profiles = []
+        for row in rows:
+            profiles.append(
+                {
+                    "profile_id": row.profile_id,
+                    "runtime_id": row.runtime_id,
+                    "auth_mode": row.auth_mode.value,
+                    "volume_ref": row.volume_ref,
+                    "volume_mount_path": row.volume_mount_path,
+                    "account_label": row.account_label,
+                    "max_parallel_runs": row.max_parallel_runs,
+                    "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
+                    "rate_limit_policy": row.rate_limit_policy.value,
+                    "enabled": row.enabled,
+                }
+            )
+
+        return {"profiles": profiles}

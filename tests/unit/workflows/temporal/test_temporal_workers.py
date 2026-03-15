@@ -88,6 +88,7 @@ def test_registered_workflow_types_include_manifest_ingest():
     assert list_registered_workflow_types() == (
         "MoonMind.Run",
         "MoonMind.ManifestIngest",
+        "MoonMind.AuthProfileManager",
     )
 
 

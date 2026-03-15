@@ -1,7 +1,8 @@
 """External-agent adapter implementation backed by the Jules provider."""
 
+from __future__ import annotations
+
 from collections.abc import Callable, Mapping
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -54,22 +55,27 @@ def _extract_parameters_metadata(
 
 
 class JulesAgentAdapter:
-    """Normalize Jules provider interactions into canonical agent contracts."""
+    """Normalize Jules provider interactions into canonical agent contracts.
+
+    Notes on client lifecycle:
+        A single ``JulesClient`` is created at construction time and reused
+        for all operations, allowing HTTP connection pooling via the
+        underlying ``httpx.AsyncClient``.
+
+    Notes on in-memory idempotency:
+        ``_starts_by_idempotency`` is intentionally an in-memory dict.  Each
+        ``JulesAgentAdapter`` is instantiated per Temporal Activity execution
+        (owned by ``TemporalJulesActivities``).  Temporal itself guarantees
+        at-most-once delivery at the workflow level; the in-memory cache
+        serves only as a cheap guard against accidental double-submit
+        *within the same Activity attempt*.  Cross-attempt deduplication
+        is the responsibility of the Temporal Workflow and the provider's
+        own idempotency semantics.
+    """
 
     def __init__(self, *, client_factory: JulesClientFactory) -> None:
-        self._client_factory = client_factory
-        # TODO: Implement a persistent, shared storage layer (e.g., database or Redis)
-        # for robust idempotency across all workers instead of this fragile in-memory cache.
+        self._client: JulesClient = client_factory()
         self._starts_by_idempotency: dict[str, AgentRunHandle] = {}
-
-    @asynccontextmanager
-    async def _client(self):
-        client = self._client_factory()
-        try:
-            yield client
-        finally:
-            await client.aclose()
-
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         if request.agent_kind != "external":
             raise ValueError("JulesAgentAdapter only supports external agent_kind")
@@ -95,14 +101,13 @@ class JulesAgentAdapter:
             moonmind_payload.setdefault("idempotencyKey", request.idempotency_key)
             metadata["moonmind"] = moonmind_payload
 
-        async with self._client() as client:
-            response = await client.create_task(
-                JulesCreateTaskRequest(
-                    title=title,
-                    description=description,
-                    metadata=metadata,
-                )
+        response = await self._client.create_task(
+            JulesCreateTaskRequest(
+                title=title,
+                description=description,
+                metadata=metadata,
             )
+        )
 
         handle = AgentRunHandle(
             runId=response.task_id,
@@ -159,14 +164,13 @@ class JulesAgentAdapter:
 
     async def cancel(self, run_id: str) -> AgentRunStatus:
         try:
-            async with self._client() as client:
-                response = await client.resolve_task(
-                    JulesResolveTaskRequest(
-                        taskId=run_id,
-                        resolutionNotes="Canceled by MoonMind.",
-                        status="canceled",
-                    )
+            response = await self._client.resolve_task(
+                JulesResolveTaskRequest(
+                    taskId=run_id,
+                    resolutionNotes="Canceled by MoonMind.",
+                    status="canceled",
                 )
+            )
         except JulesClientError:
             return AgentRunStatus(
                 runId=run_id,
@@ -191,8 +195,7 @@ class JulesAgentAdapter:
         )
 
     async def _get_task(self, run_id: str) -> JulesTaskResponse:
-        async with self._client() as client:
-            return await client.get_task(JulesGetTaskRequest(taskId=run_id))
+        return await self._client.get_task(JulesGetTaskRequest(taskId=run_id))
 
 
 __all__ = ["JulesAgentAdapter"]
