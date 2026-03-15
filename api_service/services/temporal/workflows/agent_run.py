@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import timedelta
 from temporalio import workflow, activity
 from temporalio.exceptions import CancelledError
@@ -163,9 +164,9 @@ class MoonMindAgentRun:
 
         except CancelledError:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
+                manager_id = f"auth-profile-manager:{request.agent_id}"
                 try:
                     with workflow.execute_in_background_with_shield():
-                        manager_id = f"auth-profile-manager:{request.agent_id}"
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
