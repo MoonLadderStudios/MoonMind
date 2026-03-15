@@ -1,8 +1,9 @@
 import uuid
 import datetime
 from typing import Any
+
 from .base import AgentAdapter
-from ..workflows.shared import AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult
 
 class ManagedAgentAdapter(AgentAdapter):
     def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
@@ -18,12 +19,12 @@ class ManagedAgentAdapter(AgentAdapter):
         self._launch_runtime_async(run_id)
         
         return AgentRunHandle(
-            run_id=run_id,
-            agent_kind="managed",
-            agent_id=request.agent_id,
+            runId=run_id,
+            agentKind="managed",
+            agentId=request.agent_id,
             status=AgentRunStatus.launching,
-            started_at=datetime.datetime.utcnow().isoformat() + "Z",
-            poll_hint_seconds=5  # DOC-REQ-POLLING
+            startedAt=datetime.datetime.utcnow().isoformat() + "Z",
+            metadata={"poll_hint_seconds": 5}  # DOC-REQ-POLLING
         )
 
     def _resolve_profiles(self, profile_ref: str) -> None:
@@ -40,12 +41,23 @@ class ManagedAgentAdapter(AgentAdapter):
         
     def status(self, run_id: str) -> AgentRunStatus:
         # DOC-REQ-POLLING: bounded status polling
-        return AgentRunStatus.running
+        return AgentRunStatus(
+            runId=run_id,
+            agentKind="managed",
+            agentId="stub",
+            status="running"
+        )
         
     def fetch_result(self, run_id: str) -> AgentRunResult:
         # DOC-REQ-MNG-RESP: fetch outputs/logs
-        return AgentRunResult(summary="Managed run complete", output_refs=[])
+        return AgentRunResult(summary="Managed run complete", outputRefs=[])
         
-    def cancel(self, run_id: str) -> None:
+    def cancel(self, run_id: str) -> AgentRunStatus:
         # DOC-REQ-MNG-RESP: cancel or terminate managed runs
-        pass
+        return AgentRunStatus(
+            runId=run_id,
+            agentKind="managed",
+            agentId="stub",
+            status="canceled"
+        )
+

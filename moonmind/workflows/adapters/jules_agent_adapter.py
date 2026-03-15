@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -75,7 +76,6 @@ class JulesAgentAdapter:
     def __init__(self, *, client_factory: JulesClientFactory) -> None:
         self._client: JulesClient = client_factory()
         self._starts_by_idempotency: dict[str, AgentRunHandle] = {}
-
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         if request.agent_kind != "external":
             raise ValueError("JulesAgentAdapter only supports external agent_kind")

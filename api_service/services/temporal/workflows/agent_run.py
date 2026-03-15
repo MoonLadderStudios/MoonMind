@@ -4,7 +4,7 @@ from temporalio import workflow, activity
 from temporalio.exceptions import CancelledError
 
 with workflow.unsafe.imports_passed_through():
-    from .shared import AgentExecutionRequest, AgentRunResult, AgentRunStatus
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus
     from ..adapters.base import AgentAdapter
     from ..adapters.managed import ManagedAgentAdapter
     from ..adapters.external import ExternalAgentAdapter
@@ -47,6 +47,8 @@ class MoonMindAgentRun:
         self.agent_kind = request.agent_kind
         
         # T009: Adapter routing logic
+        # TODO: Refactor to use dependency injection (e.g., passing adapter factories 
+        # into the workflow) to decouple the workflow from the concrete adapter classes.
         if request.agent_kind == "managed":
             adapter: AgentAdapter = ManagedAgentAdapter()
         elif request.agent_kind == "external":
@@ -79,7 +81,7 @@ class MoonMindAgentRun:
                     elapsed += poll_interval
                     current_status = adapter.status(self.run_id)
                     self.run_status = current_status
-                    if current_status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
+                    if current_status.status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
                         break
                         
             if elapsed >= timeout_seconds and not self.completion_event.is_set():
@@ -112,4 +114,3 @@ class MoonMindAgentRun:
                         start_to_close_timeout=timedelta(minutes=1)
                     )
             raise
-
