@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from datetime import timedelta
 from temporalio import workflow, activity
 from temporalio.exceptions import CancelledError
