@@ -67,7 +67,24 @@ class MoonMindAgentRun:
         try:
             # T010: Wait phase loop with timeout
             # T011: Timeout handling
-            await asyncio.wait_for(self.completion_event.wait(), timeout=timeout_seconds)
+            poll_interval = handle.poll_hint_seconds or 10
+            elapsed = 0
+            
+            while elapsed < timeout_seconds:
+                try:
+                    await asyncio.wait_for(self.completion_event.wait(), timeout=poll_interval)
+                    break  # Callback received
+                except asyncio.TimeoutError:
+                    # Bounded status polling fallback
+                    elapsed += poll_interval
+                    current_status = adapter.status(self.run_id)
+                    self.run_status = current_status
+                    if current_status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
+                        break
+                        
+            if elapsed >= timeout_seconds and not self.completion_event.is_set():
+                self.run_status = AgentRunStatus.timed_out
+                return AgentRunResult(failure_class="Timeout")
             
             if self.final_result is None:
                 # Fallback to fetching

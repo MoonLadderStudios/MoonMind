@@ -1,5 +1,23 @@
 # Agent Instructions
 
+## Read Documentation
+
+Read relevant documents in the following order before implementing tasks:
+
+1. **Constitution:** `.specify/memory/constitution.md` for non-negotiable principles and constraints
+2. **Standards:** Code style and guidance in `README.md`
+3. **Spec:** `specs/<feature-id>/spec.md`, then `plan.md`, then `tasks.md`
+4. **Docs:** `Docs/*.md` as needed for system architecture
+
+## Spec Numbering
+
+When creating a new spec folder/feature ID:
+
+- ✅ **DO** scan `specs/` and find the highest numeric prefix across all directories matching `<number>-<name>`.
+- ✅ **DO** assign the next number globally (`max + 1`), regardless of short-name/topic.
+- ✅ **DO** keep branch/feature/spec numbering aligned to that global next number.
+- ❌ **DON'T** reset numbering to `001` for a new short-name if higher numbered specs already exist.
+
 ## Testing Instructions
 - **Unit Tests**: Always use `./tools/test_unit.sh` to run unit tests. This script is the single source of truth for CI and local development, ensuring consistent execution and proper exit codes. It automatically uses `python` and falls back to `python3` when `python` is unavailable. Do not run `pytest` directly or pipe to `tail` as this may mask failures.
 - **WSL Unit Test Mode**: In WSL, `./tools/test_unit.sh` automatically delegates to `./tools/test_unit_docker.sh` (unless `MOONMIND_FORCE_LOCAL_TESTS=1` is set) so tests run in the Docker test environment by default. Use this path when working in WSL.
@@ -29,15 +47,6 @@
 - Never introduce compatibility transforms that change execution semantics or billing-relevant values (for example model identifiers, effort values, queue semantics, or publish behavior).
 - Prefer fail-fast behavior for unsupported runtime input values over hidden fallback behavior.
 - For Codex execution specifically, `codex.model` and `codex.effort` inputs must be passed through exactly as provided. Unsupported values must fail through normal CLI/API validation.
-
-## Spec Numbering
-
-When creating a new spec folder/feature ID:
-
-- ✅ **DO** scan `specs/` and find the highest numeric prefix across all directories matching `<number>-<name>`.
-- ✅ **DO** assign the next number globally (`max + 1`), regardless of short-name/topic.
-- ✅ **DO** keep branch/feature/spec numbering aligned to that global next number.
-- ❌ **DON'T** reset numbering to `001` for a new short-name if higher numbered specs already exist.
 
 ## Shared Skills Runtime
 - MoonMind now materializes one per-run active skill set and exposes it to both CLIs through adapter links.
