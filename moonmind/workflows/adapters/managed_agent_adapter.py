@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -54,10 +54,11 @@ _OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
     }
 )
 
-# Type alias for async signal callables injected by the caller/workflow.
-SlotRequestFunc = Callable[..., Any]
-SlotReleaseFunc = Callable[..., Any]
-CooldownReportFunc = Callable[..., Any]
+# Type aliases for async signal callables injected by the caller/workflow.
+ProfileFetcherFunc = Callable[..., Awaitable[dict[str, Any]]]
+SlotRequestFunc = Callable[..., Awaitable[Any]]
+SlotReleaseFunc = Callable[..., Awaitable[Any]]
+CooldownReportFunc = Callable[..., Awaitable[Any]]
 
 
 def _shape_environment_for_oauth(
@@ -126,10 +127,10 @@ class ManagedAgentAdapter:
     def __init__(
         self,
         *,
-        profile_fetcher: Callable[..., Any],
-        slot_requester: Callable[..., Any],
-        slot_releaser: Callable[..., Any],
-        cooldown_reporter: Callable[..., Any],
+        profile_fetcher: ProfileFetcherFunc,
+        slot_requester: SlotRequestFunc,
+        slot_releaser: SlotReleaseFunc,
+        cooldown_reporter: CooldownReportFunc,
         workflow_id: str,
     ) -> None:
         self._fetch_profiles = profile_fetcher
@@ -318,6 +319,10 @@ class ManagedAgentAdapter:
 __all__ = [
     "ManagedAgentAdapter",
     "ProfileResolutionError",
+    "ProfileFetcherFunc",
+    "SlotRequestFunc",
+    "SlotReleaseFunc",
+    "CooldownReportFunc",
     "_shape_environment_for_api_key",
     "_shape_environment_for_oauth",
     "_OAUTH_CLEARED_VARS",

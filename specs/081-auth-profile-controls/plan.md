@@ -58,8 +58,7 @@ moonmind/
     adapters/
       managed_agent_adapter.py          [NEW] ManagedAgentAdapter implementation
     temporal/
-      activities/
-        auth_profile_activity.py        [NEW] auth_profile.list activity implementation
+      artifacts.py                      [MODIFIED] auth_profile_list method added to TemporalArtifactActivities
       workflows/
         auth_profile_manager.py         [EXISTING — no changes needed for Phase 5]
 
@@ -67,21 +66,19 @@ tests/
   unit/
     workflows/
       adapters/
-        test_managed_agent_adapter.py   [NEW] unit tests: env shaping, profile resolution, concurrency guard
-      temporal/
-        test_auth_profile_activity.py   [NEW] unit tests: auth_profile.list activity
+        test_managed_agent_adapter.py   [NEW] unit tests: env shaping, profile resolution, concurrency guard, auth_profile_list activity
 ```
 
 ## Proposed Changes
 
 ### 1. `auth_profile.list` activity implementation
 
-**File**: `moonmind/workflows/temporal/activities/auth_profile_activity.py` [NEW]
+**File**: `moonmind/workflows/temporal/artifacts.py` [MODIFIED]
 
-- Implement async activity function registered as `auth_profile.list`
-- Accepts `{"runtime_id": str}` — queries `managed_agent_auth_profiles` table
+- Added `auth_profile_list` as a method of the existing `TemporalArtifactActivities` class
+- Accepts `{"runtime_id": str}` — queries `managed_agent_auth_profiles` table via `_repository._session`
 - Returns `{"profiles": [list of profile dicts]}` matching the shape `AuthProfileManager` expects
-- Registered on the artifacts worker (`mm.activity.artifacts`)
+- Registered on the artifacts worker (`mm.activity.artifacts`) via existing `_ACTIVITY_HANDLER_ATTRS` mapping
 
 ### 2. `ManagedAgentAdapter`
 
@@ -118,8 +115,7 @@ Inline in `ManagedAgentAdapter` (or extracted to `_shape_environment(profile)`):
 
 ### 4. Tests
 
-- `test_managed_agent_adapter.py`: unit tests for env shaping (both modes), fail-fast on unknown/disabled profile, slot request/release round-trips (mock AuthProfileManager signals), 429 cooldown signal
-- `test_auth_profile_activity.py`: unit tests for `auth_profile.list` activity with mock DB session
+- `test_managed_agent_adapter.py`: unit tests for env shaping (both modes), fail-fast on unknown/disabled profile, slot request/release round-trips (mock AuthProfileManager signals), 429 cooldown signal, and `auth_profile_list` activity against in-memory SQLite DB
 
 ## Complexity Tracking
 
