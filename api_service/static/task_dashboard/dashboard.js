@@ -3574,9 +3574,7 @@
   }
 
   async function renderActivePage() {
-    const activeSubtitle = temporalListEnabled
-      ? `Running and queued work across queue, orchestrator, and Temporal systems. Unified queue: ${defaultQueueName}.`
-      : `Running and queued work across queue and orchestrator systems. Unified queue: ${defaultQueueName}.`;
+    const activeSubtitle = `Running and queued work. Unified queue: ${defaultQueueName}.`;
     setView(
       "Active Tasks",
       activeSubtitle,
@@ -3595,52 +3593,6 @@
 
       const requests = [
         {
-          source: "queue-running",
-          call: () =>
-            fetchJson(
-              withQueueSummaryFlag(
-                `/api/queue/jobs?status=running&limit=${ACTIVE_QUEUE_FETCH_LIMIT}`,
-              ),
-            ),
-          transform: (payload) => toQueueRows(payload?.items || []),
-        },
-        {
-          source: "queue-queued",
-          call: () =>
-            fetchJson(
-              withQueueSummaryFlag(
-                `/api/queue/jobs?status=queued&limit=${ACTIVE_QUEUE_FETCH_LIMIT}`,
-              ),
-            ),
-          transform: (payload) => toQueueRows(payload?.items || []),
-        },
-        {
-          source: "orchestrator-running",
-          call: () =>
-            fetchJson(
-              `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?status=running&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
-            ),
-          transform: (payload) => toOrchestratorRows(payload?.runs || []),
-        },
-        {
-          source: "orchestrator-pending",
-          call: () =>
-            fetchJson(
-              `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?status=pending&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
-            ),
-          transform: (payload) => toOrchestratorRows(payload?.runs || []),
-        },
-        {
-          source: "orchestrator-awaiting",
-          call: () =>
-            fetchJson(
-              `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?status=awaiting_approval&limit=${ACTIVE_ORCHESTRATOR_FETCH_LIMIT}`,
-            ),
-          transform: (payload) => toOrchestratorRows(payload?.runs || []),
-        },
-      ];
-      if (temporalListEnabled) {
-        requests.push({
           source: "temporal-active",
           call: () =>
             fetchJson(
@@ -3653,8 +3605,8 @@
               const state = String(row.rawState || "").trim().toLowerCase();
               return !["succeeded", "failed", "canceled"].includes(state);
             }),
-        });
-      }
+        }
+      ];
 
       const settled = await Promise.allSettled(requests.map((req) => req.call()));
       settled.forEach((result, index) => {
@@ -3738,7 +3690,7 @@
       pageEnd: 0,
     };
     let stableListOrderIndex = new Map();
-    let columnSort = { field: null, direction: "desc" };
+    let columnSort = { field: "createdAt", direction: "desc" };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -3768,21 +3720,12 @@
         }
       });
       params.set("limit", String(paginationState.limit));
-      if (filterState.source === "temporal") {
-        if (paginationState.cursor) {
-          params.set("nextPageToken", paginationState.cursor);
-        } else {
-          params.delete("nextPageToken");
-        }
-        params.delete("cursor");
+      if (paginationState.cursor) {
+        params.set("nextPageToken", paginationState.cursor);
       } else {
-        if (paginationState.cursor) {
-          params.set("cursor", paginationState.cursor);
-        } else {
-          params.delete("cursor");
-        }
         params.delete("nextPageToken");
       }
+      params.delete("cursor");
       const queryText = params.toString();
       const nextUrl = queryText
         ? `${window.location.pathname}?${queryText}`
@@ -4280,116 +4223,71 @@
     }
 
     const load = async () => {
-      syncListQueryParams();
-      if (filterState.source === "temporal" && temporalListEnabled) {
-        const params = new URLSearchParams();
-        params.set("pageSize", String(paginationState.limit));
-        if (paginationState.cursor) {
-          params.set("nextPageToken", paginationState.cursor);
+      try {
+        await _load();
+      } catch (error) {
+        console.error("Queue list load failed", error);
+        if (pageActive) {
+          setView(
+            "Tasks List",
+            "Unified tasks across available execution sources.",
+            `<div class="error-notice" style="color: var(--error-text, #d32f2f); background-color: var(--error-bg, #ffebee); padding: 1rem; border-radius: 4px; margin-bottom: 1rem;">Failed to load tasks: ${escapeHtml(String(error.message || error))}</div>`,
+            { showAutoRefreshControls: true },
+          );
         }
-        if (filterState.workflowType) {
-          params.set("workflowType", filterState.workflowType);
-        }
-        if (filterState.temporalState) {
-          params.set("state", filterState.temporalState);
-        }
-        if (filterState.entry) {
-          params.set("entry", filterState.entry);
-        }
-        if (filterState.ownerType) {
-          params.set("ownerType", filterState.ownerType);
-        }
-        if (filterState.ownerId) {
-          params.set("ownerId", filterState.ownerId);
-        }
-        if (filterState.repository) {
-          params.set("repo", filterState.repository);
-        }
-        if (filterState.integration) {
-          params.set("integration", filterState.integration);
-        }
-        const temporalListEndpoint = temporalSourceConfig.list || "/api/executions";
-        const payload = await fetchJson(
-          withTemporalSourceFlag(`${temporalListEndpoint}?${params.toString()}`),
-        );
-        if (!pageActive) {
-          return;
-        }
-        const items = Array.isArray(payload?.items) ? payload.items : [];
-        const filteredTemporalRows = toTemporalRows(items);
-        const payloadNextCursor = payload && typeof payload === "object"
-          ? String(payload.nextPageToken || "").trim() || null
-          : null;
-        currentTemporalCount =
-          payload
-            && typeof payload === "object"
-            && typeof payload.count === "number"
-            ? payload.count
-            : null;
-        currentTemporalCountMode =
-          currentTemporalCount !== null && payload && typeof payload === "object"
-            ? String(payload.countMode || "").trim()
-            : "";
-        paginationState.nextCursor = payloadNextCursor;
-        paginationState.hasMore = Boolean(payloadNextCursor);
-        if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
-          const previousCursor = paginationState.cursorStack.pop() || null;
-          paginationState.cursor = previousCursor || null;
-          syncListQueryParams();
-          await load();
-          return;
-        }
-        const pageIndex = paginationState.cursorStack.length;
-        paginationState.pageStart = filteredTemporalRows.length > 0
-          ? pageIndex * paginationState.limit + 1
-          : 0;
-        paginationState.pageEnd = pageIndex * paginationState.limit + filteredTemporalRows.length;
-        currentRows = stabilizeRowsByPreviousOrder(
-          filteredTemporalRows,
-          stableListOrderIndex,
-        );
-        stableListOrderIndex = buildRowOrderIndex(currentRows);
-        renderQueueList(currentRows);
-        return;
       }
+    };
 
-      currentTemporalCount = null;
-      currentTemporalCountMode = "";
+    const _load = async () => {
+      syncListQueryParams();
       const params = new URLSearchParams();
-      params.set("limit", String(paginationState.limit));
+      params.set("pageSize", String(paginationState.limit));
       if (paginationState.cursor) {
-        params.set("cursor", paginationState.cursor);
+        params.set("nextPageToken", paginationState.cursor);
       }
-      const queueListEndpoint = queueSourceConfig.list || "/api/tasks";
-      const requests = [
-        fetchJson(withQueueSummaryFlag(`${queueListEndpoint}?${params.toString()}`)),
-        fetchJson(
-          `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=${paginationState.limit}`,
-        ).catch(() => ({ runs: [], tasks: [] })),
-      ];
-      const includeTemporalInMixed = !filterState.source && temporalListEnabled;
-      if (includeTemporalInMixed) {
-        requests.push(
-          fetchJson(
-            withTemporalSourceFlag(
-              `${temporalSourceConfig.list || "/api/executions"}?pageSize=${paginationState.limit}`,
-            ),
-          ).catch(() => ({ items: [] })),
-        );
+      if (filterState.workflowType) {
+        params.set("workflowType", filterState.workflowType);
       }
-      const [payload, orchestratorPayload, temporalPayload] = await Promise.all(requests);
+      if (filterState.temporalState) {
+        params.set("state", filterState.temporalState);
+      }
+      if (filterState.entry) {
+        params.set("entry", filterState.entry);
+      }
+      if (filterState.ownerType) {
+        params.set("ownerType", filterState.ownerType);
+      }
+      if (filterState.ownerId) {
+        params.set("ownerId", filterState.ownerId);
+      }
+      if (filterState.repository) {
+        params.set("repo", filterState.repository);
+      }
+      if (filterState.integration) {
+        params.set("integration", filterState.integration);
+      }
+      const temporalListEndpoint = temporalSourceConfig.list || "/api/executions";
+      const payload = await fetchJson(
+        withTemporalSourceFlag(`${temporalListEndpoint}?${params.toString()}`),
+      );
       if (!pageActive) {
         return;
       }
       const items = Array.isArray(payload?.items) ? payload.items : [];
+      const filteredTemporalRows = toTemporalRows(items);
       const payloadNextCursor = payload && typeof payload === "object"
-        ? String(payload.next_cursor || payload.nextCursor || "").trim() || null
+        ? String(payload.nextPageToken || "").trim() || null
         : null;
-      const orchestratorItems = Array.isArray(orchestratorPayload?.tasks)
-        ? orchestratorPayload.tasks
-        : Array.isArray(orchestratorPayload?.runs)
-          ? orchestratorPayload.runs
-          : [];
+      currentTemporalCount =
+        payload
+          && typeof payload === "object"
+          && typeof payload.count === "number"
+          ? payload.count
+          : null;
+      currentTemporalCountMode =
+        currentTemporalCount !== null && payload && typeof payload === "object"
+          ? String(payload.countMode || "").trim()
+          : "";
       paginationState.nextCursor = payloadNextCursor;
       paginationState.hasMore = Boolean(payloadNextCursor);
       if (paginationState.cursor && items.length === 0 && paginationState.cursorStack.length > 0) {
@@ -4400,14 +4298,12 @@
         return;
       }
       const pageIndex = paginationState.cursorStack.length;
-      paginationState.pageStart = items.length > 0 ? pageIndex * paginationState.limit + 1 : 0;
-      paginationState.pageEnd = pageIndex * paginationState.limit + items.length;
+      paginationState.pageStart = filteredTemporalRows.length > 0
+        ? pageIndex * paginationState.limit + 1
+        : 0;
+      paginationState.pageEnd = pageIndex * paginationState.limit + filteredTemporalRows.length;
       currentRows = stabilizeRowsByPreviousOrder(
-        [
-          ...toQueueRows(items),
-          ...toOrchestratorRows(orchestratorItems),
-          ...(includeTemporalInMixed ? toTemporalRows(temporalPayload?.items || []) : []),
-        ],
+        filteredTemporalRows,
         stableListOrderIndex,
       );
       stableListOrderIndex = buildRowOrderIndex(currentRows);

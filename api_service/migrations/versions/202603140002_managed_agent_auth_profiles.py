@@ -27,23 +27,28 @@ def upgrade() -> None:
             "'MoonMind.AuthProfileManager'"
         )
         op.execute(
-            "CREATE TYPE managedagentauthmode AS ENUM ('oauth', 'api_key')"
+            "DO $$ BEGIN "
+            "CREATE TYPE managedagentauthmode AS ENUM ('oauth', 'api_key'); "
+            "EXCEPTION WHEN duplicate_object THEN null; END $$;"
         )
         op.execute(
+            "DO $$ BEGIN "
             "CREATE TYPE managedagentratelimitpolicy AS ENUM "
-            "('backoff', 'queue', 'fail_fast')"
+            "('backoff', 'queue', 'fail_fast'); "
+            "EXCEPTION WHEN duplicate_object THEN null; END $$;"
         )
 
     # --- Create managed_agent_auth_profiles table ---
     auth_mode_type: sa.types.TypeEngine
     rate_limit_type: sa.types.TypeEngine
     if is_postgres:
-        auth_mode_type = sa.Enum(
+        from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
+        auth_mode_type = PG_ENUM(
             "oauth", "api_key",
             name="managedagentauthmode",
             create_type=False,
         )
-        rate_limit_type = sa.Enum(
+        rate_limit_type = PG_ENUM(
             "backoff", "queue", "fail_fast",
             name="managedagentratelimitpolicy",
             create_type=False,

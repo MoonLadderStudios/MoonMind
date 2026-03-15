@@ -2006,18 +2006,22 @@ class TemporalArtifactActivities:
 
         Returns a dict with a ``profiles`` key containing a list of profile
         dicts suitable for the AuthProfileManager workflow.
+
+        Uses the existing DB session from the repository.  The caller
+        (AuthProfileManager workflow) expects the keys defined in
+        ``ManagedAgentAuthProfile`` schema (DOC-REQ-010).
         """
         from sqlalchemy import select
 
         from api_service.db.models import ManagedAgentAuthProfile
 
-        async with self._service._session_factory() as session:
-            stmt = select(ManagedAgentAuthProfile).where(
-                ManagedAgentAuthProfile.runtime_id == runtime_id,
-                ManagedAgentAuthProfile.enabled.is_(True),
-            )
-            result = await session.execute(stmt)
-            rows = result.scalars().all()
+        session = self._service._repository._session
+        stmt = select(ManagedAgentAuthProfile).where(
+            ManagedAgentAuthProfile.runtime_id == runtime_id,
+            ManagedAgentAuthProfile.enabled.is_(True),
+        )
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
 
         profiles = []
         for row in rows:

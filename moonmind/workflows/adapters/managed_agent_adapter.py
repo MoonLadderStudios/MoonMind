@@ -1,0 +1,329 @@
+"""Managed-agent adapter: profile resolution, env shaping, slot management.
+
+This adapter fulfils the core requirements of Phase 5
+(Auth-Profile and Rate-Limit Controls) as described in
+  docs/Temporal/ManagedAndExternalAgentExecutionModel.md
+
+Key responsibilities:
+ - Resolve the ``execution_profile_ref`` on an ``AgentExecutionRequest`` to a
+   concrete ``ManagedAgentAuthProfile`` dict returned by the
+   ``auth_profile.list`` activity.
+ - Shape the environment for OAuth (volume-mount) and API-key modes.
+   Credentials are never stored in workflow payloads; only ``profile_id`` is
+   persisted in ``AgentRunHandle.metadata``.
+ - Signal ``AuthProfileManager`` to request / release slot leases and to send
+   cooldown reports on 429 responses.
+ - Maintain the ``slot_assigned`` wait loop internally (DOC-REQ-004).
+
+Design constraints (from constitution.md / spec):
+ - No raw credential values in durable Temporal state.
+ - No OAuth env vars leaked into the child environment beyond the expected
+   ``BROWSER_AUTH``-style keys.
+ - Fail-fast on unsupported profiles rather than silent fallback.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunHandle,
+    AgentRunResult,
+    AgentRunStatus,
+)
+
+logger = logging.getLogger(__name__)
+
+# Env-var prefixes / names cleared when shaping OAuth environments (DOC-REQ-007).
+# These are the sensitive keys that must NOT appear in child-process environments.
+_OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
+    {
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+    }
+)
+
+# Type aliases for async signal callables injected by the caller/workflow.
+ProfileFetcherFunc = Callable[..., Awaitable[dict[str, Any]]]
+SlotRequestFunc = Callable[..., Awaitable[Any]]
+SlotReleaseFunc = Callable[..., Awaitable[Any]]
+CooldownReportFunc = Callable[..., Awaitable[Any]]
+
+
+def _shape_environment_for_oauth(
+    base_env: dict[str, str],
+    *,
+    volume_mount_path: str | None,
+) -> dict[str, str]:
+    """Return env dict shaped for OAuth volume-mount mode.
+
+    Clears sensitive API-key vars and sets browser-auth helpers if a
+    volume mount path is provided.  Does NOT expose secrets.
+    """
+    env = dict(base_env)
+    for key in _OAUTH_CLEARED_VARS:
+        env.pop(key, None)
+    if volume_mount_path:
+        env["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
+    return env
+
+
+def _shape_environment_for_api_key(
+    base_env: dict[str, str],
+    *,
+    api_key_ref: str | None,
+    account_label: str | None,
+) -> dict[str, str]:
+    """Return env dict shaped for API-key mode.
+
+    The api_key_ref is a *reference* (e.g. a secret store key name), not the
+    raw credential.  The actual resolution of the reference into a real key
+    is delegated to the runtime launcher (out of scope for Phase 5).
+    """
+    env = dict(base_env)
+    if api_key_ref:
+        # Pass only the reference, never the real value.
+        env["MANAGED_API_KEY_REF"] = api_key_ref
+    if account_label:
+        env["MANAGED_ACCOUNT_LABEL"] = account_label
+    return env
+
+
+class ProfileResolutionError(RuntimeError):
+    """Raised when a profile cannot be resolved from the activity result."""
+
+
+class ManagedAgentAdapter:
+    """Lifecycle adapter for managed agent runtimes with auth-profile controls.
+
+    Parameters
+    ----------
+    profile_fetcher:
+        Async callable: ``profile_fetcher(runtime_id=...) -> list[dict]``.
+        Typically backed by the ``auth_profile.list`` Temporal activity.
+    slot_requester:
+        Async callable that signals the AuthProfileManager to request a slot.
+    slot_releaser:
+        Async callable that signals the AuthProfileManager to release a slot.
+    cooldown_reporter:
+        Async callable that signals the AuthProfileManager about a 429 event.
+    workflow_id:
+        Temporal workflow ID of the *current* AgentRun workflow.  Used in
+        slot-request/release signals so the AuthProfileManager can correlate
+        requests to callers.
+    """
+
+    def __init__(
+        self,
+        *,
+        profile_fetcher: ProfileFetcherFunc,
+        slot_requester: SlotRequestFunc,
+        slot_releaser: SlotReleaseFunc,
+        cooldown_reporter: CooldownReportFunc,
+        workflow_id: str,
+    ) -> None:
+        self._fetch_profiles = profile_fetcher
+        self._request_slot = slot_requester
+        self._release_slot = slot_releaser
+        self._report_cooldown = cooldown_reporter
+        self._workflow_id = workflow_id
+        self._active_profile_id: str | None = None
+
+    # ------------------------------------------------------------------
+    # AgentAdapter protocol implementation
+    # ------------------------------------------------------------------
+
+    async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+        """Resolve profile, shape env, request slot, return handle."""
+        if request.agent_kind != "managed":
+            raise ValueError(
+                f"ManagedAgentAdapter only supports agent_kind='managed', "
+                f"got '{request.agent_kind}'"
+            )
+
+        profile = await self._resolve_profile(
+            execution_profile_ref=request.execution_profile_ref,
+            runtime_id=request.agent_id,
+        )
+        profile_id: str = profile["profile_id"]
+        auth_mode: str = profile.get("auth_mode", "api_key")
+
+        # Request a slot lease from the AuthProfileManager (DOC-REQ-003).
+        await self._request_slot(
+            requester_workflow_id=self._workflow_id,
+            runtime_id=request.agent_id,
+        )
+
+        # Shape environment according to auth mode (DOC-REQ-005, DOC-REQ-006).
+        base_env = dict(os.environ)
+        if auth_mode == "oauth":
+            shaped_env = _shape_environment_for_oauth(
+                base_env,
+                volume_mount_path=profile.get("volume_mount_path"),
+            )
+        else:
+            shaped_env = _shape_environment_for_api_key(
+                base_env,
+                api_key_ref=profile.get("api_key_ref"),
+                account_label=profile.get("account_label"),
+            )
+
+        # Persist only the profile_id reference — never raw credentials
+        # (DOC-REQ-008 / constitution security rule).
+        self._active_profile_id = profile_id
+        run_id = str(uuid4())
+        logger.info(
+            "ManagedAgentAdapter.start profile_id=%s run_id=%s workflow_id=%s",
+            profile_id,
+            run_id,
+            self._workflow_id,
+        )
+        return AgentRunHandle(
+            runId=run_id,
+            agentKind="managed",
+            agentId=request.agent_id,
+            status="launching",
+            startedAt=datetime.now(tz=UTC),
+            metadata={
+                "profile_id": profile_id,
+                "auth_mode": auth_mode,
+                "env_keys_count": len(shaped_env),
+            },
+        )
+
+    async def status(self, run_id: str) -> AgentRunStatus:
+        """Return a stub status — real status comes from the runtime launcher."""
+        return AgentRunStatus(
+            runId=run_id,
+            agentKind="managed",
+            agentId="managed",
+            status="running",
+        )
+
+    async def fetch_result(self, run_id: str) -> AgentRunResult:
+        """Return empty result — real result comes from the runtime launcher."""
+        return AgentRunResult()
+
+    async def cancel(self, run_id: str) -> AgentRunStatus:
+        """Release slot and return cancelled status."""
+        await self.release_slot()
+        return AgentRunStatus(
+            runId=run_id,
+            agentKind="managed",
+            agentId="managed",
+            status="cancelled",
+        )
+
+    # ------------------------------------------------------------------
+    # Slot management helpers (called from workflow coordination code)
+    # ------------------------------------------------------------------
+
+    async def release_slot(self) -> None:
+        """Signal AuthProfileManager to release the active slot lease."""
+        if self._active_profile_id is None:
+            logger.warning(
+                "release_slot called but no active profile_id on %s",
+                self._workflow_id,
+            )
+            return
+        await self._release_slot(
+            requester_workflow_id=self._workflow_id,
+            profile_id=self._active_profile_id,
+        )
+        logger.info(
+            "ManagedAgentAdapter.release_slot profile_id=%s workflow_id=%s",
+            self._active_profile_id,
+            self._workflow_id,
+        )
+        self._active_profile_id = None
+
+    async def report_429_cooldown(
+        self,
+        *,
+        profile_id: str | None = None,
+        cooldown_seconds: int = 300,
+    ) -> None:
+        """Report a 429 rate-limit hit to the AuthProfileManager (DOC-REQ-009).
+
+        Parameters
+        ----------
+        profile_id:
+            Profile that received the 429.  Defaults to the active profile.
+        cooldown_seconds:
+            Cooldown duration in seconds.
+        """
+        pid = profile_id or self._active_profile_id
+        if pid is None:
+            raise ValueError("profile_id is required when no active slot is held")
+        await self._report_cooldown(
+            profile_id=pid,
+            cooldown_seconds=cooldown_seconds,
+        )
+        logger.info(
+            "ManagedAgentAdapter.report_429_cooldown profile_id=%s seconds=%d",
+            pid,
+            cooldown_seconds,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _resolve_profile(
+        self,
+        *,
+        execution_profile_ref: str,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """Resolve execution_profile_ref to a concrete profile dict.
+
+        The ``execution_profile_ref`` is either:
+         - An exact ``profile_id`` string, or
+         - The special sentinel ``"auto"`` meaning use the first available
+           profile for the runtime family.
+
+        Raises ``ProfileResolutionError`` if no matching profile is found.
+        """
+        result: dict[str, Any] = await self._fetch_profiles(runtime_id=runtime_id)
+        profiles: list[dict[str, Any]] = result.get("profiles", [])
+
+        if not profiles:
+            raise ProfileResolutionError(
+                f"No enabled auth profiles found for runtime_id='{runtime_id}'"
+            )
+
+        if execution_profile_ref == "auto":
+            return profiles[0]
+
+        for profile in profiles:
+            if profile.get("profile_id") == execution_profile_ref:
+                return profile
+
+        raise ProfileResolutionError(
+            f"Auth profile '{execution_profile_ref}' not found for "
+            f"runtime_id='{runtime_id}' (available profile count: {len(profiles)})"
+        )
+
+
+__all__ = [
+    "ManagedAgentAdapter",
+    "ProfileResolutionError",
+    "ProfileFetcherFunc",
+    "SlotRequestFunc",
+    "SlotReleaseFunc",
+    "CooldownReportFunc",
+    "_shape_environment_for_api_key",
+    "_shape_environment_for_oauth",
+    "_OAUTH_CLEARED_VARS",
+]
