@@ -9,7 +9,7 @@ from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 from api_service.services.temporal.runtime.store import ManagedRunStore
 from api_service.services.temporal.runtime.log_streamer import RuntimeLogStreamer
-from api_service.services.temporal.runtime.supervisor import ManagedRunSupervisor
+from api_service.services.temporal.runtime.supervisor import ManagedRunSupervisor, HEARTBEAT_INTERVAL
 
 
 def _make_record(
