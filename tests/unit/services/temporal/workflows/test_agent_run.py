@@ -28,14 +28,16 @@ class MockAuthProfileManager:
 
     @workflow.run
     async def run(self, input_payload: dict) -> dict:
+        assign_slots = input_payload.get("assign_slots", True)
         while not self._shutdown:
             await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
             if self._shutdown:
                 break
             while self.pending_requests:
                 req = self.pending_requests.pop(0)
-                handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                await handle.signal("slot_assigned", {"profile_id": "default-managed"})
+                if assign_slots:
+                    handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
+                    await handle.signal("slot_assigned", {"profile_id": "default-managed"})
         return {}
 
 
@@ -103,7 +105,7 @@ async def test_agent_run_workflow_cancellation():
             manager_id = f"auth-profile-manager:{request.agent_id}"
             await env.client.start_workflow(
                 MockAuthProfileManager.run,
-                {"runtime_id": request.agent_id},
+                {"runtime_id": request.agent_id, "assign_slots": False},
                 id=manager_id,
                 task_queue="agent-run-task-queue",
             )
@@ -114,10 +116,6 @@ async def test_agent_run_workflow_cancellation():
                 id="test-workflow-cancel",
                 task_queue="agent-run-task-queue",
             )
-            
-            # Yield event loop briefly to allow slot_assigned to happen if we want to cancel mid wait.
-            # While this relies on timing, it is required here strictly for correct event loop yielding in the test env.
-            await asyncio.sleep(0.1)
             
             # Cancel the workflow while it's waiting
             await handle.cancel()
