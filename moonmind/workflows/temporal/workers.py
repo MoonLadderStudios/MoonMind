@@ -63,6 +63,7 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
 REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.Run",
     "MoonMind.ManifestIngest",
+    "MoonMind.AuthProfileManager",
 )
 
 

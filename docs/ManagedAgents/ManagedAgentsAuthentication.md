@@ -48,6 +48,19 @@ Each runtime has a dedicated Docker named volume that stores persistent auth sta
 | `codex_auth_volume` | `/home/app/.codex` | Codex CLI config and session state |
 | `claude_auth_volume` | `/home/app/.claude` | Claude CLI config and session state |
 
+### Host Shell Guardrail
+
+`/var/lib/gemini-auth` is a container path, not a host-user path. Keep host and container auth paths separate:
+
+- Set `GEMINI_VOLUME_PATH=/var/lib/gemini-auth` in MoonMind `.env` for Docker mount wiring.
+- Do not export `GEMINI_HOME` or `GEMINI_CLI_HOME` in your host shell unless they point to a writable host directory (typically `~/.gemini`).
+
+If your local `gemini` CLI fails with `EACCES` on `/var/lib/gemini-auth`, clear leaked container-path variables in the host shell:
+
+```bash
+unset GEMINI_HOME GEMINI_CLI_HOME
+```
+
 Volumes are initialized by `*-auth-init` services in `docker-compose.yaml` that create the directory structure and set correct ownership (UID 1000).
 
 ### Provisioning Credentials
@@ -127,9 +140,15 @@ GEMINI_VOLUME_NAME=gemini_auth_vol_ci tools/auth-gemini-volume.sh --check
 
 ## 5. Profile Assignment to AgentRun Workflows
 
-### How Profiles Flow into Execution
+### Architecture: Singleton Resource Manager per Runtime Family
 
-When `MoonMind.Run` starts a `MoonMind.AgentRun` child workflow for a managed runtime, the profile selection follows this sequence:
+Profile slot assignment uses a **Singleton Resource Manager Workflow** pattern (`MoonMind.AuthProfileManager`). Each managed agent runtime family (e.g. `gemini_cli`, `claude_code`, `codex_cli`) gets its own long-lived manager workflow instance.
+
+**Workflow ID convention:** `auth-profile-manager:<runtime_id>` (e.g. `auth-profile-manager:gemini_cli`)
+
+The manager is the **single source of truth** for slot leases — it tracks which profiles have available capacity and which are in cooldown. All slot coordination flows through the manager via Temporal Signals (not Updates, which are reserved for synchronous operations).
+
+### How Profiles Flow into Execution
 
 ```
 1. AgentExecutionRequest includes:
@@ -137,57 +156,73 @@ When `MoonMind.Run` starts a `MoonMind.AgentRun` child workflow for a managed ru
    - execution_profile_ref: "gemini_ultra_nsticco"  (optional, explicit)
    - parameters.runtime.model: "gemini-3.1-pro-preview"
 
-2. MoonMind.AgentRun resolves the auth profile:
-   a. If execution_profile_ref is set, use that profile directly.
-   b. Otherwise, select the best available profile for the runtime_id
-      based on: enabled, rate_limit_state, current_parallel_runs < max_parallel_runs.
+2. MoonMind.AgentRun sends a request_slot Signal to the
+   AuthProfileManager for its runtime family.
 
-3. The resolved profile provides:
+3. AuthProfileManager evaluates available profiles:
+   - Filters by: enabled, not in cooldown, available_slots > 0
+   - Selects the profile with the most free slots
+
+4. AuthProfileManager signals back slot_assigned with the
+   selected profile_id to the requesting AgentRun.
+
+5. The resolved profile provides:
    - volume_ref  -> mounted into the managed runtime's execution environment
    - auth_mode   -> determines environment shaping (OAuth vs API key)
    - concurrency slot -> reserved for the duration of the run
 ```
 
+### Signal Protocol
+
+The manager exposes these Signals:
+
+| Signal | Direction | Payload |
+|--------|-----------|---------|
+| `request_slot` | AgentRun → Manager | `{requester_workflow_id, runtime_id}` |
+| `release_slot` | AgentRun → Manager | `{requester_workflow_id, profile_id}` |
+| `report_cooldown` | AgentRun → Manager | `{profile_id, cooldown_seconds}` |
+| `sync_profiles` | System → Manager | `{profiles: [...]}` |
+| `slot_assigned` | Manager → AgentRun | `{profile_id}` |
+| `shutdown` | System → Manager | (none) |
+
 ### Waiting for Available Profiles
 
-If all eligible profiles for a runtime are at capacity (`current_parallel_runs >= max_parallel_runs`) or in cooldown, `MoonMind.AgentRun` enters the `queued` state and waits for a slot to open.
-
-This waiting is implemented using Temporal's durable mechanisms:
+If all eligible profiles for a runtime are at capacity or in cooldown, the manager queues the request in FIFO order. When a slot becomes available (via `release_slot` or cooldown expiry), the manager drains the queue and signals waiting AgentRun workflows.
 
 ```
-MoonMind.AgentRun (queued state):
-  while no profile available:
-    wait for Signal("profile_slot_released") OR Timer(poll_interval)
-    re-evaluate available profiles
-
-  reserve slot on selected profile
-  proceed to launching state
+AuthProfileManager event loop:
+  1. Drain pending queue (assign slots from available profiles)
+  2. Clear expired cooldowns
+  3. Check continue-as-new threshold (2000 events)
+  4. Wait for new signals or 60s periodic wake-up
 ```
 
-When a running `AgentRun` completes, it releases its profile slot and signals the queue:
-
-```
-MoonMind.AgentRun (completion):
-  release profile slot
-  Signal all queued AgentRun workflows: "profile_slot_released"
-```
-
-This ensures runs are never launched without a valid auth profile and that rate limits are respected per-credential.
+AgentRun workflows wait durably for the `slot_assigned` signal using `workflow.wait_condition`, with a configurable timeout for fallback or failure.
 
 ### Cooldown After 429
 
-When a managed runtime encounters repeated `429 RESOURCE_EXHAUSTED` errors, the profile enters a cooldown period:
+When a managed runtime encounters `429 RESOURCE_EXHAUSTED` errors, the AgentRun signals the manager:
 
 ```
-on 429 detected:
-  increment profile.consecutive_429_count
-  if consecutive_429_count >= threshold:
-    set profile.cooldown_until = now + cooldown_after_429
-    release slot
-    re-queue the AgentRun for retry after cooldown
+AgentRun on 429 detected:
+  Signal manager: report_cooldown(profile_id, cooldown_seconds)
+  Release slot
+  Re-request a slot (may get a different profile)
 ```
 
-During cooldown, the profile is ineligible for new slot reservations. If other profiles for the same runtime exist and are available, the system falls through to them. If no profiles are available, the run waits.
+The manager marks the profile as in cooldown for the specified duration. During cooldown, the profile is ineligible for new slot reservations. If other profiles for the same runtime exist and are available, the system assigns them instead. If no profiles are available, the run waits.
+
+### Continue-As-New for History Bounds
+
+The manager uses Temporal's continue-as-new mechanism to prevent unbounded workflow history growth. After 2000 events, the manager serializes its current state (profiles, leases, cooldowns) and restarts with that state as input. This is transparent to all connected AgentRun workflows.
+
+### Observability
+
+The manager exposes a `get_state` Query that returns:
+- Current runtime_id
+- All profile states (slots, leases, cooldowns)
+- Pending request queue
+- Event count
 
 ---
 

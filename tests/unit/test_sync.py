@@ -64,3 +64,38 @@ def test_map_temporal_state_to_projection_success():
     assert result["step_count"] == 5
     assert result["search_attributes"]["mm_repo"] == "repo-1"
     assert result["search_attributes"]["mm_custom"] == {"key": "value"}
+
+
+def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_fields():
+    start_time = datetime.now(UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:456"
+    desc.run_id = "run-456"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.Run"
+    desc.status = WorkflowExecutionStatus.RUNNING
+    desc.start_time = start_time
+    desc.close_time = None
+
+    memo_data: dict[str, object] = {
+        "entry": "run",
+    }
+
+    class MockSearchAttribute:
+        def __init__(self, data):
+            self.data = data
+
+    desc.search_attributes = {
+        "mm_owner_id": MockSearchAttribute(["owner-from-search"]),
+        "mm_owner_type": MockSearchAttribute(["user"]),
+    }
+
+    async def _memo() -> dict[str, object]:
+        return memo_data
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["owner_id"] == "owner-from-search"
+    assert result["owner_type"] == TemporalExecutionOwnerType.USER
