@@ -235,6 +235,77 @@ class ManagedAgentAuthProfile(BaseModel):
         return self
 
 
+WorkspaceMode = Literal["tempdir", "shared", "none"]
+
+
+class ManagedRuntimeProfile(BaseModel):
+    """Runtime-specific execution parameters for managed agent launches."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    command_template: list[str] = Field(..., alias="commandTemplate")
+    default_model: str | None = Field(None, alias="defaultModel")
+    default_effort: str | None = Field(None, alias="defaultEffort")
+    default_timeout_seconds: int = Field(
+        3600, alias="defaultTimeoutSeconds", ge=1
+    )
+    workspace_mode: WorkspaceMode = Field("tempdir", alias="workspaceMode")
+    env_overrides: dict[str, str] = Field(
+        default_factory=dict, alias="envOverrides"
+    )
+
+    @model_validator(mode="after")
+    def _validate_profile(self) -> "ManagedRuntimeProfile":
+        self.runtime_id = _require_non_blank(
+            self.runtime_id, field_name="runtimeId"
+        )
+        if not self.command_template:
+            raise ValueError("commandTemplate must not be empty")
+        if _contains_sensitive_key(self.env_overrides):
+            raise ValueError("envOverrides must not contain raw credential keys")
+        return self
+
+
+class ManagedRunRecord(BaseModel):
+    """Durable run tracking record for managed agent executions."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    run_id: str = Field(..., alias="runId", min_length=1)
+    agent_id: str = Field(..., alias="agentId", min_length=1)
+    runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    status: AgentRunState = Field(..., alias="status")
+    pid: int | None = Field(None, alias="pid")
+    exit_code: int | None = Field(None, alias="exitCode")
+    started_at: datetime = Field(..., alias="startedAt")
+    finished_at: datetime | None = Field(None, alias="finishedAt")
+    last_heartbeat_at: datetime | None = Field(None, alias="lastHeartbeatAt")
+    workspace_path: str | None = Field(None, alias="workspacePath")
+    log_artifact_ref: str | None = Field(None, alias="logArtifactRef")
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    error_message: str | None = Field(None, alias="errorMessage")
+    failure_class: FailureClass | None = Field(None, alias="failureClass")
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "ManagedRunRecord":
+        self.run_id = _require_non_blank(self.run_id, field_name="runId")
+        self.agent_id = _require_non_blank(self.agent_id, field_name="agentId")
+        self.runtime_id = _require_non_blank(
+            self.runtime_id, field_name="runtimeId"
+        )
+        if self.started_at.tzinfo is None:
+            self.started_at = self.started_at.replace(tzinfo=UTC)
+        if self.finished_at is not None and self.finished_at.tzinfo is None:
+            self.finished_at = self.finished_at.replace(tzinfo=UTC)
+        if (
+            self.last_heartbeat_at is not None
+            and self.last_heartbeat_at.tzinfo is None
+        ):
+            self.last_heartbeat_at = self.last_heartbeat_at.replace(tzinfo=UTC)
+        return self
+
+
 __all__ = [
     "AgentExecutionRequest",
     "AgentKind",
@@ -244,6 +315,9 @@ __all__ = [
     "AgentRunStatus",
     "FailureClass",
     "ManagedAgentAuthProfile",
+    "ManagedRunRecord",
+    "ManagedRuntimeProfile",
     "TERMINAL_AGENT_RUN_STATES",
+    "WorkspaceMode",
     "is_terminal_agent_run_state",
 ]

@@ -3,17 +3,17 @@ from ..workflows.shared import AgentExecutionRequest, AgentRunHandle, AgentRunSt
 
 class AgentAdapter(ABC):
     @abstractmethod
-    def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+    async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         pass
-        
+
     @abstractmethod
     def status(self, run_id: str) -> AgentRunStatus:
         pass
-        
+
     @abstractmethod
     def fetch_result(self, run_id: str) -> AgentRunResult:
         pass
-        
+
     @abstractmethod
-    def cancel(self, run_id: str) -> None:
+    async def cancel(self, run_id: str) -> None:
         pass
