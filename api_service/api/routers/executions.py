@@ -872,10 +872,6 @@ async def list_executions(
                 query_parts.append(f'mm_integration="{escape_val(integration)}"')
 
             query_str = " AND ".join(query_parts) if query_parts else ""
-            if query_str:
-                query_str += " ORDER BY StartTime DESC"
-            else:
-                query_str = "ORDER BY StartTime DESC"
 
             items = []
             async for wf in client.list_workflows(query=query_str):
