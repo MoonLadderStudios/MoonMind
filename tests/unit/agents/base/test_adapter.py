@@ -1,6 +1,5 @@
 """Unit tests for managed agents environment adapter logic."""
 
-from typing import Dict
 
 from moonmind.agents.base.adapter import (
     resolve_volume_mount_env,

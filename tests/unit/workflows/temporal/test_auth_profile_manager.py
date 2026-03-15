@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from moonmind.workflows.temporal.workflows.auth_profile_manager import (
     WORKFLOW_NAME,
-    AuthProfileManagerInput,
-    AuthProfileManagerOutput,
     MoonMindAuthProfileManagerWorkflow,
-    PendingRequest,
     ProfileSlotState,
-    _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW,
 )
 
 

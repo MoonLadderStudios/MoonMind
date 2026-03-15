@@ -156,13 +156,10 @@ async def update_profile(
 
     update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        if key == "auth_mode" and value is not None:
-            value = ManagedAgentAuthMode(value)
-        elif key == "rate_limit_policy" and value is not None:
+        if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)
         setattr(profile, key, value)
 
-    profile.updated_at = datetime.now(UTC)  # type: ignore[attr-defined]
     await session.commit()
     await session.refresh(profile)
     return _row_to_dict(profile)

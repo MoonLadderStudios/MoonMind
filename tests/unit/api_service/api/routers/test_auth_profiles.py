@@ -1,7 +1,6 @@
 """Unit/Integration tests for ManagedAgentAuthProfile CRUD API."""
 
 import pytest
-from uuid import uuid4
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
