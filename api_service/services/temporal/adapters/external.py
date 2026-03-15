@@ -39,11 +39,11 @@ class ExternalAgentAdapter(AgentAdapter):
         # Mock passing webhook endpoints
         pass
 
-    def status(self, run_id: str) -> AgentRunStatus:
+    async def status(self, run_id: str) -> AgentRunStatus:
         # DOC-REQ-POLLING: bounded status polling fallback
         return AgentRunStatus.running
 
-    def fetch_result(self, run_id: str) -> AgentRunResult:
+    async def fetch_result(self, run_id: str) -> AgentRunResult:
         # DOC-REQ-EXT-RESP: fetch outputs/diagnostics
         diagnostics_ref = f"diag-{run_id}"
         return AgentRunResult(summary="External run complete", output_refs=[], diagnostics_ref=diagnostics_ref)

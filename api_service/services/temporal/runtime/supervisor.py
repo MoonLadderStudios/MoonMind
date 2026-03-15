@@ -17,6 +17,7 @@ from .log_streamer import RuntimeLogStreamer
 from .store import ManagedRunStore
 
 HEARTBEAT_INTERVAL = 30  # seconds
+GRACEFUL_TERMINATE_WAIT_SECONDS = 2.0  # seconds to wait for graceful SIGTERM before SIGKILL
 
 
 class ManagedRunSupervisor:
@@ -172,7 +173,7 @@ class ManagedRunSupervisor:
         with suppress(ProcessLookupError):
             process.terminate()
         try:
-            await asyncio.wait_for(process.wait(), timeout=2.0)
+            await asyncio.wait_for(process.wait(), timeout=GRACEFUL_TERMINATE_WAIT_SECONDS)
         except (asyncio.TimeoutError, ProcessLookupError):
             with suppress(ProcessLookupError):
                 process.kill()

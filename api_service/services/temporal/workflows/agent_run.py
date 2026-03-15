@@ -79,7 +79,7 @@ class MoonMindAgentRun:
                 except asyncio.TimeoutError:
                     # Bounded status polling fallback
                     elapsed += poll_interval
-                    current_status = adapter.status(self.run_id)
+                    current_status = await adapter.status(self.run_id)
                     self.run_status = current_status
                     if current_status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
                         break
@@ -90,7 +90,7 @@ class MoonMindAgentRun:
 
             if self.final_result is None:
                 # Fallback to fetching
-                self.final_result = adapter.fetch_result(self.run_id)
+                self.final_result = await adapter.fetch_result(self.run_id)
 
             # T012: Post-run artifact publishing logic
             await workflow.execute_activity(

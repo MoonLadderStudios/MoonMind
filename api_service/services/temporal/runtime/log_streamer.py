@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Union
+from typing import Any
 
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 

@@ -7,11 +7,11 @@ class AgentAdapter(ABC):
         pass
 
     @abstractmethod
-    def status(self, run_id: str) -> AgentRunStatus:
+    async def status(self, run_id: str) -> AgentRunStatus:
         pass
 
     @abstractmethod
-    def fetch_result(self, run_id: str) -> AgentRunResult:
+    async def fetch_result(self, run_id: str) -> AgentRunResult:
         pass
 
     @abstractmethod

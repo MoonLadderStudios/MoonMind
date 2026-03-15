@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 import datetime
-from typing import Dict, Any
+from typing import Dict
 from .base import AgentAdapter
 from ..workflows.shared import AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult
 from ..runtime.store import ManagedRunStore
@@ -103,7 +103,7 @@ class ManagedAgentAdapter(AgentAdapter):
             poll_hint_seconds=5,
         )
 
-    def status(self, run_id: str) -> AgentRunStatus:
+    async def status(self, run_id: str) -> AgentRunStatus:
         if self._store is None:
             return AgentRunStatus.running
 
@@ -112,7 +112,7 @@ class ManagedAgentAdapter(AgentAdapter):
             raise ValueError(f"Run not found: {run_id}")
         return AgentRunStatus(record.status)
 
-    def fetch_result(self, run_id: str) -> AgentRunResult:
+    async def fetch_result(self, run_id: str) -> AgentRunResult:
         if self._store is None:
             return AgentRunResult(summary="Managed run complete", output_refs=[])
 
