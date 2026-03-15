@@ -1,9 +1,9 @@
 """External-agent adapter implementation backed by the Jules provider."""
 
-from __future__ import annotations
-
+from collections.abc import Callable, Mapping
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -58,7 +58,17 @@ class JulesAgentAdapter:
 
     def __init__(self, *, client_factory: JulesClientFactory) -> None:
         self._client_factory = client_factory
+        # TODO: Implement a persistent, shared storage layer (e.g., database or Redis)
+        # for robust idempotency across all workers instead of this fragile in-memory cache.
         self._starts_by_idempotency: dict[str, AgentRunHandle] = {}
+
+    @asynccontextmanager
+    async def _client(self):
+        client = self._client_factory()
+        try:
+            yield client
+        finally:
+            await client.aclose()
 
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         if request.agent_kind != "external":
@@ -85,8 +95,7 @@ class JulesAgentAdapter:
             moonmind_payload.setdefault("idempotencyKey", request.idempotency_key)
             metadata["moonmind"] = moonmind_payload
 
-        client = self._client_factory()
-        try:
+        async with self._client() as client:
             response = await client.create_task(
                 JulesCreateTaskRequest(
                     title=title,
@@ -94,8 +103,6 @@ class JulesAgentAdapter:
                     metadata=metadata,
                 )
             )
-        finally:
-            await client.aclose()
 
         handle = AgentRunHandle(
             runId=response.task_id,
@@ -151,9 +158,8 @@ class JulesAgentAdapter:
         )
 
     async def cancel(self, run_id: str) -> AgentRunStatus:
-        client = self._client_factory()
         try:
-            try:
+            async with self._client() as client:
                 response = await client.resolve_task(
                     JulesResolveTaskRequest(
                         taskId=run_id,
@@ -161,16 +167,14 @@ class JulesAgentAdapter:
                         status="canceled",
                     )
                 )
-            except JulesClientError:
-                return AgentRunStatus(
-                    runId=run_id,
-                    agentKind="external",
-                    agentId="jules",
-                    status="intervention_requested",
-                    metadata={"cancelAccepted": False},
-                )
-        finally:
-            await client.aclose()
+        except JulesClientError:
+            return AgentRunStatus(
+                runId=run_id,
+                agentKind="external",
+                agentId="jules",
+                status="intervention_requested",
+                metadata={"cancelAccepted": False},
+            )
 
         provider_status = str(response.status or "").strip() or "canceled"
         return AgentRunStatus(
@@ -187,12 +191,8 @@ class JulesAgentAdapter:
         )
 
     async def _get_task(self, run_id: str) -> JulesTaskResponse:
-        client = self._client_factory()
-        try:
-            response = await client.get_task(JulesGetTaskRequest(taskId=run_id))
-        finally:
-            await client.aclose()
-        return response
+        async with self._client() as client:
+            return await client.get_task(JulesGetTaskRequest(taskId=run_id))
 
 
 __all__ = ["JulesAgentAdapter"]

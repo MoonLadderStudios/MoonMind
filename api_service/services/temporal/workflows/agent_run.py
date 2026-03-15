@@ -47,6 +47,8 @@ class MoonMindAgentRun:
         self.agent_kind = request.agent_kind
         
         # T009: Adapter routing logic
+        # TODO: Refactor to use dependency injection (e.g., passing adapter factories 
+        # into the workflow) to decouple the workflow from the concrete adapter classes.
         if request.agent_kind == "managed":
             adapter: AgentAdapter = ManagedAgentAdapter()
         elif request.agent_kind == "external":
