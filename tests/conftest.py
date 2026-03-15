@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import api_service.db.models  # noqa: F401  # Preload models to break circular import cycle
 
 import pytest
 
