@@ -1,4 +1,3 @@
-import pytest
 from api_service.services.temporal.adapters.external import ExternalAgentAdapter
 from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunStatus
 

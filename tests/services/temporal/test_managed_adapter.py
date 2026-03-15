@@ -1,4 +1,3 @@
-import pytest
 from api_service.services.temporal.adapters.managed import ManagedAgentAdapter
 from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunStatus
 

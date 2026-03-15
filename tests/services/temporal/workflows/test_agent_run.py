@@ -1,10 +1,8 @@
 import pytest
-from datetime import timedelta
-import asyncio
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.client import WorkflowFailureError
-from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunResult, AgentRunStatus
+from api_service.services.temporal.workflows.shared import AgentExecutionRequest, AgentRunResult
 from api_service.services.temporal.workflows.agent_run import MoonMindAgentRun, publish_artifacts_activity, invoke_adapter_cancel
 
 @pytest.mark.asyncio

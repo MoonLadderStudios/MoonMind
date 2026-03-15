@@ -1,6 +1,6 @@
 import uuid
 import datetime
-from typing import Dict, Any
+from typing import Any
 from .base import AgentAdapter
 from ..workflows.shared import AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult
 
