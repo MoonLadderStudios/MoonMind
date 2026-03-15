@@ -7,6 +7,7 @@ import pytest
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.jules_models import JulesTaskResponse
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
+from moonmind.workflows.adapters.jules_client import JulesClientError
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -45,7 +46,7 @@ class _FakeJulesAdapterClient:
 
     async def resolve_task(self, request):
         if self.resolve_raises:
-            raise RuntimeError("cancel unavailable")
+            raise JulesClientError("cancel unavailable")
         self.resolved.append(request)
         return JulesTaskResponse(
             taskId=request.task_id,

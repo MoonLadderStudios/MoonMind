@@ -862,6 +862,7 @@ class TemporalWorkflowType(str, enum.Enum):
 
     RUN = "MoonMind.Run"
     MANIFEST_INGEST = "MoonMind.ManifestIngest"
+    AUTH_PROFILE_MANAGER = "MoonMind.AuthProfileManager"
 
 
 class MoonMindWorkflowState(str, enum.Enum):
@@ -2227,6 +2228,80 @@ class WorkflowTaskState(Base):
 Index("ix_orchestrator_runs_status", OrchestratorRun.status)
 Index("ix_orchestrator_runs_target_service", OrchestratorRun.target_service)
 Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)
+
+
+class ManagedAgentAuthMode(str, enum.Enum):
+    """Authentication mode for a managed agent auth profile."""
+
+    OAUTH = "oauth"
+    API_KEY = "api_key"
+
+
+class ManagedAgentRateLimitPolicy(str, enum.Enum):
+    """Rate limit handling policy for a managed agent auth profile."""
+
+    BACKOFF = "backoff"
+    QUEUE = "queue"
+    FAIL_FAST = "fail_fast"
+
+
+class ManagedAgentAuthProfile(Base):
+    """Named auth and execution policy for a managed agent runtime."""
+
+    __tablename__ = "managed_agent_auth_profiles"
+    __table_args__ = (
+        Index("ix_auth_profiles_runtime", "runtime_id"),
+        Index("ix_auth_profiles_enabled", "enabled"),
+    )
+
+    profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    auth_mode: Mapped[ManagedAgentAuthMode] = mapped_column(
+        Enum(
+            ManagedAgentAuthMode,
+            name="managedagentauthmode",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+    )
+    volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    volume_mount_path: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )
+    account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    api_key_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    max_parallel_runs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    cooldown_after_429_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=300, server_default=text("300")
+    )
+    rate_limit_policy: Mapped[ManagedAgentRateLimitPolicy] = mapped_column(
+        Enum(
+            ManagedAgentRateLimitPolicy,
+            name="managedagentratelimitpolicy",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=ManagedAgentRateLimitPolicy.BACKOFF,
+        server_default=ManagedAgentRateLimitPolicy.BACKOFF.value,
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 def _register_workflow_model_dependencies() -> None:

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 WORKFLOW_ENTRY_BY_TYPE = {
     TemporalWorkflowType.RUN: "run",
     TemporalWorkflowType.MANIFEST_INGEST: "manifest",
+    TemporalWorkflowType.AUTH_PROFILE_MANAGER: "auth_profile",
 }
 
 
@@ -40,6 +41,19 @@ def _sanitize_for_json(obj: Any) -> Any:
     if isinstance(obj, (list, tuple)):
         return [_sanitize_for_json(item) for item in obj]
     return obj
+
+
+def _coerce_temporal_scalar(value: Any) -> str | None:
+    if isinstance(value, list):
+        for item in value:
+            candidate = _coerce_temporal_scalar(item)
+            if candidate:
+                return candidate
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 async def map_temporal_state_to_projection(
@@ -94,18 +108,6 @@ async def map_temporal_state_to_projection(
     entry = str(
         memo.get("entry") or WORKFLOW_ENTRY_BY_TYPE.get(workflow_type, "run")
     ).strip()
-    owner_id = memo.get("owner_id")
-    owner_type_raw = memo.get("owner_type")
-
-    try:
-        owner_type = (
-            TemporalExecutionOwnerType(str(owner_type_raw))
-            if owner_type_raw
-            else TemporalExecutionOwnerType.USER
-        )
-    except ValueError:
-        owner_type = TemporalExecutionOwnerType.USER
-
     search_attributes: dict[str, Any] = {}
     try:
         raw_search_attributes = desc.search_attributes or {}
@@ -120,6 +122,21 @@ async def map_temporal_state_to_projection(
                 search_attributes[key] = raw_value
     except Exception:
         logger.exception("Failed to decode Temporal search attributes for %s", desc.id)
+
+    owner_id = _coerce_temporal_scalar(memo.get("owner_id")) or _coerce_temporal_scalar(
+        search_attributes.get("mm_owner_id")
+    )
+    owner_type_raw = _coerce_temporal_scalar(
+        memo.get("owner_type")
+    ) or _coerce_temporal_scalar(search_attributes.get("mm_owner_type"))
+    try:
+        owner_type = (
+            TemporalExecutionOwnerType(owner_type_raw)
+            if owner_type_raw
+            else TemporalExecutionOwnerType.USER
+        )
+    except ValueError:
+        owner_type = TemporalExecutionOwnerType.USER
 
     if desc.status == WorkflowExecutionStatus.RUNNING:
         mm_state = search_attributes.get("mm_state")

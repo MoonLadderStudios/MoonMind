@@ -43,7 +43,9 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     mock_worker_cls.assert_called_once()
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.workflow"
-    assert kwargs["workflows"] == [MoonMindRun, MoonMindManifestIngest]
+    # Ensure MoonMindAuthProfileManagerWorkflow is included in the expected workflow list
+    from moonmind.workflows.temporal.workflows.auth_profile_manager import MoonMindAuthProfileManagerWorkflow
+    assert kwargs["workflows"] == [MoonMindRun, MoonMindManifestIngest, MoonMindAuthProfileManagerWorkflow]
     assert kwargs["activities"] == []
     assert kwargs["max_concurrent_workflow_tasks"] == 7
     assert "max_concurrent_activities" not in kwargs
