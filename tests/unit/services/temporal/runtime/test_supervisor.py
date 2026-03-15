@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import pytest
 from datetime import UTC, datetime

@@ -6,7 +6,6 @@ from api_service.services.temporal.workflows.shared import AgentExecutionRequest
 from api_service.services.temporal.runtime.store import ManagedRunStore
 from api_service.services.temporal.runtime.launcher import ManagedRuntimeLauncher
 from api_service.services.temporal.runtime.supervisor import ManagedRunSupervisor
-from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 
 
 def _make_request(**overrides) -> AgentExecutionRequest:
@@ -168,7 +167,7 @@ async def test_cancel_full_flow(tmp_path):
 
     try:
         request = _make_request()
-        handle = await adapter.start(request)
+        _ = await adapter.start(request)
         await asyncio.sleep(0.2)
 
         await adapter.cancel("managed-key")

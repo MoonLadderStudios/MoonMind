@@ -55,7 +55,7 @@ class ManagedRunStore:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
-                    pass
+                    pass  # Best-effort cleanup; original error is re-raised below
             raise
         return path
 
