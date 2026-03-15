@@ -833,13 +833,13 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)
 
-    activities = TemporalJulesActivities()
-
+    # Adapter eagerly creates the client at init, so the runtime gate fires
+    # at TemporalJulesActivities construction time.
     with pytest.raises(
         TemporalActivityRuntimeError,
         match=JULES_RUNTIME_DISABLED_MESSAGE,
     ):
-        await activities.integration_jules_status(external_id="task-001")
+        TemporalJulesActivities()
 
 
 async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path):
