@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
 
@@ -103,6 +103,9 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalPlanActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
@@ -110,6 +113,9 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_repository_cls,
     mock_service_cls,
     mock_artifact_activities_cls,
+    mock_plan_activities_cls,
+    mock_dispatcher_cls,
+    mock_skill_activities_cls,
     mock_sandbox_activities_cls,
     mock_jules_activities_cls,
     mock_build_bindings,
@@ -135,15 +141,26 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_repository_cls.assert_called_once_with("session")
     mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
     mock_artifact_activities_cls.assert_called_once_with(mock_service_cls.return_value)
+    mock_plan_activities_cls.assert_called_once_with(
+        artifact_service=mock_service_cls.return_value,
+        planner=ANY,
+    )
     mock_sandbox_activities_cls.assert_called_once_with(
         artifact_service=mock_service_cls.return_value
     )
     mock_jules_activities_cls.assert_called_once_with(
         artifact_service=mock_service_cls.return_value
     )
+    mock_dispatcher_cls.assert_called_once_with()
+    mock_skill_activities_cls.assert_called_once_with(
+        dispatcher=mock_dispatcher_cls.return_value,
+        artifact_service=mock_service_cls.return_value,
+    )
     mock_build_bindings.assert_called_once_with(
         fleet="artifacts",
         artifact_activities=mock_artifact_activities_cls.return_value,
+        plan_activities=mock_plan_activities_cls.return_value,
+        skill_activities=mock_skill_activities_cls.return_value,
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
     )
