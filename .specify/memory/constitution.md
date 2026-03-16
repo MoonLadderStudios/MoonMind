@@ -10,6 +10,11 @@ Non-negotiable rules:
 
 - MoonMind MUST work with any agent that can be reached via a standard interface (CLI, API, MCP). Specialized integrations MAY provide deeper orchestration for specific agents, but the platform MUST NOT require them.
 - Adding support for a new agent MUST require only a new adapter — not changes to core orchestration logic.
+- MoonMind MUST support two levels of agent integration:
+  - **Managed runtimes** where MoonMind controls execution, lifecycle, and recovery directly.
+  - **Coordinated agents** where MoonMind tracks status, injects context, and provides feedback but cannot control the agent's internals.
+
+  Core orchestration features (planning, context management, resiliency) MUST degrade gracefully — not break — when operating in coordination mode.
 - MoonMind MUST NOT build its own competing cognitive engine. The value is in the orchestration layer — resiliency, context management, planning, and coordination — not in replacing the agents themselves.
 
 Rationale: The agents themselves evolve rapidly and are best maintained by their providers. MoonMind's moat is the orchestration layer above them.
@@ -99,7 +104,7 @@ Rationale: Skills are the unit of scale for MoonMind automation.
 **Actionable Engineering Norms:**
 
 1. **Design for Deletion (Compressible Workflows)**
-If a 5-step Celery chain is required today because a model cannot plan and code simultaneously without losing context, expect to delete 4 of those steps tomorrow. Keep workflows declarative and loosely coupled so intermediate cognitive steps can be bypassed via capability flags the moment an experiment proves a model can do it natively.
+If a 5-step Temporal workflow is required today because a model cannot plan and code simultaneously without losing context, expect to delete 4 of those steps tomorrow. Keep workflows declarative and loosely coupled so intermediate cognitive steps can be bypassed via capability flags the moment an experiment proves a model can do it natively.
 2. **Thin Scaffolding, Thick Contracts**
 Push complexity behind stable interfaces. Keep adapters and tool wrappers “dumb.” Prefer standard protocols (e.g., MCP) and capability discovery over bespoke per-tool integration layers.
 3. **Abstract the Infrastructure, Not the Cognition (The 'Execute' Phase)**
@@ -145,21 +150,23 @@ Non-negotiable rules:
 
 Rationale: Extensibility is the product. Architecture must resist entanglement.
 
-### IX. Self-Healing by Default
+### IX. Resilient by Default
 
-MoonMind MUST recover safely from common failures without manual babysitting.
+MoonMind MUST enable fire-and-forget execution — operators should be able to submit work, walk away, and trust the system to handle failures without babysitting.
 
 Non-negotiable rules:
 
 - All externally visible side effects MUST be designed to be retry-safe (idempotent or de-duplicated).
 - Long-running workflows MUST persist enough state to resume, retry, or fail deterministically after worker restarts.
+- MoonMind MUST detect stuck agents (loops, repeated failures) and apply escalating interventions (soft reset, hard reset, termination) before burning through the operator's API budget.
+- Failure classification MUST distinguish transient errors (safe to retry) from permanent failures (stop execution).
 - Failure handling MUST be explicit:
   - retries and backoff where appropriate,
   - deterministic “needs human” terminal states when not recoverable,
   - error summaries that tell an operator what happened and what to do next.
 - Health checks MUST exist for runtime-critical services and worker processes (startup checks + dependency checks).
 
-Rationale: Operators will restart containers. The system must withstand it.
+Rationale: Resiliency is what makes unattended execution possible. The system must withstand infrastructure failures, agent failures, and runaway costs.
 
 ### X. Facilitate Continuous Improvement
 
@@ -201,9 +208,11 @@ Rationale: Specs are how MoonMind stays maintainable while evolving quickly.
 - **Security / secret hygiene**:
   - Secrets MUST NOT be written into artifacts, logs, or PR text.
   - Secret inputs MUST be passed via approved secret channels (env/secret stores) and redacted in output.
-- **Observability**:
+- **Observability & Mission Control**:
   - Workflows MUST emit enough structured metadata to diagnose issues (run IDs, stage names, outcomes, durations).
-  - Operators MUST be able to answer: “what happened?” without reading raw worker internals.
+  - Operators MUST be able to answer “what happened?” without reading raw worker internals.
+  - MoonMind MUST provide an operator-facing surface (Mission Control) to track real-time run status, browse artifacts, monitor intervention requests, and audit execution histories.
+  - Mission Control is the primary interface for operators — its capabilities SHOULD grow alongside the orchestration layer.
 - **Compatibility & migration**:
   - Breaking changes to public APIs/contracts MUST include a migration plan.
     - A deprecation window MUST be provided, and if not feasible, the reasoning MUST be
