@@ -108,6 +108,7 @@ Allowed values (v1):
 
 * `initializing`
 * `planning`
+* `awaiting`
 * `executing`
 * `awaiting_external`
 * `finalizing`
@@ -118,6 +119,7 @@ Allowed values (v1):
 Rules:
 
 * `mm_state` MUST be set immediately at workflow start (`initializing`).
+* `awaiting` indicates the workflow has been claimed and is past initial dispatch, but is blocked waiting for a prerequisite resource (e.g. an auth-profile slot from the `AuthProfileManager`). This is distinct from `planning` (generating a plan) and `executing` (actively running agent work). The Memo `summary` field should indicate what the workflow is awaiting.
 * `mm_state` MUST transition to a terminal value on completion (`succeeded|failed|canceled`).
 * Terminal `mm_state` must be consistent with Temporal close status:
 

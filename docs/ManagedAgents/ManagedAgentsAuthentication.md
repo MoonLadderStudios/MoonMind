@@ -199,6 +199,10 @@ AuthProfileManager event loop:
 
 AgentRun workflows wait durably for the `slot_assigned` signal using `workflow.wait_condition`, with a configurable timeout for fallback or failure.
 
+### `awaiting` Status
+
+When an AgentRun is blocked waiting for a profile slot, it should transition its status to `awaiting` (proposed `AgentRunState`). The parent `MoonMind.Run` workflow should likewise set `mm_state` to `awaiting` and update its Memo `summary` to indicate the reason (e.g. "Waiting for auth profile slot on gemini_cli"). This ensures the dashboard and Temporal Visibility surfaces distinguish between runs that are actively executing and runs that are blocked on a resource prerequisite. Once a slot is assigned, the status transitions to `launching` → `running` as normal.
+
 ### Cooldown After 429
 
 When a managed runtime encounters `429 RESOURCE_EXHAUSTED` errors, the AgentRun signals the manager:

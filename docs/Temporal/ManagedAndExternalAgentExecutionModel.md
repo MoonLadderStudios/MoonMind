@@ -131,6 +131,7 @@ Suggested states:
 
 * `queued`
 * `launching`
+* `awaiting`
 * `running`
 * `awaiting_callback`
 * `awaiting_approval`
@@ -140,6 +141,8 @@ Suggested states:
 * `failed`
 * `cancelled`
 * `timed_out`
+
+**`awaiting`** — the run has been picked up by a workflow and is past initial dispatch, but is blocked waiting for a prerequisite resource before execution can begin. The primary use case is waiting for an auth-profile slot from the `AuthProfileManager`. This is distinct from `queued` (not yet claimed by any workflow) and `running` (actively executing agent work). Metadata on the run should indicate what the run is awaiting (e.g. `{"awaiting_reason": "auth_profile_slot", "profile_manager": "auth-profile-manager:gemini_cli"}`).
 
 Terminal-state semantics should be explicit and stable. `completed`, `failed`, `cancelled`, and `timed_out` should be treated as terminal.
 
