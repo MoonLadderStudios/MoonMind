@@ -285,6 +285,13 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "post": "/api/system/worker-pause",
                 "pollIntervalMs": 5000,
             },
+            "authProfiles": {
+                "list": "/api/v1/auth-profiles",
+                "create": "/api/v1/auth-profiles",
+                "detail": "/api/v1/auth-profiles/{profileId}",
+                "update": "/api/v1/auth-profiles/{profileId}",
+                "delete": "/api/v1/auth-profiles/{profileId}",
+            },
             "attachmentPolicy": {
                 "enabled": bool(settings.workflow.agent_job_attachment_enabled),
                 **_build_default_attachment_policy(

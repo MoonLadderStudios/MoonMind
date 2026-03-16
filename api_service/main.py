@@ -8,6 +8,7 @@ configure_logging()
 logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
+import time
 
 # Now proceed with other imports
 from uuid import uuid4
@@ -15,11 +16,13 @@ from uuid import uuid4
 import httpx
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from llama_index.core import VectorStoreIndex, load_index_from_storage
+from sqlalchemy import text
 
+from api_service.db.base import get_async_session_context
 from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
@@ -263,10 +266,22 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # Healthz router
 health_router = APIRouter()
 
+_api_start_time = time.monotonic()
+
 
 @health_router.get("/healthz")
 async def health_check():
-    return {"status": "ok"}
+    """Health endpoint with database connectivity probe."""
+    uptime = int(time.monotonic() - _api_start_time)
+    try:
+        async with get_async_session_context() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "connected", "uptime_seconds": uptime}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "db": "unreachable", "uptime_seconds": uptime},
+        )
 
 
 @app.get("/", include_in_schema=False)

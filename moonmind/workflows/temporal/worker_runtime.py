@@ -32,6 +32,7 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
+from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     publish_artifacts_activity,
@@ -94,6 +95,10 @@ async def main_async() -> None:
         f"concurrency={topology.concurrency_limit}"
     )
 
+    # Start healthcheck server before connecting to Temporal so probes
+    # can confirm the process is alive even during initial connection.
+    healthcheck_server = await start_healthcheck_server()
+
     client = await Client.connect(
         settings.temporal.address, namespace=settings.temporal.namespace
     )
@@ -127,8 +132,12 @@ async def main_async() -> None:
     finally:
         if runtime_resources is not None:
             await runtime_resources.aclose()
+        if healthcheck_server is not None:
+            healthcheck_server.close()
+            await healthcheck_server.wait_closed()
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(main_async())
+

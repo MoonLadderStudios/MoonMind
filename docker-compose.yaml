@@ -66,6 +66,12 @@ services:
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     labels:
       - "ai.model.context.protocol.version=0.1"
       - "ai.model.context.protocol.endpoint=/context"
@@ -251,6 +257,12 @@ services:
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       temporal:
         condition: service_started
@@ -289,6 +301,12 @@ services:
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       temporal:
         condition: service_started
@@ -328,6 +346,12 @@ services:
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       temporal:
         condition: service_started
@@ -383,6 +407,12 @@ services:
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       temporal:
         condition: service_started
@@ -446,6 +476,12 @@ services:
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       temporal:
         condition: service_started
@@ -490,6 +526,12 @@ services:
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     depends_on:
       temporal:
         condition: service_started

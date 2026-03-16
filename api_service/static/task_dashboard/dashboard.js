@@ -555,6 +555,18 @@
       ? systemConfig.workerPause
       : null;
   const workerPauseTransport = createWorkerPauseTransport(workerPauseConfig);
+  const authProfileEndpoints =
+    systemConfig.authProfiles &&
+      typeof systemConfig.authProfiles === "object" &&
+      !Array.isArray(systemConfig.authProfiles)
+      ? {
+        list: String(systemConfig.authProfiles.list || "/api/v1/auth-profiles"),
+        create: String(systemConfig.authProfiles.create || "/api/v1/auth-profiles"),
+        detail: String(systemConfig.authProfiles.detail || "/api/v1/auth-profiles/{profileId}"),
+        update: String(systemConfig.authProfiles.update || "/api/v1/auth-profiles/{profileId}"),
+        delete: String(systemConfig.authProfiles.delete || "/api/v1/auth-profiles/{profileId}"),
+      }
+      : null;
   const taskTemplateEndpoints = {
     list: String(queueSourceConfig.taskStepTemplates || "/api/task-step-templates"),
     detail: String(
@@ -10314,6 +10326,73 @@
           </form>
         </section>
       `;
+      const authProfilesMarkup = authProfileEndpoints ? `
+        <section class="card system-settings-auth-profiles">
+          <h3>Auth Profiles</h3>
+          <p class="form-caption">
+            Manage authentication profiles for managed agent runtimes.
+          </p>
+          <div data-auth-profiles-table>
+            <p class="loading">Loading profiles...</p>
+          </div>
+          <details class="auth-profile-create-toggle">
+            <summary>Create New Profile</summary>
+            <form data-auth-profile-form="create" class="stack">
+              <fieldset>
+                <legend>New Auth Profile</legend>
+                <label>
+                  Profile ID
+                  <input type="text" name="profile_id" maxlength="80" required
+                         placeholder="e.g. gemini_oauth_user_a" />
+                </label>
+                <label>
+                  Runtime ID
+                  <input type="text" name="runtime_id" maxlength="80"
+                         placeholder="e.g. gemini_pro_runtime" />
+                </label>
+                <label>
+                  Auth Mode
+                  <select name="auth_mode" required>
+                    <option value="oauth" selected>OAuth</option>
+                    <option value="api_key">API Key</option>
+                  </select>
+                </label>
+                <label>
+                  Volume Ref
+                  <input type="text" name="volume_ref" maxlength="120"
+                         placeholder="e.g. gemini_auth_volume" />
+                </label>
+                <label>
+                  API Key Ref
+                  <input type="text" name="api_key_ref" maxlength="120"
+                         placeholder="Secret reference (API key mode only)" />
+                </label>
+                <label>
+                  Max Parallel Runs
+                  <input type="number" name="max_parallel_runs" min="0" value="1" />
+                </label>
+                <label>
+                  Cooldown After 429 (seconds)
+                  <input type="number" name="cooldown_after_429_seconds" min="0" value="60" />
+                </label>
+                <label>
+                  Rate Limit Policy
+                  <select name="rate_limit_policy">
+                    <option value="backoff" selected>Backoff</option>
+                    <option value="queue">Queue</option>
+                    <option value="reject">Reject</option>
+                  </select>
+                </label>
+                <label>
+                  <input type="checkbox" name="enabled" checked />
+                  Enabled
+                </label>
+                <button type="submit">Create Profile</button>
+              </fieldset>
+            </form>
+          </details>
+        </section>
+      ` : "";
       const layout = `
         <div data-system-settings-notice>${noticeHtml}</div>
         <div class="system-settings">
@@ -10327,6 +10406,7 @@
               <div data-system-settings-audit></div>
             </section>
           </div>
+          ${authProfilesMarkup}
         </div>
       `;
       setView(
@@ -10478,6 +10558,161 @@
       });
     }
 
+    function buildProfileTableMarkup(profiles) {
+      if (!Array.isArray(profiles) || profiles.length === 0) {
+        return "<p class='small'>No auth profiles configured.</p>";
+      }
+      return `
+        <table class="auth-profiles-table">
+          <thead>
+            <tr>
+              <th>Profile ID</th>
+              <th>Runtime</th>
+              <th>Auth Mode</th>
+              <th>Max Runs</th>
+              <th>Cooldown</th>
+              <th>Enabled</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${profiles.map((p) => `
+              <tr data-profile-id="${escapeHtml(p.profile_id)}">
+                <td>${escapeHtml(p.profile_id)}</td>
+                <td>${escapeHtml(p.runtime_id || "-")}</td>
+                <td>${escapeHtml(p.auth_mode || "-")}</td>
+                <td>${p.max_parallel_runs ?? "-"}</td>
+                <td>${p.cooldown_after_429_seconds ?? "-"}s</td>
+                <td>${p.enabled ? "✅" : "❌"}</td>
+                <td>
+                  <button class="btn-small" data-profile-toggle="${escapeHtml(p.profile_id)}">
+                    ${p.enabled ? "Disable" : "Enable"}
+                  </button>
+                  <button class="btn-small btn-danger" data-profile-delete="${escapeHtml(p.profile_id)}">
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    async function loadAuthProfiles() {
+      if (!authProfileEndpoints) {
+        return;
+      }
+      const tableNode = document.querySelector("[data-auth-profiles-table]");
+      if (!tableNode) {
+        return;
+      }
+      try {
+        const response = await fetch(authProfileEndpoints.list, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          tableNode.innerHTML = "<p class='small'>Failed to load auth profiles.</p>";
+          return;
+        }
+        const profiles = await response.json();
+        tableNode.innerHTML = buildProfileTableMarkup(profiles);
+        attachProfileHandlers();
+      } catch (error) {
+        console.error("auth profiles load failed", error);
+        tableNode.innerHTML = "<p class='small'>Error loading auth profiles.</p>";
+      }
+    }
+
+    function attachProfileHandlers() {
+      document.querySelectorAll("[data-profile-toggle]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const profileId = btn.dataset.profileToggle;
+          const isCurrentlyEnabled = btn.textContent.trim() === "Disable";
+          const endpoint = authProfileEndpoints.update.replace("{profileId}", profileId);
+          try {
+            await fetch(endpoint, {
+              method: "PATCH",
+              credentials: "include",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ enabled: !isCurrentlyEnabled }),
+            });
+            await loadAuthProfiles();
+          } catch (error) {
+            console.error("toggle profile failed", error);
+          }
+        });
+      });
+
+      document.querySelectorAll("[data-profile-delete]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const profileId = btn.dataset.profileDelete;
+          if (!window.confirm(`Delete auth profile "${profileId}"?`)) {
+            return;
+          }
+          const endpoint = authProfileEndpoints.delete.replace("{profileId}", profileId);
+          try {
+            await fetch(endpoint, {
+              method: "DELETE",
+              credentials: "include",
+            });
+            await loadAuthProfiles();
+          } catch (error) {
+            console.error("delete profile failed", error);
+          }
+        });
+      });
+
+      const createForm = document.querySelector('[data-auth-profile-form="create"]');
+      createForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const formData = new FormData(createForm);
+        const payload = {
+          profile_id: String(formData.get("profile_id") || "").trim(),
+          runtime_id: String(formData.get("runtime_id") || "").trim() || undefined,
+          auth_mode: String(formData.get("auth_mode") || "oauth"),
+          volume_ref: String(formData.get("volume_ref") || "").trim() || undefined,
+          api_key_ref: String(formData.get("api_key_ref") || "").trim() || undefined,
+          max_parallel_runs: Number(formData.get("max_parallel_runs")) || 1,
+          cooldown_after_429_seconds: Number(formData.get("cooldown_after_429_seconds")) || 60,
+          rate_limit_policy: String(formData.get("rate_limit_policy") || "backoff"),
+          enabled: Boolean(formData.get("enabled")),
+        };
+        if (!payload.profile_id) {
+          setNotice("error", "Profile ID is required.");
+          syncDynamicView();
+          return;
+        }
+        try {
+          const response = await fetch(authProfileEndpoints.create, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (response.status === 409) {
+            setNotice("error", `Profile "${payload.profile_id}" already exists.`);
+            syncDynamicView();
+            return;
+          }
+          if (!response.ok) {
+            setNotice("error", "Failed to create auth profile.");
+            syncDynamicView();
+            return;
+          }
+          setNotice("ok", `Profile "${payload.profile_id}" created.`);
+          createForm.reset();
+          await loadAuthProfiles();
+          syncDynamicView();
+        } catch (error) {
+          console.error("create profile failed", error);
+          setNotice("error", "Failed to create auth profile.");
+          syncDynamicView();
+        }
+      });
+    }
+
     const load = async (silent = false) => {
       try {
         state.snapshot = await workerPauseTransport.fetchState();
@@ -10496,14 +10731,16 @@
       }
       if (silent && hasRendered) {
         syncDynamicView();
+        loadAuthProfiles();
         return;
       }
       renderView();
+      loadAuthProfiles();
     };
 
     setView(
       "System Settings",
-      "Pause or resume worker processing.",
+      "Manage worker pause controls and auth profiles.",
       "<p class='loading'>Loading system controls...</p>",
       { showAutoRefreshControls: true },
     );
