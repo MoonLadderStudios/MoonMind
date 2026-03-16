@@ -7,7 +7,7 @@
     </picture>
 </p>
 
-MoonMind is the first platform to orchestrate state-of-the-art AI agents directly — Claude Code, Gemini CLI, Codex, etc. — with resiliency, secure sandboxing, and managed context built in.
+MoonMind is the first platform to orchestrate all of the state-of-the-art AI agents directly — Claude Code, Gemini CLI, Codex, etc. — with resiliency, secure sandboxing, and managed context built in.
 
 ## Quick Start
 
