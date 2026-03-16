@@ -8,10 +8,17 @@ from typing import Any, Optional, TypedDict
 from temporalio import exceptions, workflow
 from temporalio.common import RetryPolicy
 
+with workflow.unsafe.imports_passed_through():
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        AgentRunResult,
+    )
+
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
 from moonmind.workflows.temporal.activity_catalog import (
     INTEGRATIONS_TASK_QUEUE,
+    WORKFLOW_TASK_QUEUE,
     TemporalActivityRoute,
     build_default_activity_catalog,
 )
@@ -56,6 +63,9 @@ OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
     re.IGNORECASE,
+)
+_MANAGED_AGENT_IDS = frozenset(
+    {"gemini", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
 
 
@@ -388,11 +398,6 @@ class MoonMindRunWorkflow:
 
             selected_node: Mapping[str, Any] | None = None
             if isinstance(tool, Mapping):
-                tool_type = str(tool.get("type") or tool.get("kind") or "skill").strip()
-                if tool_type and tool_type.lower() != "skill":
-                    raise ValueError(
-                        "plan node tool.type must be 'skill' for current runtime support"
-                    )
                 selected_node = tool
             elif isinstance(skill, Mapping):
                 selected_node = skill
@@ -401,62 +406,96 @@ class MoonMindRunWorkflow:
                     "plan node tool definition is required (node.skill is legacy alias)"
                 )
 
+            tool_type = str(
+                selected_node.get("type") or selected_node.get("kind") or "skill"
+            ).strip().lower()
             tool_name = str(
                 selected_node.get("name") or selected_node.get("id") or ""
             ).strip()
             tool_version = str(selected_node.get("version") or "").strip()
-            if not tool_name or not tool_version:
-                raise ValueError("plan node tool name/version is required")
-            invocation_payload = {
-                "id": node.get("id"),
-                "tool": {"type": "skill", "name": tool_name, "version": tool_version},
-                "skill": {"name": tool_name, "version": tool_version},
-                "inputs": node.get("inputs", {}),
-                "options": node.get("options", {}),
-            }
-            route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
-            if skill_definitions_by_key:
-                skill_key = (tool_name, tool_version)
-                if skill_key not in skill_definitions_by_key:
-                    raise ValueError(
-                        "Tool "
-                        f"'{tool_name}:{tool_version}' was not found in pinned "
-                        "registry snapshot"
-                    )
-                route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
-                    skill_definitions_by_key[skill_key]
-                )
-            if route.activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
-                raise ValueError(
-                    "plan node tool executor "
-                    f"'{route.activity_type}' is unsupported by MoonMind.Run; "
-                    "expected mm.tool.execute or mm.skill.execute"
-                )
+            node_id = str(node.get("id") or "unknown")
+            node_inputs = dict(node.get("inputs", {}))
 
             self._summary = (
                 f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
             )
             self._update_memo()
 
-            try:
-                execution_result = await workflow.execute_activity(
-                    route.activity_type,
-                    {
-                        "invocation_payload": invocation_payload,
-                        "principal": self._principal(),
-                        "registry_snapshot_ref": registry_snapshot_ref,
-                        "context": {
-                            "workflow_id": workflow.info().workflow_id,
-                            "run_id": workflow.info().run_id,
-                            "node_id": str(node.get("id") or "unknown"),
+            if tool_type == "agent_runtime":
+                # --- Agent dispatch: child workflow ---
+                try:
+                    request = self._build_agent_execution_request(
+                        node_inputs=node_inputs,
+                        node_id=node_id,
+                        tool_name=tool_name,
+                    )
+                    child_result = await workflow.execute_child_workflow(
+                        "MoonMind.AgentRun",
+                        request,
+                        id=f"{workflow.info().workflow_id}:agent:{node_id}",
+                        task_queue=WORKFLOW_TASK_QUEUE,
+                    )
+                    execution_result = self._map_agent_run_result(child_result)
+                except Exception:
+                    if failure_mode == "FAIL_FAST":
+                        raise
+                    continue
+
+            elif tool_type == "skill":
+                # --- Activity dispatch: existing skill path ---
+                if not tool_name or not tool_version:
+                    raise ValueError("plan node tool name/version is required")
+                invocation_payload = {
+                    "id": node_id,
+                    "tool": {"type": "skill", "name": tool_name, "version": tool_version},
+                    "skill": {"name": tool_name, "version": tool_version},
+                    "inputs": node_inputs,
+                    "options": node.get("options", {}),
+                }
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
+                if skill_definitions_by_key:
+                    skill_key = (tool_name, tool_version)
+                    if skill_key not in skill_definitions_by_key:
+                        raise ValueError(
+                            "Tool "
+                            f"'{tool_name}:{tool_version}' was not found in pinned "
+                            "registry snapshot"
+                        )
+                    route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
+                        skill_definitions_by_key[skill_key]
+                    )
+                if route.activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
+                    raise ValueError(
+                        "plan node tool executor "
+                        f"'{route.activity_type}' is unsupported by MoonMind.Run; "
+                        "expected mm.tool.execute or mm.skill.execute"
+                    )
+
+                try:
+                    execution_result = await workflow.execute_activity(
+                        route.activity_type,
+                        {
+                            "invocation_payload": invocation_payload,
+                            "principal": self._principal(),
+                            "registry_snapshot_ref": registry_snapshot_ref,
+                            "context": {
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "node_id": node_id,
+                            },
                         },
-                    },
-                    **self._execute_kwargs_for_route(route),
+                        **self._execute_kwargs_for_route(route),
+                    )
+                except Exception:
+                    if failure_mode == "FAIL_FAST":
+                        raise
+                    continue
+
+            else:
+                raise ValueError(
+                    f"unsupported plan node tool.type: '{tool_type}'; "
+                    "expected 'skill' or 'agent_runtime'"
                 )
-            except Exception:
-                if failure_mode == "FAIL_FAST":
-                    raise
-                continue
 
             result_status = self._activity_result_status(execution_result)
             if result_status is None:
@@ -553,6 +592,91 @@ class MoonMindRunWorkflow:
             if match is not None:
                 return match.group(0)
         return None
+
+    def _build_agent_execution_request(
+        self,
+        *,
+        node_inputs: dict[str, Any],
+        node_id: str,
+        tool_name: str,
+    ) -> "AgentExecutionRequest":
+        """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
+        runtime_block = node_inputs.get("runtime") or {}
+        agent_id = str(
+            runtime_block.get("mode")
+            or runtime_block.get("agent_id")
+            or node_inputs.get("targetRuntime")
+            or tool_name
+        ).strip()
+        if not agent_id:
+            raise ValueError(
+                "agent_runtime plan node must specify an agent_id "
+                "(via inputs.runtime.mode, inputs.targetRuntime, or tool.name)"
+            )
+
+        agent_kind = self._agent_kind_for_id(agent_id)
+        execution_profile_ref = str(
+            node_inputs.get("executionProfileRef")
+            or runtime_block.get("executionProfileRef")
+            or f"default:{agent_id}"
+        )
+        wf_info = workflow.info()
+        correlation_id = wf_info.workflow_id
+        idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
+
+        workspace_spec: dict[str, Any] = {}
+        for ws_key in ("repository", "repo", "startingBranch", "newBranch", "branch"):
+            ws_val = node_inputs.get(ws_key)
+            if ws_val is not None:
+                workspace_spec[ws_key] = ws_val
+
+        parameters: dict[str, Any] = {}
+        for param_key in ("model", "effort", "publishMode", "allowed_tools"):
+            param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
+            if param_val is not None:
+                parameters[param_key] = param_val
+
+        return AgentExecutionRequest(
+            agent_kind=agent_kind,
+            agent_id=agent_id,
+            execution_profile_ref=execution_profile_ref,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            instruction_ref=node_inputs.get("instructions") or node_inputs.get("instructionRef"),
+            input_refs=node_inputs.get("inputRefs") or [],
+            workspace_spec=workspace_spec,
+            parameters=parameters,
+            timeout_policy=node_inputs.get("timeoutPolicy") or {},
+            retry_policy=node_inputs.get("retryPolicy") or {},
+            approval_policy=node_inputs.get("approvalPolicy") or {},
+            callback_policy=node_inputs.get("callbackPolicy") or {},
+        )
+
+    def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
+        """Convert ``AgentRunResult`` to the dict format the execution loop expects."""
+        if isinstance(result, dict):
+            failure = result.get("failure_class") or result.get("failureClass")
+            summary = result.get("summary") or ""
+            output_refs = result.get("output_refs") or result.get("outputRefs") or []
+        else:
+            failure = getattr(result, "failure_class", None)
+            summary = getattr(result, "summary", "") or ""
+            output_refs = getattr(result, "output_refs", []) or []
+
+        status = "FAILED" if failure else "SUCCEEDED"
+        return {
+            "status": status,
+            "outputs": {
+                "summary": summary,
+                "output_refs": output_refs,
+                "error": failure or "",
+            },
+        }
+
+    @staticmethod
+    def _agent_kind_for_id(agent_id: str) -> str:
+        """Derive ``agent_kind`` from ``agent_id``."""
+        return "managed" if agent_id.lower() in _MANAGED_AGENT_IDS else "external"
 
     async def _run_integration_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]

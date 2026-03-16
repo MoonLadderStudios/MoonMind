@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Type alias for the optional callback fired when a supervised process completes.
+# Signature: async (result_dict) -> None
+# The result_dict is AgentRunResult-compatible.
+CompletionCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 from moonmind.schemas.agent_runtime_models import (
     AgentRunState,
@@ -27,9 +37,12 @@ class ManagedRunSupervisor:
         self,
         store: ManagedRunStore,
         log_streamer: RuntimeLogStreamer,
+        *,
+        completion_callback: CompletionCallback | None = None,
     ) -> None:
         self._store = store
         self._log_streamer = log_streamer
+        self._completion_callback = completion_callback
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
 
     async def supervise(
@@ -108,6 +121,19 @@ class ManagedRunSupervisor:
                 failure_class=failure_class,
                 error_message=error_message,
             )
+
+            # Fire completion callback (best-effort, never crashes the supervisor).
+            if self._completion_callback is not None:
+                try:
+                    payload = self._build_completion_payload(record, log_refs)
+                    await self._completion_callback(payload)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "completion_callback failed for run_id=%s",
+                        run_id,
+                        exc_info=True,
+                    )
+
             return record
         finally:
             self._active_processes.pop(run_id, None)
@@ -190,6 +216,28 @@ class ManagedRunSupervisor:
         if exit_code == 0:
             return "completed", None
         return "failed", "execution_error"
+
+    @staticmethod
+    def _build_completion_payload(
+        record: ManagedRunRecord,
+        log_refs: dict[str, str],
+    ) -> dict[str, Any]:
+        """Build an AgentRunResult-compatible dict from a completed ManagedRunRecord."""
+        output_refs: list[str] = []
+        if record.log_artifact_ref:
+            output_refs.append(record.log_artifact_ref)
+        if record.diagnostics_ref:
+            output_refs.append(record.diagnostics_ref)
+        for ref in log_refs.values():
+            if ref and ref not in output_refs:
+                output_refs.append(ref)
+
+        summary = record.error_message or f"Process exited with status {record.status}"
+        return {
+            "summary": summary,
+            "output_refs": output_refs,
+            "failure_class": record.failure_class,
+        }
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:

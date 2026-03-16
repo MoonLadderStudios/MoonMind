@@ -47,7 +47,7 @@ async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
         run_id,
     )
 
-@workflow.defn
+@workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     def __init__(self):
         self.completion_event = asyncio.Event()

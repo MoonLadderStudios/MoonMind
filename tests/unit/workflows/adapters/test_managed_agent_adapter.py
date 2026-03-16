@@ -443,3 +443,119 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
         profiles = result["profiles"]
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "c1"
+
+
+# ---------------------------------------------------------------------------
+# Store-backed status / fetch_result tests
+# ---------------------------------------------------------------------------
+
+
+async def test_status_reads_from_store(tmp_path: Path):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-status-1",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-store",
+        run_store=store,
+    )
+
+    status = await adapter.status("run-status-1")
+    assert status.status == "completed"
+    assert status.agent_id == "gemini_cli"
+
+
+async def test_status_falls_back_to_stub_without_store():
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-nostub",
+    )
+
+    status = await adapter.status("nonexistent")
+    assert status.status == "running"  # stub default
+
+
+async def test_fetch_result_reads_from_store(tmp_path: Path):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-1",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            log_artifact_ref="artifact://logs/stdout",
+            diagnostics_ref="artifact://diag/123",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-1")
+    assert result.failure_class is None
+    assert "artifact://logs/stdout" in result.output_refs
+    assert "artifact://diag/123" in result.output_refs
+
+
+async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-running",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="running",
+            started_at=datetime.now(tz=UTC),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-running",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-running")
+    # Non-terminal: should return default empty result
+    assert result.failure_class is None
+    assert result.output_refs == []
+

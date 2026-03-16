@@ -474,6 +474,24 @@ def build_default_activity_catalog(
             timeouts=TemporalActivityTimeouts(120, 300),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
+        TemporalActivityDefinition(
+            activity_type="agent_runtime.publish_artifacts",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(300, 600),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
+        ),
+        TemporalActivityDefinition(
+            activity_type="agent_runtime.cancel",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+        ),
     )
 
     fleets = (
