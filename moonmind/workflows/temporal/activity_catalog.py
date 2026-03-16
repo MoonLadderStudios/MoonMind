@@ -15,12 +15,14 @@ ARTIFACTS_FLEET = "artifacts"
 LLM_FLEET = "llm"
 SANDBOX_FLEET = "sandbox"
 INTEGRATIONS_FLEET = "integrations"
+AGENT_RUNTIME_FLEET = "agent_runtime"
 
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 ARTIFACTS_TASK_QUEUE = "mm.activity.artifacts"
 LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
+AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 
 
 class TemporalActivityCatalogError(ValueError):
@@ -472,6 +474,24 @@ def build_default_activity_catalog(
             timeouts=TemporalActivityTimeouts(120, 300),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
+        TemporalActivityDefinition(
+            activity_type="agent_runtime.publish_artifacts",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(300, 600),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
+        ),
+        TemporalActivityDefinition(
+            activity_type="agent_runtime.cancel",
+            family="agent_runtime",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+        ),
     )
 
     fleets = (
@@ -542,6 +562,20 @@ def build_default_activity_catalog(
                 + ["mm.skill.execute", "mm.tool.execute"]
             ),
         ),
+        TemporalWorkerFleet(
+            fleet=AGENT_RUNTIME_FLEET,
+            task_queues=(cfg.activity_agent_runtime_task_queue,),
+            capabilities=("agent_runtime",),
+            privileges=("isolated_process_execution", "auth_volume_mounts"),
+            scaling_notes="Long-lived supervised runtime executions.",
+            activity_types=tuple(
+                list(
+                    entry.activity_type
+                    for entry in activities
+                    if entry.fleet == AGENT_RUNTIME_FLEET
+                )
+            ),
+        ),
     )
 
     return TemporalActivityCatalog(activities=activities, fleets=fleets)
@@ -596,6 +630,8 @@ def skill_policy_as_route(
 
 
 __all__ = [
+    "AGENT_RUNTIME_FLEET",
+    "AGENT_RUNTIME_TASK_QUEUE",
     "ARTIFACTS_FLEET",
     "ARTIFACTS_TASK_QUEUE",
     "INTEGRATIONS_FLEET",

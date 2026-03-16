@@ -36,7 +36,9 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    TERMINAL_AGENT_RUN_STATES,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +134,14 @@ class ManagedAgentAdapter:
         slot_releaser: SlotReleaseFunc,
         cooldown_reporter: CooldownReportFunc,
         workflow_id: str,
+        run_store: ManagedRunStore | None = None,
     ) -> None:
         self._fetch_profiles = profile_fetcher
         self._request_slot = slot_requester
         self._release_slot = slot_releaser
         self._report_cooldown = cooldown_reporter
         self._workflow_id = workflow_id
+        self._run_store = run_store
         self._active_profile_id: str | None = None
 
     # ------------------------------------------------------------------
@@ -203,7 +207,16 @@ class ManagedAgentAdapter:
         )
 
     async def status(self, run_id: str) -> AgentRunStatus:
-        """Return a stub status — real status comes from the runtime launcher."""
+        """Return status from the run store, falling back to stub if no store."""
+        if self._run_store is not None:
+            record = self._run_store.load(run_id)
+            if record is not None:
+                return AgentRunStatus(
+                    runId=record.run_id,
+                    agentKind="managed",
+                    agentId=record.agent_id,
+                    status=record.status,
+                )
         return AgentRunStatus(
             runId=run_id,
             agentKind="managed",
@@ -212,7 +225,20 @@ class ManagedAgentAdapter:
         )
 
     async def fetch_result(self, run_id: str) -> AgentRunResult:
-        """Return empty result — real result comes from the runtime launcher."""
+        """Return result from the run store, falling back to empty if no store."""
+        if self._run_store is not None:
+            record = self._run_store.load(run_id)
+            if record is not None and record.status in TERMINAL_AGENT_RUN_STATES:
+                output_refs: list[str] = []
+                if record.log_artifact_ref:
+                    output_refs.append(record.log_artifact_ref)
+                if record.diagnostics_ref:
+                    output_refs.append(record.diagnostics_ref)
+                return AgentRunResult(
+                    summary=record.error_message or f"Completed with status {record.status}",
+                    output_refs=output_refs,
+                    failure_class=record.failure_class,
+                )
         return AgentRunResult()
 
     async def cancel(self, run_id: str) -> AgentRunStatus:

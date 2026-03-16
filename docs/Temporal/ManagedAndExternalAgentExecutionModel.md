@@ -17,9 +17,20 @@ This document does **not** redefine ordinary `mm.activity.llm` behavior. Plain o
 
 ## 2. Core Design: `MoonMind.AgentRun`
 
-`MoonMind.Run` remains the root workflow. When a task requires a true agent runtime, it starts a dedicated child workflow: `MoonMind.AgentRun`.
+`MoonMind.Run` remains the root workflow. It represents a **task** — the top-level unit of work. Each task contains a **plan** consisting of one or more ordered **steps** (plan nodes). When a step requires a true agent runtime, `MoonMind.Run` starts a dedicated child workflow: `MoonMind.AgentRun`.
 
-`MoonMind.AgentRun` provides a single workflow-level lifecycle for both external and MoonMind-managed agents. The workflow should remain agnostic to whether the underlying execution path is an external HTTP-based agent or a locally supervised managed runtime.
+```
+Task (MoonMind.Run workflow)
+ └─ Plan (generated or provided)
+     ├─ Step 1: sandbox.run_command        (activity)
+     ├─ Step 2: MoonMind.AgentRun          (child workflow) → e.g. Gemini CLI
+     ├─ Step 3: MoonMind.AgentRun          (child workflow) → e.g. Jules
+     └─ Step 4: sandbox.run_tests          (activity)
+```
+
+This hierarchy enables a single task to involve multiple agents (one per step) alongside non-agent steps like sandbox commands, while `MoonMind.Run` provides the consistent task lifecycle envelope: state tracking, search attributes, pause/resume, cancellation, integration stages, and dashboard visibility.
+
+`MoonMind.AgentRun` provides a single workflow-level lifecycle for both external and MoonMind-managed agents. The workflow remains agnostic to whether the underlying execution path is an external HTTP-based agent or a locally supervised managed runtime.
 
 ### Unified Lifecycle
 
@@ -53,6 +64,17 @@ Both external and managed agents follow the same high-level lifecycle:
 ### Design Intent
 
 `MoonMind.AgentRun` exists so that MoonMind can treat agent execution as a durable orchestration concern without embedding provider-specific runtime logic into the root workflow. The child workflow owns the execution lifecycle; the adapter/runtime layer owns the actual agent launch and supervision mechanics.
+
+### Dispatch from `MoonMind.Run`
+
+Agent dispatch happens **per step**, not per task. The plan execution loop in `MoonMind.Run._run_execution_stage()` iterates ordered plan nodes and determines the dispatch mechanism for each step:
+
+- **Agent step** — the node's tool/skill type or an explicit `execution_mode` field indicates an agent runtime is required. `MoonMind.Run` starts `MoonMind.AgentRun` as a **child workflow**, constructing an `AgentExecutionRequest` from the node inputs.
+- **Activity step** — the node dispatches to a standard Temporal activity (`sandbox.run_command`, `sandbox.run_tests`, integration activities, etc.) via the existing `workflow.execute_activity()` path.
+
+This keeps the plan mechanism intact for multi-step tasks while allowing each step to use the appropriate execution strategy. A task can mix agent steps and non-agent steps freely, and can involve different agents in different steps.
+
+Cancellation propagates automatically through Temporal's child workflow mechanism. When `MoonMind.Run` is cancelled, any in-flight `MoonMind.AgentRun` child workflow receives a `CancelledError`, which triggers its non-cancellable cleanup path for adapter-level cancel operations.
 
 ---
 
@@ -452,70 +474,55 @@ Implementation should include a non-cancellable cleanup path, using the appropri
 
 ## 11. Implementation Strategy
 
-### Phase 1 — Formalize Contracts
+### Phase 1 — Formalize Contracts ✅
 
-Add code and documentation for:
+Canonical contracts live in `moonmind/schemas/agent_runtime_models.py`:
+`AgentExecutionRequest`, `AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`, `FailureClass`.
+The `AgentAdapter` protocol is in `moonmind/workflows/adapters/agent_adapter.py`.
 
-* `AgentExecutionRequest`
-* `AgentRunHandle`
-* `AgentRunStatus`
-* `AgentRunResult`
-* `AgentAdapter`
-* `ManagedAgentAuthProfile`
-* runtime/execution profile references
+### Phase 2 — Add `MoonMind.AgentRun` ✅
 
-### Phase 2 — Add `MoonMind.AgentRun`
+`MoonMind.AgentRun` is implemented in `moonmind/workflows/temporal/workflows/agent_run.py`, registered with `@workflow.defn(name="MoonMind.AgentRun")`, and included in `REGISTERED_TEMPORAL_WORKFLOW_TYPES`.
 
-Create `MoonMind.AgentRun` as the child workflow used for all true agent-runtime execution.
+### Phase 3 — Implement Adapters ✅
 
-Responsibilities:
+Production adapters:
+- `JulesAgentAdapter` — external agent adapter for Jules
+- `ManagedAgentAdapter` — managed runtime adapter with auth-profile controls
 
-* call the correct adapter
-* wait for runtime events
-* manage timeout/cancel/intervention logic
-* publish outputs
-* return normalized results to `MoonMind.Run`
+Both conform to the `AgentAdapter` protocol.
 
-Include explicit cancellation handling so the workflow can invoke adapter/runtime cancellation during teardown using the SDK-appropriate non-cancellable cleanup path.
+### Phase 4 — Build Managed Runtime Execution Layer ✅
 
-### Phase 3 — Implement Adapters
+Runtime components in `moonmind/workflows/temporal/runtime/`:
+- `ManagedRuntimeLauncher` (launcher.py)
+- `ManagedRunStore` (store.py)
+- `ManagedRunSupervisor` (supervisor.py)
+- `LogStreamer` (log_streamer.py)
 
-Implement:
+### Phase 4.5 — Remove Legacy Execution Path ✅
 
-* `ExternalAgentAdapter`
-* `ManagedAgentAdapter`
+The legacy `_auto_skill_handler` (CLI subprocess launcher), `_build_runtime_planner` (plan synthesizer), `SkillActivityDispatcher`, `TemporalSkillActivities`, and `TemporalPlanActivities` have been removed from `worker_runtime.py`. All agent execution now flows through `MoonMind.AgentRun`.
 
-Ensure both conform to the same lifecycle contract and state model.
+### Phase 5 — Add Auth-Profile and Rate-Limit Controls ✅
 
-Adapter implementations should support bounded status polling and durable callback/event resumption.
+`MoonMindAuthProfileManagerWorkflow` manages auth profile slot acquisition and release. The `MoonMind.AgentRun` workflow integrates with it for 429 retry with profile rotation.
 
-### Phase 4 — Build Managed Runtime Execution Layer
+### Phase 6 — Promote to Dedicated Runtime Fleet ✅
 
-Add:
+The `agent_runtime` fleet is defined in `workers.py` and `activity_catalog.py` with:
+- `AGENT_RUNTIME_FLEET` and `AGENT_RUNTIME_TASK_QUEUE`
+- Activity definitions: `agent_runtime.publish_artifacts`, `agent_runtime.cancel`
 
-* `ManagedRuntimeLauncher`
-* `ManagedRuntimeProfile`
-* managed run persistence
-* supervisor/run tracker
-* log streaming and diagnostics collection
+### Phase 6.5 — Connect Root Workflow ✅
 
-Ensure supervisor state is durably queryable so `status(...)` can remain fast and short-lived.
+`MoonMind.Run` dispatches to `MoonMind.AgentRun` as a child workflow **per step** when a plan node has `tool.type == "agent_runtime"`. The plan schema (`tool_plan_contracts.py`) accepts `"agent_runtime"` as a valid tool type. The dispatch discriminator in `_run_execution_stage()` routes agent nodes to `workflow.execute_child_workflow("MoonMind.AgentRun", ...)` and non-agent nodes to the existing `workflow.execute_activity()` path. Helper methods build the `AgentExecutionRequest` from node inputs + workflow context and map `AgentRunResult` back to the execution loop's expected format.
 
-### Phase 5 — Add Auth-Profile and Rate-Limit Controls
+### Phase 6.75 — Wire Supervisor → Workflow Completion Signals ✅
 
-Enforce:
+`ManagedRunSupervisor` accepts an optional `completion_callback` — an async callable fired (best-effort) after the supervised process exits. The callback receives an `AgentRunResult`-compatible dict built from the `ManagedRunRecord` (summary, output_refs, failure_class). In production, the Temporal workflow layer wires this callback to signal `MoonMind.AgentRun` for immediate wake-up instead of waiting for the next poll cycle.
 
-* auth-profile-based runtime selection
-* per-profile concurrency limits
-* provider-specific cooldown/backoff handling
-* safe environment shaping for OAuth and API-key modes
-
-### Phase 6 — Promote to Dedicated Runtime Fleet
-
-Move managed-agent execution from temporary sandbox hosting into a dedicated:
-
-* `mm.activity.agent_runtime`
-* `temporal-worker-agent-runtime`
+`ManagedAgentAdapter.status()` and `fetch_result()` now read real state from `ManagedRunStore` when a store is provided, with stub fallback for backward compatibility.
 
 ### Phase 7 — Harden Observability and HITL
 

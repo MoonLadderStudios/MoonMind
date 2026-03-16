@@ -278,18 +278,20 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    """Plan node invocation of a tool contract (skill subtype)."""
+    """Plan node invocation of a tool contract (skill or agent_runtime)."""
 
     id: str
     skill_name: str
     skill_version: str
     inputs: Mapping[str, Any]
     options: Mapping[str, Any] = field(default_factory=dict)
+    tool_type: str = "skill"
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.id, field_name="node.id")
         _ensure_non_empty(self.skill_name, field_name="node.tool.name")
-        _ensure_non_empty(self.skill_version, field_name="node.tool.version")
+        if self.tool_type == "skill":
+            _ensure_non_empty(self.skill_version, field_name="node.tool.version")
         if not isinstance(self.inputs, Mapping):
             raise ContractValidationError(
                 "invalid_plan", "node.inputs must be an object"
@@ -319,13 +321,15 @@ class Step:
         payload: dict[str, Any] = {
             "id": self.id,
             "tool": {
-                "type": "skill",
+                "type": self.tool_type,
                 "name": self.skill_name,
-                "version": self.skill_version,
             },
-            "skill": {"name": self.skill_name, "version": self.skill_version},
             "inputs": dict(self.inputs),
         }
+        if self.skill_version:
+            payload["tool"]["version"] = self.skill_version
+        if self.tool_type == "skill":
+            payload["skill"] = {"name": self.skill_name, "version": self.skill_version}
         if self.options:
             payload["options"] = dict(self.options)
         return payload
@@ -669,15 +673,16 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
     tool_payload = payload.get("tool")
     skill_payload = payload.get("skill")
     node_payload: Mapping[str, Any] | None = None
+    tool_type = "skill"
 
     if isinstance(tool_payload, Mapping):
         tool_type = str(
             tool_payload.get("type") or tool_payload.get("kind") or "skill"
-        ).strip()
-        if tool_type and tool_type.lower() != "skill":
+        ).strip().lower()
+        if tool_type not in ("skill", "agent_runtime"):
             raise ContractValidationError(
                 "invalid_plan",
-                "node.tool.type must be 'skill' for the current runtime contract",
+                f"node.tool.type must be 'skill' or 'agent_runtime', got '{tool_type}'",
             )
         node_payload = tool_payload
     elif isinstance(skill_payload, Mapping):
@@ -705,6 +710,7 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
             if isinstance(payload.get("options"), Mapping)
             else {}
         ),
+        tool_type=tool_type,
     )
 
 

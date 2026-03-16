@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
-from api_service.services.temporal.runtime.store import ManagedRunStore
-from api_service.services.temporal.runtime.log_streamer import RuntimeLogStreamer
-from api_service.services.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
 
 def _make_record(
@@ -182,7 +182,7 @@ async def test_heartbeat_updates(supervisor_env):
 
     # Temporarily lower heartbeat interval for test using patch to avoid
     # mixed import style (import + from-import of same module).
-    with patch('api_service.services.temporal.runtime.supervisor.HEARTBEAT_INTERVAL', 1):
+    with patch('moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL', 1):
         record = await supervisor.supervise(
             run_id="run-1", process=process, timeout_seconds=30
         )
@@ -191,3 +191,100 @@ async def test_heartbeat_updates(supervisor_env):
     # Last heartbeat should have been set
     loaded = store.load("run-1")
     assert loaded.last_heartbeat_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Completion callback tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_completion_callback_called_on_success(supervisor_env):
+    store, _, log_streamer, _ = supervisor_env
+    _make_record(store, "run-cb-ok", "launching")
+
+    callback_results: list[dict] = []
+
+    async def _callback(payload: dict) -> None:
+        callback_results.append(payload)
+
+    supervisor = ManagedRunSupervisor(
+        store, log_streamer, completion_callback=_callback
+    )
+
+    process = await asyncio.create_subprocess_exec(
+        "echo", "hello",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-cb-ok", process=process, timeout_seconds=30
+    )
+
+    assert record.status == "completed"
+    assert len(callback_results) == 1
+    payload = callback_results[0]
+    assert payload["failure_class"] is None
+    assert "summary" in payload
+    assert isinstance(payload["output_refs"], list)
+
+
+@pytest.mark.asyncio
+async def test_completion_callback_called_on_failure(supervisor_env):
+    store, _, log_streamer, _ = supervisor_env
+    _make_record(store, "run-cb-fail", "launching")
+
+    callback_results: list[dict] = []
+
+    async def _callback(payload: dict) -> None:
+        callback_results.append(payload)
+
+    supervisor = ManagedRunSupervisor(
+        store, log_streamer, completion_callback=_callback
+    )
+
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", "exit 1",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-cb-fail", process=process, timeout_seconds=30
+    )
+
+    assert record.status == "failed"
+    assert len(callback_results) == 1
+    payload = callback_results[0]
+    assert payload["failure_class"] == "execution_error"
+    assert "exited with code 1" in payload["summary"]
+
+
+@pytest.mark.asyncio
+async def test_completion_callback_error_does_not_crash_supervisor(supervisor_env):
+    store, _, log_streamer, _ = supervisor_env
+    _make_record(store, "run-cb-err", "launching")
+
+    async def _bad_callback(payload: dict) -> None:
+        raise RuntimeError("callback exploded")
+
+    supervisor = ManagedRunSupervisor(
+        store, log_streamer, completion_callback=_bad_callback
+    )
+
+    process = await asyncio.create_subprocess_exec(
+        "echo", "hello",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    # Should NOT raise despite the callback failure
+    record = await supervisor.supervise(
+        run_id="run-cb-err", process=process, timeout_seconds=30
+    )
+    assert record.status == "completed"
+

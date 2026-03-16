@@ -400,6 +400,69 @@ services:
       - local-network
     restart: unless-stopped
 
+  temporal-worker-agent-runtime:
+    build:
+      context: .
+      dockerfile: ./api_service/Dockerfile
+    image: ghcr.io/moonladderstudios/moonmind:latest
+    environment:
+      - PYTHONPATH=/app
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-moonmind}
+      - TEMPORAL_WORKER_FLEET=agent_runtime
+      - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
+      - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
+      - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
+      - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+      - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+      - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
+      - MOONMIND_GEMINI_CLI_AUTH_MODE=${MOONMIND_GEMINI_CLI_AUTH_MODE:-oauth}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - MOONMIND_CODEX_MODEL=${MOONMIND_CODEX_MODEL:-}
+      - MOONMIND_CODEX_EFFORT=${MOONMIND_CODEX_EFFORT:-}
+      - MOONMIND_GEMINI_MODEL=${MOONMIND_GEMINI_MODEL:-}
+      - MOONMIND_GEMINI_EFFORT=${MOONMIND_GEMINI_EFFORT:-}
+      - MOONMIND_CLAUDE_MODEL=${MOONMIND_CLAUDE_MODEL:-}
+      - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
+      - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+    env_file:
+      - .env
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./services:/app/services:ro
+      - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
+      - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
+      - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - agent_workspaces:/work/agent_jobs
+    entrypoint:
+      - /bin/sh
+      - /app/services/temporal/scripts/start-worker.sh
+    depends_on:
+      temporal:
+        condition: service_started
+      temporal-namespace-init:
+        condition: service_completed_successfully
+      agent-workspaces-init:
+        condition: service_completed_successfully
+      codex-auth-init:
+        condition: service_completed_successfully
+      claude-auth-init:
+        condition: service_completed_successfully
+      gemini-auth-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
+
   temporal-worker-integrations:
     build:
       context: .

@@ -13,6 +13,7 @@ from api_service.db.models import Base
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal import (
+    AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
     INTEGRATIONS_FLEET,
     LLM_FLEET,
@@ -68,6 +69,7 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
         LLM_FLEET,
         SANDBOX_FLEET,
         INTEGRATIONS_FLEET,
+        AGENT_RUNTIME_FLEET,
     }
     assert topologies[WORKFLOW_FLEET].service_name == "temporal-worker-workflow"
     assert topologies[ARTIFACTS_FLEET].required_secrets == (
@@ -89,6 +91,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.Run",
         "MoonMind.ManifestIngest",
         "MoonMind.AuthProfileManager",
+        "MoonMind.AgentRun",
     )
 
 
@@ -105,7 +108,7 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     assert topology.fleet == SANDBOX_FLEET
     assert topology.task_queues == (settings.temporal.activity_sandbox_task_queue,)
     assert topology.concurrency_limit == 3
-    assert topology.forbidden_capabilities == ("llm", "integration:jules")
+    assert topology.forbidden_capabilities == ("llm", "integration:jules", "agent_runtime")
 
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):

@@ -9,6 +9,7 @@ from typing import Any, Sequence
 
 from moonmind.config.settings import AppSettings, TemporalSettings, settings
 from moonmind.workflows.temporal.activity_catalog import (
+    AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
     INTEGRATIONS_FLEET,
     LLM_FLEET,
@@ -30,6 +31,7 @@ ALLOWED_TEMPORAL_WORKER_FLEETS = (
     LLM_FLEET,
     SANDBOX_FLEET,
     INTEGRATIONS_FLEET,
+    AGENT_RUNTIME_FLEET,
 )
 
 _FLEET_SERVICE_NAMES = {
@@ -38,6 +40,7 @@ _FLEET_SERVICE_NAMES = {
     LLM_FLEET: "temporal-worker-llm",
     SANDBOX_FLEET: "temporal-worker-sandbox",
     INTEGRATIONS_FLEET: "temporal-worker-integrations",
+    AGENT_RUNTIME_FLEET: "temporal-worker-agent-runtime",
 }
 _FLEET_RESOURCE_CLASSES = {
     WORKFLOW_FLEET: "light",
@@ -45,6 +48,7 @@ _FLEET_RESOURCE_CLASSES = {
     LLM_FLEET: "rate_limited",
     SANDBOX_FLEET: "cpu_mem_heavy",
     INTEGRATIONS_FLEET: "rate_limited",
+    AGENT_RUNTIME_FLEET: "cpu_mem_heavy",
 }
 _FLEET_EGRESS_POLICIES = {
     WORKFLOW_FLEET: "temporal-only",
@@ -52,18 +56,21 @@ _FLEET_EGRESS_POLICIES = {
     LLM_FLEET: "llm-provider-only",
     SANDBOX_FLEET: "restricted-sandbox-egress",
     INTEGRATIONS_FLEET: "provider-api-only",
+    AGENT_RUNTIME_FLEET: "restricted-sandbox-egress",
 }
 _FLEET_FORBIDDEN_CAPABILITIES = {
-    WORKFLOW_FLEET: ("artifacts", "llm", "sandbox", "integration:jules"),
-    ARTIFACTS_FLEET: ("llm", "sandbox", "integration:jules"),
-    LLM_FLEET: ("sandbox", "integration:jules"),
-    SANDBOX_FLEET: ("llm", "integration:jules"),
-    INTEGRATIONS_FLEET: ("sandbox",),
+    WORKFLOW_FLEET: ("artifacts", "llm", "sandbox", "integration:jules", "agent_runtime"),
+    ARTIFACTS_FLEET: ("llm", "sandbox", "integration:jules", "agent_runtime"),
+    LLM_FLEET: ("sandbox", "integration:jules", "agent_runtime"),
+    SANDBOX_FLEET: ("llm", "integration:jules", "agent_runtime"),
+    INTEGRATIONS_FLEET: ("sandbox", "agent_runtime"),
+    AGENT_RUNTIME_FLEET: ("sandbox", "llm", "integration:jules"),
 }
 REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.Run",
     "MoonMind.ManifestIngest",
     "MoonMind.AuthProfileManager",
+    "MoonMind.AgentRun",
 )
 
 
@@ -146,6 +153,7 @@ def _concurrency_limit_for_fleet(
         LLM_FLEET: temporal_settings.llm_worker_concurrency,
         SANDBOX_FLEET: temporal_settings.sandbox_worker_concurrency,
         INTEGRATIONS_FLEET: temporal_settings.integrations_worker_concurrency,
+        AGENT_RUNTIME_FLEET: temporal_settings.agent_runtime_worker_concurrency,
     }[fleet]
 
 
