@@ -3130,14 +3130,14 @@ wrapt = "*"
 
 [[package]]
 name = "llama-index-embeddings-google-genai"
-version = "0.3.2"
+version = "0.5.0"
 description = "llama-index embeddings google genai integration"
 optional = false
-python-versions = "<4.0,>=3.9"
+python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_embeddings_google_genai-0.3.2-py3-none-any.whl", hash = "sha256:ff3157959679a6af46ba3a713e282d4706934fe748d19108e32e640bc42249b9"},
-    {file = "llama_index_embeddings_google_genai-0.3.2.tar.gz", hash = "sha256:517907033afd038be7b578598df54bf34ead9bac6600a78f027c5484964b542f"},
+    {file = "llama_index_embeddings_google_genai-0.5.0-py3-none-any.whl", hash = "sha256:25a32ec995785e5e903c08561252bb107fc3f41b79691eb8fabb6a8e09ca238f"},
+    {file = "llama_index_embeddings_google_genai-0.5.0.tar.gz", hash = "sha256:051d7ca0a95e3bc1d0f32f5cc167cca119ce42bc4a516c8117934c589c93b19f"},
 ]
 
 [package.dependencies]
@@ -7531,4 +7531,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "5a4a15e6e5627a4804183dcf5239b47f1ad6a96edb083dbc9dfa7730825d2e2a"
+content-hash = "4c66d2127fda6a3081528a219eaa885b82377e38b76039a0726de20e2f7460fe"
