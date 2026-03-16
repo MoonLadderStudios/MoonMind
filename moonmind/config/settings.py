@@ -148,6 +148,10 @@ class TemporalSettings(BaseSettings):
         "mm.activity.integrations",
         validation_alias="TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE",
     )
+    activity_agent_runtime_task_queue: str = Field(
+        "mm.activity.agent_runtime",
+        validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
+    )
     temporal_authoritative_read_enabled: bool = Field(
         False,
         env="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
@@ -175,6 +179,11 @@ class TemporalSettings(BaseSettings):
     integrations_worker_concurrency: int | None = Field(
         4,
         validation_alias="TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY",
+        ge=1,
+    )
+    agent_runtime_worker_concurrency: int | None = Field(
+        4,
+        validation_alias="TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY",
         ge=1,
     )
     integration_poll_initial_seconds: int = Field(
@@ -220,11 +229,11 @@ class TemporalSettings(BaseSettings):
     @classmethod
     def _normalize_worker_fleet(cls, value: Any) -> str:
         normalized = str(value or "workflow").strip().lower()
-        allowed = {"workflow", "artifacts", "llm", "sandbox", "integrations"}
+        allowed = {"workflow", "artifacts", "llm", "sandbox", "integrations", "agent_runtime"}
         if normalized not in allowed:
             raise ValueError(
                 "TEMPORAL_WORKER_FLEET must be one of "
-                "workflow, artifacts, llm, sandbox, integrations"
+                "workflow, artifacts, llm, sandbox, integrations, agent_runtime"
             )
         return normalized
 

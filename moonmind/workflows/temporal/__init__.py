@@ -1,6 +1,8 @@
 """Temporal workflow runtime helpers."""
 
 from moonmind.workflows.temporal.activity_catalog import (
+    AGENT_RUNTIME_FLEET,
+    AGENT_RUNTIME_TASK_QUEUE,
     ARTIFACTS_FLEET,
     ARTIFACTS_TASK_QUEUE,
     INTEGRATIONS_FLEET,
@@ -100,6 +102,8 @@ from moonmind.workflows.temporal.workers import (
 )
 
 __all__ = [
+    "AGENT_RUNTIME_FLEET",
+    "AGENT_RUNTIME_TASK_QUEUE",
     "ARTIFACTS_FLEET",
     "ARTIFACTS_TASK_QUEUE",
     "ArtifactCreateActivityResult",
