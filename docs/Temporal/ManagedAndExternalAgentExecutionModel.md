@@ -514,9 +514,15 @@ The `agent_runtime` fleet is defined in `workers.py` and `activity_catalog.py` w
 - `AGENT_RUNTIME_FLEET` and `AGENT_RUNTIME_TASK_QUEUE`
 - Activity definitions: `agent_runtime.publish_artifacts`, `agent_runtime.cancel`
 
-### Phase 6.5 — Connect Root Workflow (IN PROGRESS)
+### Phase 6.5 — Connect Root Workflow ✅
 
-`MoonMind.Run` must dispatch to `MoonMind.AgentRun` as a child workflow **per step** when a plan node requires an agent runtime. The plan execution loop in `_run_execution_stage()` gains a dispatch discriminator: agent nodes start a child workflow, non-agent nodes call activities as before. See §2 "Dispatch from `MoonMind.Run`".
+`MoonMind.Run` dispatches to `MoonMind.AgentRun` as a child workflow **per step** when a plan node has `tool.type == "agent_runtime"`. The plan schema (`tool_plan_contracts.py`) accepts `"agent_runtime"` as a valid tool type. The dispatch discriminator in `_run_execution_stage()` routes agent nodes to `workflow.execute_child_workflow("MoonMind.AgentRun", ...)` and non-agent nodes to the existing `workflow.execute_activity()` path. Helper methods build the `AgentExecutionRequest` from node inputs + workflow context and map `AgentRunResult` back to the execution loop's expected format.
+
+### Phase 6.75 — Wire Supervisor → Workflow Completion Signals ✅
+
+`ManagedRunSupervisor` accepts an optional `completion_callback` — an async callable fired (best-effort) after the supervised process exits. The callback receives an `AgentRunResult`-compatible dict built from the `ManagedRunRecord` (summary, output_refs, failure_class). In production, the Temporal workflow layer wires this callback to signal `MoonMind.AgentRun` for immediate wake-up instead of waiting for the next poll cycle.
+
+`ManagedAgentAdapter.status()` and `fetch_result()` now read real state from `ManagedRunStore` when a store is provided, with stub fallback for backward compatibility.
 
 ### Phase 7 — Harden Observability and HITL
 
