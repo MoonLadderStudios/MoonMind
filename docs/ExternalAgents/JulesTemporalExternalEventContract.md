@@ -31,9 +31,10 @@ This document builds on and must stay consistent with:
 - `docs/Temporal/ArtifactPresentationContract.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/JulesClientAdapter.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/ExternalAgents/JulesClientAdapter.md`
 
-If this document conflicts with the provider-neutral Temporal docs, the shared Temporal docs win unless this file explicitly narrows behavior for Jules.
+If this document conflicts with the provider-neutral Temporal docs or the unified execution model, the shared docs win unless this file explicitly narrows behavior for Jules.
 
 ---
 
@@ -59,35 +60,26 @@ If this document conflicts with the provider-neutral Temporal docs, the shared T
 
 ## 4) Current repo baseline
 
-MoonMind already contains a **non-Temporal Jules integration slice** that should be treated as the source material for the Temporal migration path:
+MoonMind contains the following Jules integration components:
 
-- typed Jules settings in `moonmind/config/jules_settings.py`
-- typed request/response schemas in `moonmind/schemas/jules_models.py`
-- an async HTTP adapter in `moonmind/workflows/adapters/jules_client.py`
-- MCP tooling in `moonmind/mcp/jules_tool_registry.py`
-- runtime gating helpers in `moonmind/jules/runtime.py`
+- **Configuration**: typed Jules settings in `moonmind/config/jules_settings.py`
+- **Schemas**: typed request/response models in `moonmind/schemas/jules_models.py`, including `normalize_jules_status()`
+- **HTTP client**: async adapter in `moonmind/workflows/adapters/jules_client.py`
+- **Agent adapter**: `JulesAgentAdapter` implementing the `AgentAdapter` protocol in `moonmind/workflows/adapters/jules_agent_adapter.py`
+- **MCP tooling**: `JulesToolRegistry` in `moonmind/mcp/jules_tool_registry.py`
+- **Runtime gating**: gating helpers in `moonmind/jules/runtime.py`
+- **Temporal activities**: `integration.jules.start`, `.status`, and `.fetch_result` registered in `moonmind/workflows/temporal/activity_catalog.py` on the `mm.activity.integrations` queue
+- **Worker fleet**: `integration:jules` capability in the integrations fleet (`moonmind/workflows/temporal/workers.py`)
 
-The existing Temporal integrations design also explicitly states that MoonMind already has a Jules adapter and current Jules polling behavior elsewhere in the codebase, but does **not** claim that all Jules paths are already Temporal-backed.
-
-MoonMind also already contains an **early Temporal Jules slice** that this document must stay aligned with:
-
-- `integration.jules.start`, `integration.jules.status`, and `integration.jules.fetch_result` are registered in `moonmind/workflows/temporal/activity_catalog.py`
-- concrete handlers for those activities exist in `moonmind/workflows/temporal/activity_runtime.py`
-- Temporal worker fleet capability wiring already includes `integration:jules` in `moonmind/workflows/temporal/workers.py`
-
-That means this contract must describe a **hybrid repo reality**:
-
-- non-Temporal Jules MCP and worker paths still exist and remain relevant
-- early Temporal activity support already exists
-- the full workflow-level wait/callback/cancel story is still being completed
+All agent execution (both managed and external) now flows through the `MoonMind.AgentRun` child workflow, dispatched per plan step from `MoonMind.Run._run_execution_stage()` when `tool.type == "agent_runtime"`. Legacy non-Temporal execution paths have been removed (see Phase 4.5 in `ManagedAndExternalAgentExecutionModel.md`).
 
 ### Implementation stance
 
-For Jules, MoonMind should use the following migration stance:
+For Jules, MoonMind uses the following posture:
 
-- **today:** adapter-first, polling-capable, non-Temporal integration exists
-- **target:** Temporal-managed `MoonMind.Run` execution owns the durable wait path
-- **default future posture:** callback-first **when Jules supports it reliably**, with polling fallback
+- **today:** `JulesAgentAdapter` exists but external adapter instantiation in `MoonMind.AgentRun` is not yet wired (Phase C migration pending)
+- **integration activities:** `integration.jules.start/status/fetch_result` are used for the integration polling stage in `MoonMind.Run._run_integration_stage()`
+- **default posture:** callback-first **when Jules supports it reliably**, with polling fallback
 - **current safe assumption:** polling is required unless a verified Jules callback path is explicitly implemented
 
 ---
@@ -423,18 +415,20 @@ Best-effort provider cancellation.
 
 **Current implementation guidance**
 
-The current Jules adapter does not expose a cancel endpoint. Until that changes:
+`JulesAgentAdapter.cancel()` exists and attempts cancellation by calling the Jules `resolve_task` endpoint with `status="canceled"`. If the provider rejects the cancel request, the adapter returns `intervention_requested` status with `cancelAccepted: False`.
 
-- `integration.jules.cancel` should report cancellation as unsupported at the provider layer
-- workflow cancellation should still proceed with MoonMind cancellation semantics
-- the final workflow summary should state clearly that provider-side cancellation was not performed
+However:
+
+- `integration.jules.cancel` is **not yet registered** as a Temporal activity in the activity catalog
+- workflow cancellation via `MoonMind.AgentRun` proceeds with MoonMind cancellation semantics regardless of provider-side cancel support
+- the `invoke_adapter_cancel` activity in `MoonMind.AgentRun` is not yet wired to the Jules adapter (Phase C migration pending)
 
 Current repo alignment:
 
-- this activity is not yet registered in the current Temporal activity catalog
-- documentation and UI surfaces must therefore treat provider cancellation for Jules as unsupported today, not merely unimplemented in one caller
+- the adapter-level cancel path exists but is not yet connected to the Temporal activity and workflow cancel flows
+- documentation and UI surfaces should treat provider cancellation for Jules as a best-effort capability, not a guaranteed operation
 
-Do **not** fake provider cancellation success when no Jules cancel API exists.
+Do **not** fake provider cancellation success if the Jules API rejects the cancel request.
 
 ---
 

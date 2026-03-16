@@ -107,3 +107,14 @@ Follows the `QueueApiClient` pattern:
 - **Secret Redaction Tests:**
   - Error messages surfaced through MCP responses do not contain `JULES_API_KEY` or bearer token values
 - **Verification:** Import checks, settings load, pre-commit hooks.
+
+## 6. Relationship to Agent Runtime Contracts
+
+`JulesClient` is the low-level HTTP transport adapter. It is wrapped by `JulesAgentAdapter` (`moonmind/workflows/adapters/jules_agent_adapter.py`), which implements the `AgentAdapter` protocol and translates between:
+
+- `AgentExecutionRequest` → `JulesCreateTaskRequest`
+- `JulesTaskResponse` → `AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`
+
+The `JulesAgentAdapter` uses `normalize_jules_status()` (`moonmind/schemas/jules_models.py`) to map raw Jules status strings into the bounded set (`queued`, `running`, `succeeded`, `failed`, `canceled`, `unknown`) before mapping those to canonical `AgentRunState` literals.
+
+For the unified execution model that governs how `JulesAgentAdapter` (and all other adapters) are invoked via `MoonMind.AgentRun` child workflows, see [`ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md).
