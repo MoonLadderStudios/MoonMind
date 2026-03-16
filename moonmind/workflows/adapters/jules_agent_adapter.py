@@ -81,8 +81,15 @@ class JulesAgentAdapter:
     """
 
     def __init__(self, *, client_factory: JulesClientFactory) -> None:
-        self._client: JulesClient = client_factory()
+        self._client_factory = client_factory
+        self.__client: JulesClient | None = None
         self._starts_by_idempotency: dict[str, AgentRunHandle] = {}
+
+    @property
+    def _client(self) -> JulesClient:
+        if self.__client is None:
+            self.__client = self._client_factory()
+        return self.__client
 
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         if request.agent_kind != "external":
