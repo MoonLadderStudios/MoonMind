@@ -4,9 +4,9 @@
 # account tier (e.g. Gemini Ultra).
 #
 # Usage:
-#   tools/auth-gemini-volume.sh            # sync local ~/.gemini creds
-#   tools/auth-gemini-volume.sh --sync     # same as above (explicit)
-#   tools/auth-gemini-volume.sh --login    # interactive gemini auth login
+#   tools/auth-gemini-volume.sh            # interactive gemini auth login inside the container
+#   tools/auth-gemini-volume.sh --sync     # sync local ~/.gemini creds
+#   tools/auth-gemini-volume.sh --login    # same as above (explicit)
 #   tools/auth-gemini-volume.sh --check    # verify volume credentials
 #
 # Environment overrides:
@@ -17,7 +17,7 @@
 #   GEMINI_CLI_HOME       Container-side Gemini CLI home (defaults to GEMINI_VOLUME_PATH)
 set -euo pipefail
 
-export GEMINI_VOLUME_NAME="${GEMINI_VOLUME_NAME:-moonmind_gemini_auth_volume}"
+export GEMINI_VOLUME_NAME="${GEMINI_VOLUME_NAME:-gemini_auth_volume}"
 VOLUME_NAME="${GEMINI_VOLUME_NAME}"
 HOST_GEMINI_DIR="${GEMINI_AUTH_HOST_DIR:-${HOME}/.gemini}"
 GEMINI_VOLUME_PATH="${GEMINI_VOLUME_PATH:-${GEMINI_HOME:-/var/lib/gemini-auth}}"
@@ -166,9 +166,9 @@ cmd_check() {
 # Dispatch
 # ---------------------------------------------------------------------------
 case "${1:-}" in
-  --login)  cmd_login ;;
+  --login|"")  cmd_login ;;
   --check)  cmd_check ;;
-  --sync|"") cmd_sync ;;
+  --sync) cmd_sync ;;
   -h|--help)
     sed -n '2,/^[^#]/{ /^#/s/^# \?//p }' "$0"
     exit 0
