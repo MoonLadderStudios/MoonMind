@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
-from api_service.services.temporal.runtime.store import ManagedRunStore
-from api_service.services.temporal.runtime.log_streamer import RuntimeLogStreamer
-from api_service.services.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
 
 def _make_record(
@@ -182,7 +182,7 @@ async def test_heartbeat_updates(supervisor_env):
 
     # Temporarily lower heartbeat interval for test using patch to avoid
     # mixed import style (import + from-import of same module).
-    with patch('api_service.services.temporal.runtime.supervisor.HEARTBEAT_INTERVAL', 1):
+    with patch('moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL', 1):
         record = await supervisor.supervise(
             run_id="run-1", process=process, timeout_seconds=30
         )

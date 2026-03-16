@@ -4,10 +4,26 @@ from temporalio import workflow, activity
 from temporalio.exceptions import CancelledError
 
 with workflow.unsafe.imports_passed_through():
-    from .shared import AgentExecutionRequest, AgentRunResult, AgentRunStatus
-    from ..adapters.base import AgentAdapter
-    from ..adapters.managed import ManagedAgentAdapter
-    from ..adapters.external import ExternalAgentAdapter
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        AgentRunResult,
+        AgentRunState,
+    )
+    from moonmind.workflows.adapters.agent_adapter import AgentAdapter
+    from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
+    from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+
+# Map canonical AgentRunState literals to workflow-usable status constants.
+# The canonical model uses Literal strings, not an Enum, so we alias them here.
+class AgentRunStatus:
+    queued = "queued"
+    launching = "launching"
+    running = "running"
+    awaiting_callback = "awaiting_callback"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+    timed_out = "timed_out"
 
 PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
@@ -21,13 +37,15 @@ async def publish_artifacts_activity(result: AgentRunResult) -> AgentRunResult:
 
 @activity.defn
 async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
-    if agent_kind == "managed":
-        adapter = ManagedAgentAdapter()
-    elif agent_kind == "external":
-        adapter = ExternalAgentAdapter()
-    else:
-        return
-    await adapter.cancel(run_id)
+    # TODO(Phase C): Wire adapter instantiation via DI / activity context.
+    # Production adapters require injected dependencies (clients, callables).
+    # For now this is a best-effort stub; the full cancel path will be
+    # implemented when this workflow moves to moonmind/.
+    activity.logger.warning(
+        "invoke_adapter_cancel called for %s/%s — adapter cancel not yet wired",
+        agent_kind,
+        run_id,
+    )
 
 @workflow.defn
 class MoonMindAgentRun:
@@ -67,7 +85,7 @@ class MoonMindAgentRun:
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = AgentRunStatus.timed_out
-                    return AgentRunResult(failure_class="Timeout")
+                    return AgentRunResult(failure_class="execution_error")
 
                 manager_handle = None
                 # Acquire auth slot if managed
@@ -85,9 +103,20 @@ class MoonMindAgentRun:
                     await workflow.wait_condition(lambda: self.slot_assigned_event.is_set())
                     request.execution_profile_ref = self._assigned_profile_id
 
-                    adapter: AgentAdapter = ManagedAgentAdapter()
+                    # TODO(Phase C): Wire ManagedAgentAdapter with proper DI params.
+                    # For now, create a minimal stub that satisfies the protocol.
+                    adapter: AgentAdapter = ManagedAgentAdapter(
+                        profile_fetcher=lambda **kw: [],
+                        slot_requester=lambda **kw: None,
+                        slot_releaser=lambda **kw: None,
+                        cooldown_reporter=lambda **kw: None,
+                        workflow_id=workflow.info().workflow_id,
+                    )
                 elif request.agent_kind == "external":
-                    adapter: AgentAdapter = ExternalAgentAdapter()
+                    # TODO(Phase C): Wire JulesAgentAdapter with JulesClient.
+                    raise NotImplementedError(
+                        "External adapter instantiation not yet wired — pending Phase C migration"
+                    )
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 
@@ -123,7 +152,7 @@ class MoonMindAgentRun:
                     self.run_status = AgentRunStatus.timed_out
                     if manager_handle and request.execution_profile_ref:
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
-                    return AgentRunResult(failure_class="Timeout")
+                    return AgentRunResult(failure_class="execution_error")
 
                 if self.final_result is None:
                     # Fallback to fetching
@@ -159,7 +188,7 @@ class MoonMindAgentRun:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
                     workflow.logger.warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
-            return AgentRunResult(failure_class="Timeout")
+            return AgentRunResult(failure_class="execution_error")
 
         except CancelledError:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):

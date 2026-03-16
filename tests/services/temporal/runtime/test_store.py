@@ -1,7 +1,7 @@
 import pytest
 from datetime import UTC, datetime
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
-from api_service.services.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 
 def _make_record(run_id: str = "test-run-1", status: str = "running") -> ManagedRunRecord:

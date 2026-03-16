@@ -1,9 +1,9 @@
 import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-from api_service.services.temporal.runtime.store import ManagedRunStore
-from api_service.services.temporal.runtime.launcher import ManagedRuntimeLauncher
-from api_service.services.temporal.workflows.shared import AgentExecutionRequest
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 def _make_profile(**overrides) -> ManagedRuntimeProfile:
@@ -25,6 +25,7 @@ def _make_request(**overrides) -> AgentExecutionRequest:
         agent_kind="managed",
         agent_id="agent-1",
         execution_profile_ref="default-managed",
+        correlation_id="test-corr-1",
         idempotency_key="run-1",
     )
     defaults.update(overrides)
