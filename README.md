@@ -7,7 +7,7 @@
     </picture>
 </p>
 
-Instead of forcing you to build agents from scratch in a new proprietary framework, MoonMind lets you orchestrate the tools you already use—like **Claude Code, Gemini CLI, Codex, and Jules**. It wraps them in durable execution, secure sandboxing, shared context, and human-in-the-loop oversight.
+MoonMind is the first platform to orchestrate state-of-the-art AI agents directly — Claude Code, Gemini CLI, Codex, etc. — with resiliency, secure sandboxing, and managed context built in.
 
 ## Quick Start
 
@@ -29,35 +29,26 @@ Go to [http://localhost:5000/tasks](http://localhost:5000/tasks) to access Missi
 
 ## Why MoonMind?
 
-### 🛰️ Bring Your Own Agent — or let MoonMind run it for you
-Other platforms want you to rebuild inside their SDK. MoonMind takes the opposite approach: orchestrate the agents you already use, wherever they run.
-- **Managed Runtimes:** Run Claude Code, Gemini CLI, and Codex as managed workers on your own infrastructure — full control, full visibility.
-- **Black-Box Orchestration:** Command cloud-hosted agents like Jules and Codex Cloud under a strict operational model. MoonMind tracks status and injects context even when you don't control the internals.
+### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
+Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box.
+- **Managed Runtimes:** MoonMind can run Claude Code, Gemini CLI, and Codex as managed workers on your own infrastructure using your existing subscriptions or API keys.
+- **Black-Box Coordination:** Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and responds with feedback even when you can't control the internals.
 - **Universal Integration:** Connect any agent through MCP or standard API endpoints.
+- **Sandboxed Execution:** Runtimes run behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
+
+### 1️⃣ Orchestration Starts At One
+You don't need ten agents to benefit from an orchestrator. MoonMind supercharges the planning, resiliency, and context management of even a single agent.
+- **Multi-Step Planning:** Agents perform better on small, focused tasks. Break a massive goal into discrete steps with presets, and let MoonMind schedule and sequence them.
+- **Fire-and-Forget Resiliency:** Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Backed by [Temporal](https://temporal.io/), workflows survive container crashes and restarts. Automatic stuck detection and smart retries keep your agent on track — and off your API bill.
+- **Step-Based Context Management:** Inject the right context into each step and clear it between steps. Ground agents with built-in loaders for GitHub, Jira, Confluence, Google Drive, and local files. Procedural memory retains structured summaries from past runs so agents don't repeat the same mistakes.
+- **Mission Control:** Track real-time run status, browse generated artifacts, monitor intervention requests, and audit full execution histories.
 
 ### 🔓 Free Yourself from Vendor Lock-In
 MoonMind can manage any agent runtime and makes it easy to mix agents and models in even a single workflow.
+* **Open-Source:** MoonMind is 100% free and open-source software.
 * **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Keep your memory, artifacts, and orchestration logic intact regardless of the underlying LLM.
 * **Multi-Agent Chaining:** Break massive goals into smaller steps. Only use expensive models for steps that need them.
 * **Side-by-Side Comparison:** Easily run the same task with different models and runtimes to compare results.
-
-### 🔄 Designed for Resilient Execution
-Agent tasks fail in messy ways: rate limits, terminal hangs, and crashed containers. MoonMind expects failure and builds around it.
-* **Durable Foundations:** Backed by [Temporal](https://temporal.io/), the system is designed so that workflows can survive container crashes and restarts with deterministic replay.
-* **Anti-Loop Protection:** Automatic stuck-detection applies soft and hard resets.
-* **Smart Retries:** Failure classification distinguishes between transient errors (safe to retry) and permanent failures (stopping execution before burning your API budget).
-
-### 🛡️ Supervised Autonomy & Restricted Blast Radius
-Agents with terminal access can do real damage. MoonMind puts a leash on your agents while still letting them be useful.
-* **Human-in-the-Loop (HITL):** Pause execution, step in to answer clarifying questions mid-run, or take over a stuck terminal manually, then hand control back.
-* **Approval Gates:** Require human sign-off before high-risk operations (e.g., executing arbitrary code, modifying production databases).
-* **Restricted Blast Radius:** Execution runs behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
-
-### 🧠 Actionable Context & Observability
-Stop blowing up your context windows with irrelevant data, and stop tailing terminal logs to guess what your agent is doing.
-* **Procedural Memory:** Agents learn from past runs and failures, retaining structured summaries so they are less likely to repeat the same mistakes.
-* **Universal RAG:** Ground agents in your real docs with built-in loaders for GitHub, Jira, Confluence, Google Drive, and local files.
-* **Operator Visibility:** An evolving "Mission Control" surface to track real-time run status, browse generated artifacts, monitor intervention requests, and audit full execution histories.
 
 ## Architecture
 
