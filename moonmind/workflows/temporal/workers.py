@@ -239,6 +239,7 @@ def build_worker_activity_bindings(
     skill_activities: Any | None = None,
     sandbox_activities: Any | None = None,
     integration_activities: Any | None = None,
+    agent_runtime_activities: Any | None = None,
 ) -> tuple[TemporalActivityBinding, ...]:
     """Resolve activity handlers for exactly one activity fleet."""
 
@@ -254,6 +255,7 @@ def build_worker_activity_bindings(
         skill_activities=skill_activities,
         sandbox_activities=sandbox_activities,
         integration_activities=integration_activities,
+        agent_runtime_activities=agent_runtime_activities,
         fleets=(normalized,),
     )
 

@@ -14,6 +14,7 @@ from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
     TemporalJulesActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
@@ -220,6 +221,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             sandbox_activities=sandbox_activities,
             integration_activities=TemporalJulesActivities(
                 artifact_service=artifact_service
+            ),
+            agent_runtime_activities=TemporalAgentRuntimeActivities(
+                artifact_service=artifact_service,
             ),
         )
         binding_descriptors = sorted(

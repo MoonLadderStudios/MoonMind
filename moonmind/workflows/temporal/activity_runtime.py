@@ -175,6 +175,11 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "integration_jules_fetch_result",
     ),
+    "agent_runtime.publish_artifacts": (
+        "agent_runtime",
+        "agent_runtime_publish_artifacts",
+    ),
+    "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
 }
 
 
@@ -1560,6 +1565,57 @@ class TemporalJulesActivities:
         return tuple(output_refs)
 
 
+class TemporalAgentRuntimeActivities:
+    """Implementation helpers for ``agent_runtime.*`` activities."""
+
+    def __init__(
+        self,
+        *,
+        artifact_service: TemporalArtifactService | None = None,
+    ) -> None:
+        self._artifact_service = artifact_service
+
+    async def agent_runtime_publish_artifacts(
+        self,
+        result: Any = None,
+        /,
+    ) -> Any:
+        """Publish agent-run outputs back to artifact storage.
+
+        This is currently a pass-through stub.  Full implementation will
+        persist outputs via the artifact service once the managed-runtime
+        supervisor materialises output refs.
+        """
+        return result
+
+    async def agent_runtime_cancel(
+        self,
+        request: Any = None,
+        /,
+    ) -> None:
+        """Best-effort cancel of an in-flight agent run.
+
+        Production wiring will instantiate the correct adapter and
+        delegate cancel to it.  For now this logs the cancellation
+        request without side effects.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+        if isinstance(request, Mapping):
+            agent_kind = request.get("agent_kind", "unknown")
+            run_id = request.get("run_id", "unknown")
+        elif isinstance(request, (list, tuple)) and len(request) >= 2:
+            agent_kind, run_id = request[0], request[1]
+        else:
+            agent_kind, run_id = "unknown", str(request)
+        logger.warning(
+            "agent_runtime.cancel called for %s/%s — adapter cancel not yet wired",
+            agent_kind,
+            run_id,
+        )
+
+
 def _build_activity_wrapper(
     func: Callable[..., Any],
 ) -> Callable[[Any, Any], Awaitable[Any]]:
@@ -1618,6 +1674,7 @@ def build_activity_bindings(
     skill_activities: Any | None = None,
     sandbox_activities: Any | None = None,
     integration_activities: Any | None = None,
+    agent_runtime_activities: Any | None = None,
     fleets: Sequence[str] | None = None,
 ) -> tuple[TemporalActivityBinding, ...]:
     """Bind catalog activity types to concrete runtime handlers."""
@@ -1629,6 +1686,7 @@ def build_activity_bindings(
         "skills": skill_activities,
         "sandbox": sandbox_activities,
         "integrations": integration_activities,
+        "agent_runtime": agent_runtime_activities,
     }
     bindings: list[TemporalActivityBinding] = []
     bound_keys: set[tuple[str, str]] = set()
@@ -1730,6 +1788,7 @@ __all__ = [
     "build_observability_summary",
     "TemporalActivityBinding",
     "TemporalActivityRuntimeError",
+    "TemporalAgentRuntimeActivities",
     "TemporalJulesActivities",
     "TemporalPlanActivities",
     "TemporalSkillActivities",

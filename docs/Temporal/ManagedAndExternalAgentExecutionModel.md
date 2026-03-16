@@ -516,6 +516,7 @@ The legacy `_auto_skill_handler` (CLI subprocess launcher), `_build_runtime_plan
 The `agent_runtime` fleet is defined in `workers.py` and `activity_catalog.py` with:
 - `AGENT_RUNTIME_FLEET` and `AGENT_RUNTIME_TASK_QUEUE`
 - Activity definitions: `agent_runtime.publish_artifacts`, `agent_runtime.cancel`
+- Runtime binding metadata in `_ACTIVITY_HANDLER_ATTRS` and handler class `TemporalAgentRuntimeActivities` in `activity_runtime.py`
 
 ### Phase 6.5 — Connect Root Workflow ✅
 

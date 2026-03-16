@@ -22,6 +22,7 @@ from moonmind.workflows.skills.skill_registry import (
     parse_skill_registry,
 )
 from moonmind.workflows.temporal.activity_catalog import (
+    AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
     SANDBOX_FLEET,
     build_default_activity_catalog,
@@ -29,6 +30,7 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.temporal.activity_runtime import (
     SandboxCommandResult,
     TemporalActivityRuntimeError,
+    TemporalAgentRuntimeActivities,
     TemporalJulesActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
@@ -1153,3 +1155,29 @@ async def test_build_activity_bindings_requires_selected_family_implementation(
                     artifact_activities=TemporalArtifactActivities(service),
                     fleets=(SANDBOX_FLEET,),
                 )
+
+
+async def test_build_activity_bindings_resolves_agent_runtime_fleet(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            catalog = build_default_activity_catalog()
+
+            bindings = build_activity_bindings(
+                catalog,
+                agent_runtime_activities=TemporalAgentRuntimeActivities(
+                    artifact_service=service,
+                ),
+                fleets=(AGENT_RUNTIME_FLEET,),
+            )
+
+            assert bindings
+            assert {binding.fleet for binding in bindings} == {AGENT_RUNTIME_FLEET}
+            bound_types = {binding.activity_type for binding in bindings}
+            assert "agent_runtime.publish_artifacts" in bound_types
+            assert "agent_runtime.cancel" in bound_types
