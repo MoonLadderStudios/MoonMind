@@ -7,10 +7,8 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
         AgentRunResult,
-        AgentRunState,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
-    from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 
 # Map canonical AgentRunState literals to workflow-usable status constants.

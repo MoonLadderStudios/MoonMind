@@ -3,13 +3,12 @@
 import json
 import unittest
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytest.importorskip("temporalio")
 
-from temporalio import activity, client, exceptions
+from temporalio import activity, client
 from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 from temporalio.common import (
@@ -26,10 +25,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     SANDBOX_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
 )
-from moonmind.workflows.temporal.workflows.run import (
-    MoonMindRunWorkflow,
-    _MANAGED_AGENT_IDS,
-)
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
     publish_artifacts_activity,
@@ -248,7 +244,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                 # The child workflow will fail because the adapter is a stub.
                 # With FAIL_FAST, the parent propagates the failure.
                 try:
-                    result = await handle.result()
+                    await handle.result()
                     # If it somehow succeeds, that's fine too — what matters is
                     # that the dispatch took the agent_runtime path.
                 except Exception:

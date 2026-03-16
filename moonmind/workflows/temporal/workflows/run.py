@@ -11,7 +11,6 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
-        AgentRunResult,
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition

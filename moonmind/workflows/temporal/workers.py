@@ -64,7 +64,7 @@ _FLEET_FORBIDDEN_CAPABILITIES = {
     LLM_FLEET: ("sandbox", "integration:jules", "agent_runtime"),
     SANDBOX_FLEET: ("llm", "integration:jules", "agent_runtime"),
     INTEGRATIONS_FLEET: ("sandbox", "agent_runtime"),
-    AGENT_RUNTIME_FLEET: ("llm", "integration:jules"),
+    AGENT_RUNTIME_FLEET: ("sandbox", "llm", "integration:jules"),
 }
 REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.Run",

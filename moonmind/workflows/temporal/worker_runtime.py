@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from contextlib import AsyncExitStack
-from typing import Any
+
 
 from temporalio.client import Client
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
