@@ -1755,7 +1755,7 @@ google-auth = ">=2.14.1,<3.0.0"
 googleapis-common-protos = ">=1.56.3,<2.0.0"
 grpcio = [
     {version = ">=1.49.1,<2.0.0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
-    {version = ">=1.33.2,<2.0.0", optional = true, markers = "extra == \"grpc\""},
+    {version = ">=1.33.2,<2.0.0", optional = true, markers = "python_version < \"3.11\" and extra == \"grpc\""},
 ]
 grpcio-status = [
     {version = ">=1.49.1,<2.0.0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
@@ -3130,14 +3130,14 @@ wrapt = "*"
 
 [[package]]
 name = "llama-index-embeddings-google-genai"
-version = "0.3.2"
+version = "0.5.0"
 description = "llama-index embeddings google genai integration"
 optional = false
-python-versions = "<4.0,>=3.9"
+python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_embeddings_google_genai-0.3.2-py3-none-any.whl", hash = "sha256:ff3157959679a6af46ba3a713e282d4706934fe748d19108e32e640bc42249b9"},
-    {file = "llama_index_embeddings_google_genai-0.3.2.tar.gz", hash = "sha256:517907033afd038be7b578598df54bf34ead9bac6600a78f027c5484964b542f"},
+    {file = "llama_index_embeddings_google_genai-0.5.0-py3-none-any.whl", hash = "sha256:25a32ec995785e5e903c08561252bb107fc3f41b79691eb8fabb6a8e09ca238f"},
+    {file = "llama_index_embeddings_google_genai-0.5.0.tar.gz", hash = "sha256:051d7ca0a95e3bc1d0f32f5cc167cca119ce42bc4a516c8117934c589c93b19f"},
 ]
 
 [package.dependencies]
@@ -4531,8 +4531,8 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.23.2", markers = "python_version == \"3.11\""},
-    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
 ]
 python-dateutil = ">=2.8.2"
 pytz = ">=2020.1"
@@ -5908,8 +5908,8 @@ grpcio = ">=1.41.0"
 httpx = {version = ">=0.20.0", extras = ["http2"]}
 numpy = [
     {version = ">=1.21", markers = "python_version == \"3.11\""},
-    {version = ">=1.21,<2.3.0", markers = "python_version == \"3.10\""},
     {version = ">=1.26", markers = "python_version == \"3.12\""},
+    {version = ">=1.21,<2.3.0", markers = "python_version == \"3.10\""},
     {version = ">=2.1.0", markers = "python_version == \"3.13\""},
 ]
 portalocker = ">=2.7.0,<4.0"
@@ -7531,4 +7531,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "8d4d344716ffbc6d4b3c222008ee475438803bc90ae8c4c46db2f83d91e615be"
+content-hash = "65cb10b607a4aee80a2bf57b52e7e47177c374177db4b813d4ef0056a868f2aa"
