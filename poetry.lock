@@ -3291,14 +3291,14 @@ pymupdf = ["pymupdf (>=1.23.21,<2)"]
 
 [[package]]
 name = "llama-index-readers-github"
-version = "0.10.0"
+version = "0.11.1"
 description = "llama-index readers github integration"
 optional = false
-python-versions = "<4.0,>=3.9"
+python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_readers_github-0.10.0-py3-none-any.whl", hash = "sha256:0c33a028d2a534bbb911744b0ccb676b8e1ea93d19f98a7f3c9e9ed4bfb52162"},
-    {file = "llama_index_readers_github-0.10.0.tar.gz", hash = "sha256:99e54de665429e8024984610553ce043750c56b1f55b88e57aa404cf34ef40d2"},
+    {file = "llama_index_readers_github-0.11.1-py3-none-any.whl", hash = "sha256:f147ed034ca448defbf507c1650f9e158cc36aad4213de7533879b0f2d7c9892"},
+    {file = "llama_index_readers_github-0.11.1.tar.gz", hash = "sha256:fbfed64bd873f80f47b6517542db8f92289407970563b9600894c0e6202cd964"},
 ]
 
 [package.dependencies]
@@ -7531,4 +7531,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "80bcc98aae19a3cd17c36748ff3cebb2b829099d3c7307ad4d65646d8f0d7573"
+content-hash = "19be3cd7fd9ef483296f437f8d5abb22e508cec37058f006f37c80d9cfe0d628"
