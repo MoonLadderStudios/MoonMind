@@ -2,7 +2,19 @@
 
 ## Core Principles
 
-### I. One-Click Agent Deployment
+### I. Orchestrate, Don't Recreate
+
+MoonMind MUST orchestrate AI agents directly — as their providers build and maintain them — rather than requiring users to rebuild agent behavior in a MoonMind-specific SDK.
+
+Non-negotiable rules:
+
+- MoonMind MUST work with any agent that can be reached via a standard interface (CLI, API, MCP). Specialized integrations MAY provide deeper orchestration for specific agents, but the platform MUST NOT require them.
+- Adding support for a new agent MUST require only a new adapter — not changes to core orchestration logic.
+- MoonMind MUST NOT build its own competing cognitive engine. The value is in the orchestration layer — resiliency, context management, planning, and coordination — not in replacing the agents themselves.
+
+Rationale: The agents themselves evolve rapidly and are best maintained by their providers. MoonMind's moat is the orchestration layer above them.
+
+### II. One-Click Agent Deployment
 
 MoonMind MUST provide a “fresh clone → running system” path that is simple,
 documented, reliable, and local-first in any environment that supports Docker
@@ -31,7 +43,7 @@ Non-negotiable rules:
 Rationale: MoonMind is an operator tool. Setup friction and mandatory cloud
 coupling are feature-killers.
 
-### II. Avoid Vendor Lock-In
+### III. Avoid Vendor Lock-In
 
 MoonMind MUST avoid designs that force one exclusive proprietary provider to use core functionality.
 
@@ -45,11 +57,20 @@ Non-negotiable rules:
 
 Rationale: MoonMind should remain deployable and evolvable across ecosystems.
 
-### III. Own Your Data
+### IV. Own Your Data
 
-MoonMind MUST make it easy to gather data from many sources, store it wherever you want, and provide it as exclusive context to AI tools.
+MoonMind MUST make it easy to gather data from many sources, store it locally, and provide it as managed context to AI agents.
 
-### IV. Skills Are First-Class and Easy to Add
+Non-negotiable rules:
+
+- MoonMind MUST support ingesting context from diverse sources (e.g., GitHub, Jira, Confluence, Google Drive, local files) through built-in loaders.
+- Context MUST be injectable at the step level — the orchestrator decides what each agent sees and clears context between steps to prevent window pollution.
+- Procedural memory (structured summaries of past runs and failures) MUST be retained and available to future runs so agents don't repeat the same mistakes.
+- All ingested data and generated artifacts MUST be stored on operator-controlled infrastructure, not in external SaaS by default.
+
+Rationale: Context management is a core orchestration advantage. Agents perform better when they see the right information at the right time — and operators must own the data that makes that possible.
+
+### V. Skills Are First-Class and Easy to Add
 
 MoonMind MUST make skills straightforward to create, register, test, and use across runtimes.
 
@@ -69,7 +90,7 @@ Non-negotiable rules:
 
 Rationale: Skills are the unit of scale for MoonMind automation.
 
-### V. The Bittersweet Lesson: AI scaffolds are useful, but they must constantly evolve.
+### VI. The Bittersweet Lesson: AI scaffolds are useful, but they must constantly evolve.
 
 **The Principle:** AI scaffolding is a massive short-term speed multiplier—but it expires. Scaffolding decays rapidly as product boundaries sharpen, integrations drift, and foundation model capabilities internalize what used to require custom code. Therefore, optimize for **replaceability and evolution**: build every scaffold expecting to delete, swap, or regenerate it quickly without destabilizing the system.
 
@@ -88,7 +109,7 @@ Focus rigid, robust engineering on what LLMs won’t do natively: secure remote 
 5. **Isolate Volatility**
 Encapsulate likely-to-change code—vendor auth flows, API clients, capability negotiation, and UI seams—into replaceable modules with explicit boundaries. This ensures that early integration hacks don’t calcify into the permanent architecture.
 
-### VI. Powerful Runtime Configurability
+### VII. Powerful Runtime Configurability
 
 MoonMind MUST be configurable at runtime without requiring code edits or image rebuilds for routine changes.
 
@@ -109,7 +130,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind runs in many environments; routine tuning must be easy and reversible.
 
-### VII. Modular and Extensible Architecture
+### VIII. Modular and Extensible Architecture
 
 MoonMind MUST remain easy to extend without rewriting the core.
 
@@ -124,7 +145,7 @@ Non-negotiable rules:
 
 Rationale: Extensibility is the product. Architecture must resist entanglement.
 
-### VIII. Self-Healing by Default
+### IX. Self-Healing by Default
 
 MoonMind MUST recover safely from common failures without manual babysitting.
 
@@ -140,7 +161,7 @@ Non-negotiable rules:
 
 Rationale: Operators will restart containers. The system must withstand it.
 
-### IX. Facilitate Continuous Improvement
+### X. Facilitate Continuous Improvement
 
 MoonMind MUST make it easy to improve itself and the projects it operates on.
 
@@ -157,7 +178,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind is an automation engine; it must learn from real execution.
 
-### X. Spec-Driven Development Is the Source of Truth
+### XI. Spec-Driven Development Is the Source of Truth
 
 MoonMind development MUST be spec-driven, with clear contracts and traceability.
 

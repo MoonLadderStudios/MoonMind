@@ -49,6 +49,7 @@ MoonMind can manage any agent runtime and makes it easy to mix agents and models
 * **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Keep your memory, artifacts, and orchestration logic intact regardless of the underlying LLM.
 * **Multi-Agent Chaining:** Break massive goals into smaller steps. Only use expensive models for steps that need them.
 * **Side-by-Side Comparison:** Easily run the same task with different models and runtimes to compare results.
+* **Own Your Data:** Context, artifacts, and memory are stored on your infrastructure. Switch providers without losing what your agents have learned.
 
 ## Architecture
 
