@@ -31,7 +31,7 @@ Go to [http://localhost:5000/tasks](http://localhost:5000/tasks) to access Missi
 
 ### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box.
-- **Managed Runtimes:** MoonMind can run Claude Code, Gemini CLI, and Codex as managed workers on your own infrastructure using your existing subscriptions or API keys.
+- **Managed Runtimes:** MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure using your existing subscriptions or API keys.
 - **Black-Box Coordination:** Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and responds with feedback even when you can't control the internals.
 - **Universal Integration:** Connect any agent through MCP or standard API endpoints.
 - **Sandboxed Execution:** Runtimes run behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
