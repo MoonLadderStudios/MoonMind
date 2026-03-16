@@ -1755,7 +1755,7 @@ google-auth = ">=2.14.1,<3.0.0"
 googleapis-common-protos = ">=1.56.3,<2.0.0"
 grpcio = [
     {version = ">=1.49.1,<2.0.0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
-    {version = ">=1.33.2,<2.0.0", optional = true, markers = "extra == \"grpc\""},
+    {version = ">=1.33.2,<2.0.0", optional = true, markers = "python_version < \"3.11\" and extra == \"grpc\""},
 ]
 grpcio-status = [
     {version = ">=1.49.1,<2.0.0", optional = true, markers = "python_version >= \"3.11\" and extra == \"grpc\""},
@@ -3212,14 +3212,14 @@ pydantic = ">=2.11.5"
 
 [[package]]
 name = "llama-index-llms-anthropic"
-version = "0.10.11"
+version = "0.11.1"
 description = "llama-index llms anthropic integration"
 optional = false
-python-versions = "<4.0,>=3.9"
+python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_llms_anthropic-0.10.11-py3-none-any.whl", hash = "sha256:753cdbc33534ac72a1d73419b689b6a8085bb875736d0ce80e4afcf9fee32d9b"},
-    {file = "llama_index_llms_anthropic-0.10.11.tar.gz", hash = "sha256:8453b5dcaff20bd20c0d99358c7106def3ec36154880764202568ab64a308eb2"},
+    {file = "llama_index_llms_anthropic-0.11.1-py3-none-any.whl", hash = "sha256:ef9b78d61d6edf411a9c8361b6d703ca722a5735890163c35eac4c37d58b7702"},
+    {file = "llama_index_llms_anthropic-0.11.1.tar.gz", hash = "sha256:41a9e9206b0a27d0f5f39b8d432c0254d072e7e63245c8b0f2f814b8d815a45c"},
 ]
 
 [package.dependencies]
@@ -4531,8 +4531,8 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.23.2", markers = "python_version == \"3.11\""},
-    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
 ]
 python-dateutil = ">=2.8.2"
 pytz = ">=2020.1"
@@ -5908,8 +5908,8 @@ grpcio = ">=1.41.0"
 httpx = {version = ">=0.20.0", extras = ["http2"]}
 numpy = [
     {version = ">=1.21", markers = "python_version == \"3.11\""},
-    {version = ">=1.21,<2.3.0", markers = "python_version == \"3.10\""},
     {version = ">=1.26", markers = "python_version == \"3.12\""},
+    {version = ">=1.21,<2.3.0", markers = "python_version == \"3.10\""},
     {version = ">=2.1.0", markers = "python_version == \"3.13\""},
 ]
 portalocker = ">=2.7.0,<4.0"
@@ -7531,4 +7531,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "8d4d344716ffbc6d4b3c222008ee475438803bc90ae8c4c46db2f83d91e615be"
+content-hash = "9d98f3f3e0c1ea65e3a43e835d59ef30d7219c19b5b8e317c990789afa586f0e"
