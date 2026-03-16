@@ -71,9 +71,9 @@ Auth credentials are provisioned into volumes via scripts in `tools/`:
 |--------|---------|-------|
 | `tools/auth-gemini-volume.sh` | Gemini CLI | `--sync` (copy host creds), `--login` (interactive), `--check` (verify) |
 | `tools/auth-codex-volume.sh` | Codex CLI | Interactive `codex login --device-auth` |
-| `tools/auth-claude-volume.sh` | Claude Code | Interactive `claude login` |
+| `tools/auth-claude-volume.sh` | Claude Code | `--sync` (copy host creds), `--login` (interactive), `--check` (verify) |
 
-The `--sync` mode (Gemini) copies the host user's local `~/.gemini` credentials into the Docker volume, preserving the account's subscription tier claims (e.g. Gemini Ultra). The `--login` modes authenticate interactively inside a container.
+The `--sync` mode (Gemini, Claude) copies the host user's local credential directory (`~/.gemini` or `~/.claude`) into the Docker volume, preserving the account's subscription tier claims. The `--login` modes authenticate interactively inside a container.
 
 ---
 
