@@ -15,8 +15,9 @@ with workflow.unsafe.imports_passed_through():
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
-# The canonical model uses Literal strings, not an Enum, so we alias them here.
-class AgentRunStatus:
+# Named RunStatus (not AgentRunStatus) to avoid shadowing the Pydantic model
+# imported in activity code.
+class RunStatus:
     queued = "queued"
     launching = "launching"
     running = "running"
@@ -33,6 +34,8 @@ AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=5)
 AGENT_RUNTIME_CANCEL_TIMEOUT = timedelta(minutes=1)
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
+INTEGRATIONS_ACTIVITY_TIMEOUT = timedelta(minutes=5)
+INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
 
 
 @activity.defn(name="integration.resolve_external_adapter")
@@ -55,11 +58,12 @@ class MoonMindAgentRun:
     def __init__(self):
         self.completion_event = asyncio.Event()
         self.slot_assigned_event = asyncio.Event()
-        self.run_status = AgentRunStatus.queued
+        self.run_status = RunStatus.queued
         self.final_result: AgentRunResult | None = None
         self.run_id: str | None = None
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
+        self._external_agent_id: str | None = None
 
     async def _ensure_manager_and_signal(
         self, manager_id: str, runtime_id: str
@@ -99,7 +103,7 @@ class MoonMindAgentRun:
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
         self.final_result = AgentRunResult(**result_dict)
-        self.run_status = AgentRunStatus.completed
+        self.run_status = RunStatus.completed
         self.completion_event.set()
 
     @workflow.signal
@@ -122,7 +126,7 @@ class MoonMindAgentRun:
             while True:
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
-                    self.run_status = AgentRunStatus.timed_out
+                    self.run_status = RunStatus.timed_out
                     return AgentRunResult(failure_class="execution_error")
 
                 manager_handle = None
@@ -149,7 +153,7 @@ class MoonMindAgentRun:
                         )
                     except asyncio.TimeoutError:
                         workflow.logger.error("Timed out waiting for auth profile slot.")
-                        self.run_status = AgentRunStatus.timed_out
+                        self.run_status = RunStatus.timed_out
                         return AgentRunResult(failure_class="execution_error")
                     request.execution_profile_ref = self._assigned_profile_id
 
@@ -211,17 +215,32 @@ class MoonMindAgentRun:
                         request.agent_id,
                         start_to_close_timeout=timedelta(seconds=30),
                     )
-                    registry = build_default_registry()
-                    adapter = registry.create(validated_id)
+                    # Store the validated agent_id for activity routing.
+                    self._external_agent_id = validated_id
+
+                    # Start via Temporal activity on the integrations fleet
+                    # (determinism-safe: no adapter construction in-workflow).
+                    handle_dict = await workflow.execute_activity(
+                        f"integration.{validated_id}.start",
+                        request,
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                        start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                    )
+                    from moonmind.schemas.agent_runtime_models import AgentRunHandle
+                    handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+                    self.run_id = handle.run_id
+                    self.run_status = handle.status
+                    poll_interval = handle.poll_hint_seconds or 10
+                    adapter = None  # External ops route through activities, not adapter
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 
-                # Launch adapter
-                handle = await adapter.start(request)
-                self.run_id = handle.run_id
-                self.run_status = handle.status
-
-                poll_interval = handle.poll_hint_seconds or 10
+                if request.agent_kind == "managed":
+                    # --- Managed agent: launch via adapter ---
+                    handle = await adapter.start(request)
+                    self.run_id = handle.run_id
+                    self.run_status = handle.status
+                    poll_interval = handle.poll_hint_seconds or 10
 
                 # Wait for completion checking periodically
                 while True:
@@ -237,22 +256,47 @@ class MoonMindAgentRun:
                         )
                         break  # Callback received
                     except asyncio.TimeoutError:
-                        current_status = await adapter.status(self.run_id)
-                        self.run_status = current_status
-                        if current_status in (AgentRunStatus.completed, AgentRunStatus.failed, AgentRunStatus.cancelled):
-                            break
+                        if request.agent_kind == "external":
+                            # Poll via Temporal activity (determinism-safe).
+                            status_dict = await workflow.execute_activity(
+                                f"integration.{self._external_agent_id}.status",
+                                self.run_id,
+                                task_queue=INTEGRATIONS_TASK_QUEUE,
+                                start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
+                            )
+                            from moonmind.schemas.agent_runtime_models import AgentRunStatus as AgentRunStatusModel
+                            status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
+                            self.run_status = status_obj.status
+                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                                break
+                        else:
+                            # Managed agent: poll via adapter directly.
+                            status_obj = await adapter.status(self.run_id)
+                            self.run_status = status_obj.status
+                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                                break
 
                 elapsed = (workflow.now() - overall_start).total_seconds()
 
                 if elapsed >= timeout_seconds and not self.completion_event.is_set():
-                    self.run_status = AgentRunStatus.timed_out
+                    self.run_status = RunStatus.timed_out
                     if manager_handle and request.execution_profile_ref:
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                     return AgentRunResult(failure_class="execution_error")
 
                 if self.final_result is None:
-                    # Fallback to fetching
-                    self.final_result = await adapter.fetch_result(self.run_id)
+                    if request.agent_kind == "external":
+                        # Fetch result via Temporal activity.
+                        result_dict = await workflow.execute_activity(
+                            f"integration.{self._external_agent_id}.fetch_result",
+                            self.run_id,
+                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                            start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                        )
+                        self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
+                    else:
+                        # Managed agent: fetch via adapter.
+                        self.final_result = await adapter.fetch_result(self.run_id)
 
                 # Check for 429
                 if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
@@ -279,7 +323,7 @@ class MoonMindAgentRun:
                 return self.final_result
 
         except asyncio.TimeoutError:
-            self.run_status = AgentRunStatus.timed_out
+            self.run_status = RunStatus.timed_out
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
                 try:
                     runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
@@ -305,12 +349,21 @@ class MoonMindAgentRun:
 
             if self.run_id is not None and self.agent_kind is not None:
                 try:
-                    await workflow.execute_activity(
-                        "agent_runtime.cancel",
-                        {"agent_kind": self.agent_kind, "run_id": self.run_id},
-                        task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                        start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
-                    )
+                    if self.agent_kind == "external" and hasattr(self, "_external_agent_id"):
+                        # Route external cancel through integration activity.
+                        await workflow.execute_activity(
+                            f"integration.{self._external_agent_id}.cancel",
+                            self.run_id,
+                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                            start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                        )
+                    else:
+                        await workflow.execute_activity(
+                            "agent_runtime.cancel",
+                            {"agent_kind": self.agent_kind, "run_id": self.run_id},
+                            task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                            start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                        )
                 except Exception:
                     workflow.logger.warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
             raise
