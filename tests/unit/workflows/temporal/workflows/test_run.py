@@ -464,6 +464,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                         "initialParameters": {
                             "repo": "moonladder/moonmind",
                             "proposeTasks": True,
+                            "proposalDefaultRuntime": "gemini_cli",
                         },
                     },
                     id="test-workflow-proposals-enabled",

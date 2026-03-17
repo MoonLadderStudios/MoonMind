@@ -2281,6 +2281,7 @@
             )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
             : escapeHtml(originSource);
         const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const runtimeMode = pick(preview, "runtimeMode") || "-";
         const instructions = pick(preview, "instructions") || "";
         const tags = (pick(row, "tags") || []).join(", ");
         const priority = (pick(row, "reviewPriority") || "normal").toUpperCase();
@@ -2298,6 +2299,7 @@
             <td>${escapeHtml(pick(row, "title") || "(untitled)")}</td>
             <td>${escapeHtml(repo)}</td>
             <td>${escapeHtml(pick(row, "category") || "-")}</td>
+            <td>${escapeHtml(runtimeMode)}</td>
             <td>${priorityBadge}</td>
             <td>${statusBadge("proposals", pick(row, "status"))}</td>
             <td>${escapeHtml(formatTimestamp(pick(row, "createdAt")))}</td>
@@ -2326,7 +2328,7 @@
             </td>
           </tr>
           ${instructions
-            ? `<tr><td colspan="12"><span class="small">${escapeHtml(
+            ? `<tr><td colspan="13"><span class="small">${escapeHtml(
               instructions,
             )}</span><br/><span class="tiny">Dedup Hash: <code>${escapeHtml(
               dedupHash || "-",
@@ -2353,6 +2355,7 @@
             )}">queue/${escapeHtml(String(pick(origin, "id") || ""))}</a>`
             : escapeHtml(originSource);
         const repo = pick(row, "repository") || pick(preview, "repository") || "-";
+        const runtimeMode = pick(preview, "runtimeMode") || "-";
         const instructions = pick(preview, "instructions") || "";
         const instructionText = String(instructions || "").trim();
         const instructionPreview = instructionText
@@ -2415,6 +2418,10 @@
                 <dt>Origin</dt>
                 <dd>${originLink}</dd>
               </div>
+              <div data-field="runtime">
+                <dt>Runtime</dt>
+                <dd><code>${escapeHtml(runtimeMode)}</code></dd>
+              </div>
               <div>
                 <dt>Tags</dt>
                 <dd>${escapeHtml(tags || "-")}</dd>
@@ -2468,6 +2475,7 @@
                 <th>Title</th>
                 <th>Repository</th>
                 <th>Category</th>
+                <th>Runtime</th>
                 <th>Priority</th>
                 <th>Status</th>
                 <th>Created</th>
@@ -3340,6 +3348,22 @@
       return null;
     }
     gitNode.startingBranch = startingBranch || null;
+
+    const runtimeNode =
+      taskNode.runtime && typeof taskNode.runtime === "object"
+        ? taskNode.runtime
+        : {};
+    taskNode.runtime = runtimeNode;
+    const runtimeMode = window.prompt(
+      "Agent runtime (gemini_cli/jules/codex/claude, or leave blank for default)",
+      runtimeNode.mode || "",
+    );
+    if (runtimeMode === null) {
+      return null;
+    }
+    if (runtimeMode.trim()) {
+      runtimeNode.mode = runtimeMode.trim();
+    }
 
     const queuePriority = window.prompt(
       "Queue priority",

@@ -1615,6 +1615,7 @@ class TemporalProposalActivities:
         trigger_repo: str = origin.get("trigger_repo") or ""
 
         max_items = int(policy.get("max_items", 10))
+        default_runtime = policy.get("default_runtime")
         generated_count = len(candidates)
         submitted_count = 0
         errors: list[str] = []
@@ -1651,6 +1652,24 @@ class TemporalProposalActivities:
                 errors.append(f"skipped malformed candidate: {title!r}")
                 continue
 
+            # Stamp default runtime into taskCreateRequest if not already set
+            stamped_request = dict(task_create_request)
+            if default_runtime and isinstance(default_runtime, str):
+                payload_node = stamped_request.get("payload")
+                if isinstance(payload_node, dict):
+                    task_node = payload_node.get("task")
+                    if isinstance(task_node, dict):
+                        runtime_node = task_node.get("runtime")
+                        if isinstance(runtime_node, dict):
+                            if not runtime_node.get("mode"):
+                                runtime_node["mode"] = default_runtime
+                        else:
+                            task_node["runtime"] = {"mode": default_runtime}
+                    else:
+                        payload_node["task"] = {
+                            "runtime": {"mode": default_runtime}
+                        }
+
             try:
                 if service is not None:
                     from moonmind.workflows.task_proposals.models import (
@@ -1668,7 +1687,7 @@ class TemporalProposalActivities:
                         summary=summary,
                         category=candidate.get("category"),
                         tags=candidate.get("tags"),
-                        task_create_request=dict(task_create_request),
+                        task_create_request=stamped_request,
                         origin_source=origin_source,
                         origin_id=None,
                         origin_metadata=origin_metadata,

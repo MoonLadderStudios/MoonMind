@@ -851,6 +851,7 @@ class MoonMindRunWorkflow:
             policy = {
                 "max_items": parameters.get("proposalMaxItems", 10),
                 "targets": parameters.get("proposalTargets", "project"),
+                "default_runtime": parameters.get("proposalDefaultRuntime"),
             }
             origin = {
                 "workflow_id": workflow.info().workflow_id,

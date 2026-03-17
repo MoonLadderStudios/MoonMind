@@ -129,3 +129,125 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["submitted_count"], 0)
         self.assertEqual(len(result["errors"]), 1)
         self.assertIn("DB down", result["errors"][0])
+
+
+class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
+    async def test_default_runtime_stamped_into_candidate(self) -> None:
+        """When default_runtime is set and candidate has no runtime, stamp it."""
+        mock_service = AsyncMock()
+        activities = TemporalProposalActivities(
+            proposal_service_factory=lambda: mock_service,
+        )
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "Bug in module X",
+                "taskCreateRequest": {
+                    "payload": {
+                        "repository": "org/repo",
+                        "task": {"instructions": "fix it"},
+                    }
+                },
+            },
+        ]
+        await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {"default_runtime": "jules"},
+                "origin": {},
+            }
+        )
+        call_kwargs = mock_service.create_proposal.call_args.kwargs
+        stamped = call_kwargs["task_create_request"]
+        self.assertEqual(
+            stamped["payload"]["task"]["runtime"]["mode"], "jules"
+        )
+
+    async def test_default_runtime_preserves_existing(self) -> None:
+        """When candidate already specifies a runtime, do not overwrite."""
+        mock_service = AsyncMock()
+        activities = TemporalProposalActivities(
+            proposal_service_factory=lambda: mock_service,
+        )
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "Bug in module X",
+                "taskCreateRequest": {
+                    "payload": {
+                        "repository": "org/repo",
+                        "task": {
+                            "instructions": "fix it",
+                            "runtime": {"mode": "codex"},
+                        },
+                    }
+                },
+            },
+        ]
+        await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {"default_runtime": "jules"},
+                "origin": {},
+            }
+        )
+        call_kwargs = mock_service.create_proposal.call_args.kwargs
+        stamped = call_kwargs["task_create_request"]
+        self.assertEqual(
+            stamped["payload"]["task"]["runtime"]["mode"], "codex"
+        )
+
+    async def test_default_runtime_stamps_missing_task_node(self) -> None:
+        """When payload exists but has no task node, create it."""
+        mock_service = AsyncMock()
+        activities = TemporalProposalActivities(
+            proposal_service_factory=lambda: mock_service,
+        )
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "Bug in module X",
+                "taskCreateRequest": {
+                    "payload": {"repository": "org/repo"}
+                },
+            },
+        ]
+        await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {"default_runtime": "gemini_cli"},
+                "origin": {},
+            }
+        )
+        call_kwargs = mock_service.create_proposal.call_args.kwargs
+        stamped = call_kwargs["task_create_request"]
+        self.assertEqual(
+            stamped["payload"]["task"]["runtime"]["mode"], "gemini_cli"
+        )
+
+    async def test_no_default_runtime_leaves_candidate_untouched(self) -> None:
+        """When default_runtime is None, do not modify the candidate."""
+        mock_service = AsyncMock()
+        activities = TemporalProposalActivities(
+            proposal_service_factory=lambda: mock_service,
+        )
+        candidates = [
+            {
+                "title": "Fix bug",
+                "summary": "Bug in module X",
+                "taskCreateRequest": {
+                    "payload": {"repository": "org/repo"}
+                },
+            },
+        ]
+        await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {},
+                "origin": {},
+            }
+        )
+        call_kwargs = mock_service.create_proposal.call_args.kwargs
+        stamped = call_kwargs["task_create_request"]
+        self.assertNotIn("task", stamped["payload"])
+
