@@ -2,7 +2,7 @@
 
 > Tracking the major milestones remaining to fully deliver on the README promise.
 >
-> Last updated: 2026-03-16
+> Last updated: 2026-03-17
 
 ---
 
@@ -17,9 +17,13 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 | 📐 Designed | Architecture/spec exists, implementation not started |
 | ⬜ Not Started | No implementation or spec yet |
 
+Remaining items within each milestone are numbered **M.N** (milestone.item) and tracked with checkboxes:
+- `[x]` = done
+- `[ ]` = still remaining
+
 ---
 
-## Milestone 1 — Managed Agent Runtimes ✅ → 🔧
+## Milestone 1 — Managed Agent Runtimes ✅
 
 **README claim:** *"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure."*
 
@@ -29,13 +33,11 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Docker-socket-proxy sandboxing for all workers
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`)
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Claude auth volume flow matches Codex/Gemini parity | 🔧 | Spec 072 (`managed-agents-auth`) covers this |
-| Auth profile management UI in Mission Control | 🔧 | API router exists (`auth_profiles.py`), dashboard integration partial |
-| Worker health checks & readiness probes | 📐 | Constitution IX requires this; not yet exposed |
-| Graceful worker pause / unpause | 🔧 | Spec 038/040 (`worker-pause`) — API exists, dashboard wiring needed |
+### Remaining tasks
+- [x] **1.1** Claude auth volume flow matches Codex/Gemini parity — Spec 072 (`managed-agents-auth`)
+- [x] **1.2** Auth profile management UI in Mission Control — API router (`auth_profiles.py`) + dashboard
+- [x] **1.3** Worker health checks & readiness probes — Constitution IX
+- [ ] **1.4** Graceful worker pause / unpause — Spec 038/040 (`worker-pause`), API exists, dashboard wiring needed
 
 ---
 
@@ -47,17 +49,15 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Jules Temporal external-event contract and adapter (`moonmind/jules/`, `docs/ExternalAgents/`)
 - External-agent integration system design doc
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Jules end-to-end external event workflow | 🔧 | Spec 048/066 — adapter exists, event wiring incomplete |
-| Codex Cloud integration adapter | ⬜ | No adapter yet for the hosted Codex product |
-| Generic external-agent adapter pattern | 📐 | Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code |
-| Status tracking dashboard for external runs | ⬜ | Mission Control only shows managed runs currently |
+### Remaining tasks
+- [ ] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring incomplete
+- [ ] **2.2** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
+- [ ] **2.3** Generic external-agent adapter pattern — Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code
+- [ ] **2.4** Status tracking dashboard for external runs — Mission Control only shows managed runs currently
 
 ---
 
-## Milestone 3 — Multi-Step Planning & Step-Based Context ️🔧
+## Milestone 3 — Multi-Step Planning & Step-Based Context 🔧
 
 **README claim:** *"Break a massive goal into discrete steps with presets, and let MoonMind schedule and sequence them."* / *"Inject the right context into each step and clear it between steps."*
 
@@ -67,17 +67,15 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Manifest-based task submission (`manifest.schema.json`, `moonmind/manifest/`)
 - Task proposal queue for automated step generation
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Automatic context injection per step | 📐 | Context pack exists (`rag/context_pack.py`), not wired into step execution |
-| Context clearing between steps | ⬜ | No implementation; promised in README |
-| Multi-step workflow visualization in Mission Control | 🔧 | Dashboard shows tasks but not step DAGs |
-| Preset-driven scheduling (auto-sequence from goal) | 🔧 | Presets exist but goal-to-plan decomposition is manual |
+### Remaining tasks
+- [ ] **3.1** Automatic context injection per step — Context pack exists (`rag/context_pack.py`), not wired into step execution
+- [ ] **3.2** Context clearing between steps — No implementation; promised in README
+- [ ] **3.3** Multi-step workflow visualization in Mission Control — Dashboard shows tasks but not step DAGs
+- [ ] **3.4** Preset-driven scheduling (auto-sequence from goal) — Presets exist but goal-to-plan decomposition is manual
 
 ---
 
-## Milestone 4 — Fire-and-Forget Resiliency ✅ → 🔧
+## Milestone 4 — Fire-and-Forget Resiliency 🔧
 
 **README claim:** *"Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Backed by Temporal, workflows survive container crashes and restarts. Automatic stuck detection and smart retries."*
 
@@ -87,13 +85,11 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Worker crash recovery via Temporal replay
 - Recurring task schedules (spec 049)
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Automatic stuck-detection for agent runs | 🔧 | Spec 039 (`worker-self-heal`) — partial design |
-| Smart retry policies per runtime | 📐 | Temporal retries exist but not tuned per agent type |
-| Intervention request signaling (agent asks for human help) | ⬜ | README promises "monitor intervention requests" — not implemented |
-| Notification system (email/webhook on completion) | ⬜ | No notification channel for fire-and-forget results |
+### Remaining tasks
+- [ ] **4.1** Automatic stuck-detection for agent runs — Spec 039 (`worker-self-heal`), partial design
+- [ ] **4.2** Smart retry policies per runtime — Temporal retries exist but not tuned per agent type
+- [ ] **4.3** Intervention request signaling (agent asks for human help) — README promises "monitor intervention requests"
+- [ ] **4.4** Notification system (email/webhook on completion) — No notification channel for fire-and-forget results
 
 ---
 
@@ -107,16 +103,14 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Context pack primitives (`rag/context_pack.py`)
 - Memory architecture design doc (`docs/Memory/MemoryArchitecture.md` — "Desired State")
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Run Digests (Plane B — task history summaries) | 📐 | Architecture defined, no implementation |
-| Fix Patterns / Error Signatures (procedural memory) | 📐 | Architecture defined, no implementation |
-| Long-Term Memory integration (Mem0 / Plane C) | 📐 | Architecture defined, no integration |
-| Planning Memory (Beads / Plane A) | 📐 | Architecture defined, no integration |
-| Context pack assembly wired into agent runs | 🔧 | Primitives exist; not integrated into Temporal activity execution |
-| Token budgeting & provenance tracking | 📐 | Designed in memory arch, not implemented |
-| Memory feature flags (`MEMORY_ENABLED`, etc.) | ⬜ | Defined in spec, not in codebase |
+### Remaining tasks
+- [ ] **5.1** Run Digests (Plane B — task history summaries) — Architecture defined, no implementation
+- [ ] **5.2** Fix Patterns / Error Signatures (procedural memory) — Architecture defined, no implementation
+- [ ] **5.3** Long-Term Memory integration (Mem0 / Plane C) — Architecture defined, no integration
+- [ ] **5.4** Planning Memory (Beads / Plane A) — Architecture defined, no integration
+- [ ] **5.5** Context pack assembly wired into agent runs — Primitives exist; not integrated into Temporal activity execution
+- [ ] **5.6** Token budgeting & provenance tracking — Designed in memory arch, not implemented
+- [ ] **5.7** Memory feature flags (`MEMORY_ENABLED`, etc.) — Defined in spec, not in codebase
 
 ---
 
@@ -131,15 +125,13 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Task editing, cancellation, resubmission
 - Runtime selector on submit
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Artifact browsing UI (files/logs/patches) | 🔧 | API exists (`temporal_artifacts.py`), dashboard integration partial |
-| Intervention request monitoring | ⬜ | Not implemented |
-| Execution history / audit trail view | 🔧 | Spec 067 (`run-history-rerun`) — API exists, UI incomplete |
-| Side-by-side comparison view | ⬜ | README promises "run the same task with different models and runtimes to compare results" |
-| Multi-step / step DAG visualization | ⬜ | Steps are tracked but no graphical visualization |
-| Worker fleet health dashboard | ⬜ | No per-worker health view |
+### Remaining tasks
+- [ ] **6.1** Artifact browsing UI (files/logs/patches) — API exists (`temporal_artifacts.py`), dashboard integration partial
+- [ ] **6.2** Intervention request monitoring — Not implemented
+- [ ] **6.3** Execution history / audit trail view — Spec 067 (`run-history-rerun`), API exists, UI incomplete
+- [ ] **6.4** Side-by-side comparison view — README promises "run the same task with different models and runtimes to compare results"
+- [ ] **6.5** Multi-step / step DAG visualization — Steps are tracked but no graphical visualization
+- [ ] **6.6** Worker fleet health dashboard — No per-worker health view
 
 ---
 
@@ -153,13 +145,11 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - OpenAI-compatible chat API (`chat.py`)
 - Codex MCP tools adapter doc
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| MCP Streamable HTTP Transport (2025 spec) | ⬜ | Current `/context` is REST-style; modern MCP uses streamable HTTP |
-| MCP resource & tool discovery | ⬜ | Clients can't discover what MoonMind offers via MCP |
-| Webhook / callback API for external agents | 🔧 | Jules external events started, no generic webhook receiver |
-| OpenAI Responses API compatibility | ⬜ | Only Chat Completions format supported |
+### Remaining tasks
+- [ ] **7.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP
+- [ ] **7.2** MCP resource & tool discovery — Clients can't discover what MoonMind offers via MCP
+- [ ] **7.3** Webhook / callback API for external agents — Jules external events started, no generic webhook receiver
+- [ ] **7.4** OpenAI Responses API compatibility — Only Chat Completions format supported
 
 ---
 
@@ -172,13 +162,11 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Agent workspace volume isolation
 - Auth-volume separation per runtime
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| File allowlist enforcement | ⬜ | Promised in README, no implementation found |
-| Credential sanitization from logs | 🔧 | Agent rules prohibit secrets in output; no runtime log scrubber |
-| Per-runtime capability routing policy | 📐 | Proxy limits Docker API endpoints, but not per-runtime policies |
-| Network egress policies for sandboxes | ⬜ | No outbound network restrictions on worker containers |
+### Remaining tasks
+- [ ] **8.1** File allowlist enforcement — Promised in README, no implementation found
+- [ ] **8.2** Credential sanitization from logs — Agent rules prohibit secrets in output; no runtime log scrubber
+- [ ] **8.3** Per-runtime capability routing policy — Proxy limits Docker API endpoints, but not per-runtime policies
+- [ ] **8.4** Network egress policies for sandboxes — No outbound network restrictions on worker containers
 
 ---
 
@@ -192,13 +180,11 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Runtime selector per task submission
 - Model routing in chat endpoint
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Per-step model/runtime selection in multi-step flows | ⬜ | Steps don't independently select models |
-| Cost tracking / billing-aware routing | ⬜ | No cost instrumentation |
-| Model comparison mode (same task, different models) | ⬜ | README promises this; no implementation |
-| Artifact/memory portability across model switches | 🔧 | Artifacts are model-agnostic; memory doesn't track model provenance |
+### Remaining tasks
+- [ ] **9.1** Per-step model/runtime selection in multi-step flows — Steps don't independently select models
+- [ ] **9.2** Cost tracking / billing-aware routing — No cost instrumentation
+- [ ] **9.3** Model comparison mode (same task, different models) — README promises this; no implementation
+- [ ] **9.4** Artifact/memory portability across model switches — Artifacts are model-agnostic; memory doesn't track model provenance
 
 ---
 
@@ -211,14 +197,12 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 - Structured workflow run states in Postgres
 - Task finish summary system (spec 079)
 
-### What's remaining
-| Item | Status | Notes |
-|------|--------|-------|
-| Structured outcome summaries on every run | 🔧 | Spec 079 started; not fully wired |
-| Improvement signal capture (retries, loops, flaky tests) | ⬜ | Constitution X mandates this |
-| Reviewable improvement backlog / proposals queue | 🔧 | Task proposals exist; not fed by telemetry |
-| Metrics / dashboards (run duration, success rate, cost) | ⬜ | No operational metrics endpoint |
-| Structured logging enrichment (run IDs, worker IDs) | 🔧 | structlog in use; inconsistent enrichment |
+### Remaining tasks
+- [ ] **10.1** Structured outcome summaries on every run — Spec 079 started; not fully wired
+- [ ] **10.2** Improvement signal capture (retries, loops, flaky tests) — Constitution X mandates this
+- [ ] **10.3** Reviewable improvement backlog / proposals queue — Task proposals exist; not fed by telemetry
+- [ ] **10.4** Metrics / dashboards (run duration, success rate, cost) — No operational metrics endpoint
+- [ ] **10.5** Structured logging enrichment (run IDs, worker IDs) — structlog in use; inconsistent enrichment
 
 ---
 
@@ -226,15 +210,15 @@ Each milestone maps to a specific claim in the [README](../../README.md). Status
 
 The milestones below are ordered by **impact on delivering the README promise** (highest first):
 
-| Priority | Milestone | Current Status |
-|----------|-----------|----------------|
-| 🔴 P0 | **5 — Memory & Procedural Learning** | 📐 Designed only |
-| 🔴 P0 | **3 — Multi-Step Planning & Context** | 🔧 Partial |
-| 🟠 P1 | **4 — Resiliency (stuck detection, intervention)** | 🔧 Partial |
-| 🟠 P1 | **6 — Mission Control Dashboard** | 🔧 Partial |
-| 🟠 P1 | **2 — External Agent Coordination** | 🔧 Partial |
-| 🟡 P2 | **8 — Sandboxed Execution & Security** | 🔧 Partial |
-| 🟡 P2 | **10 — Observability & Improvement** | 🔧 Partial |
-| 🟡 P2 | **7 — Universal Integration (MCP)** | 🔧 Partial |
-| 🟢 P3 | **9 — Vendor Portability & Model Flexibility** | 🔧 Partial |
-| 🟢 P3 | **1 — Managed Agent Runtimes** | ✅ → 🔧 Mostly shipped |
+| Priority | Milestone | Current Status | Remaining |
+|----------|-----------|----------------|-----------|
+| 🔴 P0 | **5 — Memory & Procedural Learning** | 📐 Designed only | 7 items |
+| 🔴 P0 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 4 items |
+| 🟠 P1 | **4 — Resiliency (stuck detection, intervention)** | 🔧 Partial | 4 items |
+| 🟠 P1 | **6 — Mission Control Dashboard** | 🔧 Partial | 6 items |
+| 🟠 P1 | **2 — External Agent Coordination** | 🔧 Partial | 4 items |
+| 🟡 P2 | **8 — Sandboxed Execution & Security** | 🔧 Partial | 4 items |
+| 🟡 P2 | **10 — Observability & Improvement** | 🔧 Partial | 5 items |
+| 🟡 P2 | **7 — Universal Integration (MCP)** | 🔧 Partial | 4 items |
+| 🟢 P3 | **9 — Vendor Portability & Model Flexibility** | 🔧 Partial | 4 items |
+| 🟢 P3 | **1 — Managed Agent Runtimes** | ✅ Shipped | 1 item |
