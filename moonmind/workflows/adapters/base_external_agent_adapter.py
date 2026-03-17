@@ -142,7 +142,17 @@ class BaseExternalAgentAdapter(abc.ABC):
                 normalized_status="cancel_unsupported",
                 extra_metadata={"cancelAccepted": False, "unsupported": True},
             )
-        return await self.do_cancel(run_id)
+        try:
+            return await self.do_cancel(run_id)
+        except Exception:
+            return self.build_status(
+                run_id=run_id,
+                agent_id=cap.provider_name,
+                status="intervention_requested",
+                provider_status="cancel_error",
+                normalized_status="cancel_error",
+                extra_metadata={"cancelAccepted": False, "error": True},
+            )
 
     # ------------------------------------------------------------------
     # Provider hooks (subclasses override these)

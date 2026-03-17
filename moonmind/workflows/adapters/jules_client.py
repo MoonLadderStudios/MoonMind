@@ -144,6 +144,7 @@ class JulesClient:
                     title=request.title,
                     description=description,
                     metadata=metadata,
+                    source_context={"moonmind": metadata.get("moonmind", {})},
                 )
             )
         except JulesClientError as exc:

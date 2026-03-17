@@ -353,3 +353,24 @@ async def test_cancel_delegates_when_supported():
     assert result.metadata.get("cancelAccepted") is True
     assert adapter.do_cancel_calls == ["run-42"]
 
+
+class _ExplodingCancelAdapter(_StubAdapter):
+    """Stub adapter whose do_cancel raises an unexpected exception."""
+
+    async def do_cancel(self, run_id: str) -> AgentRunStatus:
+        self.do_cancel_calls.append(run_id)
+        raise RuntimeError("transient provider error")
+
+
+async def test_cancel_returns_fallback_on_do_cancel_exception():
+    """cancel() should return a safe fallback status when do_cancel()
+    raises an unexpected exception (spec edge case, line 91)."""
+    adapter = _ExplodingCancelAdapter()
+    result = await adapter.cancel("run-boom")
+
+    assert result.status == "intervention_requested"
+    assert result.metadata.get("cancelAccepted") is False
+    assert result.metadata.get("error") is True
+    assert adapter.do_cancel_calls == ["run-boom"]
+
+
