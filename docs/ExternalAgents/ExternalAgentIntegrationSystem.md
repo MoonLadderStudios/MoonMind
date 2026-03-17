@@ -1,95 +1,277 @@
-# Technical Design: External Agent Integration System (BYOA)
+# Technical Design: External Agent Integration System
 
 ## 1. Objective
 
-Enable MoonMind to act as a definitive top-level orchestrator by defining a standardized "Bring Your Own Agent" (BYOA) protocol. This pattern leverages `MoonMind.AgentRun` child workflows and the `AgentAdapter` protocol to allow seamless, secure delegation to black-box or gray-box agents (e.g., Jules, OpenHands, future BYOA integrations) without requiring MoonMind to sandbox, containerize, or manage the agent's internal execution runtime.
+Define one canonical model for MoonMind external-agent integrations.
 
-For the full unified execution model covering both external and managed agents, see [`ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md).
+The goal is to stop describing each provider as its own mini-architecture and instead treat providers such as Jules, Codex Cloud, and future BYOA integrations as implementations of one shared external-agent system:
 
-## 2. Architecture Overview: The 3-Layer Integration Model
+- one generic orchestration lifecycle
+- one canonical `AgentAdapter` contract
+- one universal external-adapter base pattern
+- provider-specific transport and status mapping behind that boundary
 
-Rather than building custom Docker worker fleets for every new agent flavor, MoonMind delegates work through a unified adapter layer. The `JulesAgentAdapter` implementation serves as the reference pattern.
+For the full execution model covering both managed and external agents, see [`ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md).
 
-1. **Configuration Layer**: Dynamic endpoint URLs, API keys, and behavioral toggles loaded securely into provider-specific settings (e.g., `JulesSettings`). Feature gating ensures providers are only active when explicitly enabled and configured.
+## 2. Canonical Mental Model
 
-2. **Adapter Layer**: Provider-specific implementations of the `AgentAdapter` protocol (`moonmind/workflows/adapters/agent_adapter.py`). Each adapter normalizes provider interactions into the canonical contracts:
-   - `start(request: AgentExecutionRequest) -> AgentRunHandle`
-   - `status(run_id) -> AgentRunStatus`
-   - `fetch_result(run_id) -> AgentRunResult`
-   - `cancel(run_id) -> AgentRunStatus`
+The old docs drifted because they described different slices of the stack:
 
-   Adapters handle provider-specific concerns: REST/RPC calls, retry behavior for 429s/5xx, timeout management, idempotency, and status normalization.
+- this document compressed external execution into a "3-layer" model
+- [`JulesClientAdapter.md`](./JulesClientAdapter.md) described Jules transport and MCP tooling as a "4-layer" model
 
-3. **Workflow Layer**: `MoonMind.AgentRun` child workflow (`moonmind/workflows/temporal/workflows/agent_run.py`), dispatched **per plan step** from `MoonMind.Run._run_execution_stage()` when a plan node has `tool.type == "agent_runtime"`. The child workflow owns the full execution lifecycle: adapter start, polling/callback wait loop, auth slot management (for managed agents), 429 retry with profile rotation, artifact publishing, and cancellation cleanup.
+Those are not actually competing architectures. They are different views of the same system. The standard model should be:
 
-```
-Task (MoonMind.Run workflow)
- └─ Plan (generated or provided)
-     ├─ Step 1: sandbox.run_command        (activity)
-     ├─ Step 2: MoonMind.AgentRun          (child workflow) → e.g. Jules
-     ├─ Step 3: MoonMind.AgentRun          (child workflow) → e.g. Gemini CLI
-     └─ Step 4: sandbox.run_tests          (activity)
-```
+## 3. The Universal External Agent Stack
 
-This hierarchy enables a single task to involve multiple agents (one per step) alongside non-agent steps, with `MoonMind.Run` providing the consistent task lifecycle envelope.
+MoonMind should describe every external-agent integration using the same five concerns.
 
-## 3. The Context & Artifact Exchange Problem
+### Layer 1: Configuration and Runtime Gate
 
-Black-box agents require context (files, logs, plan definitions) and must return results, but they cannot be granted direct access to MoonMind's internal PostgreSQL or MinIO services.
+Provider enablement, endpoints, auth references, timeouts, retry controls, and feature flags.
 
-This integration model solves the artifact boundary problem via two secure methods:
+Examples:
 
-### Method A: Presigned URLs (The Default Payload Model)
-When MoonMind dispatches an external `MoonMind.AgentRun`:
-1. The adapter uses the `TemporalArtifactStore` to generate short-lived, presigned download URLs for the `input_refs` specified in the `AgentExecutionRequest`.
-2. It generates presigned upload URLs for the expected `output_refs`.
-3. The external agent receives these URLs in its initialization payload, downloads its instructions via standard HTTP GET, performs its work, and HTTP PUTs the results back before completion.
-4. MoonMind verifies the uploaded artifacts via `artifact.write_complete`.
+- `JulesSettings`
+- Codex Cloud settings
+- runtime gate helpers such as `is_jules_runtime_enabled()`
 
-### Method B: Reverse MCP (Future — The Interactive Model)
-If the external agent supports calling MCP tools during execution:
-1. MoonMind provisions an ephemeral, restricted MCP server session specifically tied to the run.
-2. This session exposes scoped capabilities, such as `moonmind.artifact.read` and `moonmind.artifact.write_complete`, bounded by the workflow's authorization context.
-3. The external agent interactively requests context and submits artifacts directly via the MCP protocol without ever touching the underlying storage infrastructure.
+This layer answers: "Is this provider enabled, configured, and safe to use?"
 
-> **Note:** Reverse MCP is not yet implemented. Presigned URLs are the current supported method.
+### Layer 2: Provider Transport
 
-## 4. Execution Flow: Callbacks vs. Polling
+Provider-specific schemas and client code that speak the provider's native protocol.
 
-`MoonMind.AgentRun` manages the wait-phase for external agents using callback-first execution with a polling fallback.
+Examples:
 
-### Callback-First Path (Preferred)
-1. **Trigger**: The `ExternalAgentAdapter.start()` sends the start request to the external system, optionally including a webhook callback URL.
-2. **Suspend**: `MoonMind.AgentRun` enters a bounded `wait_condition` loop, awaiting a `completion_signal` or timeout.
-3. **Execute**: The external agent runs for minutes or hours independently.
-4. **Notify**: The external agent finishes and POSTs results/status to the webhook.
-5. **Resume**: MoonMind validates the callback payload and delivers a Temporal Signal to the waiting `MoonMind.AgentRun` workflow.
+- `moonmind/schemas/jules_models.py`
+- `moonmind/workflows/adapters/jules_client.py`
+- `moonmind/workflows/adapters/codex_cloud_client.py`
 
-### Polling Fallback Path
-If the external agent lacks webhook capability (the current default for Jules):
-1. `MoonMind.AgentRun` uses a bounded `wait_condition` with a configurable timeout (from `AgentRunHandle.poll_hint_seconds`).
-2. On timeout, it calls `adapter.status(run_id)` to check current state.
-3. This continues until a terminal status is reached or the overall timeout expires.
-4. No Temporal worker threads are held open during the wait.
+This layer owns:
 
-### Wait-Phase Safety
-`MoonMind.AgentRun` must not wait indefinitely. Even when callback-first behavior is used, the workflow maintains a bounded timeout so it can wake up, inspect current run state, and fail or recover cleanly if the callback path goes dark.
+- REST/RPC request and response shapes
+- provider auth headers
+- transport retries and timeout handling
+- scrubbed provider error handling
 
-## 5. Integrating a New External Agent
+This layer does **not** own MoonMind workflow lifecycle semantics.
 
-Adding a new BYOA external agent requires:
+### Layer 3: Universal External Agent Adapter
 
-1. **Provider settings class** — a `BaseSettings` subclass with API URL, key, enable flag, and operational controls.
-2. **HTTP client adapter** — an async `httpx.AsyncClient` wrapper for the provider's REST API, following the `JulesClient` pattern.
-3. **`AgentAdapter` implementation** — a class conforming to the `AgentAdapter` protocol that translates `AgentExecutionRequest` into provider-specific payloads, normalizes statuses, and handles idempotency.
-4. **Activity registration** (optional) — if the provider needs Temporal activities for integration polling outside of `MoonMind.AgentRun`, activities can be registered on the `mm.activity.integrations` queue.
+This is the key standardization point.
 
-No changes to `MoonMind.Run`, `MoonMind.AgentRun`, or core orchestration logic are required. The `_agent_kind_for_id()` discriminator in `MoonMind.Run` automatically routes unrecognized agent IDs to `agent_kind="external"`.
+Every external provider should plug into one generic external-agent adapter pattern that implements the shared `AgentAdapter` contract:
 
-## 6. Architectural Benefits
+- `start(request: AgentExecutionRequest) -> AgentRunHandle`
+- `status(run_id) -> AgentRunStatus`
+- `fetch_result(run_id) -> AgentRunResult`
+- `cancel(run_id) -> AgentRunStatus`
 
-1. **Zero Sandboxing Overhead**: Sandbox isolation becomes the sole responsibility of the external agent or its hosting infrastructure. MoonMind passes instructions over HTTP; it does not map Docker sockets or manage untrusted runtimes.
-2. **Orchestrator Focus**: MoonMind focuses on planning (`plan.generate`), artifact versioning, secure delegation, and output validation (`plan.validate`).
-3. **True Plug-and-Play**: Integrating a new agent requires only a new adapter class that maps MoonMind's `AgentAdapter` contract to the agent's specific REST payload — no new worker classes, Docker images, or core infrastructure changes.
-4. **Resilience**: `MoonMind.AgentRun` durably tracks external runs. A crash in the external system does not orphan the MoonMind workflow — the child workflow retries, times out, or escalates cleanly.
-5. **Unified Lifecycle**: External and managed agents share the same `AgentAdapter` protocol and `MoonMind.AgentRun` lifecycle, enabling consistent monitoring, cancellation, and artifact handling across all agent types.
+In the current codebase, this boundary is represented by:
+
+- `moonmind/workflows/adapters/agent_adapter.py`
+- `moonmind/workflows/adapters/external_adapter_registry.py`
+- provider adapters such as `jules_agent_adapter.py` and `codex_cloud_agent_adapter.py`
+
+This layer should become the **universal external adapter base**, not just a loose convention.
+
+It should own the generic external-agent rules that repeat across providers:
+
+- validation that `agent_kind == "external"`
+- stable idempotency handling
+- MoonMind correlation metadata injection
+- artifact reference preparation rules
+- callback vs polling capability declaration
+- normalized MoonMind run-handle/status/result construction
+- truthful cancel semantics when providers lack hard cancellation
+
+Providers should override only the provider-specific parts:
+
+- request translation
+- status normalization tables
+- provider result extraction
+- provider-specific cancel behavior
+
+### Layer 4: Workflow Orchestration
+
+`MoonMind.AgentRun` is the generic execution lifecycle owner for all true agent runs.
+
+This layer owns:
+
+- start via adapter
+- durable waiting
+- callback handling
+- polling fallback
+- timeouts
+- cancellation cleanup
+- artifact publishing
+- normalized result return to `MoonMind.Run`
+
+This layer is provider-neutral. It should not contain Jules-specific or Codex-Cloud-specific logic beyond adapter selection.
+
+### Layer 5: Optional Tooling and Operator Surfaces
+
+These are useful integration surfaces, but they are **not** the core execution architecture.
+
+Examples:
+
+- MCP tooling
+- REST helper endpoints
+- dashboard widgets
+- provider-specific admin or debugging surfaces
+
+For Jules, `JulesToolRegistry` belongs here.
+
+This is the main reason the old "4-layer Jules architecture" felt inconsistent: MCP tooling is a valid integration surface, but it should be described as an optional consumer of the provider client/adapter, not as a peer of the core execution lifecycle.
+
+## 4. Target Shape in Code
+
+The codebase already has most of the right seams, but they are not documented as one cohesive pattern yet.
+
+### Already Present
+
+- shared `AgentAdapter` protocol
+- `MoonMind.AgentRun` child workflow
+- provider-specific adapters for Jules and Codex Cloud
+- `ExternalAdapterRegistry`
+- provider-specific HTTP clients
+
+### Missing Standardization
+
+What is still missing is a clearly named and reusable **base implementation strategy** for external adapters.
+
+Today, `JulesAgentAdapter` and `CodexCloudAgentAdapter` follow the same pattern by convention. The plan should make that pattern explicit so future providers do not copy-paste integration logic ad hoc.
+
+## 5. Proposed Universal External Adapter Plan
+
+MoonMind should implement a first-class universal external adapter base in the `moonmind/workflows/adapters/` package.
+
+Suggested shape:
+
+- `BaseExternalAgentAdapter` or `ExternalAgentAdapterBase`
+- provider descriptor/config hooks
+- shared helper methods for correlation metadata, idempotency cache behavior, and normalized contract creation
+- overridable provider hooks for `do_start`, `do_status`, `do_fetch_result`, and `do_cancel`
+
+Suggested responsibilities for the base class:
+
+1. Validate the request is an external-agent request for the expected provider.
+2. Inject MoonMind correlation metadata consistently.
+3. Apply stable idempotency behavior.
+4. Normalize common metadata fields:
+   - `providerStatus`
+   - `normalizedStatus`
+   - `externalUrl`
+   - callback capability hints
+5. Centralize best-effort cancel semantics for providers without native cancellation.
+6. Keep workflow-facing contracts compact and artifact-ref-based.
+
+Suggested responsibilities for provider subclasses:
+
+1. Translate `AgentExecutionRequest` into provider-native transport payloads.
+2. Define provider status normalization.
+3. Extract provider result summaries and artifact-worthy snapshots.
+4. Advertise provider capabilities:
+   - callback support
+   - cancel support
+   - result-download richness
+
+## 6. Jules in the Standard Model
+
+Under this model, Jules is no longer "a separate 4-layer integration."
+
+Jules is:
+
+- one provider configuration profile
+- one provider transport client and schema set
+- one provider-specific subclass of the universal external adapter
+- optional tooling surfaces such as MCP
+
+That means the right description is:
+
+> Jules is the reference provider implementation for the universal external-agent adapter pattern.
+
+Not:
+
+> Jules defines its own separate architecture.
+
+## 7. Practical Implementation Sequence
+
+This can be implemented incrementally without rewriting the execution model.
+
+### Phase A: Documentation Alignment
+
+Update external-agent docs so they all use the same vocabulary:
+
+- "Universal External Agent Stack"
+- "provider transport"
+- "universal external agent adapter"
+- "provider-specific adapter implementation"
+- "optional tooling surface"
+
+### Phase B: Extract Shared External Adapter Base
+
+Refactor shared logic currently duplicated across provider adapters into one reusable base.
+
+Likely candidates:
+
+- idempotency cache handling
+- correlation metadata shaping
+- common `AgentRunHandle` metadata population
+- common `AgentRunStatus` metadata population
+- common fallback cancel behavior
+
+### Phase C: Standardize Provider Capability Descriptors
+
+Add an explicit provider capability model so the workflow layer does not infer provider behavior from scattered implementation details.
+
+Suggested capability fields:
+
+- `supports_callbacks`
+- `supports_cancel`
+- `supports_result_fetch`
+- `provider_name`
+- `default_poll_hint_seconds`
+
+### Phase D: Keep Tooling Surfaces Thin
+
+MCP, REST, and dashboard integration should consume the same provider transport and adapter boundaries rather than re-defining provider semantics.
+
+This keeps:
+
+- status normalization in one place
+- correlation rules in one place
+- runtime gating in one place
+
+### Phase E: Add the Next External Provider Using the Same Base
+
+The real architecture proof is not Jules alone. The proof is that the next provider can be added by supplying:
+
+1. settings
+2. schemas/client
+3. provider adapter subclass
+4. registry registration
+5. optional tooling surface
+
+without changing `MoonMind.Run` or `MoonMind.AgentRun`.
+
+## 8. Architectural Benefits
+
+1. One mental model for all external agents.
+2. Jules becomes the reference implementation, not a special case.
+3. Provider-specific transport and tooling stay isolated from orchestration.
+4. Future integrations become adapter work, not workflow redesign.
+5. The docs align with the constitution principle that MoonMind should orchestrate agents through thin, replaceable adapter boundaries.
+
+## 9. Summary
+
+The standard MoonMind model for external agents should be:
+
+1. configuration/runtime gate
+2. provider transport
+3. universal external agent adapter
+4. `MoonMind.AgentRun` orchestration
+5. optional tooling surfaces
+
+Jules should be documented and implemented as the first provider-specific implementation of that shared external-adapter system.
