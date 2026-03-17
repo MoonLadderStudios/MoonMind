@@ -1,7 +1,7 @@
 import asyncio
 from datetime import timedelta
 from temporalio import workflow, activity
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import ApplicationError, CancelledError
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
@@ -61,6 +61,41 @@ class MoonMindAgentRun:
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
 
+    async def _ensure_manager_and_signal(
+        self, manager_id: str, runtime_id: str
+    ) -> workflow.ExternalWorkflowHandle:
+        """Signal the auth-profile-manager; auto-start it on first failure.
+
+        Tries the signal. If the manager workflow doesn't exist, starts it
+        via the ``auth_profile.ensure_manager`` activity and retries once.
+        """
+        manager_handle = workflow.get_external_workflow_handle(manager_id)
+        signal_payload = {
+            "requester_workflow_id": workflow.info().workflow_id,
+            "runtime_id": runtime_id,
+        }
+        try:
+            await manager_handle.signal("request_slot", signal_payload)
+        except ApplicationError as exc:
+            if "ExternalWorkflowExecutionNotFound" not in (
+                getattr(exc, "type", None) or str(exc)
+            ):
+                raise
+            workflow.logger.warning(
+                "AuthProfileManager %s not found, auto-starting via activity",
+                manager_id,
+            )
+            await workflow.execute_activity(
+                "auth_profile.ensure_manager",
+                {"runtime_id": runtime_id},
+                task_queue="mm.activity.artifacts",
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            # Re-acquire handle and retry signal once.
+            manager_handle = workflow.get_external_workflow_handle(manager_id)
+            await manager_handle.signal("request_slot", signal_payload)
+        return manager_handle
+
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
         self.final_result = AgentRunResult(**result_dict)
@@ -100,14 +135,12 @@ class MoonMindAgentRun:
                     }
                     runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                     manager_id = f"auth-profile-manager:{runtime_id}"
-                    manager_handle = workflow.get_external_workflow_handle(manager_id)
-                    
+
                     self.slot_assigned_event.clear()
-                    await manager_handle.signal(
-                        "request_slot", 
-                        {"requester_workflow_id": workflow.info().workflow_id, "runtime_id": runtime_id}
+                    manager_handle = await self._ensure_manager_and_signal(
+                        manager_id, runtime_id
                     )
-                    
+
                     # Wait for assigned slot
                     try:
                         await workflow.wait_condition(

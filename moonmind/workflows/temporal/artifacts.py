@@ -2041,3 +2041,45 @@ class TemporalArtifactActivities:
             )
 
         return {"profiles": profiles}
+
+    async def auth_profile_ensure_manager(
+        self,
+        *,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """Ensure the AuthProfileManager workflow is running for *runtime_id*.
+
+        Starts the singleton ``auth-profile-manager:<runtime_id>`` workflow if
+        it is not already running.  Handles ``WorkflowAlreadyStartedError``
+        gracefully so this activity is safe to call repeatedly.
+        """
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+            WORKFLOW_NAME as AUTH_PROFILE_MANAGER_WF,
+            WORKFLOW_TASK_QUEUE as AUTH_PROFILE_MANAGER_QUEUE,
+        )
+
+        workflow_id = f"auth-profile-manager:{runtime_id}"
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+
+        try:
+            await client.start_workflow(
+                AUTH_PROFILE_MANAGER_WF,
+                {"runtime_id": runtime_id},
+                id=workflow_id,
+                task_queue=AUTH_PROFILE_MANAGER_QUEUE,
+            )
+            logger.info(
+                "auth_profile.ensure_manager started manager for runtime=%s",
+                runtime_id,
+            )
+            return {"started": True, "workflow_id": workflow_id}
+        except WorkflowAlreadyStartedError:
+            logger.debug(
+                "auth_profile.ensure_manager manager already running for runtime=%s",
+                runtime_id,
+            )
+            return {"started": False, "workflow_id": workflow_id}
