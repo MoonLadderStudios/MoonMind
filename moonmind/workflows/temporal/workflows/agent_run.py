@@ -209,6 +209,13 @@ class MoonMindAgentRun:
                         runtime_id=runtime_id,
                         run_store=run_store,
                     )
+
+                    # --- Managed agent: launch via adapter ---
+                    handle = await adapter.start(request)
+                    self.run_id = handle.run_id
+                    self.run_status = handle.status
+                    poll_interval = handle.poll_hint_seconds or 10
+
                 elif request.agent_kind == "external":
                     # Validate adapter availability in an activity (deterministic-safe).
                     validated_id = await workflow.execute_activity(
@@ -236,13 +243,6 @@ class MoonMindAgentRun:
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 
-                if request.agent_kind == "managed":
-                    # --- Managed agent: launch via adapter ---
-                    handle = await adapter.start(request)
-                    self.run_id = handle.run_id
-                    self.run_status = handle.status
-                    poll_interval = handle.poll_hint_seconds or 10
-
                 # Wait for completion checking periodically
                 while True:
                     remaining_timeout = timeout_seconds - (workflow.now() - overall_start).total_seconds()
@@ -266,15 +266,13 @@ class MoonMindAgentRun:
                                 start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
                             )
                             status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
-                            self.run_status = status_obj.status
-                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
-                                break
                         else:
                             # Managed agent: poll via adapter directly.
                             status_obj = await adapter.status(self.run_id)
-                            self.run_status = status_obj.status
-                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
-                                break
+
+                        self.run_status = status_obj.status
+                        if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                            break
 
                 elapsed = (workflow.now() - overall_start).total_seconds()
 
