@@ -150,7 +150,7 @@ class _FakeJulesClient:
     async def create_task(self, request):
         self.created.append(request)
         return JulesTaskResponse(
-            taskId="task-001",
+            task_id="task-001",
             status=self._create_status,
             url="https://jules.test/task-001",
         )
@@ -158,7 +158,7 @@ class _FakeJulesClient:
     async def get_task(self, request):
         self.lookups.append(request)
         return JulesTaskResponse(
-            taskId=request.task_id,
+            task_id=request.task_id,
             status=self._get_status,
             url="https://jules.test/task-001",
         )

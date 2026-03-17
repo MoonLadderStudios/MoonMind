@@ -26,7 +26,6 @@ except ImportError:
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
-    AgentRunResult,
     AgentRunStatus,
 )
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
