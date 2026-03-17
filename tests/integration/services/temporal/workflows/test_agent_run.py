@@ -60,7 +60,9 @@ async def test_agent_run_workflow():
             )
             
             # Start dummy manager
-            manager_id = f"auth-profile-manager:{request.agent_id}"
+            runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+            runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+            manager_id = f"auth-profile-manager:{runtime_id}"
             await env.client.start_workflow(
                 MockAuthProfileManager.run,
                 {"runtime_id": request.agent_id},
@@ -104,7 +106,9 @@ async def test_agent_run_workflow_cancellation():
             )
             
             # Start dummy manager
-            manager_id = f"auth-profile-manager:{request.agent_id}"
+            runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+            runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+            manager_id = f"auth-profile-manager:{runtime_id}"
             await env.client.start_workflow(
                 MockAuthProfileManager.run,
                 {"runtime_id": request.agent_id, "assign_slots": False},

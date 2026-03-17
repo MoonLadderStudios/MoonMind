@@ -88,13 +88,19 @@ class MoonMindAgentRun:
                 manager_handle = None
                 # Acquire auth slot if managed
                 if request.agent_kind == "managed":
-                    manager_id = f"auth-profile-manager:{request.agent_id}"
+                    runtime_mapping = {
+                        "gemini": "gemini_cli",
+                        "claude": "claude_code",
+                        "codex": "codex_cli",
+                    }
+                    runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+                    manager_id = f"auth-profile-manager:{runtime_id}"
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
                     
                     self.slot_assigned_event.clear()
                     await manager_handle.signal(
                         "request_slot", 
-                        {"requester_workflow_id": workflow.info().workflow_id, "runtime_id": request.agent_id}
+                        {"requester_workflow_id": workflow.info().workflow_id, "runtime_id": runtime_id}
                     )
                     
                     # Wait for assigned slot
@@ -181,7 +187,9 @@ class MoonMindAgentRun:
             self.run_status = AgentRunStatus.timed_out
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
                 try:
-                    manager_id = f"auth-profile-manager:{request.agent_id}"
+                    runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                    runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+                    manager_id = f"auth-profile-manager:{runtime_id}"
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
@@ -190,7 +198,9 @@ class MoonMindAgentRun:
 
         except CancelledError:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
-                manager_id = f"auth-profile-manager:{request.agent_id}"
+                runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+                manager_id = f"auth-profile-manager:{runtime_id}"
                 try:
                     with workflow.execute_in_background_with_shield():
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
