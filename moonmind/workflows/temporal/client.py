@@ -256,18 +256,30 @@ class TemporalClientAdapter:
             visibility_filter += f" AND TaskQueue IN ({quoted})"
 
         signaled = 0
+        _log = logging.getLogger(__name__)
+        _sem = asyncio.Semaphore(50)
+
+        async def _signal_one(wf_id: str) -> bool:
+            async with _sem:
+                try:
+                    handle = client.get_workflow_handle(wf_id)
+                    await handle.signal(signal_name)
+                    return True
+                except Exception:
+                    _log.warning(
+                        "Failed to signal workflow %s with %s",
+                        wf_id,
+                        signal_name,
+                        exc_info=True,
+                    )
+                    return False
+
+        tasks: list[asyncio.Task[bool]] = []
         async for execution in client.list_workflows(query=visibility_filter):
-            try:
-                handle = client.get_workflow_handle(execution.id)
-                await handle.signal(signal_name)
-                signaled += 1
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "Failed to signal workflow %s with %s",
-                    execution.id,
-                    signal_name,
-                    exc_info=True,
-                )
+            tasks.append(asyncio.create_task(_signal_one(execution.id)))
+
+        results = await asyncio.gather(*tasks)
+        signaled = sum(1 for ok in results if ok)
         return signaled
 
 

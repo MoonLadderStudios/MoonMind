@@ -1241,6 +1241,8 @@ class AgentQueueService:
         state = await self._repository.get_pause_state()
         now = datetime.now(UTC)
 
+        pause_mode: models.WorkerPauseMode | None = None
+
         if action_key == "pause":
             mode_value = (mode or "").strip().lower()
             if not mode_value:
