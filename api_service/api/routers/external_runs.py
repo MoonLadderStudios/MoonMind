@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -93,7 +92,8 @@ async def _query_external_runs(
 
     query_parts = ['WorkflowType = "MoonMind.AgentRun"']
     if agent_id:
-        query_parts.append(f'AgentId = "{agent_id}"')
+        escaped_agent_id = agent_id.replace('\\', '\\\\').replace('"', '\\"')
+        query_parts.append(f'AgentId = "{escaped_agent_id}"')
     if status_filter:
         temporal_status = status_filter.strip().capitalize()
         if temporal_status in {"Running", "Completed", "Failed", "Canceled", "Terminated", "TimedOut"}:
@@ -174,7 +174,7 @@ async def list_external_runs(
         limit=limit + 1,
     )
     has_more = len(runs) > limit
-    items = runs[:limit]
+    items = list(runs[:limit])
     return {
         "items": items,
         "total": len(items),
@@ -184,13 +184,60 @@ async def list_external_runs(
 
 @router.get("/{workflow_id}", response_model=ExternalRunDetail)
 async def get_external_run(workflow_id: str) -> dict[str, Any]:
-    """Get detail for one external agent run."""
+    """Get detail for one external agent run by direct workflow handle lookup."""
 
-    runs = await _query_external_runs(limit=200)
-    for run in runs:
-        if run.get("workflowId") == workflow_id:
-            return run
-    raise HTTPException(status_code=404, detail=f"External run {workflow_id} not found")
+    get_client = _get_temporal_client()
+    if get_client is None:
+        raise HTTPException(status_code=503, detail="Temporal client not available")
+
+    try:
+        client = await get_client()
+        handle = client.get_workflow_handle(workflow_id)
+        desc = await handle.describe()
+    except Exception:
+        logger.warning("Failed to describe workflow %s", workflow_id, exc_info=True)
+        raise HTTPException(status_code=404, detail=f"External run {workflow_id} not found")
+
+    memo = {}
+    if hasattr(desc, "memo") and desc.memo:
+        memo = dict(desc.memo) if isinstance(desc.memo, dict) else {}
+
+    if memo.get("agent_kind") != "external":
+        raise HTTPException(status_code=404, detail=f"External run {workflow_id} not found")
+
+    return {
+        "workflowId": workflow_id,
+        "runId": getattr(desc, "run_id", None),
+        "agentId": memo.get("agent_id", "unknown"),
+        "status": str(getattr(desc, "status", "unknown")).lower(),
+        "providerStatus": memo.get("provider_status"),
+        "normalizedStatus": memo.get("normalized_status"),
+        "externalUrl": memo.get("external_url"),
+        "startedAt": (
+            desc.start_time.isoformat()
+            if hasattr(desc, "start_time") and desc.start_time
+            else None
+        ),
+        "closedAt": (
+            desc.close_time.isoformat()
+            if hasattr(desc, "close_time") and desc.close_time
+            else None
+        ),
+        "correlationId": memo.get("correlation_id"),
+        "metadata": {
+            k: v
+            for k, v in memo.items()
+            if k
+            not in {
+                "agent_kind",
+                "agent_id",
+                "provider_status",
+                "normalized_status",
+                "external_url",
+                "correlation_id",
+            }
+        },
+    }
 
 
 __all__ = ["router"]

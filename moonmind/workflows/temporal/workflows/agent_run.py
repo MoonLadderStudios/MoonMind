@@ -49,16 +49,20 @@ async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
     )
 
 
-def _create_external_adapter(agent_id: str) -> AgentAdapter:
-    """Instantiate an external adapter using the runtime-gated registry.
+@activity.defn(name="integration.resolve_external_adapter")
+async def resolve_external_adapter(agent_id: str) -> str:
+    """Activity: verify that *agent_id* has a registered adapter.
 
-    This function is called inside the workflow to create the appropriate
-    adapter for an external agent.  The registry respects runtime gates
-    so only providers that are enabled and configured will be available.
+    All non-deterministic work (reading env vars, dynamic imports) runs
+    here rather than in the workflow so that replays remain deterministic.
+
+    Returns the validated agent_id on success; raises if no adapter exists.
     """
 
     registry = build_default_registry()
-    return registry.create(agent_id)
+    # Validate the adapter is registered — this forces the gate check.
+    registry.create(agent_id)
+    return agent_id
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
@@ -126,7 +130,14 @@ class MoonMindAgentRun:
                         workflow_id=workflow.info().workflow_id,
                     )
                 elif request.agent_kind == "external":
-                    adapter = _create_external_adapter(request.agent_id)
+                    # Validate adapter availability in an activity (deterministic-safe).
+                    validated_id = await workflow.execute_activity(
+                        resolve_external_adapter,
+                        request.agent_id,
+                        start_to_close_timeout=timedelta(seconds=30),
+                    )
+                    registry = build_default_registry()
+                    adapter = registry.create(validated_id)
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 

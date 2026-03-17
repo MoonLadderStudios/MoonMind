@@ -179,7 +179,8 @@ class CodexCloudClient:
                             try:
                                 delay = max(delay, float(retry_after))
                             except (ValueError, TypeError):
-                                pass
+                                # Malformed Retry-After header — fall back to default delay.
+                                logger.debug("Ignoring unparseable Retry-After header: %r", retry_after)
                     logger.warning(
                         "Codex Cloud request %s failed with HTTP %s (attempt %s/%s); retrying in %.1fs",
                         path,

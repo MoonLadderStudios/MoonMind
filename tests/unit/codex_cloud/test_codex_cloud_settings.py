@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from moonmind.codex_cloud.settings import (
-    CodexCloudRuntimeGate,
     build_codex_cloud_gate,
     is_codex_cloud_enabled,
 )

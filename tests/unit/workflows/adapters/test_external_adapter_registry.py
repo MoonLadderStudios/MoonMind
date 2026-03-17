@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from moonmind.workflows.adapters.external_adapter_registry import (
@@ -25,7 +27,7 @@ class _StubAdapter:
 class TestExternalAdapterRegistry:
     def test_register_and_create_returns_adapter(self):
         registry = ExternalAdapterRegistry()
-        registry.register("test", lambda: _StubAdapter(agent_id="test"))
+        registry.register("test", partial(_StubAdapter, agent_id="test"))
         adapter = registry.create("test")
         assert isinstance(adapter, _StubAdapter)
         assert adapter.agent_id == "test"
@@ -37,7 +39,7 @@ class TestExternalAdapterRegistry:
 
     def test_register_is_case_insensitive(self):
         registry = ExternalAdapterRegistry()
-        registry.register("Jules", lambda: _StubAdapter(agent_id="jules"))
+        registry.register("Jules", partial(_StubAdapter, agent_id="jules"))
         adapter = registry.create("JULES")
         assert isinstance(adapter, _StubAdapter)
         assert adapter.agent_id == "jules"
@@ -45,24 +47,24 @@ class TestExternalAdapterRegistry:
     def test_register_rejects_blank_agent_id(self):
         registry = ExternalAdapterRegistry()
         with pytest.raises(ValueError, match="must not be blank"):
-            registry.register("  ", lambda: _StubAdapter())
+            registry.register("  ", _StubAdapter)
 
     def test_registered_ids_returns_sorted_list(self):
         registry = ExternalAdapterRegistry()
-        registry.register("beta", lambda: _StubAdapter())
-        registry.register("alpha", lambda: _StubAdapter())
+        registry.register("beta", _StubAdapter)
+        registry.register("alpha", _StubAdapter)
         assert registry.registered_ids == ["alpha", "beta"]
 
     def test_contains_membership(self):
         registry = ExternalAdapterRegistry()
-        registry.register("jules", lambda: _StubAdapter())
+        registry.register("jules", _StubAdapter)
         assert "jules" in registry
         assert "codex_cloud" not in registry
 
     def test_len(self):
         registry = ExternalAdapterRegistry()
         assert len(registry) == 0
-        registry.register("a", lambda: _StubAdapter())
+        registry.register("a", _StubAdapter)
         assert len(registry) == 1
 
 
@@ -110,7 +112,7 @@ class TestBuildDefaultRegistry:
 
     def test_disabled_provider_not_registered(self):
         env = {
-            "JULES_RUNTIME_ENABLED": "false",
+            "JULES_ENABLED": "false",
             "JULES_API_URL": "https://jules.test",
             "JULES_API_KEY": "test-key",
         }
