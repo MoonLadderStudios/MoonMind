@@ -1,4 +1,4 @@
-"""Pydantic schemas for the workflow workflow API."""
+"""Pydantic schemas for the workflow API."""
 
 from __future__ import annotations
 

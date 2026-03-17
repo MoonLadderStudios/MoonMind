@@ -1,5 +1,5 @@
 slug: agentkit-orchestrate
-title: workflow Orchestrate
+title: Workflow Orchestrate
 description: Run the full workflow pipeline from one feature request, including remediation loops, scope validation, and implementation/PR handoff.
 scope: global
 version: 1.0.0
