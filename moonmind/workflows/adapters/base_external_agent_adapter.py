@@ -103,6 +103,14 @@ class BaseExternalAgentAdapter(abc.ABC):
 
         handle = await self.do_start(request, title, description, metadata)
 
+        # Auto-populate poll_hint_seconds from capability descriptor
+        # when the provider hook did not set it explicitly.
+        if handle.poll_hint_seconds is None:
+            cap = self.provider_capability
+            handle = handle.model_copy(
+                update={"poll_hint_seconds": cap.default_poll_hint_seconds}
+            )
+
         self._starts_by_idempotency[request.idempotency_key] = handle
         return handle
 
@@ -117,8 +125,23 @@ class BaseExternalAgentAdapter(abc.ABC):
         return await self.do_fetch_result(run_id)
 
     async def cancel(self, run_id: str) -> AgentRunStatus:
-        """Attempt provider cancellation for one run."""
+        """Attempt provider cancellation for one run.
 
+        If the provider does not support cancellation
+        (``provider_capability.supports_cancel is False``), returns a
+        best-effort fallback status without invoking ``do_cancel``.
+        """
+
+        cap = self.provider_capability
+        if not cap.supports_cancel:
+            return self.build_status(
+                run_id=run_id,
+                agent_id=cap.provider_name,
+                status="intervention_requested",
+                provider_status="cancel_unsupported",
+                normalized_status="cancel_unsupported",
+                extra_metadata={"cancelAccepted": False, "unsupported": True},
+            )
         return await self.do_cancel(run_id)
 
     # ------------------------------------------------------------------
