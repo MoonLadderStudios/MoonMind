@@ -141,6 +141,29 @@ async def create_profile(
     session.add(profile)
     await session.commit()
     await session.refresh(profile)
+
+    # Ensure the AuthProfileManager workflow is running for this runtime_id
+    try:
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.workflows.auth_profile_manager import WORKFLOW_NAME, AuthProfileManagerInput
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+
+        temporal_adapter = TemporalClientAdapter()
+        temporal_client = await temporal_adapter.get_client()
+        workflow_id = f"auth-profile-manager:{body.runtime_id}"
+        
+        await temporal_client.start_workflow(
+            WORKFLOW_NAME,
+            AuthProfileManagerInput(runtime_id=body.runtime_id),
+            id=workflow_id,
+            task_queue="mm.workflow",
+        )
+        logger.info(f"Started AuthProfileManager for runtime: {body.runtime_id}")
+    except WorkflowAlreadyStartedError:
+        logger.debug(f"AuthProfileManager already running for runtime: {body.runtime_id}")
+    except Exception as e:
+        logger.error(f"Failed to start AuthProfileManager for {body.runtime_id}: {e}", exc_info=True)
+
     return _row_to_dict(profile)
 
 

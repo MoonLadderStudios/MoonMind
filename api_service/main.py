@@ -391,6 +391,47 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+async def ensure_auth_profile_managers_started():
+    """Ensure AuthProfileManager workflows are running for all distinct runtime families."""
+    from api_service.db.base import get_async_session_context
+    from sqlalchemy import select
+    from api_service.db.models import ManagedAgentAuthProfile
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.workflows.auth_profile_manager import WORKFLOW_NAME, AuthProfileManagerInput
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+    
+    logger.info("Ensuring AuthProfileManager workflows are started...")
+    try:
+        async with get_async_session_context() as session:
+            stmt = select(ManagedAgentAuthProfile.runtime_id).distinct()
+            result = await session.execute(stmt)
+            runtime_ids = result.scalars().all()
+            
+        if not runtime_ids:
+            logger.info("No managed agent auth profiles found. Skipping AuthProfileManager startup.")
+            return
+
+        temporal_adapter = TemporalClientAdapter()
+        temporal_client = await temporal_adapter.get_client()
+        
+        for runtime_id in runtime_ids:
+            workflow_id = f"auth-profile-manager:{runtime_id}"
+            try:
+                await temporal_client.start_workflow(
+                    WORKFLOW_NAME,
+                    AuthProfileManagerInput(runtime_id=runtime_id),
+                    id=workflow_id,
+                    task_queue="mm.workflow",
+                )
+                logger.info(f"Started AuthProfileManager for runtime: {runtime_id}")
+            except WorkflowAlreadyStartedError:
+                logger.debug(f"AuthProfileManager already running for runtime: {runtime_id}")
+            except Exception as e:
+                logger.error(f"Failed to start AuthProfileManager for {runtime_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error ensuring AuthProfileManager workflows: {e}", exc_info=True)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Defines the application's startup events."""
@@ -490,6 +531,7 @@ async def startup_event():
             f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup."
         )
 
+    await ensure_auth_profile_managers_started()
     logger.info("Application startup events completed.")
 
 

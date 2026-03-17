@@ -4,10 +4,12 @@
 # account tier (e.g. Gemini Ultra).
 #
 # Usage:
-#   tools/auth-gemini-volume.sh            # interactive gemini auth login inside the container
-#   tools/auth-gemini-volume.sh --sync     # sync local ~/.gemini creds
-#   tools/auth-gemini-volume.sh --login    # same as above (explicit)
-#   tools/auth-gemini-volume.sh --check    # verify volume credentials
+#   tools/auth-gemini-volume.sh                 # login interactively and register profile (default)
+#   tools/auth-gemini-volume.sh --sync          # sync local ~/.gemini creds and register
+#   tools/auth-gemini-volume.sh --login         # same as above (explicit)
+#   tools/auth-gemini-volume.sh --sync --no-register  # sync only, do not register API profile
+#   tools/auth-gemini-volume.sh --check         # verify volume credentials
+#   tools/auth-gemini-volume.sh --register      # explicitly register the profile via API
 #
 # Environment overrides:
 #   GEMINI_AUTH_HOST_DIR  Host credential directory (default: ~/.gemini)
@@ -163,19 +165,88 @@ cmd_check() {
 }
 
 # ---------------------------------------------------------------------------
+# --register: register the volume in the MoonMind auth profile API
+# ---------------------------------------------------------------------------
+cmd_register() {
+  local API_URL="${MOONMIND_API_URL:-http://localhost:5000}"
+  local PROFILE_ID="${GEMINI_PROFILE_ID:-gemini_default}"
+  
+  echo "Registering auth profile '${PROFILE_ID}' via ${API_URL}..."
+  
+  local response
+  response=$(curl -sS -w "\n%{http_code}" -X POST "${API_URL}/api/v1/auth-profiles" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "profile_id": "'"${PROFILE_ID}"'",
+      "runtime_id": "gemini_cli",
+      "auth_mode": "oauth",
+      "volume_ref": "'"${VOLUME_NAME}"'",
+      "volume_mount_path": "'"${GEMINI_VOLUME_PATH}"'",
+      "account_label": "Gemini OAuth Profile ('"${PROFILE_ID}"')",
+      "max_parallel_runs": 1
+    }')
+    
+  local status_code=$(echo "$response" | tail -n1)
+  local body=$(echo "$response" | sed '$d')
+  
+  if [ "$status_code" -eq 201 ]; then
+    echo "Successfully registered profile '${PROFILE_ID}'."
+  elif [ "$status_code" -eq 409 ]; then
+    echo "Profile '${PROFILE_ID}' already exists."
+  else
+    echo "Error registering profile (HTTP $status_code): $body" >&2
+    exit 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
-case "${1:-}" in
-  --login|"")  cmd_login ;;
-  --check)  cmd_check ;;
-  --sync) cmd_sync ;;
-  -h|--help)
-    sed -n '2,/^[^#]/{ /^#/s/^# \?//p }' "$0"
-    exit 0
+DO_REGISTER=1
+COMMAND=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-register) DO_REGISTER=0 ;;
+    --login) COMMAND="login" ;;
+    --check) COMMAND="check" ;;
+    --sync) COMMAND="sync" ;;
+    --register) COMMAND="register" ;;
+    -h|--help)
+      sed -n '2,/^[^#]/{ /^#/s/^# \?//p }' "$0"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      echo "Usage: $0 [--sync|--login|--check|--register|--no-register|--help]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$COMMAND" ]; then
+  COMMAND="login"
+fi
+
+case "$COMMAND" in
+  login)
+    cmd_login
+    if [ "$DO_REGISTER" -eq 1 ]; then
+      echo ""
+      cmd_register
+    fi
     ;;
-  *)
-    echo "Unknown option: $1" >&2
-    echo "Usage: $0 [--sync|--login|--check|--help]" >&2
-    exit 1
+  check)
+    cmd_check
+    ;;
+  sync)
+    cmd_sync
+    if [ "$DO_REGISTER" -eq 1 ]; then
+      echo ""
+      cmd_register
+    fi
+    ;;
+  register)
+    cmd_register
     ;;
 esac
