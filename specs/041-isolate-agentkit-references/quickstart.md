@@ -1,4 +1,4 @@
-# Quickstart: Isolate Spec Kit References and Skill-First Runtime
+# Quickstart: Isolate workflow References and Skill-First Runtime
 
 ## 1. Validate canonical and legacy workflow API routes
 

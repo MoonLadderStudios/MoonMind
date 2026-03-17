@@ -1,4 +1,4 @@
-"""Codex preflight check helpers for Spec Automation.
+"""Codex preflight check helpers for workflow automation.
 
 Extracted from moonmind.workflows.agentkit_celery.tasks during the Celery removal.
 This module has no Celery dependency.

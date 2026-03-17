@@ -1,4 +1,4 @@
-# Data Model: Isolate Spec Kit References and Skill-First Runtime
+# Data Model: Isolate workflow References and Skill-First Runtime
 
 ## Entity: SkillAdapterBinding
 

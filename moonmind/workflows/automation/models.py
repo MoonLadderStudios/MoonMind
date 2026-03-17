@@ -1,4 +1,4 @@
-"""SQLAlchemy models for Spec Automation workflow persistence.
+"""SQLAlchemy models for workflow automation workflow persistence.
 
 This module was formerly part of moonmind.workflows.agentkit_celery.models
 and has been moved here as part of the Celery removal.
@@ -185,7 +185,7 @@ class CodexWorkerShard(Base):
 
 
 class AutomationRunStatus(str, enum.Enum):
-    """Lifecycle states for Spec Automation runs."""
+    """Lifecycle states for workflow automation runs."""
 
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
@@ -195,7 +195,7 @@ class AutomationRunStatus(str, enum.Enum):
 
 
 class AutomationPhase(str, enum.Enum):
-    """Phases executed during the Spec Automation pipeline."""
+    """Phases executed during the workflow automation pipeline."""
 
     PREPARE_JOB = "prepare_job"
     START_JOB_CONTAINER = "start_job_container"
@@ -217,7 +217,7 @@ class AutomationPhase(str, enum.Enum):
 
 
 class AutomationTaskStatus(str, enum.Enum):
-    """Per-phase task status values for Spec Automation."""
+    """Per-phase task status values for workflow automation."""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -228,7 +228,7 @@ class AutomationTaskStatus(str, enum.Enum):
 
 
 class AutomationArtifactType(str, enum.Enum):
-    """Artifact classifications produced by Spec Automation."""
+    """Artifact classifications produced by workflow automation."""
 
     STDOUT_LOG = "stdout_log"
     STDERR_LOG = "stderr_log"
@@ -239,7 +239,7 @@ class AutomationArtifactType(str, enum.Enum):
 
 
 class AutomationRun(Base):
-    """Represents a Spec Kit automation execution."""
+    """Represents a workflow automation execution."""
 
     __tablename__ = "automation_runs"
     __table_args__ = (

@@ -108,7 +108,7 @@ _DEFAULT_PROFILES: Mapping[str, ServiceProfile] = {
         key="celery-worker",
         compose_service="celery-worker",
         workspace_path=Path("."),
-        description="Celery worker responsible for Spec Kit tasks",
+        description="Celery worker responsible for workflow tasks",
         allowlist_globs=(
             "celery_worker/Dockerfile",
             "celery_worker/Dockerfile.*",

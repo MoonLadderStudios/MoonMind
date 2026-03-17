@@ -1,4 +1,4 @@
-# Research: Isolate Spec Kit References and Skill-First Runtime
+# Research: Isolate workflow References and Skill-First Runtime
 
 ## Decision 1: Adapter resolution must be explicit and authoritative
 

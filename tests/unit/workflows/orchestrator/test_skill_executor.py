@@ -14,10 +14,7 @@ from moonmind.workflows.orchestrator import skill_executor
 def _clear_skill_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
-        "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
         "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
-        "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
-        "SPEC_SKILLS_WORKSPACE_ROOT",
         "WORKFLOW_REPO_ROOT",
         "WORKFLOW_REPO_ROOT",
         "WORKSPACE_ROOT",

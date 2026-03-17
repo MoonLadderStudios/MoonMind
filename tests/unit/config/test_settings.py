@@ -242,13 +242,9 @@ class TestWorkflowSettings:
             "WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
-            "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
             "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
-            "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
             "WORKFLOW_SKILLS_CACHE_ROOT",
-            "SPEC_SKILLS_CACHE_ROOT",
             "WORKFLOW_SKILLS_WORKSPACE_ROOT",
-            "SPEC_SKILLS_WORKSPACE_ROOT",
             "WORKFLOW_REPO_ROOT",
             "WORKFLOW_REPO_ROOT",
             "WORKFLOW_TASKS_ROOT",
@@ -535,17 +531,17 @@ class TestWorkflowSettings:
         assert settings.submit_skill == "custom"
 
     def test_skills_mirror_env_overrides(self, monkeypatch):
-        """Skill mirror roots should honor explicit SPEC_SKILLS_* env overrides."""
+        """Skill mirror roots should honor explicit WORKFLOW_SKILLS_* env overrides."""
 
-        monkeypatch.setenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT", "/tmp/skills-local")
-        monkeypatch.setenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT", "/tmp/skills-legacy")
+        monkeypatch.setenv("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT", "/tmp/skills-local")
+        monkeypatch.setenv("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT", "/tmp/skills-legacy")
         settings = WorkflowSettings(_env_file=None)
 
         assert settings.skills_local_mirror_root == "/tmp/skills-local"
         assert settings.skills_legacy_mirror_root == "/tmp/skills-legacy"
 
-        monkeypatch.delenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT", raising=False)
-        monkeypatch.delenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT", raising=False)
+        monkeypatch.delenv("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT", raising=False)
+        monkeypatch.delenv("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT", raising=False)
 
     def test_skills_cache_and_workspace_roots_use_workflow_env(self, monkeypatch):
         """Skills cache/workspace roots should read from WORKFLOW_* env names."""

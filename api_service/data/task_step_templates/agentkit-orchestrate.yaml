@@ -1,6 +1,6 @@
 slug: agentkit-orchestrate
-title: Spec Kit Orchestrate
-description: Run the full Spec Kit pipeline from one feature request, including remediation loops, scope validation, and implementation/PR handoff.
+title: Workflow Orchestrate
+description: Run the full workflow pipeline from one feature request, including remediation loops, scope validation, and implementation/PR handoff.
 scope: global
 version: 1.0.0
 tags:

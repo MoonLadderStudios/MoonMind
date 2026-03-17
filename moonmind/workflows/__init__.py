@@ -32,7 +32,7 @@ def get_workflow_repository(session: AsyncSession) -> WorkflowRepository:
 
 
 def get_automation_repository(session: AsyncSession) -> AutomationRepository:
-    """Factory helper returning the Spec Automation repository."""
+    """Factory helper returning the workflow automation repository."""
 
     return AutomationRepository(session)
 

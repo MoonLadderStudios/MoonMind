@@ -38,7 +38,7 @@
 ---
 
 ## Phase 3: User Story 1 – Trigger Next Spec Phase (Priority: P1) 🎯 MVP
-**Goal**: Operators run “next Spec Kit phase” and a Celery chain executes discovery → submit → apply → publish while persisting artifacts and Codex context.
+**Goal**: Operators run “next workflow phase” and a Celery chain executes discovery → submit → apply → publish while persisting artifacts and Codex context.
 **Independent Test**: POST `/api/workflows/runs` against a staging repo and verify a branch/PR plus Codex logs are created without manual steps.
 
 ### Tests (write before implementation)

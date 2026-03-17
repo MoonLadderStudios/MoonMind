@@ -46,7 +46,7 @@ Expected log signals:
 
 - `Codex CLI detected ...` (codex worker)
 - `Gemini CLI detected ...` (gemini worker)
-- `Spec Kit CLI detected ...` (both workers)
+- `workflow CLI detected ...` (both workers)
 - queue binding log lines for each worker
 - Codex pre-flight success on codex worker
 - embedding runtime profile diagnostics

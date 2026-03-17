@@ -1,9 +1,9 @@
-# Data Model: Codex & Spec Kit Tooling Availability
+# Data Model: Codex & workflow Tooling Availability
 
 ## Entities
 
 ### RuntimeImageToolchain
-Represents the shared `api_service` container image that packages Codex CLI, GitHub Spec Kit CLI, and the managed Codex config template used by Celery workers.
+Represents the shared `api_service` container image that packages Codex CLI, GitHub workflow CLI, and the managed Codex config template used by Celery workers.
 
 | Field | Type | Description | Validation |
 |-------|------|-------------|------------|

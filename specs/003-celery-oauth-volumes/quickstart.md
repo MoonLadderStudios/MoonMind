@@ -36,7 +36,7 @@
    ```
    Confirm log lines include `Listening on codex-0`.
 
-## 4. Trigger a Spec Kit Run
+## 4. Trigger a workflow Run
 1. Dispatch a run that exercises the Codex phase:
    ```bash
    poetry run python -m tools.trigger_spec_run --repo <repo_url> --prompt agentkit.specify

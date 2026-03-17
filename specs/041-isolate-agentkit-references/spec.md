@@ -1,4 +1,4 @@
-# Feature Specification: Isolate Spec Kit References and Skill-First Runtime
+# Feature Specification: Isolate workflow References and Skill-First Runtime
 
 **Feature Branch**: `[036-isolate-agentkit-references]`  
 **Created**: 2026-02-20  

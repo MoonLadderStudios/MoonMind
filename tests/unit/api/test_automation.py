@@ -1,4 +1,4 @@
-"""Unit tests for Spec Automation API router."""
+"""Unit tests for workflow automation API router."""
 
 from __future__ import annotations
 

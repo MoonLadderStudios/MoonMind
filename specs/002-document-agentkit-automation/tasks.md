@@ -1,4 +1,4 @@
-# Tasks: Spec Kit Automation Pipeline
+# Tasks: workflow Automation Pipeline
 
 **Input**: Design documents from `/specs/002-document-agentkit-automation/`
 **Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
@@ -17,7 +17,7 @@
 
 **Purpose**: Establish container images and compose resources required for automation runs.
 
-- [ ] T001 [P] Author Spec Kit job container image with git/gh/Codex tooling in images/job/Dockerfile
+- [ ] T001 [P] Author workflow job container image with git/gh/Codex tooling in images/job/Dockerfile
 - [ ] T002 [P] Create lean Celery worker image with Docker client dependencies in images/worker/Dockerfile
 - [ ] T003 Update docker-compose.yaml to use worker image, mount /var/run/docker.sock, and declare agentkit_workspaces volume
 
@@ -38,7 +38,7 @@
 
 ## Phase 3: User Story 1 - Launch Automated Spec Run (Priority: P1) 🎯 MVP
 
-**Goal**: Trigger a Spec Kit automation run that clones the repo, executes specify/plan/tasks in a job container, commits changes, and opens a PR.
+**Goal**: Trigger a workflow automation run that clones the repo, executes specify/plan/tasks in a job container, commits changes, and opens a PR.
 
 **Independent Test**: Dispatch a Celery task for a staging repo and verify branch, PR URL, and artifacts are produced when changes exist, or “no changes” status otherwise.
 

@@ -1,4 +1,4 @@
-"""Pydantic schemas for the Spec Kit workflow API."""
+"""Pydantic schemas for the workflow API."""
 
 from __future__ import annotations
 
@@ -516,7 +516,7 @@ class OrchestratorRetryRequest(BaseModel):
 
 
 class AutomationPhaseState(BaseModel):
-    """Schema describing a single Spec Automation phase execution."""
+    """Schema describing a single workflow automation phase execution."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -568,7 +568,7 @@ class AutomationRunResponse(BaseModel):
 
 
 class AutomationRunDetail(BaseModel):
-    """Detailed representation of a Spec Automation run."""
+    """Detailed representation of a workflow automation run."""
 
     model_config = ConfigDict(from_attributes=True)
 

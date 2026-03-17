@@ -28,7 +28,7 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [x] T003 Expand Spec Kit settings for CODEX shard configuration in `moonmind/config/settings.py`
+- [x] T003 Expand workflow settings for CODEX shard configuration in `moonmind/config/settings.py`
 - [x] T004 Add CodexAuthVolume/CodexWorkerShard models and new run metadata fields in `moonmind/workflows/agentkit_celery/models.py`
 - [x] T005 Create Alembic migration adding Codex shard tables and run columns in `api_service/migrations/versions/*_codex_shards.py`
 - [x] T006 Update Spec workflow repositories to persist shard and pre-flight fields in `moonmind/workflows/agentkit_celery/repositories.py`

@@ -41,9 +41,9 @@
 - Alternatives considered: Directly instantiating Celery tasks per API call, but that would duplicate routing logic and hinder retries.
 
 ## Celery ↔ Codex Container Execution
-- Decision: Keep Codex steps inside the worker container but spawn the actual Spec Kit automation inside per-run Docker jobs (as described in docs), ensuring the Codex auth volume is mounted and log files stream back to `var/artifacts` for ingestion.
+- Decision: Keep Codex steps inside the worker container but spawn the actual workflow automation inside per-run Docker jobs (as described in docs), ensuring the Codex auth volume is mounted and log files stream back to `var/artifacts` for ingestion.
 - Rationale: This preserves isolation between runs, allows reuse of the existing job container pattern, and makes it easier to collect JSONL logs required by FR-003/FR-004.
-- Alternatives considered: Running Spec Kit inline inside the Celery worker process, but that would couple process lifecycles and complicate log streaming.
+- Alternatives considered: Running workflow inline inside the Celery worker process, but that would couple process lifecycles and complicate log streaming.
 
 ## Celery ↔ GitHub Integration Pattern
 - Decision: Encapsulate GitHub interactions in dedicated utility functions/services that accept repository metadata from discovery outputs, authenticate via mounted credentials, and log responses for PR/audit updates.
@@ -58,7 +58,7 @@
 ## 015 Umbrella Alignment: Agentkit Always Available
 - Decision: Run `agentkit --version` startup checks in both Codex and Gemini worker entrypoints, in addition to existing Codex/Gemini readiness checks.
 - Rationale: Enforces "workers always have Agentkit" as an invariant independent of selected stage skill.
-- Alternatives considered: Checking Agentkit only in Spec Kit task execution paths, but that would delay failures and create non-deterministic startup behavior.
+- Alternatives considered: Checking Agentkit only in workflow task execution paths, but that would delay failures and create non-deterministic startup behavior.
 
 ## 015 Umbrella Alignment: Fastest Path Runtime Profile
 - Decision: Document and test a compose-first startup path that uses one-time Codex auth volume login and Google Gemini embedding defaults (`DEFAULT_EMBEDDING_PROVIDER=google`, `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`).

@@ -18,7 +18,7 @@
 **Purpose**: Implement shared queue defaults and runtime mode guardrails used by all user stories.
 
 - [X] T004 Implement single-queue defaults and compatibility fallback in `moonmind/config/settings.py` (DOC-REQ-003, DOC-REQ-010).
-- [X] T005 [P] Align Spec Kit Celery queue routing defaults in `moonmind/workflows/agentkit_celery/celeryconfig.py` and `moonmind/workflows/agentkit_celery/__init__.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-010).
+- [X] T005 [P] Align workflow Celery queue routing defaults in `moonmind/workflows/agentkit_celery/celeryconfig.py` and `moonmind/workflows/agentkit_celery/__init__.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-010).
 - [X] T006 [P] Implement runtime mode validation and queue/runtime startup logging in `celery_worker/agentkit_worker.py` and `celery_worker/gemini_worker.py` (DOC-REQ-004, DOC-REQ-011).
 - [X] T007 Update Gemini task queue binding to single-queue compatibility behavior in `celery_worker/gemini_tasks.py` (DOC-REQ-003, DOC-REQ-010).
 

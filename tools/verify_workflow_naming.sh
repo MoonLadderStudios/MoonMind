@@ -59,7 +59,7 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 2
 fi
 
-PATTERN='SPEC_WORKFLOW_|SPEC_AUTOMATION_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows'
+PATTERN='SPEC_WORKFLOW_|SPEC_AUTOMATION_|SPEC_SKILLS_|/api/spec-automation|/api/workflows/speckit|SpecWorkflow|spec_workflow|spec_workflows|spec-automation|spec_automation|moonmind\\.spec_workflow|var/artifacts/spec_workflows|Spec Kit|Spec Automation'
 DOCS_SPEC_GLOBS=(--glob '*.md' --glob '*.yaml' --glob '*.yml' --glob '!specs/task/**')
 RUNTIME_GLOBS=(--glob '*.py' --glob '*.sh' --glob '*.md' --glob '*.yaml' --glob '*.yml')
 
@@ -105,15 +105,23 @@ scan_mode() {
     while IFS= read -r exception || [[ -n "$exception" ]]; do
       ((line_number += 1))
       [[ -z "$exception" || "$exception" =~ ^[[:space:]]*# ]] && continue
-      if ! filtered="$(printf '%s\n' "$filtered" | rg -v -e "$exception" 2>&1)"; then
-        local filter_status=$?
-        if [[ "$filter_status" -eq 1 ]]; then
-          filtered=""
-        else
-          echo "[$mode] ERROR: invalid exception regex at $EXCEPTIONS_FILE:$line_number: $exception" >&2
-          printf '%s\n' "$filtered" >&2
-          return 2
-        fi
+      # Short-circuit when all matches have been filtered out.
+      if [[ -z "${filtered//[[:space:]]/}" ]]; then
+        filtered=""
+        break
+      fi
+      local rg_output rg_status=0
+      rg_output="$(printf '%s\n' "$filtered" | rg -v -e "$exception" 2>&1)" || rg_status=$?
+      if [[ "$rg_status" -eq 0 ]]; then
+        # rg found non-matching lines; keep them.
+        filtered="$rg_output"
+      elif [[ "$rg_status" -eq 1 ]]; then
+        # All lines matched the exception; nothing left.
+        filtered=""
+      else
+        echo "[$mode] ERROR: invalid exception regex at $EXCEPTIONS_FILE:$line_number: $exception" >&2
+        printf '%s\n' "$rg_output" >&2
+        return 2
       fi
     done < "$EXCEPTIONS_FILE"
   else

@@ -1,6 +1,6 @@
-# Quickstart: Codex & Spec Kit Tooling Availability
+# Quickstart: Codex & workflow Tooling Availability
 
-Follow these steps to build the updated `api_service` image, confirm Codex + Spec Kit CLIs are bundled, and verify Celery workers inherit the non-interactive Codex config.
+Follow these steps to build the updated `api_service` image, confirm Codex + workflow CLIs are bundled, and verify Celery workers inherit the non-interactive Codex config.
 
 ## 1. Prerequisites
 
@@ -44,7 +44,7 @@ docker run --rm -e HOME=/home/app moonmind/api-service:tooling bash -lc '
 - The merge script runs at container start and ensures the file contains `approval_policy = "never"` even if other keys exist.
 - To test drift handling, mount a volume with a conflicting config; the entrypoint should rewrite the policy and log the correction.
 
-## 5. Run the Spec Kit smoke test
+## 5. Run the workflow smoke test
 
 ```bash
 docker compose run --rm celery-worker bash -lc '
@@ -53,7 +53,7 @@ docker compose run --rm celery-worker bash -lc '
 ```
 
 - Confirms the Celery worker (which reuses the api_service image) can access both CLIs and that Codex authentication remains non-interactive.
-- Watch the worker logs for `Spec Kit CLI detected` entries before task output; these come from the new bootstrap check inside `moonmind/workflows/agentkit_celery/tasks.py` and confirm the binary is executable for the `app` user.
+- Watch the worker logs for `workflow CLI detected` entries before task output; these come from the new bootstrap check inside `moonmind/workflows/agentkit_celery/tasks.py` and confirm the binary is executable for the `app` user.
 - The command should exit with status zero; if the `agentkit` invocation fails, rebuild the image and confirm the Dockerfile logs `agentkit --version` during the builder stage.
 
 ## 6. Troubleshooting

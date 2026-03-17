@@ -1,4 +1,4 @@
-# Implementation Plan: Isolate Spec Kit References and Skill-First Runtime
+# Implementation Plan: Isolate workflow References and Skill-First Runtime
 
 **Branch**: `036-isolate-agentkit-references` | **Date**: 2026-02-20 | **Spec**: `specs/036-isolate-agentkit-references/spec.md`  
 **Input**: Feature specification from `/specs/036-isolate-agentkit-references/spec.md`

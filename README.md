@@ -32,23 +32,20 @@ Go to [http://localhost:5000/tasks](http://localhost:5000/tasks) to access Missi
 ### 🛰️ Bring Your Own Agent — or let MoonMind run one for you
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, orchestrating state-of-the-art agents out of the box.
 - **Managed Runtimes:** MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure using your existing subscriptions or API keys.
-- **Black-Box Coordination:** Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and responds with feedback even when you can't control the internals.
-- **Universal Integration:** Connect any agent through MCP or standard API endpoints.
+- **Black-Box Coordination:** Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and closes the feedback loop — whether you control the internals or not.
 - **Sandboxed Execution:** Runtimes run behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
 
 ### 1️⃣ Orchestration Starts At One
 You don't need ten agents to benefit from an orchestrator. MoonMind supercharges the planning, resiliency, and context management of even a single agent.
-- **Multi-Step Planning:** Agents perform better on small, focused tasks. Break a massive goal into discrete steps with presets, and let MoonMind schedule and sequence them.
+- **Mission Control:** See what your agent is doing in real time. Track run status, browse generated artifacts, monitor intervention requests, and audit full execution histories from a single UI.
+- **Scheduled & Recurring Tasks:** Schedule a heavy job to run overnight when tokens are cheaper, plan a server reboot and get an alert if it fails, or set up a recurring cron schedule for daily issue triaging.
 - **Fire-and-Forget Resiliency:** Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Backed by [Temporal](https://temporal.io/), workflows survive container crashes and restarts. Automatic stuck detection and smart retries keep your agent on track — and off your API bill.
-- **Step-Based Context Management:** Inject the right context into each step and clear it between steps. Ground agents with built-in loaders for GitHub, Jira, Confluence, Google Drive, and local files. Procedural memory retains structured summaries from past runs so agents don't repeat the same mistakes.
-- **Mission Control:** Track real-time run status, browse generated artifacts, monitor intervention requests, and audit full execution histories.
+- **Step-Based Context Management:** Agents perform better on small, focused tasks. Inject the right context into each step and clear it between steps.
 
 ### 🔓 Free Yourself from Vendor Lock-In
 MoonMind can manage any agent runtime and makes it easy to mix agents and models in even a single workflow.
 * **Open-Source:** MoonMind is 100% free and open-source software.
-* **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Keep your memory, artifacts, and orchestration logic intact regardless of the underlying LLM.
-* **Multi-Agent Chaining:** Break massive goals into smaller steps. Only use expensive models for steps that need them.
-* **Side-by-Side Comparison:** Easily run the same task with different models and runtimes to compare results.
+* **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Only use expensive models for the steps that actually need them.
 * **Own Your Data:** Context, artifacts, and memory are stored on your infrastructure. Switch providers without losing what your agents have learned.
 
 ## Architecture

@@ -44,7 +44,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
    docker compose logs --tail=200 celery_codex_worker
    ```
    Expected signals:
-   - Spec Kit CLI detection logs are present.
+   - workflow CLI detection logs are present.
    - Codex preflight status is `passed`.
    - Queue bindings include `agentkit` and `codex`.
 
@@ -53,7 +53,7 @@ Start MoonMind workflow services on the fastest path so Celery stages run with:
    docker compose logs --tail=200 celery_gemini_worker
    ```
    Expected signals:
-   - Gemini CLI and Spec Kit CLI detection logs are present.
+   - Gemini CLI and workflow CLI detection logs are present.
    - Queue binding includes `gemini`.
    - No auth/credential startup failures.
 
