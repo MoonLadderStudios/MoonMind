@@ -6130,7 +6130,7 @@ async def test_config_from_env_rejects_jules_runtime_when_disabled(
 
     with pytest.raises(
         ValueError,
-        match="targetRuntime=jules requires JULES_ENABLED=true",
+        match="targetRuntime=jules requires JULES_API_KEY configured",
     ):
         CodexWorkerConfig.from_env()
 
