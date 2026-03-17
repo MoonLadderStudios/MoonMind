@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 import os
 import re
 import shlex
@@ -55,6 +56,8 @@ from moonmind.workflows.temporal.manifest_ingest import (
     compile_manifest_plan,
     plan_nodes_to_runtime_nodes,
 )
+
+logger = logging.getLogger(__name__)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
 PlanGenerator = Callable[
@@ -1572,8 +1575,12 @@ class TemporalAgentRuntimeActivities:
         self,
         *,
         artifact_service: TemporalArtifactService | None = None,
+        run_store: "ManagedRunStore | None" = None,
+        run_supervisor: "ManagedRunSupervisor | None" = None,
     ) -> None:
         self._artifact_service = artifact_service
+        self._run_store = run_store
+        self._run_supervisor = run_supervisor
 
     async def agent_runtime_publish_artifacts(
         self,
@@ -1582,11 +1589,62 @@ class TemporalAgentRuntimeActivities:
     ) -> Any:
         """Publish agent-run outputs back to artifact storage.
 
-        This is currently a pass-through stub.  Full implementation will
-        persist outputs via the artifact service once the managed-runtime
-        supervisor materialises output refs.
+        Writes a summary JSON artifact containing the run result metadata
+        (output refs, summary, failure class) via the artifact service.
+        Returns the result enriched with a ``diagnostics_ref`` pointing to
+        the persisted summary artifact.
         """
-        return result
+        if result is None:
+            return result
+        if self._artifact_service is None:
+            logger.warning(
+                "agent_runtime.publish_artifacts called without artifact_service; "
+                "returning result unchanged"
+            )
+            return result
+
+        # Normalize to dict
+        if isinstance(result, Mapping):
+            result_dict = dict(result)
+        elif hasattr(result, "model_dump"):
+            result_dict = result.model_dump(mode="json", by_alias=True)
+        else:
+            result_dict = {"raw": str(result)}
+
+        # Build summary payload for the artifact
+        summary_payload: dict[str, Any] = {
+            "summary": result_dict.get("summary") or result_dict.get("raw", ""),
+            "output_refs": result_dict.get("output_refs") or result_dict.get("outputRefs") or [],
+            "failure_class": result_dict.get("failure_class") or result_dict.get("failureClass"),
+            "provider_error_code": result_dict.get("provider_error_code") or result_dict.get("providerErrorCode"),
+            "metrics": result_dict.get("metrics") or {},
+        }
+
+        try:
+            summary_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal="system:agent_runtime",
+                payload=summary_payload,
+                metadata_json={
+                    "name": "agent_run_result.json",
+                    "producer": "activity:agent_runtime.publish_artifacts",
+                    "labels": ["agent_runtime", "result"],
+                },
+            )
+            # Enrich result with the diagnostics ref
+            if isinstance(result, Mapping):
+                enriched = dict(result)
+                enriched["diagnostics_ref"] = summary_ref.artifact_id
+                return enriched
+            if hasattr(result, "diagnostics_ref"):
+                result.diagnostics_ref = summary_ref.artifact_id
+            return result
+        except Exception:
+            logger.warning(
+                "agent_runtime.publish_artifacts failed to write summary artifact",
+                exc_info=True,
+            )
+            return result
 
     async def agent_runtime_cancel(
         self,
@@ -1595,13 +1653,10 @@ class TemporalAgentRuntimeActivities:
     ) -> None:
         """Best-effort cancel of an in-flight agent run.
 
-        Production wiring will instantiate the correct adapter and
-        delegate cancel to it.  For now this logs the cancellation
-        request without side effects.
+        For managed runs, delegates to the ``ManagedRunSupervisor`` to
+        terminate the subprocess.  For external runs, logs the request
+        (external cancel must go through the provider adapter).
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
         if isinstance(request, Mapping):
             agent_kind = request.get("agent_kind", "unknown")
             run_id = request.get("run_id", "unknown")
@@ -1609,8 +1664,52 @@ class TemporalAgentRuntimeActivities:
             agent_kind, run_id = request[0], request[1]
         else:
             agent_kind, run_id = "unknown", str(request)
+
+        if agent_kind == "managed":
+            if self._run_supervisor is not None:
+                try:
+                    await self._run_supervisor.cancel(str(run_id))
+                    logger.info(
+                        "agent_runtime.cancel completed for managed run %s",
+                        run_id,
+                    )
+                    return
+                except Exception:
+                    logger.warning(
+                        "agent_runtime.cancel failed for managed run %s",
+                        run_id,
+                        exc_info=True,
+                    )
+                    return
+            else:
+                logger.warning(
+                    "agent_runtime.cancel called for managed run %s but no supervisor configured",
+                    run_id,
+                )
+                # Fall through to store-based cancel if possible
+                if self._run_store is not None:
+                    try:
+                        self._run_store.update_status(
+                            str(run_id),
+                            "cancelled",
+                            finished_at=datetime.now(tz=UTC),
+                            error_message="Cancelled via activity (no supervisor)",
+                        )
+                        logger.info(
+                            "agent_runtime.cancel marked run %s as cancelled in store",
+                            run_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "agent_runtime.cancel store update failed for %s",
+                            run_id,
+                            exc_info=True,
+                        )
+                return
+
+        # External or unknown agent kind
         logger.warning(
-            "agent_runtime.cancel called for %s/%s — adapter cancel not yet wired",
+            "agent_runtime.cancel called for %s/%s — external cancel requires provider adapter",
             agent_kind,
             run_id,
         )

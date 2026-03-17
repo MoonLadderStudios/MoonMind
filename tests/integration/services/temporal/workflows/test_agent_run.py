@@ -6,7 +6,22 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun, publish_artifacts_activity, invoke_adapter_cancel
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun, resolve_external_adapter
+
+
+# Local mock activities that simulate the catalog-routed activities
+# (the standalone stubs were removed in favor of catalog routing).
+from temporalio import activity as _activity
+
+
+@_activity.defn(name="agent_runtime.publish_artifacts")
+async def mock_publish_artifacts(result: dict) -> dict:
+    return result
+
+
+@_activity.defn(name="agent_runtime.cancel")
+async def mock_cancel(request: dict) -> None:
+    pass
 
 @workflow.defn(name="MoonMind.AuthProfileManager")
 class MockAuthProfileManager:
@@ -48,7 +63,7 @@ async def test_agent_run_workflow():
             env.client,
             task_queue="agent-run-task-queue",
             workflows=[MoonMindAgentRun, MockAuthProfileManager],
-            activities=[publish_artifacts_activity, invoke_adapter_cancel],
+            activities=[mock_publish_artifacts, mock_cancel],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             request = AgentExecutionRequest(
@@ -94,7 +109,7 @@ async def test_agent_run_workflow_cancellation():
             env.client,
             task_queue="agent-run-task-queue",
             workflows=[MoonMindAgentRun, MockAuthProfileManager],
-            activities=[publish_artifacts_activity, invoke_adapter_cancel],
+            activities=[mock_publish_artifacts, mock_cancel],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             request = AgentExecutionRequest(

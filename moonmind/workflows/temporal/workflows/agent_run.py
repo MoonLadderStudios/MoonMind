@@ -28,25 +28,11 @@ class AgentRunStatus:
 
 PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
-# Note: In a real temporal app, adapters might be activities or standard classes
-# accessed via DI. We simulate them here based on the request.
-
-@activity.defn
-async def publish_artifacts_activity(result: AgentRunResult) -> AgentRunResult:
-    # Stub for publishing outputs back to artifact storage
-    return result
-
-@activity.defn
-async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
-    # TODO(Phase C): Wire adapter instantiation via DI / activity context.
-    # Production adapters require injected dependencies (clients, callables).
-    # For now this is a best-effort stub; the full cancel path will be
-    # implemented when this workflow moves to moonmind/.
-    activity.logger.warning(
-        "invoke_adapter_cancel called for %s/%s — adapter cancel not yet wired",
-        agent_kind,
-        run_id,
-    )
+# Activity catalog constants for agent_runtime fleet routing.
+AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
+AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=5)
+AGENT_RUNTIME_CANCEL_TIMEOUT = timedelta(minutes=1)
+INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 
 
 @activity.defn(name="integration.resolve_external_adapter")
@@ -126,19 +112,45 @@ class MoonMindAgentRun:
                     await workflow.wait_condition(lambda: self.slot_assigned_event.is_set())
                     request.execution_profile_ref = self._assigned_profile_id
 
-                    # TODO(Phase C): Wire ManagedAgentAdapter with proper DI params.
-                    # For now, create a minimal stub that satisfies the protocol.
-                    async def mock_profile_fetcher(**kw):
-                        return {"profiles": [{"profile_id": request.execution_profile_ref}]}
-                    async def mock_async_noop(**kw):
-                        pass
+                    # Wire ManagedAgentAdapter with real DI callables.
+                    # The slot_requester / slot_releaser / cooldown_reporter
+                    # are thin wrappers around AuthProfileManager signals.
+                    # The profile_fetcher dispatches to the auth_profile.list
+                    # activity on the artifacts fleet.
+                    wf_id = workflow.info().workflow_id
+
+                    async def _profile_fetcher(**kw):
+                        return await workflow.execute_activity(
+                            "auth_profile.list",
+                            {"runtime_id": kw.get("runtime_id", runtime_id)},
+                            task_queue="mm.activity.artifacts",
+                            start_to_close_timeout=timedelta(seconds=30),
+                        )
+
+                    async def _slot_requester(**kw):
+                        await manager_handle.signal("request_slot", {
+                            "requester_workflow_id": wf_id,
+                            "runtime_id": kw.get("runtime_id", runtime_id),
+                        })
+
+                    async def _slot_releaser(**kw):
+                        await manager_handle.signal("release_slot", {
+                            "requester_workflow_id": wf_id,
+                            "profile_id": kw.get("profile_id", request.execution_profile_ref),
+                        })
+
+                    async def _cooldown_reporter(**kw):
+                        await manager_handle.signal("report_cooldown", {
+                            "profile_id": kw.get("profile_id", request.execution_profile_ref),
+                            "cooldown_seconds": kw.get("cooldown_seconds", 300),
+                        })
 
                     adapter: AgentAdapter = ManagedAgentAdapter(
-                        profile_fetcher=mock_profile_fetcher,
-                        slot_requester=mock_async_noop,
-                        slot_releaser=mock_async_noop,
-                        cooldown_reporter=mock_async_noop,
-                        workflow_id=workflow.info().workflow_id,
+                        profile_fetcher=_profile_fetcher,
+                        slot_requester=_slot_requester,
+                        slot_releaser=_slot_releaser,
+                        cooldown_reporter=_cooldown_reporter,
+                        workflow_id=wf_id,
                     )
                 elif request.agent_kind == "external":
                     # Validate adapter availability in an activity (deterministic-safe).
@@ -202,11 +214,12 @@ class MoonMindAgentRun:
                 if manager_handle and request.execution_profile_ref:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
 
-                # Post-run artifact publishing logic
+                # Post-run artifact publishing via the agent_runtime activity fleet.
                 await workflow.execute_activity(
-                    publish_artifacts_activity,
-                    self.final_result,
-                    start_to_close_timeout=timedelta(minutes=5)
+                    "agent_runtime.publish_artifacts",
+                    self.final_result.model_dump(mode="json", by_alias=True) if hasattr(self.final_result, "model_dump") else self.final_result,
+                    task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                    start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
                 )
 
                 return self.final_result
@@ -240,8 +253,9 @@ class MoonMindAgentRun:
             if self.run_id is not None and self.agent_kind is not None:
                 with workflow.execute_in_background_with_shield():
                     await workflow.execute_activity(
-                        invoke_adapter_cancel,
-                        args=[self.agent_kind, self.run_id],
-                        start_to_close_timeout=timedelta(minutes=1)
+                        "agent_runtime.cancel",
+                        {"agent_kind": self.agent_kind, "run_id": self.run_id},
+                        task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                        start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
                     )
             raise
