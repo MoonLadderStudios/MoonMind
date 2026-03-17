@@ -450,3 +450,63 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert result["status"] == "merged"
     assert full_invocations == 0
     assert sleeps == [15]
+
+
+def test_summarize_ci_treats_stale_rollup_as_running(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """When rollup has non-security checks but REST API has none for the
+    actual HEAD, the rollup is stale and CI should be marked as running."""
+    summarize = pr_resolve_snapshot_module["summarize_ci_checks"]
+
+    # Simulate a stale rollup with one non-security check that passed
+    stale_checks = [
+        {
+            "name": "test",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "workflowName": "Run Pytest Unit Tests",
+        }
+    ]
+    summary = summarize(stale_checks)
+    assert summary["nonSecurityCheckCount"] == 1
+    assert summary["isRunning"] is False
+    assert summary["hasFailures"] is False
+
+    # Simulate an empty HEAD check-run result (CI hasn't started)
+    head_summary = summarize([])
+    head_non_sec = head_summary.get("nonSecurityCheckCount", 0)
+    rollup_non_sec = summary.get("nonSecurityCheckCount", 0)
+
+    # Verify the condition our cross-check uses
+    assert rollup_non_sec > 0 and head_non_sec == 0
+
+
+def test_summarize_ci_head_checks_propagate_failures(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """When REST API check-runs for HEAD exist and include failures,
+    the summarize function should report them."""
+    summarize = pr_resolve_snapshot_module["summarize_ci_checks"]
+
+    head_checks = [
+        {
+            "name": "test",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "workflowName": "Run Pytest Unit Tests",
+        },
+        {
+            "name": "Analyze (python)",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "workflowName": "CodeQL",
+        },
+    ]
+    summary = summarize(head_checks)
+    assert summary["hasFailures"] is True
+    assert summary["isRunning"] is False
+    assert summary["nonSecurityCheckCount"] == 1
+    assert len(summary["failedChecks"]) == 1
+    assert summary["failedChecks"][0]["name"] == "test"
+

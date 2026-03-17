@@ -460,6 +460,44 @@ def main():
                 }
             )
 
+    # --- HEAD SHA cross-check ---------------------------------------------------
+    # The GraphQL statusCheckRollup may include stale checks from a previous
+    # commit when CI for the newest commit hasn't started yet.  Cross-validate
+    # by fetching REST API check-runs for the exact HEAD SHA and comparing
+    # against the rollup.
+    head_sha = str(pr_data.get("headRefOid") or "").strip()
+    if head_sha and pr_repo:
+        head_check_runs = _fetch_commit_check_runs(
+            pr_repo=pr_repo, commit_sha=head_sha
+        )
+        head_summary = summarize_ci_checks(head_check_runs) if head_check_runs else {
+            "nonSecurityCheckCount": 0,
+            "isRunning": False,
+            "hasFailures": False,
+        }
+        head_non_sec = int(head_summary.get("nonSecurityCheckCount", 0))
+        rollup_non_sec = int(ci_summary.get("nonSecurityCheckCount", 0))
+
+        if rollup_non_sec > 0 and head_non_sec == 0:
+            # Rollup reports non-security checks but REST API has none for the
+            # actual HEAD — the rollup is stale.  Mark CI as running so the
+            # resolver waits instead of merging.
+            ci_summary["isRunning"] = True
+            ci_summary["signalQuality"] = "degraded"
+            degraded = list(ci_summary.get("degradedReasons") or [])
+            degraded.append("rollup_stale_head_sha_has_no_non_security_checks")
+            ci_summary["degradedReasons"] = sorted(dict.fromkeys(degraded))
+        elif head_non_sec > 0:
+            # REST API has check-runs for the HEAD — use the HEAD summary as
+            # the authoritative source for running / failure state.
+            ci_summary["isRunning"] = bool(head_summary.get("isRunning"))
+            ci_summary["hasFailures"] = bool(head_summary.get("hasFailures"))
+            head_failed = head_summary.get("failedChecks") or []
+            if head_failed:
+                ci_summary["failedChecks"] = head_failed
+        ci_summary["headShaVerified"] = head_sha
+        ci_summary["headShaNonSecurityCheckCount"] = head_non_sec
+
     previous_sha = _fetch_previous_commit_sha(
         pr_repo=pr_repo,
         pr_number=pr_data.get("number"),
