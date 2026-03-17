@@ -9,8 +9,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindRun,
     _build_runtime_activities,
     main_async,
-    publish_artifacts_activity,
-    invoke_adapter_cancel,
+    resolve_external_adapter,
 )
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
 
@@ -48,7 +47,7 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
         MoonMindAuthProfileManagerWorkflow,
         MoonMindAgentRun,
     ]
-    assert kwargs["activities"] == [publish_artifacts_activity, invoke_adapter_cancel]
+    assert kwargs["activities"] == [resolve_external_adapter]
     assert kwargs["max_concurrent_workflow_tasks"] == 7
     assert "max_concurrent_activities" not in kwargs
 
@@ -100,6 +99,7 @@ async def test_main_async_activity_fleet(
 
 
 @pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
@@ -121,7 +121,10 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_jules_activities_cls,
     mock_agent_runtime_activities_cls,
     mock_build_bindings,
+    mock_build_deps,
 ):
+    mock_build_deps.return_value = (MagicMock(), MagicMock())
+
     @asynccontextmanager
     async def _fake_session_context():
         yield "session"
@@ -154,7 +157,9 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         artifact_service=mock_service_cls.return_value
     )
     mock_agent_runtime_activities_cls.assert_called_once_with(
-        artifact_service=mock_service_cls.return_value
+        artifact_service=mock_service_cls.return_value,
+        run_store=ANY,
+        run_supervisor=ANY,
     )
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(
