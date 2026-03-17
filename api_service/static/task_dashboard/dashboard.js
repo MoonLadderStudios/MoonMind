@@ -309,10 +309,10 @@
     Array.from(new Set([...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME]));
 
   const TASK_RUNTIME_LABELS = {
-    codex: "Codex worker",
-    gemini: "Gemini worker",
-    claude: "Claude worker",
-    jules: "Jules worker",
+    codex: "Codex CLI",
+    gemini: "Gemini CLI",
+    claude: "Claude Code",
+    jules: "Jules",
     [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 

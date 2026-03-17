@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -841,7 +842,7 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
 
     with pytest.raises(
         TemporalActivityRuntimeError,
-        match=JULES_RUNTIME_DISABLED_MESSAGE,
+        match=re.escape(JULES_RUNTIME_DISABLED_MESSAGE),
     ):
         await activities.integration_jules_start(
             principal="test-user",

@@ -151,3 +151,160 @@ async def test_agent_run_workflow_cancellation():
             assert "cancel" in exc_str or "cancel" in cause_str or isinstance(
                 exc_info.value.__cause__, asyncio.CancelledError
             )
+
+
+# --- External agent workflow path ---
+
+# Track activity calls for external-agent verification.
+_external_activity_calls: list[str] = []
+
+
+@_activity.defn(name="integration.resolve_external_adapter")
+async def mock_resolve_external_adapter(agent_id: str) -> str:
+    _external_activity_calls.append(f"resolve:{agent_id}")
+    return agent_id
+
+
+@_activity.defn(name="integration.jules.start")
+async def mock_jules_start(request: dict) -> dict:
+    from datetime import UTC, datetime
+
+    _external_activity_calls.append("start")
+    return {
+        "runId": "jules-task-001",
+        "agentKind": "external",
+        "agentId": "jules",
+        "status": "running",
+        "startedAt": datetime.now(tz=UTC).isoformat(),
+        "pollHintSeconds": 2,
+        "metadata": {
+            "providerStatus": "in_progress",
+            "normalizedStatus": "running",
+        },
+    }
+
+
+# Counter for status polling — starts running, then completes.
+_status_poll_count = 0
+
+
+@_activity.defn(name="integration.jules.status")
+async def mock_jules_status(run_id: str) -> dict:
+    from datetime import UTC, datetime
+
+    global _status_poll_count
+    _status_poll_count += 1
+    _external_activity_calls.append(f"status:{_status_poll_count}")
+    if _status_poll_count >= 2:
+        return {
+            "runId": run_id,
+            "agentKind": "external",
+            "agentId": "jules",
+            "status": "completed",
+            "observedAt": datetime.now(tz=UTC).isoformat(),
+            "metadata": {
+                "providerStatus": "completed",
+                "normalizedStatus": "succeeded",
+            },
+        }
+    return {
+        "runId": run_id,
+        "agentKind": "external",
+        "agentId": "jules",
+        "status": "running",
+        "observedAt": datetime.now(tz=UTC).isoformat(),
+        "metadata": {
+            "providerStatus": "in_progress",
+            "normalizedStatus": "running",
+        },
+    }
+
+
+@_activity.defn(name="integration.jules.fetch_result")
+async def mock_jules_fetch_result(run_id: str) -> dict:
+    _external_activity_calls.append("fetch_result")
+    return {
+        "outputRefs": [],
+        "summary": f"Jules task {run_id} completed successfully.",
+        "metadata": {"normalizedStatus": "succeeded"},
+    }
+
+
+@_activity.defn(name="integration.jules.cancel")
+async def mock_jules_cancel(run_id: str) -> dict:
+    from datetime import UTC, datetime
+
+    _external_activity_calls.append("cancel")
+    return {
+        "runId": run_id,
+        "agentKind": "external",
+        "agentId": "jules",
+        "status": "cancelled",
+        "observedAt": datetime.now(tz=UTC).isoformat(),
+        "metadata": {"cancelAccepted": False, "unsupported": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_run_external_agent_workflow():
+    """Validate that external-agent runs route through integration activities."""
+    global _status_poll_count
+    _status_poll_count = 0
+    _external_activity_calls.clear()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        # Workflow worker: hosts the workflow + agent_runtime activities.
+        async with Worker(
+            env.client,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun],
+            activities=[mock_publish_artifacts, mock_cancel],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            # Integrations worker: hosts integration.* activities on
+            # mm.activity.integrations, matching production fleet separation.
+            async with Worker(
+                env.client,
+                task_queue="mm.activity.integrations",
+                activities=[
+                    mock_resolve_external_adapter,
+                    mock_jules_start,
+                    mock_jules_status,
+                    mock_jules_fetch_result,
+                    mock_jules_cancel,
+                ],
+            ):
+                request = AgentExecutionRequest(
+                    agent_kind="external",
+                    agent_id="jules",
+                    execution_profile_ref="profile:jules-default",
+                    correlation_id="corr-ext-1",
+                    idempotency_key="idem-ext-1",
+                    parameters={
+                        "title": "External Test",
+                        "description": "Integration test for external agent workflow",
+                    },
+                )
+
+                handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    request,
+                    id="test-workflow-external-1",
+                    task_queue="agent-run-task-queue",
+                )
+
+                result = await handle.result()
+
+                assert isinstance(result, AgentRunResult)
+                assert result.summary is not None
+                assert "jules-task-001" in result.summary
+
+                # Verify activities were called in the correct order.
+                resolve_idx = _external_activity_calls.index("resolve:jules")
+                start_idx = _external_activity_calls.index("start")
+                fetch_idx = _external_activity_calls.index("fetch_result")
+                assert resolve_idx < start_idx < fetch_idx, (
+                    f"Expected resolve < start < fetch_result, got {_external_activity_calls}"
+                )
+                # At least one status poll should have happened between start and fetch_result.
+                assert any(c.startswith("status:") for c in _external_activity_calls[start_idx:fetch_idx])
