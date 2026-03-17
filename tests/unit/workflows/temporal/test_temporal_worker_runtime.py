@@ -99,6 +99,7 @@ async def test_main_async_activity_fleet(
 
 
 @pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
@@ -120,7 +121,10 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_jules_activities_cls,
     mock_agent_runtime_activities_cls,
     mock_build_bindings,
+    mock_build_deps,
 ):
+    mock_build_deps.return_value = (MagicMock(), MagicMock())
+
     @asynccontextmanager
     async def _fake_session_context():
         yield "session"
