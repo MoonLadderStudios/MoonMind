@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 import os
 import re
 import shlex
@@ -1603,8 +1604,6 @@ class TemporalProposalActivities:
         Returns a summary dict with ``generated_count``, ``submitted_count``,
         and ``errors`` (redacted).
         """
-        import logging
-
         logger = logging.getLogger(__name__)
         payload = dict(request or {})
         candidates: list[Any] = payload.get("candidates") or []

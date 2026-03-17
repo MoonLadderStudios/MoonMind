@@ -226,6 +226,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             agent_runtime_activities=TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
             ),
+            # TODO: wire proposal_service_factory once full proposal
+            # generation is implemented.  While the generator stub returns
+            # an empty candidate list, proposal_submit is never invoked
+            # with real data and the factory is not required.
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
             ),
