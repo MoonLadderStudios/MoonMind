@@ -176,6 +176,7 @@ class WorkerPauseMetrics:
     queued: int
     running: int
     stale_running: int
+    metrics_source: str = "legacy"  # "temporal" or "legacy"
 
     @property
     def is_drained(self) -> bool:
@@ -1313,6 +1314,39 @@ class AgentQueueService:
             )
 
         await self._repository.commit()
+
+        # --- Quiesce Batch Signal Dispatch (DOC-REQ-003, FR-007, FR-010) ---
+        if action_key == "pause" and pause_mode == models.WorkerPauseMode.QUIESCE:
+            try:
+                from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+                adapter = TemporalClientAdapter()
+                signaled = await adapter.send_batch_pause_signal()
+                logger.info(
+                    "quiesce pause signals dispatched",
+                    extra={"signaled_count": signaled},
+                )
+            except Exception:
+                logger.warning(
+                    "quiesce pause signal dispatch failed (best-effort)",
+                    exc_info=True,
+                )
+        elif action_key == "resume" and state.mode == models.WorkerPauseMode.QUIESCE:
+            try:
+                from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+                adapter = TemporalClientAdapter()
+                signaled = await adapter.send_batch_resume_signal()
+                logger.info(
+                    "quiesce resume signals dispatched",
+                    extra={"signaled_count": signaled},
+                )
+            except Exception:
+                logger.warning(
+                    "quiesce resume signal dispatch failed (best-effort)",
+                    exc_info=True,
+                )
+
         return await self._build_worker_pause_snapshot(audit_limit=audit_limit)
 
     async def complete_job(
@@ -2626,13 +2660,29 @@ class AgentQueueService:
         return None
 
     async def _build_worker_pause_metrics(self) -> WorkerPauseMetrics:
-        """Compute queued/running/stale counters for worker pause UX."""
+        """Compute queued/running/stale counters for worker pause UX.
 
-        counts = await self._repository.fetch_worker_pause_metrics()
+        Prefers Temporal Visibility metrics (DOC-REQ-002, FR-003) and falls back
+        to legacy queue-table counts when Temporal is unreachable.
+        """
+        source = "temporal"
+        try:
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+            adapter = TemporalClientAdapter()
+            counts = await adapter.get_drain_metrics()
+        except Exception:
+            logger.warning(
+                "Temporal Visibility drain metrics unavailable, falling back to queue table",
+                exc_info=True,
+            )
+            source = "legacy"
+            counts = await self._repository.fetch_worker_pause_metrics()
         return WorkerPauseMetrics(
             queued=counts.get("queued", 0),
             running=counts.get("running", 0),
             stale_running=counts.get("stale_running", 0),
+            metrics_source=source,
         )
 
     async def _build_worker_pause_snapshot(

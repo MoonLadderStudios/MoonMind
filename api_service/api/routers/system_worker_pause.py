@@ -158,6 +158,7 @@ def _serialize_worker_pause_snapshot(
             running=snapshot.metrics.running,
             stale_running=snapshot.metrics.stale_running,
             is_drained=snapshot.metrics.is_drained,
+            metrics_source=snapshot.metrics.metrics_source,
         ),
         audit=WorkerPauseAuditListModel(
             latest=[_serialize_audit_event(event) for event in snapshot.audit_events]

@@ -186,6 +186,25 @@ class TemporalExecutionService:
         )
         self._client_adapter = client_adapter or TemporalClientAdapter()
 
+    async def check_system_paused(self) -> bool:
+        """Return True if the system-wide worker pause singleton is active.
+
+        Used by API guard to prevent new workflow submissions (DOC-REQ-001/004/005).
+        """
+        from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+
+        repo = AgentQueueRepository(self._session)
+        state = await repo.get_pause_state()
+        return bool(state.paused)
+
+    async def send_quiesce_pause_signal(self) -> int:
+        """Send a Quiesce pause signal to all running workflows (DOC-REQ-003, FR-007)."""
+        return await self._client_adapter.send_batch_pause_signal()
+
+    async def send_quiesce_resume_signal(self) -> int:
+        """Send a Quiesce resume signal to all paused workflows (DOC-REQ-003, FR-010)."""
+        return await self._client_adapter.send_batch_resume_signal()
+
     async def create_execution(
         self,
         *,
@@ -203,6 +222,14 @@ class TemporalExecutionService:
         integration: str | None = None,
         summary: str | None = None,
     ) -> TemporalExecutionRecord:
+        # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
+        if await self.check_system_paused():
+            raise TemporalExecutionValidationError(
+                "System is paused. New workflow submissions are blocked. "
+                "Resume the system via POST /api/system/worker-pause before "
+                "starting new workflows."
+            )
+
         workflow_type_enum = self._parse_workflow_type(workflow_type)
         owner_type_enum, owner = self._resolve_owner_metadata(
             owner_id=owner_id,

@@ -155,6 +155,104 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(workflow_id)
         return await handle.describe()
 
+    # --- Worker Pause: Temporal Visibility drain metrics (DOC-REQ-002) ---
+
+    async def get_drain_metrics(
+        self,
+        *,
+        task_queues: Sequence[str] | None = None,
+    ) -> dict[str, int]:
+        """Query Temporal Visibility for running workflow counts.
+
+        Returns a dict with ``running``, ``queued`` (pending), and ``stale_running``
+        counts derived from ``ListWorkflowExecutions`` with
+        ``ExecutionStatus="Running"``.
+
+        ``task_queues``: optional list of task queues to filter.  When omitted the
+        query targets all queues in the namespace.
+        """
+        client = await self.get_client()
+
+        visibility_filter = 'ExecutionStatus="Running"'
+        if task_queues:
+            quoted = ", ".join(f'"{tq}"' for tq in task_queues)
+            visibility_filter += f" AND TaskQueue IN ({quoted})"
+
+        running_count = 0
+        async for _ in client.list_workflows(query=visibility_filter):
+            running_count += 1
+
+        return {
+            "running": running_count,
+            "queued": 0,  # Temporal doesn't distinguish "queued" from "running"
+            "stale_running": 0,
+        }
+
+    # --- Worker Pause: Batch Signals for Quiesce mode (DOC-REQ-003) ---
+
+    async def send_batch_pause_signal(
+        self,
+        *,
+        task_queues: Sequence[str] | None = None,
+    ) -> int:
+        """Send a ``pause`` signal to all running workflows (Quiesce mode).
+
+        Returns the number of workflows signaled.
+        """
+        return await self._send_signal_to_running_workflows(
+            signal_name="pause",
+            task_queues=task_queues,
+        )
+
+    async def send_batch_resume_signal(
+        self,
+        *,
+        task_queues: Sequence[str] | None = None,
+    ) -> int:
+        """Send a ``resume`` signal to all running workflows.
+
+        Returns the number of workflows signaled.
+        """
+        return await self._send_signal_to_running_workflows(
+            signal_name="resume",
+            task_queues=task_queues,
+        )
+
+    async def _send_signal_to_running_workflows(
+        self,
+        *,
+        signal_name: str,
+        task_queues: Sequence[str] | None = None,
+    ) -> int:
+        """Iterate running workflows via Visibility and signal each one.
+
+        This approach works with all Temporal server versions.  When the
+        Temporal Batch Operations API becomes available in the Python SDK,
+        this can be replaced with a single ``StartBatchOperation`` call.
+        """
+        client = await self.get_client()
+
+        visibility_filter = 'ExecutionStatus="Running"'
+        if task_queues:
+            quoted = ", ".join(f'"{tq}"' for tq in task_queues)
+            visibility_filter += f" AND TaskQueue IN ({quoted})"
+
+        signaled = 0
+        async for execution in client.list_workflows(query=visibility_filter):
+            try:
+                handle = client.get_workflow_handle(execution.id)
+                await handle.signal(signal_name)
+                signaled += 1
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Failed to signal workflow %s with %s",
+                    execution.id,
+                    signal_name,
+                    exc_info=True,
+                )
+        return signaled
+
 
 class TemporalExecutionCreatorProtocol(Protocol):
     """Protocol for the execution service used by manifest child scheduling."""

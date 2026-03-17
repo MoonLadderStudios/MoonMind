@@ -303,6 +303,7 @@ class WorkerPauseMetricsModel(BaseModel):
     running: int = Field(..., alias="running", ge=0)
     stale_running: int = Field(..., alias="staleRunning", ge=0)
     is_drained: bool = Field(..., alias="isDrained")
+    metrics_source: str = Field("legacy", alias="metricsSource")
 
 
 class WorkerPauseAuditEventModel(BaseModel):
