@@ -109,7 +109,9 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactService")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalArtifactRepository")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalProposalActivities")
 async def test_build_runtime_activities_injects_concrete_handlers(
+    mock_proposal_activities_cls,
     mock_repository_cls,
     mock_service_cls,
     mock_artifact_activities_cls,
@@ -163,5 +165,10 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         skill_activities=mock_skill_activities_cls.return_value,
         sandbox_activities=mock_sandbox_activities_cls.return_value,
         integration_activities=mock_jules_activities_cls.return_value,
+        agent_runtime_activities=ANY,
+        proposal_activities=mock_proposal_activities_cls.return_value,
+    )
+    mock_proposal_activities_cls.assert_called_once_with(
+        artifact_service=mock_service_cls.return_value,
     )
     await resources.aclose()

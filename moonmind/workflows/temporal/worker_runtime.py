@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalJulesActivities,
     TemporalPlanActivities,
+    TemporalProposalActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
@@ -223,6 +224,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service
             ),
             agent_runtime_activities=TemporalAgentRuntimeActivities(
+                artifact_service=artifact_service,
+            ),
+            proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
             ),
         )

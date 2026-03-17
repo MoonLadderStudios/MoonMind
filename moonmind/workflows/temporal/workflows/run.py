@@ -42,15 +42,21 @@ class RunWorkflowInput(TypedDict, total=False):
     plan_artifact_ref: Optional[str]
 
 
-class RunWorkflowOutput(TypedDict):
+class _RunWorkflowOutputBase(TypedDict):
     status: str
     message: Optional[str]
+
+
+class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
+    proposals_generated: int
+    proposals_submitted: int
 
 
 WORKFLOW_NAME = "MoonMind.Run"
 STATE_INITIALIZING = "initializing"
 STATE_PLANNING = "planning"
 STATE_EXECUTING = "executing"
+STATE_PROPOSALS = "proposals"
 STATE_AWAITING_EXTERNAL = "awaiting_external"
 STATE_FINALIZING = "finalizing"
 STATE_SUCCEEDED = "succeeded"
@@ -107,6 +113,11 @@ class MoonMindRunWorkflow:
         self._step_count = 0
         self._max_wait_cycles = 100
         self._max_steps = 100
+
+        # Proposal tracking
+        self._proposals_generated = 0
+        self._proposals_submitted = 0
+        self._proposals_errors: list[str] = []
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -240,12 +251,21 @@ class MoonMindRunWorkflow:
         if self._cancel_requested:
             return {"status": "canceled"}
 
+        await self._run_proposals_stage(parameters=parameters)
+
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(STATE_SUCCEEDED, summary="Workflow completed successfully.")
 
-        return {"status": "success", "message": "Workflow completed successfully"}
+        output: RunWorkflowOutput = {
+            "status": "success",
+            "message": "Workflow completed successfully",
+        }
+        if self._proposals_generated > 0 or self._proposals_submitted > 0:
+            output["proposals_generated"] = self._proposals_generated
+            output["proposals_submitted"] = self._proposals_submitted
+        return output
 
     def _initialize_from_payload(
         self, input_payload: dict[str, Any]
@@ -781,6 +801,83 @@ class MoonMindRunWorkflow:
         self._waiting_reason = None
         self._attention_required = False
         self._update_search_attributes()
+
+    async def _run_proposals_stage(
+        self, *, parameters: dict[str, Any]
+    ) -> None:
+        """Best-effort proposal generation phase.
+
+        Runs only when ``proposeTasks`` is set in ``initialParameters``.
+        Failures are logged but do not fail the workflow.
+        """
+        propose_tasks = parameters.get("proposeTasks")
+        if not propose_tasks:
+            return
+
+        self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
+
+        try:
+            proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "proposal.generate"
+            )
+            candidates = await workflow.execute_activity(
+                "proposal.generate",
+                {
+                    "principal": self._principal(),
+                    "workflow_id": workflow.info().workflow_id,
+                    "run_id": workflow.info().run_id,
+                    "repo": self._repo,
+                    "parameters": parameters,
+                },
+                **self._execute_kwargs_for_route(proposal_route),
+            )
+        except Exception as exc:
+            workflow.logger.warning(
+                "Proposal generation failed (best-effort): %s", exc
+            )
+            self._proposals_errors.append(f"generation failed: {str(exc)[:200]}")
+            return
+
+        candidate_list = candidates if isinstance(candidates, list) else []
+        self._proposals_generated = len(candidate_list)
+
+        if not candidate_list:
+            return
+
+        try:
+            submit_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                "proposal.submit"
+            )
+            policy = {
+                "max_items": parameters.get("proposalMaxItems", 10),
+                "targets": parameters.get("proposalTargets", "project"),
+            }
+            origin = {
+                "workflow_id": workflow.info().workflow_id,
+                "temporal_run_id": workflow.info().run_id,
+                "trigger_repo": self._repo or "",
+            }
+            submit_result = await workflow.execute_activity(
+                "proposal.submit",
+                {
+                    "candidates": candidate_list,
+                    "policy": policy,
+                    "origin": origin,
+                    "principal": self._principal(),
+                },
+                **self._execute_kwargs_for_route(submit_route),
+            )
+            if isinstance(submit_result, dict):
+                self._proposals_submitted = submit_result.get(
+                    "submitted_count", 0
+                )
+                errors = submit_result.get("errors") or []
+                self._proposals_errors.extend(errors)
+        except Exception as exc:
+            workflow.logger.warning(
+                "Proposal submission failed (best-effort): %s", exc
+            )
+            self._proposals_errors.append(f"submission failed: {str(exc)[:200]}")
 
     def _set_state(self, state: str, summary: Optional[str] = None) -> None:
         self._state = state

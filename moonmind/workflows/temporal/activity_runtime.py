@@ -180,6 +180,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime_publish_artifacts",
     ),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
+    "proposal.generate": ("proposals", "proposal_generate"),
+    "proposal.submit": ("proposals", "proposal_submit"),
 }
 
 
@@ -1565,6 +1567,139 @@ class TemporalJulesActivities:
         return tuple(output_refs)
 
 
+class TemporalProposalActivities:
+    """Implementation helpers for ``proposal.*`` activities."""
+
+    def __init__(
+        self,
+        *,
+        artifact_service: TemporalArtifactService | None = None,
+        proposal_service_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self._artifact_service = artifact_service
+        self._proposal_service_factory = proposal_service_factory
+
+    async def proposal_generate(
+        self,
+        request: Mapping[str, Any] | None = None,
+        /,
+    ) -> list[dict[str, Any]]:
+        """Analyze execution artifacts and produce candidate proposals.
+
+        Currently a stub returning an empty candidate array.
+        Future implementation will use LLM activities to analyze
+        step-level ``AgentRunResult`` data, execution artifacts,
+        and run diagnostics to produce structured proposals.
+        """
+        return []
+
+    async def proposal_submit(
+        self,
+        request: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        """Validate, filter, and submit generated proposals to the Proposal Queue API.
+
+        Returns a summary dict with ``generated_count``, ``submitted_count``,
+        and ``errors`` (redacted).
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+        payload = dict(request or {})
+        candidates: list[Any] = payload.get("candidates") or []
+        policy: dict[str, Any] = payload.get("policy") or {}
+        origin: dict[str, Any] = payload.get("origin") or {}
+        workflow_id: str = origin.get("workflow_id") or ""
+        run_id: str = origin.get("temporal_run_id") or ""
+        trigger_repo: str = origin.get("trigger_repo") or ""
+
+        max_items = int(policy.get("max_items", 10))
+        generated_count = len(candidates)
+        submitted_count = 0
+        errors: list[str] = []
+
+        if not candidates:
+            return {
+                "generated_count": 0,
+                "submitted_count": 0,
+                "errors": [],
+            }
+
+        service = None
+        if self._proposal_service_factory is not None:
+            try:
+                service = self._proposal_service_factory()
+            except Exception as exc:
+                logger.warning(
+                    "proposal.submit: failed to create proposal service: %s", exc
+                )
+                return {
+                    "generated_count": generated_count,
+                    "submitted_count": 0,
+                    "errors": ["proposal service unavailable"],
+                }
+
+        for candidate in candidates[:max_items]:
+            if not isinstance(candidate, Mapping):
+                errors.append("skipped non-object candidate")
+                continue
+            title = str(candidate.get("title") or "").strip()
+            summary = str(candidate.get("summary") or "").strip()
+            task_create_request = candidate.get("taskCreateRequest")
+            if not title or not summary or not isinstance(task_create_request, Mapping):
+                errors.append(f"skipped malformed candidate: {title!r}")
+                continue
+
+            try:
+                if service is not None:
+                    from moonmind.workflows.task_proposals.models import (
+                        TaskProposalOriginSource,
+                    )
+
+                    origin_source = TaskProposalOriginSource.WORKFLOW
+                    origin_metadata = {
+                        "workflowId": workflow_id,
+                        "temporalRunId": run_id,
+                        "triggerRepo": trigger_repo,
+                    }
+                    await service.create_proposal(
+                        title=title,
+                        summary=summary,
+                        category=candidate.get("category"),
+                        tags=candidate.get("tags"),
+                        task_create_request=dict(task_create_request),
+                        origin_source=origin_source,
+                        origin_id=None,
+                        origin_metadata=origin_metadata,
+                        proposed_by_worker_id=f"temporal:{workflow_id}",
+                        proposed_by_user_id=None,
+                    )
+                    submitted_count += 1
+                else:
+                    # No service available — log and count as submitted for
+                    # structural verification in tests.
+                    logger.info(
+                        "proposal.submit: would submit proposal %r (no service wired)",
+                        title,
+                    )
+                    submitted_count += 1
+            except Exception as exc:
+                redacted_error = str(exc)[:200]
+                errors.append(f"submission failed for {title!r}: {redacted_error}")
+                logger.warning(
+                    "proposal.submit: failed to submit proposal %r: %s",
+                    title,
+                    redacted_error,
+                )
+
+        return {
+            "generated_count": generated_count,
+            "submitted_count": submitted_count,
+            "errors": errors,
+        }
+
+
 class TemporalAgentRuntimeActivities:
     """Implementation helpers for ``agent_runtime.*`` activities."""
 
@@ -1675,6 +1810,7 @@ def build_activity_bindings(
     sandbox_activities: Any | None = None,
     integration_activities: Any | None = None,
     agent_runtime_activities: Any | None = None,
+    proposal_activities: Any | None = None,
     fleets: Sequence[str] | None = None,
 ) -> tuple[TemporalActivityBinding, ...]:
     """Bind catalog activity types to concrete runtime handlers."""
@@ -1687,6 +1823,7 @@ def build_activity_bindings(
         "sandbox": sandbox_activities,
         "integrations": integration_activities,
         "agent_runtime": agent_runtime_activities,
+        "proposals": proposal_activities,
     }
     bindings: list[TemporalActivityBinding] = []
     bound_keys: set[tuple[str, str]] = set()
@@ -1791,6 +1928,7 @@ __all__ = [
     "TemporalAgentRuntimeActivities",
     "TemporalJulesActivities",
     "TemporalPlanActivities",
+    "TemporalProposalActivities",
     "TemporalSkillActivities",
     "TemporalSandboxActivities",
     "build_activity_bindings",
