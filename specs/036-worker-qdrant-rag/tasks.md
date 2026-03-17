@@ -91,4 +91,4 @@
 1. Complete Phase 1–2 foundations so all transports share one `ContextRetrievalService` + `ContextPack` contract.
 2. Deliver User Story 1 as the MVP to unblock the direct worker ↔ Qdrant path; ship as soon as T008–T013 pass tests to provide immediate value.
 3. Layer guardrails (US2) to protect production runs, then decide whether regulated environments require the RetrievalGateway (US3) before or after overlays (US4) based on deployment pressure.
-4. Finish with documentation, release comms, and a full `./tools/test_unit.sh` run (Phase 7) before requesting Spec Kit verification or integration tests.
+4. Finish with documentation, release comms, and a full `./tools/test_unit.sh` run (Phase 7) before requesting workflow verification or integration tests.

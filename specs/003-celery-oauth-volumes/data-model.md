@@ -33,7 +33,7 @@
   - `hash_modulo` must match global routing configuration to keep deterministic mapping consistent.
 
 ## Entity: AutomationRun (extended fields)
-- **Purpose**: Existing record for Spec Kit executions augmented with Codex routing metadata.
+- **Purpose**: Existing record for workflow executions augmented with Codex routing metadata.
 - **Key Attributes (additions)**:
   - `codex_queue` (string) – queue the Codex phase executed on.
   - `codex_volume` (string) – identifier of the auth volume mounted for the run.

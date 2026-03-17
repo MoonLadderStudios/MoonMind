@@ -3,13 +3,13 @@ info:
   title: Tooling Health Check API
   version: 0.1.0
   description: |
-    Reports Codex CLI, GitHub Spec Kit CLI, and Codex config status for each Celery worker.
+    Reports Codex CLI, GitHub workflow CLI, and Codex config status for each Celery worker.
 servers:
   - url: https://moonmind.local/api
 paths:
   /internal/tooling-status:
     get:
-      summary: Fetch Codex/Spec Kit tooling status for Celery workers
+      summary: Fetch Codex/workflow tooling status for Celery workers
       tags:
         - tooling
       parameters:

@@ -1,0 +1,24 @@
+# Legacy naming exceptions approved for the 047-spec-removal migration.
+# Each line is a regex matched against ripgrep output lines.
+
+# Spec-removal spec itself references legacy names by definition.
+
+# Spec-removal spec itself references legacy names by definition.
+^specs/047-spec-removal/
+
+# Alembic migration references old table names in upgrade/downgrade DDL.
+^api_service/migrations/
+
+# Helper rename scripts contain legacy patterns as search targets.
+^tools/rename_
+
+# Verification script contains the patterns it scans for.
+^tools/verify_workflow_naming
+
+# Historical OpenAPI spec contract and traceability tables reference filename.
+spec-automation-api
+
+# Regression test intentionally asserts SPEC_SKILLS env vars are NOT honored.
+SPEC_SKILLS_CACHE_ROOT
+SPEC_SKILLS_WORKSPACE_ROOT
+Legacy SPEC_SKILLS

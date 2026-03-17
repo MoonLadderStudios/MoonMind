@@ -13,7 +13,7 @@
 ./tools/test_unit.sh
 ```
 
-## 3. Validate Spec Kit scope gates
+## 3. Validate workflow scope gates
 
 ```bash
 .specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime

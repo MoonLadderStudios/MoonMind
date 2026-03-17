@@ -2,7 +2,7 @@
 
 ## Multi-stage Tooling Builder
 
-The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooling-builder` to install Spec Kit and Codex CLIs. The stage accepts two build arguments:
+The `api_service/Dockerfile` uses a dedicated Node.js builder stage named `tooling-builder` to install workflow and Codex CLIs. The stage accepts two build arguments:
 
 - `CODEX_CLI_VERSION` (default `0.104.0`)
 - `AGENT_KIT_VERSION` (default `0.4.0`)

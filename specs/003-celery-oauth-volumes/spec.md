@@ -9,9 +9,9 @@
 
 ### User Story 1 - Reliable Codex Authentication (Priority: P1)
 
-Spec Kit operators need Codex automation runs to reuse a persistent sign-in so Codex-driven phases finish without manual intervention.
+workflow operators need Codex automation runs to reuse a persistent sign-in so Codex-driven phases finish without manual intervention.
 
-**Why this priority**: Without persistent authentication every Codex task stalls for human re-login, blocking the automation promise of Spec Kit.
+**Why this priority**: Without persistent authentication every Codex task stalls for human re-login, blocking the automation promise of workflow.
 
 **Independent Test**: Trigger a Celery Codex phase and confirm it completes end-to-end without prompting for Codex authentication while recording the mounted volume that was used.
 

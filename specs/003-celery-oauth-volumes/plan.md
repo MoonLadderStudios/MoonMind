@@ -5,14 +5,14 @@
 
 ## Summary
 
-Implement persistent Codex authentication volumes and sharded Celery routing so Spec Kit automation reuses OAuth logins, enforces pre-flight checks, and records shard/volume metadata for every Codex run while providing operator runbooks for credential stewardship.
+Implement persistent Codex authentication volumes and sharded Celery routing so workflow automation reuses OAuth logins, enforces pre-flight checks, and records shard/volume metadata for every Codex run while providing operator runbooks for credential stewardship.
 
 ## Technical Context
 
 **Language/Version**: Python 3.11 (existing MoonMind services)  
 **Primary Dependencies**: Celery 5.x worker stack, Docker SDK for Python, Docker Compose services  
 **Storage**: Docker named volumes (`agentkit_workspaces`, `codex_auth_{0,1,2}`) plus existing PostgreSQL/RabbitMQ backends  
-**Testing**: pytest with integration coverage for Celery workflow, smoke validation via Spec Kit end-to-end tooling  
+**Testing**: pytest with integration coverage for Celery workflow, smoke validation via workflow end-to-end tooling  
 **Target Platform**: Containerized Linux environment orchestrated via Docker Compose  
 **Project Type**: Backend automation services (Celery workers + orchestration utilities)  
 **Performance Goals**: Maintain ≥95% Codex runs without manual reauthentication and route Codex tasks with negligible queue contention (target <1 additional minute per run)  

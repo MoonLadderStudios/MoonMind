@@ -7,7 +7,7 @@
 
 ## Summary
 
-Implement a Celery chain that drives Spec Kit phases end-to-end: discover the next actionable task, submit it to Codex Cloud, poll for diffs, and publish GitHub branches/PRs while persisting artifacts and emitting structured status for MoonMind’s UI. Align runtime behavior with the 015 umbrella direction by routing stages through a skills-first policy layer (Agentkit default with fallback), keeping Agentkit always available on workers, and documenting the fastest startup path for authenticated Codex workers with Gemini embeddings.
+Implement a Celery chain that drives workflow phases end-to-end: discover the next actionable task, submit it to Codex Cloud, poll for diffs, and publish GitHub branches/PRs while persisting artifacts and emitting structured status for MoonMind’s UI. Align runtime behavior with the 015 umbrella direction by routing stages through a skills-first policy layer (Agentkit default with fallback), keeping Agentkit always available on workers, and documenting the fastest startup path for authenticated Codex workers with Gemini embeddings.
 
 ## Technical Context
 

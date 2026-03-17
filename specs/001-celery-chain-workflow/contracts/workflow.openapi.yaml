@@ -3,13 +3,13 @@ info:
   title: MoonMind Workflow API
   version: 0.1.0
   description: |
-    Contracts for triggering, monitoring, and retrying Spec Kit Celery chains.
+    Contracts for triggering, monitoring, and retrying workflow Celery chains.
 servers:
   - url: https://api.moonmind.local
 paths:
   /api/workflows/runs:
     post:
-      summary: Trigger the next Spec Kit phase via the Celery chain.
+      summary: Trigger the next workflow phase via the Celery chain.
       operationId: createWorkflowRun
       requestBody:
         required: true

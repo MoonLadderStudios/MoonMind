@@ -338,7 +338,7 @@ class TemporalDashboardSettings(BaseSettings):
 
 
 class WorkflowSettings(BaseSettings):
-    """Settings specific to Spec Kit Celery workflows."""
+    """Settings specific to workflow automation."""
 
     repo_root: str = Field(
         ".",
@@ -575,12 +575,12 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices(
             "WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"
         ),
-        description="Container image used for Spec Automation job executions.",
+        description="Container image used for workflow automation job executions.",
     )
     workspace_root: str = Field(
         "/work",
         env="WORKFLOW_WORKSPACE_ROOT",
-        description="Host-mounted root directory for Spec Automation workspaces.",
+        description="Host-mounted root directory for workflow automation workspaces.",
     )
     celery_broker_url: Optional[str] = Field(
         None,
@@ -589,7 +589,7 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_CELERY_BROKER_URL",
             "CELERY_BROKER_URL",
         ),
-        description="Override Celery broker URL dedicated to Spec workflow chains.",
+        description="Override Celery broker URL dedicated to workflow chains.",
     )
     celery_result_backend: Optional[str] = Field(
         None,
@@ -598,12 +598,12 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_CELERY_RESULT_BACKEND",
             "CELERY_RESULT_BACKEND",
         ),
-        description="Override Celery result backend for Spec workflow chains.",
+        description="Override Celery result backend for workflow chains.",
     )
     metrics_enabled: bool = Field(
         False,
         env=("WORKFLOW_METRICS_ENABLED", "WORKFLOW_METRICS_ENABLED"),
-        description="Toggle emission of Spec Automation StatsD metrics.",
+        description="Toggle emission of workflow automation StatsD metrics.",
     )
     metrics_host: Optional[str] = Field(
         None,
@@ -618,7 +618,7 @@ class WorkflowSettings(BaseSettings):
     metrics_namespace: str = Field(
         "automation",
         env=("WORKFLOW_METRICS_NAMESPACE", "WORKFLOW_METRICS_NAMESPACE"),
-        description="Namespace/prefix applied to emitted Spec Automation metrics.",
+        description="Namespace/prefix applied to emitted workflow automation metrics.",
     )
     default_feature_key: str = Field(
         "001-celery-chain-workflow",
@@ -770,12 +770,12 @@ class WorkflowSettings(BaseSettings):
     agent_backend: str = Field(
         "codex_cli",
         env="WORKFLOW_AGENT_BACKEND",
-        description="Active agent backend identifier for Spec Kit automation runs.",
+        description="Active agent backend identifier for workflow automation runs.",
     )
     allowed_agent_backends: tuple[str, ...] = Field(
         ("codex_cli",),
         env="WORKFLOW_ALLOWED_AGENT_BACKENDS",
-        description="Whitelisted agent backend identifiers for Spec Kit automation.",
+        description="Whitelisted agent backend identifiers for workflow automation.",
     )
     agent_version: str = Field(
         "unspecified",
@@ -785,7 +785,7 @@ class WorkflowSettings(BaseSettings):
     prompt_pack_version: Optional[str] = Field(
         None,
         env="WORKFLOW_PROMPT_PACK_VERSION",
-        description="Spec Kit prompt pack version associated with the selected agent.",
+        description="Prompt pack version associated with the selected agent.",
     )
     agent_runtime_env_keys: tuple[str, ...] = Field(
         ("CODEX_ENV", "CODEX_MODEL", "CODEX_PROFILE", "CODEX_API_KEY"),
@@ -886,35 +886,20 @@ class WorkflowSettings(BaseSettings):
     )
     skills_registry_source: Optional[str] = Field(
         None,
-        env=(
-            "WORKFLOW_SKILLS_REGISTRY_SOURCE",
-            "SPEC_SKILLS_REGISTRY_SOURCE",
-        ),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_REGISTRY_SOURCE",
-            "SPEC_SKILLS_REGISTRY_SOURCE",
-        ),
+        env=("WORKFLOW_SKILLS_REGISTRY_SOURCE",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_REGISTRY_SOURCE"),
         description="Optional registry profile/URI for skill source resolution.",
     )
     skills_local_mirror_root: str = Field(
         ".agents/skills/local",
-        env=("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT", "SPEC_SKILLS_LOCAL_MIRROR_ROOT"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
-            "SPEC_SKILLS_LOCAL_MIRROR_ROOT",
-        ),
+        env=("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT"),
         description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
         ".agents/skills",
-        env=(
-            "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
-            "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
-        ),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
-            "SPEC_SKILLS_LEGACY_MIRROR_ROOT",
-        ),
+        env=("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT"),
         description=(
             "Secondary shared mirror root checked after local-only skills; "
             "nested '<root>/skills' is auto-detected for compatibility."
@@ -922,23 +907,14 @@ class WorkflowSettings(BaseSettings):
     )
     skills_verify_signatures: bool = Field(
         False,
-        env=("WORKFLOW_SKILLS_VERIFY_SIGNATURES", "SPEC_SKILLS_VERIFY_SIGNATURES"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_VERIFY_SIGNATURES",
-            "SPEC_SKILLS_VERIFY_SIGNATURES",
-        ),
+        env=("WORKFLOW_SKILLS_VERIFY_SIGNATURES",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_VERIFY_SIGNATURES"),
         description="Require signature metadata for selected skills before activation.",
     )
     skills_validate_local_mirror: bool = Field(
         False,
-        env=(
-            "WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR",
-            "SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
-        ),
-        validation_alias=AliasChoices(
-            "WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR",
-            "SPEC_SKILLS_VALIDATE_LOCAL_MIRROR",
-        ),
+        env=("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR",),
+        validation_alias=AliasChoices("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR"),
         description="Enable startup validation of the configured local skill mirror root.",
     )
     live_session_enabled_default: bool = Field(

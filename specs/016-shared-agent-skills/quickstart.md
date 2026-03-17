@@ -12,10 +12,10 @@ Set environment values for resolver/materializer integration:
 
 - `WORKFLOW_USE_SKILLS=true`
 - `WORKFLOW_ALLOWED_SKILLS=<comma-separated skill names>`
-- `SPEC_SKILLS_CACHE_ROOT=var/skill_cache`
-- `SPEC_SKILLS_WORKSPACE_ROOT=runs`
-- `SPEC_SKILLS_REGISTRY_SOURCE=<registry uri or profile>`
-- `SPEC_SKILLS_VERIFY_SIGNATURES=<true|false>`
+- `WORKFLOW_SKILLS_CACHE_ROOT=var/skill_cache`
+- `WORKFLOW_SKILLS_WORKSPACE_ROOT=runs`
+- `WORKFLOW_SKILLS_REGISTRY_SOURCE=<registry uri or profile>`
+- `WORKFLOW_SKILLS_VERIFY_SIGNATURES=<true|false>`
 
 ## 2) Start required services
 

@@ -1,7 +1,7 @@
 # Data Model: Celery Chain Workflow Integration
 
 ## Entity: WorkflowRun
-- **Purpose**: Canonical record per MoonMind-triggered Spec Kit automation run; stores identifiers, chain metadata, operator inputs, and aggregated artifacts.
+- **Purpose**: Canonical record per MoonMind-triggered workflow automation run; stores identifiers, chain metadata, operator inputs, and aggregated artifacts.
 - **Primary Identifier**: `id` (UUID).
 - **Key Attributes**:
   - `feature_key` (string, required) – Spec identifier or repo/task handle used for idempotent branch naming.

@@ -1,4 +1,4 @@
-"""Client adapter for GitHub automation used by Spec Kit workflows."""
+"""Client adapter for GitHub automation used by workflows."""
 
 from __future__ import annotations
 

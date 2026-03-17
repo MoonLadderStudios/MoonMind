@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: |
     API additions supporting Codex OAuth volume management, deterministic queue routing,
-    and pre-flight authentication visibility for Spec Kit automation runs.
+    and pre-flight authentication visibility for workflow automation runs.
 servers:
   - url: https://api.moonmind.local
 paths:

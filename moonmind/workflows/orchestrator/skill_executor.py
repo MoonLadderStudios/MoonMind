@@ -36,12 +36,10 @@ def _resolve_workspace_root() -> Path:
 def _resolve_skill_roots(workspace_root: Path) -> tuple[Path, ...]:
     local_root_raw = (
         os.getenv("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT")
-        or os.getenv("SPEC_SKILLS_LOCAL_MIRROR_ROOT")
         or f"{workspace_root}/.agents/skills/local"
     )
     legacy_root_raw = (
         os.getenv("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT")
-        or os.getenv("SPEC_SKILLS_LEGACY_MIRROR_ROOT")
         or f"{workspace_root}/.agents/skills"
     )
 

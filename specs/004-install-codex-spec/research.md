@@ -1,4 +1,4 @@
-# Research: Codex & Spec Kit Tooling Availability
+# Research: Codex & workflow Tooling Availability
 
 ## Decision 1: Codex CLI install source & version pin
 - **Decision**: Install Codex CLI via the official npm package `@openai/codex` during the Docker build, using a `CODEX_CLI_VERSION` build arg defaulting to a vetted semver tag (initially `0.6.x`) so releases can be bumped intentionally.
@@ -8,9 +8,9 @@
   - *Install via `pip`*: not supported by the Codex team; would require bundling an unofficial wrapper and add maintenance burden.
   - *Install at container runtime*: rejected because Spec workflow tasks must start instantly and sandboxed nodes often lack outbound network access.
 
-## Decision 2: GitHub Spec Kit CLI installation approach
-- **Decision**: Install the GitHub Spec Kit CLI from its npm package (`@githubnext/spec-kit`) within the Docker build, controlled by a `AGENT_KIT_VERSION` build arg so Spec platform operators can align the CLI version with repo expectations.
-- **Rationale**: Spec Kit’s own documentation prescribes the npm CLI; using a versioned build arg keeps Celery workers consistent with other environments and simplifies upgrades (single Docker build). Installing globally exposes the `agentkit` binary on PATH for both FastAPI and Celery processes.
+## Decision 2: GitHub workflow CLI installation approach
+- **Decision**: Install the GitHub workflow CLI from its npm package (`@githubnext/spec-kit`) within the Docker build, controlled by a `AGENT_KIT_VERSION` build arg so Spec platform operators can align the CLI version with repo expectations.
+- **Rationale**: workflow’s own documentation prescribes the npm CLI; using a versioned build arg keeps Celery workers consistent with other environments and simplifies upgrades (single Docker build). Installing globally exposes the `agentkit` binary on PATH for both FastAPI and Celery processes.
 - **Alternatives considered**:
   - *Vendoring source files into the repo*: increases maintenance overhead and risks divergence from upstream CLI behavior.
   - *Using `npx` to download on demand*: blocked by offline/headless Celery runs and increases per-task startup time.
@@ -37,7 +37,7 @@
 - **Rationale**: The runtime image primarily executes Python workloads; leaving Node/npm there increases attack surface and slows security scanning. Multi-stage builds keep the final layer slim while still packaging the needed CLIs.
 - **Alternatives considered**:
   - *Install Node/npm in the final layer*: simpler but bloats the runtime image and increases patching surface.
-  - *Use OS package managers (apt)*: Codex & Spec Kit CLIs are not available as apt packages, so this path would still require manual tarball management.
+  - *Use OS package managers (apt)*: Codex & workflow CLIs are not available as apt packages, so this path would still require manual tarball management.
   - *Ship separate sidecar containers for the CLIs*: overkill for simple command-line utilities and complicates Celery task orchestration.
 
 ## Verification

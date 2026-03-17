@@ -1,9 +1,9 @@
-"""Workspace helpers for Spec Kit automation runs.
+"""Workspace helpers for workflow automation runs.
 
-The Spec Kit automation pipeline allocates a shared volume (``agentkit_workspaces``)
+The workflow automation pipeline allocates a shared volume (``agentkit_workspaces``)
 that is mounted into both Celery workers and ephemeral job containers.  Each run
 receives an isolated directory tree rooted at ``/work/runs/<run_id>`` with
-dedicated ``repo`` (git checkout), ``home`` (Codex CLI / Spec Kit state), and
+dedicated ``repo`` (git checkout), ``home`` (Codex CLI / workflow state), and
 ``artifacts`` (logs, diffs, summaries) folders as outlined in the feature
 specification.  This module centralises path calculations and directory creation
 so later orchestration steps can rely on a consistent layout.
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "RunWorkspacePaths",
-    "SpecWorkspaceManager",
+    "WorkflowWorkspaceManager",
     "WorkspaceConfigurationError",
     "generate_branch_name",
     "sanitize_branch_component",
@@ -157,8 +157,8 @@ class RunWorkspacePaths:
     gemini_skills_path: Path
 
 
-class SpecWorkspaceManager:
-    """Manage run-scoped directories for Spec Kit automation.
+class WorkflowWorkspaceManager:
+    """Manage run-scoped directories for workflow automation.
 
     Parameters
     ----------
@@ -194,7 +194,7 @@ class SpecWorkspaceManager:
     # Construction helpers
     # ------------------------------------------------------------------
     @classmethod
-    def from_settings(cls) -> "SpecWorkspaceManager":
+    def from_settings(cls) -> "WorkflowWorkspaceManager":
         """Create a manager using the application settings configuration."""
 
         return cls(settings.workflow.workspace_root)
@@ -218,7 +218,7 @@ class SpecWorkspaceManager:
     def job_container_name(run_id: UUID | str) -> str:
         """Return the deterministic container name for a workflow run."""
 
-        return f"{SpecWorkspaceManager._CONTAINER_PREFIX}{run_id}"
+        return f"{WorkflowWorkspaceManager._CONTAINER_PREFIX}{run_id}"
 
     def run_root(self, run_id: UUID | str) -> Path:
         """Path to the root directory for the provided run identifier."""
@@ -471,7 +471,7 @@ class SpecWorkspaceManager:
         base_branch: str,
         extra_env: Optional[Mapping[str, str]] = None,
     ) -> dict[str, str]:
-        """Construct environment variables for the Spec Automation job container."""
+        """Construct environment variables for the workflow automation job container."""
 
         paths = self.ensure_workspace(run_id)
         env: dict[str, str] = {
@@ -535,7 +535,7 @@ def generate_branch_name(
     timestamp: Optional[datetime] = None,
     suffix: Optional[str] = None,
 ) -> str:
-    """Generate a deterministic branch name for a Spec Automation run."""
+    """Generate a deterministic branch name for a workflow automation run."""
 
     current = timestamp or datetime.now(UTC)
     date_fragment = current.strftime("%Y%m%d")

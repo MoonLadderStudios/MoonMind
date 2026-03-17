@@ -1,4 +1,4 @@
-"""Serialization helpers for Spec Kit Celery workflow entities."""
+"""Serialization helpers for workflow Celery workflow entities."""
 
 from __future__ import annotations
 
