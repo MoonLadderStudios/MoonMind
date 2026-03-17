@@ -65,6 +65,19 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "awaiting_action": "awaiting_action",
         "cancelled": "cancelled",
     },
+    "external": {
+        "queued": "queued",
+        "running": "running",
+        "completed": "succeeded",
+        "succeeded": "succeeded",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+        "timed_out": "failed",
+        "awaiting_callback": "awaiting_action",
+        "intervention_requested": "awaiting_action",
+        "unknown": "queued",
+    },
 }
 
 
@@ -247,6 +260,10 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "artifactMetadata": temporal_dashboard.artifact_metadata_endpoint,
                 "artifactPresignDownload": temporal_dashboard.artifact_presign_download_endpoint,
                 "artifactDownload": temporal_dashboard.artifact_download_endpoint,
+            },
+            "externalRuns": {
+                "list": "/api/external-runs",
+                "detail": "/api/external-runs/{workflowId}",
             },
         },
         "features": {

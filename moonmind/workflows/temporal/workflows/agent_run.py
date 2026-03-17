@@ -10,6 +10,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        build_default_registry,
+    )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
 # The canonical model uses Literal strings, not an Enum, so we alias them here.
@@ -44,6 +47,18 @@ async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
         agent_kind,
         run_id,
     )
+
+
+def _create_external_adapter(agent_id: str) -> AgentAdapter:
+    """Instantiate an external adapter using the runtime-gated registry.
+
+    This function is called inside the workflow to create the appropriate
+    adapter for an external agent.  The registry respects runtime gates
+    so only providers that are enabled and configured will be available.
+    """
+
+    registry = build_default_registry()
+    return registry.create(agent_id)
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
@@ -111,10 +126,7 @@ class MoonMindAgentRun:
                         workflow_id=workflow.info().workflow_id,
                     )
                 elif request.agent_kind == "external":
-                    # TODO(Phase C): Wire JulesAgentAdapter with JulesClient.
-                    raise NotImplementedError(
-                        "External adapter instantiation not yet wired — pending Phase C migration"
-                    )
+                    adapter = _create_external_adapter(request.agent_id)
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 
