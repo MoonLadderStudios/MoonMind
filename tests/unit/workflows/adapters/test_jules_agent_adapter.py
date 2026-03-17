@@ -31,7 +31,7 @@ class _FakeJulesAdapterClient:
     async def create_task(self, request):
         self.created.append(request)
         return JulesTaskResponse(
-            taskId="task-123",
+            task_id="task-123",
             status=self.create_status,
             url="https://jules.example.test/tasks/task-123",
         )
@@ -39,7 +39,7 @@ class _FakeJulesAdapterClient:
     async def get_task(self, request):
         self.lookups.append(request)
         return JulesTaskResponse(
-            taskId=request.task_id,
+            task_id=request.task_id,
             status=self.get_status,
             url=f"https://jules.example.test/tasks/{request.task_id}",
         )
@@ -49,7 +49,7 @@ class _FakeJulesAdapterClient:
             raise JulesClientError("cancel unavailable")
         self.resolved.append(request)
         return JulesTaskResponse(
-            taskId=request.task_id,
+            task_id=request.task_id,
             status="canceled",
             url=f"https://jules.example.test/tasks/{request.task_id}",
         )

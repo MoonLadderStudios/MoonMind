@@ -1,6 +1,7 @@
 """Adapters bridging MoonMind workflows with external services."""
 
 from .agent_adapter import AgentAdapter
+from .base_external_agent_adapter import BaseExternalAgentAdapter
 from .codex_client import (
     CodexClient,
     CodexDiffNotReadyError,
@@ -15,6 +16,7 @@ from .jules_agent_adapter import JulesAgentAdapter
 
 __all__ = [
     "AgentAdapter",
+    "BaseExternalAgentAdapter",
     "CodexClient",
     "CodexCloudAgentAdapter",
     "CodexDiffNotReadyError",

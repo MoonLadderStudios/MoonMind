@@ -88,7 +88,7 @@ async def test_call_create_task():
         arguments={"title": "Fix bug", "description": "Resolve issue #42"},
         context=context,
     )
-    assert result["taskId"] == "task-001"
+    assert result["id"] == "task-001"
     assert len(fake.calls) == 1
     assert fake.calls[0][0] == "create_task"
 
@@ -108,7 +108,7 @@ async def test_call_resolve_task():
         },
         context=context,
     )
-    assert result["status"] == "completed"
+    assert result["state"] == "completed"
     assert len(fake.calls) == 1
     assert fake.calls[0][0] == "resolve_task"
 
@@ -124,7 +124,7 @@ async def test_call_get_task():
         arguments={"taskId": "task-001"},
         context=context,
     )
-    assert result["taskId"] == "task-001"
+    assert result["id"] == "task-001"
     assert len(fake.calls) == 1
     assert fake.calls[0][0] == "get_task"
 

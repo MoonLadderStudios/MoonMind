@@ -85,6 +85,7 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
                 title=title,
                 description=description,
                 metadata=metadata,
+                source_context={"moonmind": metadata.get("moonmind", {})},
             )
         )
         provider_status = str(response.status or "").strip() or "unknown"

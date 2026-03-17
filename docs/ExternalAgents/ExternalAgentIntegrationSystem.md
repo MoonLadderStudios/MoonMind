@@ -210,29 +210,27 @@ Update external-agent docs so they all use the same vocabulary:
 - "provider-specific adapter implementation"
 - "optional tooling surface"
 
-### Phase B: Extract Shared External Adapter Base
+### Phase B: Extract Shared External Adapter Base ✅ COMPLETE
 
-Refactor shared logic currently duplicated across provider adapters into one reusable base.
+Shared logic is consolidated in `BaseExternalAgentAdapter` (`moonmind/workflows/adapters/base_external_agent_adapter.py`):
 
-Likely candidates:
+- In-memory idempotency cache handling
+- Correlation metadata injection (`moonmind.correlationId`, `moonmind.idempotencyKey`)
+- `AgentRunHandle` / `AgentRunStatus` / `AgentRunResult` builder methods
+- Automatic `poll_hint_seconds` population from `ProviderCapabilityDescriptor`
+- Best-effort cancel fallback when `supportsCancel=False`
 
-- idempotency cache handling
-- correlation metadata shaping
-- common `AgentRunHandle` metadata population
-- common `AgentRunStatus` metadata population
-- common fallback cancel behavior
+### Phase C: Standardize Provider Capability Descriptors ✅ COMPLETE
 
-### Phase C: Standardize Provider Capability Descriptors
-
-Add an explicit provider capability model so the workflow layer does not infer provider behavior from scattered implementation details.
-
-Suggested capability fields:
+`ProviderCapabilityDescriptor` is defined in `moonmind/schemas/agent_runtime_models.py` with:
 
 - `supports_callbacks`
 - `supports_cancel`
 - `supports_result_fetch`
 - `provider_name`
 - `default_poll_hint_seconds`
+
+Both Jules and Codex Cloud adapters declare their capabilities. The base class auto-populates `poll_hint_seconds` from the descriptor and provides a cancel fallback for providers that don't support cancellation.
 
 ### Phase D: Keep Tooling Surfaces Thin
 
@@ -244,17 +242,19 @@ This keeps:
 - correlation rules in one place
 - runtime gating in one place
 
-### Phase E: Add the Next External Provider Using the Same Base
+### Phase E: Add the Next External Provider Using the Same Base ✅ PROVEN
 
-The real architecture proof is not Jules alone. The proof is that the next provider can be added by supplying:
+Codex Cloud was integrated as the second provider using the same base class pattern:
 
-1. settings
-2. schemas/client
-3. provider adapter subclass
-4. registry registration
-5. optional tooling surface
+1. settings — `moonmind/codex_cloud/settings.py`
+2. schemas/client — `moonmind/workflows/adapters/codex_cloud_client.py`
+3. provider adapter subclass — `CodexCloudAgentAdapter` extends `BaseExternalAgentAdapter`
+4. registry registration — in `build_default_registry()`
+5. Temporal activities — `moonmind/workflows/temporal/activities/codex_cloud_activities.py`
 
-without changing `MoonMind.Run` or `MoonMind.AgentRun`.
+No changes to `MoonMind.Run` or `MoonMind.AgentRun` were required.
+
+For a step-by-step guide to adding the next provider, see [`AddingExternalProvider.md`](AddingExternalProvider.md).
 
 ## 8. Architectural Benefits
 
