@@ -183,6 +183,12 @@ class ManagedAgentAdapter:
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = profile_id
         run_id = str(uuid4())
+
+        # Signal AuthProfileManager to acquire a slot lease (DOC-REQ-004).
+        await self._request_slot(
+            requester_workflow_id=self._workflow_id,
+            runtime_id=self._runtime_id or request.agent_id,
+        )
         
         if self._run_store is not None:
             from moonmind.schemas.agent_runtime_models import ManagedRunRecord
