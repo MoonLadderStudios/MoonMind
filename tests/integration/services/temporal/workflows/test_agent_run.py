@@ -253,49 +253,55 @@ async def test_agent_run_external_agent_workflow():
     _external_activity_calls.clear()
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
+        # Workflow worker: hosts the workflow + agent_runtime activities.
         async with Worker(
             env.client,
             task_queue="agent-run-task-queue",
             workflows=[MoonMindAgentRun],
-            activities=[
-                mock_resolve_external_adapter,
-                mock_jules_start,
-                mock_jules_status,
-                mock_jules_fetch_result,
-                mock_jules_cancel,
-                mock_publish_artifacts,
-                mock_cancel,
-            ],
+            activities=[mock_publish_artifacts, mock_cancel],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
-            request = AgentExecutionRequest(
-                agent_kind="external",
-                agent_id="jules",
-                execution_profile_ref="profile:jules-default",
-                correlation_id="corr-ext-1",
-                idempotency_key="idem-ext-1",
-                parameters={
-                    "title": "External Test",
-                    "description": "Integration test for external agent workflow",
-                },
-            )
+            # Integrations worker: hosts integration.* activities on
+            # mm.activity.integrations, matching production fleet separation.
+            async with Worker(
+                env.client,
+                task_queue="mm.activity.integrations",
+                activities=[
+                    mock_resolve_external_adapter,
+                    mock_jules_start,
+                    mock_jules_status,
+                    mock_jules_fetch_result,
+                    mock_jules_cancel,
+                ],
+            ):
+                request = AgentExecutionRequest(
+                    agent_kind="external",
+                    agent_id="jules",
+                    execution_profile_ref="profile:jules-default",
+                    correlation_id="corr-ext-1",
+                    idempotency_key="idem-ext-1",
+                    parameters={
+                        "title": "External Test",
+                        "description": "Integration test for external agent workflow",
+                    },
+                )
 
-            handle = await env.client.start_workflow(
-                MoonMindAgentRun.run,
-                request,
-                id="test-workflow-external-1",
-                task_queue="agent-run-task-queue",
-            )
+                handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    request,
+                    id="test-workflow-external-1",
+                    task_queue="agent-run-task-queue",
+                )
 
-            result = await handle.result()
+                result = await handle.result()
 
-            assert isinstance(result, AgentRunResult)
-            assert result.summary is not None
-            assert "jules-task-001" in result.summary
+                assert isinstance(result, AgentRunResult)
+                assert result.summary is not None
+                assert "jules-task-001" in result.summary
 
-            # Verify activities were called in the correct order.
-            assert "resolve:jules" in _external_activity_calls
-            assert "start" in _external_activity_calls
-            assert "fetch_result" in _external_activity_calls
-            # At least one status poll should have happened.
-            assert any(c.startswith("status:") for c in _external_activity_calls)
+                # Verify activities were called in the correct order.
+                assert "resolve:jules" in _external_activity_calls
+                assert "start" in _external_activity_calls
+                assert "fetch_result" in _external_activity_calls
+                # At least one status poll should have happened.
+                assert any(c.startswith("status:") for c in _external_activity_calls)

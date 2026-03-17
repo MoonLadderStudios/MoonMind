@@ -213,6 +213,7 @@ class MoonMindAgentRun:
                     validated_id = await workflow.execute_activity(
                         resolve_external_adapter,
                         request.agent_id,
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
                         start_to_close_timeout=timedelta(seconds=30),
                     )
                     # Store the validated agent_id for activity routing.
