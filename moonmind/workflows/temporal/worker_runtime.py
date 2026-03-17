@@ -42,9 +42,12 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as Moo
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
-    publish_artifacts_activity,
-    invoke_adapter_cancel,
+    resolve_external_adapter,
 )
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
+from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +195,28 @@ def _build_runtime_planner():
     return _runtime_planner
 
 
+def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor]:
+    """Build shared store and supervisor for the agent_runtime fleet."""
+    import os
+
+    store_root = os.path.join(
+        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+        "managed_runs",
+    )
+    artifact_root = os.path.join(
+        os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"),
+        "artifacts",
+    )
+    os.makedirs(store_root, exist_ok=True)
+    os.makedirs(artifact_root, exist_ok=True)
+
+    store = ManagedRunStore(store_root)
+    artifact_storage = AgentQueueArtifactStorage(artifact_root)
+    log_streamer = RuntimeLogStreamer(artifact_storage)
+    supervisor = ManagedRunSupervisor(store, log_streamer)
+    return store, supervisor
+
+
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
     """Build activity handlers for the configured non-workflow fleet.
 
@@ -207,6 +232,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
+
+        # Build agent_runtime dependencies (store + supervisor)
+        run_store, run_supervisor = _build_agent_runtime_deps()
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,
@@ -225,6 +253,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             ),
             agent_runtime_activities=TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
+                run_store=run_store,
+                run_supervisor=run_supervisor,
             ),
             # TODO: wire proposal_service_factory once full proposal
             # generation is implemented.  While the generator stub returns
@@ -280,7 +310,7 @@ async def main_async() -> None:
 
     if topology.fleet == WORKFLOW_FLEET:
         workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindAuthProfileManager, MoonMindAgentRun]
-        activities = [publish_artifacts_activity, invoke_adapter_cancel]
+        activities = [resolve_external_adapter]
         logger.info(
             "Temporal workflow fleet registrations: %s",
             ", ".join(list_registered_workflow_types()),

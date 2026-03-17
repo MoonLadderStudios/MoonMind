@@ -28,9 +28,19 @@ from moonmind.workflows.temporal.activity_catalog import (
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
-    publish_artifacts_activity,
-    invoke_adapter_cancel,
+    resolve_external_adapter,
 )
+
+
+# Local mock activities simulating catalog-routed agent_runtime activities.
+@activity.defn(name="agent_runtime.publish_artifacts")
+async def mock_publish_artifacts(result: dict) -> dict:
+    return result
+
+
+@activity.defn(name="agent_runtime.cancel")
+async def mock_cancel(request: dict) -> None:
+    pass
 
 # ── Tracking lists ──
 
@@ -215,7 +225,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                     env.client,
                     task_queue=WORKFLOW_TASK_QUEUE,
                     workflows=[MoonMindAgentRun],
-                    activities=[publish_artifacts_activity, invoke_adapter_cancel],
+                    activities=[mock_publish_artifacts, mock_cancel],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
                 Worker(
