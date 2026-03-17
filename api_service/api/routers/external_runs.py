@@ -109,6 +109,10 @@ async def _query_external_runs(
                 memo = dict(workflow.memo) if isinstance(workflow.memo, dict) else {}
 
             agent_kind = memo.get("agent_kind", "")
+            # TODO: For a true total count, register agent_kind as a Temporal
+            # custom search attribute and use client.count_workflows(query=query).
+            # Post-query filtering is a pragmatic first step while the schema
+            # does not include AgentKind as a search attribute.
             if agent_kind != "external":
                 # Additional filter: only include external agent runs
                 continue
@@ -177,6 +181,9 @@ async def list_external_runs(
     items = list(runs[:limit])
     return {
         "items": items,
+        # NOTE: total reflects the current page, not the global count.
+        # Accurate pagination requires making agent_kind a Temporal search
+        # attribute and using client.count_workflows().
         "total": len(items),
         "hasMore": has_more,
     }
