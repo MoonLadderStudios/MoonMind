@@ -281,10 +281,14 @@ class MoonMindAuthProfileManagerWorkflow:
 
             # Reset event flag and wait for new signals or periodic wake-up.
             self._has_new_events = False
-            await workflow.wait_condition(
-                lambda: self._has_new_events or self._shutdown_requested,
-                timeout=timedelta(seconds=60),
-            )
+            try:
+                await workflow.wait_condition(
+                    lambda: self._has_new_events or self._shutdown_requested,
+                    timeout=timedelta(seconds=60),
+                )
+            except TimeoutError:
+                # Expected: Periodic wake-up to clear expired cooldowns.
+                pass
 
         return AuthProfileManagerOutput(
             status="shutdown",
