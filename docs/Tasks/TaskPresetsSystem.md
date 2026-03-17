@@ -191,8 +191,8 @@ Global presets can be seeded from YAML files in `api_service/data/task_step_temp
 
 ```yaml
 slug: speckit-orchestrate
-title: Spec Kit Orchestrate
-description: Run the full Spec Kit pipeline...
+title: workflow Orchestrate
+description: Run the full workflow pipeline...
 scope: global
 version: 1.0.0
 tags: [speckit, orchestration]

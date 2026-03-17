@@ -1,9 +1,9 @@
-"""Workspace helpers for Spec Kit automation runs.
+"""Workspace helpers for workflow automation runs.
 
-The Spec Kit automation pipeline allocates a shared volume (``agentkit_workspaces``)
+The workflow automation pipeline allocates a shared volume (``agentkit_workspaces``)
 that is mounted into both Celery workers and ephemeral job containers.  Each run
 receives an isolated directory tree rooted at ``/work/runs/<run_id>`` with
-dedicated ``repo`` (git checkout), ``home`` (Codex CLI / Spec Kit state), and
+dedicated ``repo`` (git checkout), ``home`` (Codex CLI / workflow state), and
 ``artifacts`` (logs, diffs, summaries) folders as outlined in the feature
 specification.  This module centralises path calculations and directory creation
 so later orchestration steps can rely on a consistent layout.
@@ -158,7 +158,7 @@ class RunWorkspacePaths:
 
 
 class SpecWorkspaceManager:
-    """Manage run-scoped directories for Spec Kit automation.
+    """Manage run-scoped directories for workflow automation.
 
     Parameters
     ----------
@@ -471,7 +471,7 @@ class SpecWorkspaceManager:
         base_branch: str,
         extra_env: Optional[Mapping[str, str]] = None,
     ) -> dict[str, str]:
-        """Construct environment variables for the Spec Automation job container."""
+        """Construct environment variables for the workflow automation job container."""
 
         paths = self.ensure_workspace(run_id)
         env: dict[str, str] = {
@@ -535,7 +535,7 @@ def generate_branch_name(
     timestamp: Optional[datetime] = None,
     suffix: Optional[str] = None,
 ) -> str:
-    """Generate a deterministic branch name for a Spec Automation run."""
+    """Generate a deterministic branch name for a workflow automation run."""
 
     current = timestamp or datetime.now(UTC)
     date_fragment = current.strftime("%Y%m%d")

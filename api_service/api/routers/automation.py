@@ -1,4 +1,4 @@
-"""FastAPI router exposing Spec Automation monitoring endpoints."""
+"""FastAPI router exposing workflow automation monitoring endpoints."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/workflows", tags=["Automation"])
 async def _get_repository(
     session: AsyncSession = Depends(get_async_session),
 ) -> AutomationRepository:
-    """Dependency wiring the Spec Automation repository."""
+    """Dependency wiring the workflow automation repository."""
 
     return get_automation_repository(session)
 

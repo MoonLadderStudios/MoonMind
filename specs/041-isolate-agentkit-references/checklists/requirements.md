@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Isolate Spec Kit References and Skill-First Runtime
+# Specification Quality Checklist: Isolate workflow References and Skill-First Runtime
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-02-20  

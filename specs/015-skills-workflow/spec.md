@@ -14,7 +14,7 @@ As an operator, I want workflow stage contracts and surfaced metadata to match t
 
 **Why this priority**: Stage contract drift causes incorrect expectations in automation runs and slows incident response.
 
-**Independent Test**: Run Spec Automation phase serialization tests and verify phase payloads expose canonical skill metadata for current stage execution.
+**Independent Test**: Run workflow automation phase serialization tests and verify phase payloads expose canonical skill metadata for current stage execution.
 
 **Acceptance Scenarios**:
 
@@ -76,9 +76,9 @@ As a release owner, I want refreshed `015` tasks to require runtime code changes
 ### Functional Requirements
 
 - **FR-001** (`DOC-REQ-001`): `specs/015-skills-workflow` artifacts MUST reference current runtime stage names (`discover_next_phase`, `submit_codex_job`, `apply_and_publish`).
-- **FR-002** (`DOC-REQ-005`): Spec Automation phase metadata normalization MUST expose `selectedSkill`, `adapterId`, and `executionPath` when available.
+- **FR-002** (`DOC-REQ-005`): workflow automation phase metadata normalization MUST expose `selectedSkill`, `adapterId`, and `executionPath` when available.
 - **FR-003** (`DOC-REQ-006`): Legacy Agentkit phase metadata without explicit skill fields MUST default to `selectedSkill=agentkit`, `adapterId=agentkit`, and `executionPath=skill`.
-- **FR-004** (`DOC-REQ-005`): API response schemas for Spec Automation phase details MUST include adapter metadata for skills-first observability.
+- **FR-004** (`DOC-REQ-005`): API response schemas for workflow automation phase details MUST include adapter metadata for skills-first observability.
 - **FR-005** (`DOC-REQ-002`, `DOC-REQ-003`): Documentation contracts in `015` MUST reflect shared skills runtime layout (`skills_active`, `.agents/skills`, `.gemini/skills`) and current auth startup path.
 - **FR-006** (`DOC-REQ-004`): `015` runtime assumptions MUST align with current strategy where Agentkit verification is conditioned on configured stage skills.
 - **FR-007** (`DOC-REQ-007`): Updated implementation tasks MUST include production runtime file changes and validation tests.
@@ -96,7 +96,7 @@ As a release owner, I want refreshed `015` tasks to require runtime code changes
 ### Measurable Outcomes
 
 - **SC-001**: 100% of refreshed `015` artifacts use current stage names and shared-skills runtime terminology.
-- **SC-002**: Spec Automation phase responses include `adapter_id` whenever metadata is present, with Agentkit defaults for legacy stage records.
+- **SC-002**: workflow automation phase responses include `adapter_id` whenever metadata is present, with Agentkit defaults for legacy stage records.
 - **SC-003**: Unit tests covering metadata normalization and API serialization pass through `./tools/test_unit.sh`.
 - **SC-004**: Updated `tasks.md` contains explicit runtime implementation and validation tasks, and all are completed.
 

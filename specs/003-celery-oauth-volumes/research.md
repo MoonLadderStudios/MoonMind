@@ -1,7 +1,7 @@
 # Research Findings: Celery OAuth Volume Mounts
 
 ## Decision 1: Deterministic Codex Queue Sharding
-- **Rationale**: Hash-based routing on a stable key (repo, project, or affinity token) ensures every Codex phase for a run reaches the same worker, preventing credential contention and aligning with the three-volume design from Spec Kit Option A.
+- **Rationale**: Hash-based routing on a stable key (repo, project, or affinity token) ensures every Codex phase for a run reaches the same worker, preventing credential contention and aligning with the three-volume design from workflow Option A.
 - **Alternatives Considered**:
   - Round-robin routing: rejected because runs could bounce between workers, forcing multiple login states and risking token clobbering.
   - Manual queue selection per task: rejected due to operational overhead and higher risk of human error when routing jobs.
@@ -24,4 +24,4 @@
   - Minimal logging limited to success/failure: rejected because it leaves operators without visibility into which volume served a run.
   - Centralized metrics only: rejected since metrics alone cannot provide per-run traceability required for compliance.
 
-All identified clarifications have been resolved through existing Spec Kit guidance, so no open questions remain for `/agentkit.clarify`.
+All identified clarifications have been resolved through existing workflow guidance, so no open questions remain for `/agentkit.clarify`.

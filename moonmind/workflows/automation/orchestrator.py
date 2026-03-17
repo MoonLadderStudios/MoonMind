@@ -1,4 +1,4 @@
-"""Workflow orchestration for Spec Automation runs.
+"""Workflow orchestration for workflow automation runs.
 
 This module replaces the Celery-based orchestrator from agentkit_celery.
 The trigger/retry functions previously dispatched Celery task chains;
@@ -74,7 +74,7 @@ async def trigger_workflow_run(
     force_phase: Optional[str] = None,
     repository: Optional[str] = None,
 ) -> TriggeredWorkflow:
-    """Trigger a new Spec Automation workflow run.
+    """Trigger a new workflow automation workflow run.
 
     Previously dispatched a Celery task chain. Now creates the DB record
     and is expected to be wired to a Temporal workflow or similar executor.

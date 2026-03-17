@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Codex & Spec Kit Tooling Availability
+# Specification Quality Checklist: Codex & workflow Tooling Availability
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2025-11-07

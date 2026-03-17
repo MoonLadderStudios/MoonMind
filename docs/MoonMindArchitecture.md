@@ -238,7 +238,7 @@ Why LlamaIndex is valuable here:
 MoonMind’s main image can optionally install Node-based CLIs:
 
 * `@openai/codex` (Codex CLI)
-* `@githubnext/spec-kit` (Spec Kit)
+* `@githubnext/spec-kit` (workflow)
 * `@google/gemini-cli`
 * `@anthropic-ai/claude-code`
 

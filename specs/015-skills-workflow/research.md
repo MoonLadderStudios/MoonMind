@@ -7,7 +7,7 @@
 - **Alternatives considered**:
   - Keep legacy stage terms in `015`: rejected because it creates contract drift with production behavior.
 
-## Decision 2: Surface adapter metadata in Spec Automation phase responses
+## Decision 2: Surface adapter metadata in workflow automation phase responses
 
 - **Decision**: Include `adapterId` in normalized phase metadata and expose it as `adapter_id` in API responses.
 - **Rationale**: Stage-level observability needs both selected skill and selected adapter to diagnose routing issues quickly.

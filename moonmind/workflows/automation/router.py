@@ -1,4 +1,4 @@
-"""Celery routing helpers for Spec Kit Codex queue bindings."""
+"""Celery routing helpers for workflow Codex queue bindings."""
 
 from __future__ import annotations
 

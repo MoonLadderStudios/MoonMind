@@ -1,4 +1,4 @@
-# Tasks: Isolate Spec Kit References and Skill-First Runtime
+# Tasks: Isolate workflow References and Skill-First Runtime
 
 **Input**: Design documents from `/specs/036-isolate-agentkit-references/`  
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/, quickstart.md

@@ -41,7 +41,7 @@ Normalized skill-routing metadata surfaced for each phase.
 
 ## Value Object: AutomationPhaseState (API payload view)
 
-Normalized API contract for phase details returned by `/api/spec-automation/runs/{run_id}`.
+Normalized API contract for phase details returned by `/api/workflows/runs/{run_id}`.
 
 - **Fields**:
   - `phase` (enum)

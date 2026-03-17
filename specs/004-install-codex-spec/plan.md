@@ -1,18 +1,18 @@
-# Implementation Plan: Codex & Spec Kit Tooling Availability
+# Implementation Plan: Codex & workflow Tooling Availability
 
 **Branch**: `004-install-codex-spec` | **Date**: 2025-11-07 | **Spec**: [`specs/004-install-codex-spec/spec.md`](specs/004-install-codex-spec/spec.md)
 **Input**: Feature specification from `/specs/004-install-codex-spec/spec.md`
 
-MoonMind’s Spec workflow automation currently depends on Codex CLI and GitHub Spec Kit being present inside the `api_service` container image, yet the image does not install either CLI nor manage Codex’s approval policy. This plan scopes the Dockerfile changes, configuration management, and validation steps required to bundle both CLIs in the image, ensure Celery workers inherit them, and ship a managed `~/.codex/config.toml` with `approval_policy = "never"` so unattended Celery tasks never stall.
+MoonMind’s Spec workflow automation currently depends on Codex CLI and GitHub workflow being present inside the `api_service` container image, yet the image does not install either CLI nor manage Codex’s approval policy. This plan scopes the Dockerfile changes, configuration management, and validation steps required to bundle both CLIs in the image, ensure Celery workers inherit them, and ship a managed `~/.codex/config.toml` with `approval_policy = "never"` so unattended Celery tasks never stall.
 
 ## Summary
 
-Package Codex CLI and GitHub Spec Kit CLI directly into `api_service/Dockerfile`, bake a Codex config fragment that enforces `approval_policy = "never"`, and extend worker health checks plus docs so Celery-based Spec workflows always find the tooling and run without interactive approvals.
+Package Codex CLI and GitHub workflow CLI directly into `api_service/Dockerfile`, bake a Codex config fragment that enforces `approval_policy = "never"`, and extend worker health checks plus docs so Celery-based Spec workflows always find the tooling and run without interactive approvals.
 
 ## Technical Context
 
 **Language/Version**: Python 3.11 (per AGENTS.md)  
-**Primary Dependencies**: FastAPI API service, Celery 5.4 worker, Codex CLI (npm package `@openai/codex`), GitHub Spec Kit CLI (npm package `@githubnext/spec-kit`)  
+**Primary Dependencies**: FastAPI API service, Celery 5.4 worker, Codex CLI (npm package `@openai/codex`), GitHub workflow CLI (npm package `@githubnext/spec-kit`)  
 **Storage**: PostgreSQL result backend, RabbitMQ broker, local filesystem volumes for artifacts  
 **Testing**: pytest + docker-compose smoke tests; need container-level verification of packaged CLIs  
 **Target Platform**: Containerized Linux (api_service + Celery workers share Docker image)  
@@ -24,7 +24,7 @@ Package Codex CLI and GitHub Spec Kit CLI directly into `api_service/Dockerfile`
 Research outcomes:
 
 1. Codex CLI will be installed from npm with a `CODEX_CLI_VERSION` build arg and verified via `codex --version`.  
-2. GitHub Spec Kit CLI ships from npm with its own `AGENT_KIT_VERSION` build arg to keep worker behavior deterministic.  
+2. GitHub workflow CLI ships from npm with its own `AGENT_KIT_VERSION` build arg to keep worker behavior deterministic.  
 3. `~/.codex/config.toml` will be merged from a template at entrypoint time to guarantee `approval_policy = "never"` without overwriting other keys.
 
 ## Constitution Check
@@ -51,7 +51,7 @@ specs/004-install-codex-spec/
 
 ```text
 api_service/
-├── Dockerfile           # target image that must install Codex + Spec Kit CLIs
+├── Dockerfile           # target image that must install Codex + workflow CLIs
 ├── main.py              # FastAPI entrypoint (shares image with Celery)
 └── pyproject/poetry     # Python dependencies already define runtime stack
 
@@ -59,7 +59,7 @@ celery_worker/
 └── agentkit_worker.py    # Runs on same image, consumes bundled CLIs
 
 moonmind/workflows/agentkit_celery/
-├── tasks.py             # Invokes Codex/Spec Kit commands
+├── tasks.py             # Invokes Codex/workflow commands
 └── job_container.py     # Defines workspace + env for CLI usage
 
 docs/AgentKitAutomation*.md

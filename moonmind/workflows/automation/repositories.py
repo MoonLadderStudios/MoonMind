@@ -1,4 +1,4 @@
-"""Database repositories for the Spec Kit Celery workflow."""
+"""Database repositories for the workflow Celery workflow."""
 
 from __future__ import annotations
 
@@ -845,7 +845,7 @@ class WorkflowRepository:
 
 
 class AutomationRepository:
-    """Persistence helpers for Spec Kit automation runs and related entities."""
+    """Persistence helpers for workflow automation runs and related entities."""
 
     _UPDATABLE_RUN_FIELDS = {
         "status",
@@ -889,7 +889,7 @@ class AutomationRepository:
         job_container_id: Optional[str] = None,
         run_id: Optional[UUID] = None,
     ) -> models.AutomationRun:
-        """Persist a new Spec Automation run record."""
+        """Persist a new workflow automation run record."""
 
         run = models.AutomationRun(
             id=run_id or uuid4(),
@@ -913,7 +913,7 @@ class AutomationRepository:
     async def get_run(
         self, run_id: UUID, *, with_relations: bool = False
     ) -> Optional[models.AutomationRun]:
-        """Retrieve a Spec Automation run by identifier."""
+        """Retrieve a workflow automation run by identifier."""
 
         stmt: Select[tuple[models.AutomationRun]] = select(
             models.AutomationRun
@@ -1182,7 +1182,7 @@ class AutomationRepository:
         expires_at: Optional[datetime] = None,
         source_phase: models.AutomationPhase | str | None = None,
     ) -> models.AutomationArtifact:
-        """Persist an artifact reference for a Spec Automation run."""
+        """Persist an artifact reference for a workflow automation run."""
 
         artifact_type_enum = (
             artifact_type
