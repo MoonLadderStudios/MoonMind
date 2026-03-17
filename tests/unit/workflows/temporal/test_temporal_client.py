@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,49 +29,39 @@ def adapter() -> TemporalClientAdapter:
 
 
 async def test_get_drain_metrics_counts_running_workflows(adapter):
-    """get_drain_metrics should iterate Visibility results and count running workflows."""
+    """get_drain_metrics should use count_workflows and return the count."""
 
-    executions = [_FakeWorkflowExecution(f"wf-{i}") for i in range(5)]
-
-    async def _fake_list(query):
-        for ex in executions:
-            yield ex
-
-    adapter._client.list_workflows = _fake_list
+    adapter._client.count_workflows = AsyncMock(
+        return_value=SimpleNamespace(count=5)
+    )
 
     result = await adapter.get_drain_metrics()
 
     assert result["running"] == 5
     assert result["queued"] == 0
     assert result["stale_running"] == 0
+    adapter._client.count_workflows.assert_awaited_once()
 
 
 async def test_get_drain_metrics_with_task_queue_filter(adapter):
     """get_drain_metrics should include TaskQueue filter in Visibility query."""
 
-    captured_queries = []
-
-    async def _fake_list(query):
-        captured_queries.append(query)
-        if False:
-            yield  # empty async generator
-
-    adapter._client.list_workflows = _fake_list
+    adapter._client.count_workflows = AsyncMock(
+        return_value=SimpleNamespace(count=0)
+    )
 
     await adapter.get_drain_metrics(task_queues=["mm.workflow", "mm.activity"])
 
-    assert len(captured_queries) == 1
-    assert 'TaskQueue IN ("mm.workflow", "mm.activity")' in captured_queries[0]
+    called_query = adapter._client.count_workflows.await_args.kwargs["query"]
+    assert 'TaskQueue IN ("mm.workflow", "mm.activity")' in called_query
 
 
 async def test_get_drain_metrics_empty_namespace(adapter):
     """With no running workflows, counts should all be zero."""
 
-    async def _empty_list(query):
-        if False:
-            yield
-
-    adapter._client.list_workflows = _empty_list
+    adapter._client.count_workflows = AsyncMock(
+        return_value=SimpleNamespace(count=0)
+    )
 
     result = await adapter.get_drain_metrics()
 

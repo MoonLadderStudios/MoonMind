@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -178,9 +179,8 @@ class TemporalClientAdapter:
             quoted = ", ".join(f'"{tq}"' for tq in task_queues)
             visibility_filter += f" AND TaskQueue IN ({quoted})"
 
-        running_count = 0
-        async for _ in client.list_workflows(query=visibility_filter):
-            running_count += 1
+        count_result = await client.count_workflows(query=visibility_filter)
+        running_count = count_result.count
 
         return {
             "running": running_count,
@@ -244,7 +244,6 @@ class TemporalClientAdapter:
                 await handle.signal(signal_name)
                 signaled += 1
             except Exception:
-                import logging
                 logging.getLogger(__name__).warning(
                     "Failed to signal workflow %s with %s",
                     execution.id,

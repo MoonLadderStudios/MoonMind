@@ -1316,34 +1316,26 @@ class AgentQueueService:
         await self._repository.commit()
 
         # --- Quiesce Batch Signal Dispatch (DOC-REQ-003, FR-007, FR-010) ---
-        if action_key == "pause" and pause_mode == models.WorkerPauseMode.QUIESCE:
+        _is_quiesce_pause = action_key == "pause" and pause_mode == models.WorkerPauseMode.QUIESCE
+        _is_quiesce_resume = action_key == "resume" and state.mode == models.WorkerPauseMode.QUIESCE
+        if _is_quiesce_pause or _is_quiesce_resume:
             try:
                 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
                 adapter = TemporalClientAdapter()
-                signaled = await adapter.send_batch_pause_signal()
+                if _is_quiesce_pause:
+                    signaled = await adapter.send_batch_pause_signal()
+                else:
+                    signaled = await adapter.send_batch_resume_signal()
                 logger.info(
-                    "quiesce pause signals dispatched",
+                    "quiesce %s signals dispatched",
+                    action_key,
                     extra={"signaled_count": signaled},
                 )
             except Exception:
                 logger.warning(
-                    "quiesce pause signal dispatch failed (best-effort)",
-                    exc_info=True,
-                )
-        elif action_key == "resume" and state.mode == models.WorkerPauseMode.QUIESCE:
-            try:
-                from moonmind.workflows.temporal.client import TemporalClientAdapter
-
-                adapter = TemporalClientAdapter()
-                signaled = await adapter.send_batch_resume_signal()
-                logger.info(
-                    "quiesce resume signals dispatched",
-                    extra={"signaled_count": signaled},
-                )
-            except Exception:
-                logger.warning(
-                    "quiesce resume signal dispatch failed (best-effort)",
+                    "quiesce %s signal dispatch failed (best-effort)",
+                    action_key,
                     exc_info=True,
                 )
 
