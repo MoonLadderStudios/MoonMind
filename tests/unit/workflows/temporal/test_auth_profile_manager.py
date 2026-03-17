@@ -83,8 +83,10 @@ class TestProfileSlotState:
             rate_limit_policy="backoff",
             enabled=True,
         )
-        assert state.reserve("wf1")
+        now = datetime(2026, 3, 17, tzinfo=timezone.utc)
+        assert state.reserve("wf1", now)
         assert "wf1" in state.current_leases
+        assert state.lease_granted_at["wf1"] == now.isoformat()
         assert state.available_slots == 1
 
     def test_reserve_fails_at_capacity(self):
@@ -96,7 +98,8 @@ class TestProfileSlotState:
             enabled=True,
             current_leases=["wf1"],
         )
-        assert not state.reserve("wf2")
+        now = datetime(2026, 3, 17, tzinfo=timezone.utc)
+        assert not state.reserve("wf2", now)
         assert "wf2" not in state.current_leases
 
     def test_release_success(self):

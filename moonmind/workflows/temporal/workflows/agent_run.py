@@ -151,6 +151,7 @@ class MoonMindAgentRun:
                         slot_releaser=_slot_releaser,
                         cooldown_reporter=_cooldown_reporter,
                         workflow_id=wf_id,
+                        runtime_id=runtime_id,
                     )
                 elif request.agent_kind == "external":
                     # Validate adapter availability in an activity (deterministic-safe).
@@ -245,19 +246,20 @@ class MoonMindAgentRun:
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = f"auth-profile-manager:{runtime_id}"
                 try:
-                    with workflow.execute_in_background_with_shield():
-                        manager_handle = workflow.get_external_workflow_handle(manager_id)
-                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                    manager_handle = workflow.get_external_workflow_handle(manager_id)
+                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
                     # Errors are intentionally ignored to avoid masking the original cancellation
                     workflow.logger.warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
 
             if self.run_id is not None and self.agent_kind is not None:
-                with workflow.execute_in_background_with_shield():
+                try:
                     await workflow.execute_activity(
                         "agent_runtime.cancel",
                         {"agent_kind": self.agent_kind, "run_id": self.run_id},
                         task_queue=AGENT_RUNTIME_TASK_QUEUE,
                         start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
                     )
+                except Exception:
+                    workflow.logger.warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
             raise

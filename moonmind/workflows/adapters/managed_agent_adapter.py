@@ -134,6 +134,7 @@ class ManagedAgentAdapter:
         slot_releaser: SlotReleaseFunc,
         cooldown_reporter: CooldownReportFunc,
         workflow_id: str,
+        runtime_id: str | None = None,
         run_store: ManagedRunStore | None = None,
     ) -> None:
         self._fetch_profiles = profile_fetcher
@@ -141,6 +142,7 @@ class ManagedAgentAdapter:
         self._release_slot = slot_releaser
         self._report_cooldown = cooldown_reporter
         self._workflow_id = workflow_id
+        self._runtime_id = runtime_id
         self._run_store = run_store
         self._active_profile_id: str | None = None
 
@@ -158,7 +160,7 @@ class ManagedAgentAdapter:
 
         profile = await self._resolve_profile(
             execution_profile_ref=request.execution_profile_ref,
-            runtime_id=request.agent_id,
+            runtime_id=self._runtime_id or request.agent_id,
         )
         profile_id: str = profile["profile_id"]
         auth_mode: str = profile.get("auth_mode", "api_key")

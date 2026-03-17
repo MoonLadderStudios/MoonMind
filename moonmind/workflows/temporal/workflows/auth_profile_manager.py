@@ -91,6 +91,9 @@ class ProfileSyncPayload(TypedDict):
 # ---------------------------------------------------------------------------
 
 
+_MAX_LEASE_DURATION_SECONDS = 7200  # 2 hours — safety net for leaked slots
+
+
 @dataclass
 class ProfileSlotState:
     """In-workflow tracking of one auth profile's slot availability."""
@@ -101,6 +104,7 @@ class ProfileSlotState:
     rate_limit_policy: str
     enabled: bool
     current_leases: list[str] = field(default_factory=list)
+    lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
     cooldown_until: Optional[str] = None  # ISO timestamp string or None
 
     @property
@@ -116,17 +120,43 @@ class ProfileSlotState:
             return False
         return True
 
-    def reserve(self, requester_workflow_id: str) -> bool:
+    def reserve(self, requester_workflow_id: str, now: datetime) -> bool:
         if not self.is_available():
             return False
         self.current_leases.append(requester_workflow_id)
+        self.lease_granted_at[requester_workflow_id] = now.isoformat()
         return True
 
     def release(self, requester_workflow_id: str) -> bool:
         if requester_workflow_id in self.current_leases:
             self.current_leases.remove(requester_workflow_id)
+            self.lease_granted_at.pop(requester_workflow_id, None)
             return True
         return False
+
+    def evict_expired_leases(self, now: datetime, max_duration_seconds: int) -> list[str]:
+        """Remove leases that have exceeded the maximum duration. Returns evicted IDs."""
+        evicted: list[str] = []
+        for wf_id in list(self.current_leases):
+            granted_str = self.lease_granted_at.get(wf_id)
+            if granted_str is None:
+                # Legacy lease without timestamp — evict it as we can't verify age.
+                self.current_leases.remove(wf_id)
+                evicted.append(wf_id)
+                continue
+            try:
+                granted_dt = datetime.fromisoformat(granted_str)
+                if granted_dt.tzinfo is None:
+                    granted_dt = granted_dt.replace(tzinfo=timezone.utc)
+                if (now - granted_dt).total_seconds() > max_duration_seconds:
+                    self.current_leases.remove(wf_id)
+                    self.lease_granted_at.pop(wf_id, None)
+                    evicted.append(wf_id)
+            except (ValueError, TypeError):
+                self.current_leases.remove(wf_id)
+                self.lease_granted_at.pop(wf_id, None)
+                evicted.append(wf_id)
+        return evicted
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -136,6 +166,7 @@ class ProfileSlotState:
             "rate_limit_policy": self.rate_limit_policy,
             "enabled": self.enabled,
             "current_leases": list(self.current_leases),
+            "lease_granted_at": dict(self.lease_granted_at),
             "cooldown_until": self.cooldown_until,
         }
 
@@ -275,6 +306,10 @@ class MoonMindAuthProfileManagerWorkflow:
             # Clear expired cooldowns.
             self._clear_expired_cooldowns()
 
+            # Evict leases that exceed the max duration (safety net for
+            # cancelled/terminated workflows that failed to release).
+            self._evict_expired_leases()
+
             # Check continue-as-new threshold.
             if self._event_count >= _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW:
                 workflow.continue_as_new(self._build_continue_as_new_input())
@@ -302,6 +337,7 @@ class MoonMindAuthProfileManagerWorkflow:
         profiles_data = input_payload.get("profiles", [])
         leases_data = input_payload.get("leases", {})
         cooldowns_data = input_payload.get("cooldowns", {})
+        lease_times_data = input_payload.get("lease_granted_at", {})
 
         for p in profiles_data:
             pid = p["profile_id"]
@@ -312,6 +348,7 @@ class MoonMindAuthProfileManagerWorkflow:
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
                 current_leases=list(leases_data.get(pid, [])),
+                lease_granted_at=dict(lease_times_data.get(pid, {})),
                 cooldown_until=cooldowns_data.get(pid),
             )
             self._profiles[pid] = state
@@ -353,10 +390,11 @@ class MoonMindAuthProfileManagerWorkflow:
 
     async def _drain_queue(self) -> None:
         """Try to assign slots to pending requests in FIFO order."""
+        now = workflow.now()
         remaining: list[PendingRequest] = []
         for req in self._pending_requests:
             profile = self._find_available_profile()
-            if profile and profile.reserve(req.requester_workflow_id):
+            if profile and profile.reserve(req.requester_workflow_id, now):
                 await self._signal_slot_assigned(
                     req.requester_workflow_id, profile.profile_id
                 )
@@ -381,6 +419,18 @@ class MoonMindAuthProfileManagerWorkflow:
         handle = workflow.get_external_workflow_handle(requester_workflow_id)
         await handle.signal("slot_assigned", {"profile_id": profile_id})
 
+    def _evict_expired_leases(self) -> None:
+        """Remove leases held longer than the max duration."""
+        now = workflow.now()
+        for profile in self._profiles.values():
+            evicted = profile.evict_expired_leases(now, _MAX_LEASE_DURATION_SECONDS)
+            for wf_id in evicted:
+                workflow.logger.warning(
+                    "Evicted stale lease for profile %s held by %s",
+                    profile.profile_id,
+                    wf_id,
+                )
+
     def _clear_expired_cooldowns(self) -> None:
         """Remove cooldown markers that have expired."""
         now = workflow.now()
@@ -400,6 +450,7 @@ class MoonMindAuthProfileManagerWorkflow:
         profiles_list = []
         leases: dict[str, list[str]] = {}
         cooldowns: dict[str, str] = {}
+        lease_times: dict[str, dict[str, str]] = {}
 
         for pid, state in self._profiles.items():
             profiles_list.append(
@@ -413,6 +464,8 @@ class MoonMindAuthProfileManagerWorkflow:
             )
             if state.current_leases:
                 leases[pid] = list(state.current_leases)
+            if state.lease_granted_at:
+                lease_times[pid] = dict(state.lease_granted_at)
             if state.cooldown_until:
                 cooldowns[pid] = state.cooldown_until
 
@@ -420,6 +473,7 @@ class MoonMindAuthProfileManagerWorkflow:
             "runtime_id": self._runtime_id,
             "profiles": profiles_list,
             "leases": leases,
+            "lease_granted_at": lease_times,
             "cooldowns": cooldowns,
         }
 
