@@ -201,6 +201,13 @@ The per-task policy controls:
 2. `maxItems.project`
 3. `maxItems.moonmind`
 4. `minSeverityForMoonMind`
+5. `defaultRuntime` — default agent runtime mode (e.g. `gemini_cli`, `jules`,
+   `codex`, `claude`) stamped into each proposal's
+   `taskCreateRequest.payload.task.runtime.mode`. Per-candidate values that
+   already specify a runtime are not overwritten. At promotion time, operators
+   may still override the runtime via `taskCreateRequestOverride`.
+
+The corresponding `initialParameters` key is `proposalDefaultRuntime`.
 
 The resolved policy is evaluated during proposal submission, not during proposal
 review.

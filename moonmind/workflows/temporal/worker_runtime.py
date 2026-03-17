@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalJulesActivities,
     TemporalPlanActivities,
+    TemporalProposalActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
@@ -254,6 +255,13 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service,
                 run_store=run_store,
                 run_supervisor=run_supervisor,
+            ),
+            # TODO: wire proposal_service_factory once full proposal
+            # generation is implemented.  While the generator stub returns
+            # an empty candidate list, proposal_submit is never invoked
+            # with real data and the factory is not required.
+            proposal_activities=TemporalProposalActivities(
+                artifact_service=artifact_service,
             ),
         )
         binding_descriptors = sorted(
