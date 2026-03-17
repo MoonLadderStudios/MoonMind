@@ -2,7 +2,7 @@
 
 **Status:** Draft (migration-oriented)  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-05  
+**Last updated:** 2026-03-16  
 **Audience:** backend, infra, dashboard, workflow authors
 
 ## 1. Purpose
@@ -156,6 +156,188 @@ For Temporal-managed flows, the architecture becomes:
 
 5. **Compatibility adapters**
    - bridge current task/orchestrator APIs and UI surfaces onto Temporal-backed workflows where needed
+
+### 6.3 Container reference
+
+All Temporal-related containers are defined in `docker-compose.yaml`. The table below summarises every container, followed by detailed descriptions grouped by role.
+
+#### Quick reference
+
+| Container | Image | Always on? | Purpose |
+| --- | --- | --- | --- |
+| `temporal` | `temporalio/auto-setup` | Yes | Temporal server (history, matching, frontend, internal-frontend) |
+| `temporal-namespace-init` | `temporalio/admin-tools` | Yes (run-once) | Creates/updates the `moonmind` namespace and registers custom search attributes |
+| `temporal-visibility-rehearsal` | `temporalio/admin-tools` | No (`temporal-tools` profile) | Dry-runs a visibility-schema upgrade against Postgres |
+| `temporal-admin-tools` | `temporalio/admin-tools` | No (`temporal-tools` profile) | Long-running shell for ad-hoc `temporal` / `tctl` commands |
+| `temporal-ui` | `temporalio/ui` | No (`temporal-ui` profile) | Web dashboard for browsing workflows, activities, and schedules |
+| `temporal-worker-workflow` | `moonmind` (app image) | Yes | Runs deterministic workflow code on `mm.workflow` |
+| `temporal-worker-artifacts` | `moonmind` (app image) | Yes | Artifact I/O activities on `mm.activity.artifacts` |
+| `temporal-worker-llm` | `moonmind` (app image) | Yes | LLM-call activities on `mm.activity.llm` |
+| `temporal-worker-sandbox` | `moonmind` (app image) | Yes | Shell/repo/CLI activities on `mm.activity.sandbox` |
+| `temporal-worker-agent-runtime` | `moonmind` (app image) | Yes | Agent orchestration activities on `mm.activity.agent_runtime` |
+| `temporal-worker-integrations` | `moonmind` (app image) | Yes | External-service activities on `mm.activity.integrations` |
+| `postgres` | `postgres:17` | Yes | Shared database (MoonMind tables + Temporal persistence + visibility) |
+| `minio` | `minio/minio` | Yes | S3-compatible object store for workflow artifacts |
+
+#### 6.3.1 Core Temporal infrastructure
+
+##### `temporal`
+
+The Temporal Server container, using the official `temporalio/auto-setup` image. On first start it auto-creates the Temporal and visibility databases in Postgres, then runs the server with all four internal services (history, matching, frontend, internal-frontend) in a single process.
+
+Key configuration:
+
+- **`DB=postgres12`** — selects the Postgres persistence plugin.
+- **`POSTGRES_SEEDS=postgres`** — points at the shared Postgres container via the `temporal-db` network alias.
+- **`DBNAME` / `VISIBILITY_DBNAME`** — separate logical databases (`temporal` / `temporal_visibility`) created by `init_db_scripts`.
+- **`DYNAMIC_CONFIG_FILE_PATH`** — loads `services/temporal/dynamicconfig/development-sql.yaml`, which currently enables `UpdateWorkflowExecution` and disables secondary visibility reads.
+- **`NUM_HISTORY_SHARDS=1`** — single-node development default.
+- Exposes **port 7233** (gRPC) only on the Docker network via the `temporal-internal` alias.
+
+Dependencies: `postgres` (healthy).
+
+##### `postgres`
+
+A single Postgres 17 instance shared across MoonMind, Temporal persistence, and Temporal visibility. The `init_db_scripts/` directory contains startup SQL that creates dedicated databases and roles:
+
+| Database | Owner role | Purpose |
+| --- | --- | --- |
+| `moonmind` | `postgres` | MoonMind API tables, migrations, Alembic history |
+| `temporal` | `temporal` | Temporal workflow persistence (history, shards, tasks) |
+| `temporal_visibility` | `temporal` | Temporal visibility store (search attributes, list/count queries) |
+| `keycloak` | `keycloak` | Keycloak IdP state (when `keycloak` profile is active) |
+
+The container exposes **5432** only on the Docker network and publishes two network aliases: `moonmind-api-db` (used by the API) and `temporal-db` (used by Temporal).
+
+##### `minio`
+
+MinIO provides the S3-compatible object store used by Temporal workflow artifacts. The `temporal-worker-artifacts` container connects to MinIO on **port 9000** for blob read/write. The MinIO Console is available on **port 9001** (mapped to host) for debugging.
+
+#### 6.3.2 Init and tooling containers
+
+##### `temporal-namespace-init` (run-once)
+
+Runs `services/temporal/bootstrap-namespace.sh` on startup. This script:
+
+1. Waits for the Temporal server to become healthy (up to 90 retries).
+2. Creates the `moonmind` namespace if it does not exist, or updates retention if it does.
+3. Derives retention days from `TEMPORAL_RETENTION_MAX_STORAGE_GB` and `TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY` unless an explicit `TEMPORAL_NAMESPACE_RETENTION_DAYS` is set.
+4. Registers MoonMind custom search attributes (`mm_entry`, `mm_owner_id`, `mm_owner_type`, `mm_state`, `mm_updated_at`, `mm_repo`, `mm_integration`, `mm_continue_as_new_cause`).
+
+Restart policy: `no` — exits after one successful run.
+
+##### `temporal-visibility-rehearsal` (profile: `temporal-tools`)
+
+A one-shot container that dry-runs a Temporal visibility schema upgrade against the Postgres visibility database. Used for upgrade planning and CI validation before applying schema changes in production.
+
+Restart policy: `no`.
+
+##### `temporal-admin-tools` (profile: `temporal-tools`)
+
+A long-running container that sleeps indefinitely, providing a shell with `temporal` and `tctl` CLIs pre-installed. Operators can `docker exec` into it for ad-hoc namespace, schedule, search-attribute, and workflow management.
+
+##### `temporal-ui` (profile: `temporal-ui`)
+
+The official Temporal Web UI. Provides a browser dashboard for inspecting running and completed workflow executions, activity details, task queue status, and schedules. Mapped to **host port 8088** by default.
+
+#### 6.3.3 Auth and workspace init containers
+
+These lightweight Alpine containers initialise Docker volumes with correct ownership (`1000:1000`) and permissions (`0775`) so that worker containers running as a non-root user can write to them. All have restart policy `no`.
+
+| Container | Volume | Purpose |
+| --- | --- | --- |
+| `agent-workspaces-init` | `agent_workspaces` | `/work/agent_jobs` — per-run workspaces for agent task execution |
+| `codex-auth-init` | `codex_auth_volume` | Codex CLI auth credentials and config |
+| `claude-auth-init` | `claude_auth_volume` | Claude CLI auth credentials and config |
+| `gemini-auth-init` | `gemini_auth_volume` | Gemini CLI auth credentials and config |
+
+The sandbox and agent-runtime workers depend on all four init containers completing before they start.
+
+#### 6.3.4 Worker fleet
+
+All workers share the same `moonmind` application image (`ghcr.io/moonladderstudios/moonmind:latest`), use the `services/temporal/scripts/start-worker.sh` entrypoint, and differ only in the **`TEMPORAL_WORKER_FLEET`** environment variable and the task queue they poll. Each worker exposes an HTTP health endpoint at `:8080/healthz`.
+
+##### `temporal-worker-workflow`
+
+- **Fleet:** `workflow`
+- **Task queue:** `mm.workflow`
+- **Concurrency:** 8 (default)
+- **Role:** Runs deterministic Temporal workflow code. This worker executes the orchestration logic (state machines, child workflow spawning, signal/update handling) and must never perform side-effecting I/O directly.
+- **Volumes:** Read-only `moonmind/` and `api_service/` source mounts.
+
+##### `temporal-worker-artifacts`
+
+- **Fleet:** `artifacts`
+- **Task queue:** `mm.activity.artifacts`
+- **Concurrency:** 8 (default)
+- **Role:** Executes artifact lifecycle activities — upload, download, list, delete, and retention enforcement against MinIO.
+- **Key env:** `TEMPORAL_ARTIFACT_BACKEND=s3`, S3 endpoint/bucket/credentials pointing at the `minio` container.
+- **Depends on:** `minio` in addition to Temporal.
+
+##### `temporal-worker-llm`
+
+- **Fleet:** `llm`
+- **Task queue:** `mm.activity.llm`
+- **Concurrency:** 4 (default)
+- **Role:** Executes LLM API call activities. Holds API keys for OpenAI, Gemini/Google, and Anthropic.
+- **Key env:** `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`.
+- **Note:** Provider-specific sub-queues (e.g. `mm.activity.llm.codex`) are not configured by default; add them only when isolation or separate scaling is needed.
+
+##### `temporal-worker-sandbox`
+
+- **Fleet:** `sandbox`
+- **Task queue:** `mm.activity.sandbox`
+- **Concurrency:** 2 (default)
+- **Role:** Executes shell commands, repo checkouts, and agent CLI invocations (Codex, Claude, Gemini). This is the primary worker for running external code-generation agents against checked-out repositories.
+- **Volumes:** `codex_auth_volume`, `claude_auth_volume`, `gemini_auth_volume` (CLI credentials), `agent_workspaces` (per-job working directories).
+- **Depends on:** All four auth/workspace init containers plus Temporal.
+
+##### `temporal-worker-agent-runtime`
+
+- **Fleet:** `agent_runtime`
+- **Task queue:** `mm.activity.agent_runtime`
+- **Concurrency:** 4 (default)
+- **Role:** Executes higher-level agent orchestration activities — task dispatch, status polling, result collection — that coordinate the sandbox worker's lower-level CLI execution.
+- **Volumes:** Same auth and workspace volumes as the sandbox worker.
+- **Depends on:** Same auth and workspace init containers as the sandbox worker.
+
+##### `temporal-worker-integrations`
+
+- **Fleet:** `integrations`
+- **Task queue:** `mm.activity.integrations`
+- **Concurrency:** 4 (default)
+- **Role:** Executes activities for external service integrations (GitHub, Jules, webhooks).
+- **Key env:** `JULES_ENABLED`, `JULES_API_URL`, `JULES_API_KEY`.
+
+#### 6.3.5 Dependency and startup order
+
+```
+postgres (healthy)
+├── temporal (started)
+│   └── temporal-namespace-init (completed)
+│       ├── temporal-worker-workflow
+│       ├── temporal-worker-artifacts  (+ minio started)
+│       ├── temporal-worker-llm
+│       ├── temporal-worker-sandbox    (+ auth/workspace inits completed)
+│       ├── temporal-worker-agent-runtime (+ auth/workspace inits completed)
+│       ├── temporal-worker-integrations
+│       ├── temporal-ui               (profile: temporal-ui)
+│       ├── temporal-admin-tools       (profile: temporal-tools)
+│       └── temporal-visibility-rehearsal (profile: temporal-tools)
+└── init-db (completed) → api
+```
+
+#### 6.3.6 Networking
+
+All Temporal containers join the `local-network` Docker network. Internal service discovery uses container names and network aliases:
+
+| Alias | Target | Used by |
+| --- | --- | --- |
+| `temporal-internal` | `temporal` | All workers, API, namespace-init, admin tools, UI |
+| `temporal-db` | `postgres` | `temporal` (auto-setup persistence connection) |
+| `moonmind-api-db` | `postgres` | `api`, `init-db` |
+
+No Temporal ports are published to the host by default. The `temporal-ui` container optionally publishes **8088→8080**.
 
 ## 7. Migration phases
 
