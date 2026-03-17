@@ -321,7 +321,17 @@ class ManagedAgentAdapter:
 
         Raises ``ProfileResolutionError`` if no matching profile is found.
         """
-        result: dict[str, Any] = await self._fetch_profiles(runtime_id=runtime_id)
+        fetch_res = self._fetch_profiles(runtime_id=runtime_id)
+        if isinstance(fetch_res, list):
+            import logging
+            logging.error(f"_fetch_profiles returned a list: {fetch_res}")
+            result = {"profiles": fetch_res}
+        elif isinstance(fetch_res, dict):
+            import logging
+            logging.error(f"_fetch_profiles returned a dict directly: {fetch_res}")
+            result = fetch_res
+        else:
+            result: dict[str, Any] = await fetch_res
         profiles: list[dict[str, Any]] = result.get("profiles", [])
 
         if not profiles:
