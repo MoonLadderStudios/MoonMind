@@ -10,6 +10,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        build_default_registry,
+    )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
 # The canonical model uses Literal strings, not an Enum, so we alias them here.
@@ -44,6 +47,22 @@ async def invoke_adapter_cancel(agent_kind: str, run_id: str) -> None:
         agent_kind,
         run_id,
     )
+
+
+@activity.defn(name="integration.resolve_external_adapter")
+async def resolve_external_adapter(agent_id: str) -> str:
+    """Activity: verify that *agent_id* has a registered adapter.
+
+    All non-deterministic work (reading env vars, dynamic imports) runs
+    here rather than in the workflow so that replays remain deterministic.
+
+    Returns the validated agent_id on success; raises if no adapter exists.
+    """
+
+    registry = build_default_registry()
+    # Validate the adapter is registered — this forces the gate check.
+    registry.create(agent_id)
+    return agent_id
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
@@ -117,10 +136,14 @@ class MoonMindAgentRun:
                         workflow_id=workflow.info().workflow_id,
                     )
                 elif request.agent_kind == "external":
-                    # TODO(Phase C): Wire JulesAgentAdapter with JulesClient.
-                    raise NotImplementedError(
-                        "External adapter instantiation not yet wired — pending Phase C migration"
+                    # Validate adapter availability in an activity (deterministic-safe).
+                    validated_id = await workflow.execute_activity(
+                        resolve_external_adapter,
+                        request.agent_id,
+                        start_to_close_timeout=timedelta(seconds=30),
                     )
+                    registry = build_default_registry()
+                    adapter = registry.create(validated_id)
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 
