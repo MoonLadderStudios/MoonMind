@@ -109,11 +109,16 @@ class MoonMindAgentRun:
 
                     # TODO(Phase C): Wire ManagedAgentAdapter with proper DI params.
                     # For now, create a minimal stub that satisfies the protocol.
+                    async def mock_profile_fetcher(**kw):
+                        return {"profiles": [{"profile_id": request.execution_profile_ref}]}
+                    async def mock_async_noop(**kw):
+                        pass
+
                     adapter: AgentAdapter = ManagedAgentAdapter(
-                        profile_fetcher=lambda **kw: [],
-                        slot_requester=lambda **kw: None,
-                        slot_releaser=lambda **kw: None,
-                        cooldown_reporter=lambda **kw: None,
+                        profile_fetcher=mock_profile_fetcher,
+                        slot_requester=mock_async_noop,
+                        slot_releaser=mock_async_noop,
+                        cooldown_reporter=mock_async_noop,
                         workflow_id=workflow.info().workflow_id,
                     )
                 elif request.agent_kind == "external":
