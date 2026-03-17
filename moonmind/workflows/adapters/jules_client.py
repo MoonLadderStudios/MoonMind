@@ -78,7 +78,7 @@ class JulesClient:
         else:
             headers = {
                 "Accept": "application/json",
-                "Authorization": f"Bearer {api_key}",
+                "X-Goog-Api-Key": api_key,
             }
             self._client = httpx.AsyncClient(
                 base_url=base_url, timeout=timeout, headers=headers
@@ -91,20 +91,20 @@ class JulesClient:
 
     async def create_task(self, request: JulesCreateTaskRequest) -> JulesTaskResponse:
         data = await self._post_json(
-            "/tasks",
+            "/sessions",
             json=request.model_dump(by_alias=True, mode="json"),
         )
         return JulesTaskResponse.model_validate(data)
 
     async def resolve_task(self, request: JulesResolveTaskRequest) -> JulesTaskResponse:
         data = await self._post_json(
-            f"/tasks/{request.task_id}/finish",
+            f"/sessions/{request.task_id}/finish",
             json=request.model_dump(by_alias=True, mode="json", exclude={"task_id"}),
         )
         return JulesTaskResponse.model_validate(data)
 
     async def get_task(self, request: JulesGetTaskRequest) -> JulesTaskResponse:
-        data = await self._get_json(f"/tasks/{request.task_id}")
+        data = await self._get_json(f"/sessions/{request.task_id}")
         return JulesTaskResponse.model_validate(data)
 
     async def start_integration(
@@ -147,7 +147,7 @@ class JulesClient:
                 )
             )
         except JulesClientError as exc:
-            if exc.request_path == "/tasks" and exc.status_code is None:
+            if exc.request_path == "/sessions" and exc.status_code is None:
                 raise JulesClientError(
                     "ambiguous Jules start result",
                     request_path=exc.request_path,
