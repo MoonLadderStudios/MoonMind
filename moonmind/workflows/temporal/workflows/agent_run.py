@@ -215,13 +215,15 @@ class MoonMindAgentRun:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
 
                 # Post-run artifact publishing via the agent_runtime activity fleet.
-                await workflow.execute_activity(
+                enriched_result = await workflow.execute_activity(
                     "agent_runtime.publish_artifacts",
                     self.final_result.model_dump(mode="json", by_alias=True) if hasattr(self.final_result, "model_dump") else self.final_result,
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
                 )
 
+                if isinstance(enriched_result, dict):
+                    self.final_result = AgentRunResult(**enriched_result)
                 return self.final_result
 
         except asyncio.TimeoutError:

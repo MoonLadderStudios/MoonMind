@@ -6,7 +6,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun, resolve_external_adapter
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
 # Local mock activities that simulate the catalog-routed activities
