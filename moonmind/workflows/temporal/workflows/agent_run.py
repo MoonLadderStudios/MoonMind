@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import timedelta
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
@@ -6,13 +7,16 @@ from temporalio.exceptions import ApplicationError, CancelledError
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
+        AgentRunHandle,
         AgentRunResult,
+        AgentRunStatus as AgentRunStatusModel,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
     from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
     )
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
 # Named RunStatus (not AgentRunStatus) to avoid shadowing the Pydantic model
@@ -190,9 +194,6 @@ class MoonMindAgentRun:
                             "cooldown_seconds": kw.get("cooldown_seconds", 300),
                         })
 
-                    import os
-                    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-                    
                     store_root = os.path.join(
                         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
                         "managed_runs",
@@ -227,7 +228,6 @@ class MoonMindAgentRun:
                         task_queue=INTEGRATIONS_TASK_QUEUE,
                         start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
                     )
-                    from moonmind.schemas.agent_runtime_models import AgentRunHandle
                     handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
                     self.run_id = handle.run_id
                     self.run_status = handle.status
@@ -265,7 +265,6 @@ class MoonMindAgentRun:
                                 task_queue=INTEGRATIONS_TASK_QUEUE,
                                 start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
                             )
-                            from moonmind.schemas.agent_runtime_models import AgentRunStatus as AgentRunStatusModel
                             status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
                             self.run_status = status_obj.status
                             if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
@@ -350,7 +349,7 @@ class MoonMindAgentRun:
 
             if self.run_id is not None and self.agent_kind is not None:
                 try:
-                    if self.agent_kind == "external" and hasattr(self, "_external_agent_id"):
+                    if self.agent_kind == "external" and self._external_agent_id is not None:
                         # Route external cancel through integration activity.
                         await workflow.execute_activity(
                             f"integration.{self._external_agent_id}.cancel",

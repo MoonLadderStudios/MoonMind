@@ -300,8 +300,11 @@ async def test_agent_run_external_agent_workflow():
                 assert "jules-task-001" in result.summary
 
                 # Verify activities were called in the correct order.
-                assert "resolve:jules" in _external_activity_calls
-                assert "start" in _external_activity_calls
-                assert "fetch_result" in _external_activity_calls
-                # At least one status poll should have happened.
-                assert any(c.startswith("status:") for c in _external_activity_calls)
+                resolve_idx = _external_activity_calls.index("resolve:jules")
+                start_idx = _external_activity_calls.index("start")
+                fetch_idx = _external_activity_calls.index("fetch_result")
+                assert resolve_idx < start_idx < fetch_idx, (
+                    f"Expected resolve < start < fetch_result, got {_external_activity_calls}"
+                )
+                # At least one status poll should have happened between start and fetch_result.
+                assert any(c.startswith("status:") for c in _external_activity_calls[start_idx:fetch_idx])
