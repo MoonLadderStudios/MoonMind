@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import inspect
 import json
-import logging
+from logging import getLogger
 import os
 import re
 import shlex
@@ -57,7 +57,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
 PlanGenerator = Callable[
