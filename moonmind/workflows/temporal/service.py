@@ -221,9 +221,10 @@ class TemporalExecutionService:
         repository: str | None = None,
         integration: str | None = None,
         summary: str | None = None,
+        _skip_pause_guard: bool = False,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
-        if await self.check_system_paused():
+        if not _skip_pause_guard and await self.check_system_paused():
             raise TemporalExecutionValidationError(
                 "System is paused. New workflow submissions are blocked. "
                 "Resume the system via POST /api/system/worker-pause before "

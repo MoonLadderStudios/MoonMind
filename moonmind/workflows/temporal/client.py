@@ -25,6 +25,17 @@ if TYPE_CHECKING:
 
 MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
 
+# All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
+# so that drain metrics and batch signals only target our own workflows.
+_MOONMIND_TASK_QUEUES: tuple[str, ...] = (
+    "mm.workflow",
+    "mm.activity.artifacts",
+    "mm.activity.llm",
+    "mm.activity.sandbox",
+    "mm.activity.integrations",
+    "mm.activity.agent_runtime",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class WorkflowStartResult:
@@ -170,9 +181,13 @@ class TemporalClientAdapter:
         ``ExecutionStatus="Running"``.
 
         ``task_queues``: optional list of task queues to filter.  When omitted the
-        query targets all queues in the namespace.
+        ``task_queues``: optional list of task queues to filter.  Defaults to
+        ``_MOONMIND_TASK_QUEUES`` so queries are scoped to MoonMind workflows.
         """
         client = await self.get_client()
+
+        if task_queues is None:
+            task_queues = _MOONMIND_TASK_QUEUES
 
         visibility_filter = 'ExecutionStatus="Running"'
         if task_queues:
@@ -231,6 +246,9 @@ class TemporalClientAdapter:
         this can be replaced with a single ``StartBatchOperation`` call.
         """
         client = await self.get_client()
+
+        if task_queues is None:
+            task_queues = _MOONMIND_TASK_QUEUES
 
         visibility_filter = 'ExecutionStatus="Running"'
         if task_queues:
@@ -337,6 +355,7 @@ async def start_manifest_child_runs(
             idempotency_key=(
                 f"{parent_execution.workflow_id}:{parent_execution.run_id}:{node.node_id}"
             ),
+            _skip_pause_guard=True,
         )
         starts.append(
             ManifestChildWorkflowStart(

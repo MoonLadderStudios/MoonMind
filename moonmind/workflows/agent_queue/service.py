@@ -215,6 +215,7 @@ class WorkerPauseSnapshot:
     system: QueueSystemMetadata
     metrics: WorkerPauseMetrics
     audit_events: tuple[WorkerPauseAuditEvent, ...]
+    signal_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1318,6 +1319,7 @@ class AgentQueueService:
         # --- Quiesce Batch Signal Dispatch (DOC-REQ-003, FR-007, FR-010) ---
         _is_quiesce_pause = action_key == "pause" and pause_mode == models.WorkerPauseMode.QUIESCE
         _is_quiesce_resume = action_key == "resume" and state.mode == models.WorkerPauseMode.QUIESCE
+        _signal_status: str | None = None
         if _is_quiesce_pause or _is_quiesce_resume:
             try:
                 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -1332,14 +1334,19 @@ class AgentQueueService:
                     action_key,
                     extra={"signaled_count": signaled},
                 )
+                _signal_status = f"signals_dispatched:{signaled}"
             except Exception:
                 logger.warning(
                     "quiesce %s signal dispatch failed (best-effort)",
                     action_key,
                     exc_info=True,
                 )
+                _signal_status = "signal_dispatch_failed"
 
-        return await self._build_worker_pause_snapshot(audit_limit=audit_limit)
+        return await self._build_worker_pause_snapshot(
+            audit_limit=audit_limit,
+            signal_status=_signal_status,
+        )
 
     async def complete_job(
         self,
@@ -2681,6 +2688,7 @@ class AgentQueueService:
         self,
         *,
         audit_limit: int = 5,
+        signal_status: str | None = None,
     ) -> WorkerPauseSnapshot:
         """Return aggregated worker pause metadata/metrics/audit entries."""
 
@@ -2688,7 +2696,12 @@ class AgentQueueService:
         metrics = await self._build_worker_pause_metrics()
         events = await self._repository.list_system_control_events(limit=audit_limit)
         audit = tuple(self._serialize_control_event(event) for event in events)
-        return WorkerPauseSnapshot(system=metadata, metrics=metrics, audit_events=audit)
+        return WorkerPauseSnapshot(
+            system=metadata,
+            metrics=metrics,
+            audit_events=audit,
+            signal_status=signal_status,
+        )
 
     @staticmethod
     def _to_queue_system_metadata(

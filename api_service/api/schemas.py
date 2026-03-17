@@ -339,6 +339,7 @@ class WorkerPauseSnapshotResponse(BaseModel):
     audit: WorkerPauseAuditListModel = Field(
         default_factory=WorkerPauseAuditListModel, alias="audit"
     )
+    signal_status: Optional[str] = Field(None, alias="signalStatus")
 
 
 class TaskTemplateInputSchema(BaseModel):

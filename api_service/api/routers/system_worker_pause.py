@@ -163,6 +163,7 @@ def _serialize_worker_pause_snapshot(
         audit=WorkerPauseAuditListModel(
             latest=[_serialize_audit_event(event) for event in snapshot.audit_events]
         ),
+        signal_status=snapshot.signal_status,
     )
 
 
