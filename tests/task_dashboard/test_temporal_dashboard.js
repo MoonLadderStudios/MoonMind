@@ -251,3 +251,52 @@ const helpers = loadTemporalHelpers();
     "/api/executions/mm%3Awf-1?source=temporal",
   );
 })();
+
+(function testTemporalDetailMarkupIncludesLiveLogsSection() {
+  const html = helpers.renderTemporalDetailMarkup({
+    execution: { state: "executing", workflowType: "MoonMind.Run" },
+    latestWorkflowId: "mm:wf-live-logs",
+    latestRunId: "run-001",
+    artifacts: { artifacts: [] },
+    waitingReason: "",
+    detailTitle: "Test Task",
+    attentionRequired: false,
+    noticeHtml: "",
+    debugFields: "",
+  });
+  assert(html.includes('id="temporal-live-logs-section"'), "Expected live logs section");
+  assert(html.includes('id="temporal-start-tailing"'), "Expected start tailing button");
+  assert(html.includes('id="temporal-live-logs-inactive"'), "Expected inactive container");
+  assert(html.includes('id="temporal-live-logs-active"'), "Expected active container");
+  assert(html.includes('style="display:none"'), "Expected active container to be hidden by default");
+  assert(html.includes('id="temporal-follow-output"'), "Expected follow output toggle");
+  assert(html.includes('id="temporal-output-filter"'), "Expected output filter select");
+  assert(html.includes('id="temporal-copy-output"'), "Expected copy button");
+  assert(html.includes('id="temporal-stop-tailing"'), "Expected stop button");
+  assert(html.includes('id="temporal-live-transport-status"'), "Expected transport status span");
+  assert(html.includes('id="temporal-live-output"'), "Expected live output pre element");
+})();
+
+(function testTemporalDetailMarkupLiveLogsDefaultsToCollapsed() {
+  const html = helpers.renderTemporalDetailMarkup({
+    execution: { state: "succeeded", workflowType: "MoonMind.Run" },
+    latestWorkflowId: "mm:wf-collapsed",
+    latestRunId: "run-002",
+    artifacts: { artifacts: [] },
+    waitingReason: "",
+    detailTitle: "Collapsed Task",
+    attentionRequired: false,
+    noticeHtml: "",
+    debugFields: "",
+  });
+  const inactiveIdx = html.indexOf('id="temporal-live-logs-inactive"');
+  const activeIdx = html.indexOf('id="temporal-live-logs-active"');
+  assert(inactiveIdx > -1, "Inactive container must exist");
+  assert(activeIdx > -1, "Active container must exist");
+  // The inactive section should NOT have display:none, the active section should
+  const inactiveSlice = html.slice(Math.max(0, inactiveIdx - 100), inactiveIdx);
+  assert(!inactiveSlice.includes('display:none'), "Inactive container should be visible by default");
+  const activeSlice = html.slice(Math.max(0, activeIdx - 100), activeIdx + 100);
+  assert(activeSlice.includes('display:none'), "Active container should be hidden by default");
+})();
+

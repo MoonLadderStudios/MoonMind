@@ -3222,6 +3222,7 @@
       fetchTemporalArtifactMetadata,
       normalizeDashboardRoutePath,
       renderTemporalActionButtons,
+      renderTemporalDetailMarkup,
       resolveTemporalActionResultMessage,
       resolveTemporalActionSurface,
       resolveTemporalArtifactPresentation,
@@ -9341,6 +9342,34 @@
       }</tbody>
         </table>
       </section>
+      <section id="temporal-live-logs-section">
+        <h3>Live Logs</h3>
+        <div id="temporal-live-logs-inactive">
+          <p class="small">Event logs are not streamed by default. Start tailing to see live output from this task.</p>
+          <button type="button" id="temporal-start-tailing">Start Tailing</button>
+        </div>
+        <div id="temporal-live-logs-active" style="display:none">
+          <div class="actions queue-live-output-toolbar">
+            <label class="queue-inline-toggle">
+              <input type="checkbox" id="temporal-follow-output" checked />
+              Follow output
+            </label>
+            <label class="queue-inline-filter">
+              Filter
+              <select id="temporal-output-filter">
+                <option value="all" selected>All</option>
+                <option value="stages">Stages</option>
+                <option value="logs">Logs</option>
+                <option value="warnings">Warnings/Errors</option>
+              </select>
+            </label>
+            <button type="button" class="secondary" id="temporal-copy-output">Copy</button>
+            <button type="button" class="secondary" id="temporal-stop-tailing">Stop</button>
+            <span class="small" id="temporal-live-transport-status">Live transport: Idle</span>
+          </div>
+          <pre id="temporal-live-output" class="queue-live-output"></pre>
+        </div>
+      </section>
       ${debugFields}
     `;
   }
@@ -9355,6 +9384,416 @@
 
     let detailNotice = "";
     let detailNoticeLevel = "ok";
+
+    const logState = {
+      tailing: false,
+      events: [],
+      eventIds: new Set(),
+      after: null,
+      afterEventId: null,
+      outputFilter: "all",
+      followOutput: true,
+      eventsTransport: "idle",
+      eventsTransportStatus: "idle",
+      liveOutputLines: [],
+      liveOutputRenderedEventCount: 0,
+      liveOutputRenderedFilter: "all",
+      forceLiveOutputRebuild: true,
+      maxLiveOutputLines: 1500,
+      maxEvents: 20000,
+      eventsRenderTimer: null,
+      eventsRenderIntervalMs: 120,
+    };
+
+    let logEventSource = null;
+
+    const stopLogEventStream = () => {
+      if (!logEventSource) {
+        return;
+      }
+      logEventSource.onmessage = null;
+      logEventSource.onerror = null;
+      logEventSource.close();
+      logEventSource = null;
+    };
+
+    registerDisposer(() => {
+      stopLogEventStream();
+      if (logState.eventsRenderTimer !== null) {
+        clearTimeout(logState.eventsRenderTimer);
+        logState.eventsRenderTimer = null;
+      }
+    });
+
+    const renderLogTransportStatus = () => {
+      const node = document.getElementById("temporal-live-transport-status");
+      if (!node) {
+        return;
+      }
+      const label = logState.eventsTransport === "sse" ? "SSE" : logState.eventsTransport === "polling" ? "Polling" : "Idle";
+      node.textContent = `Live transport: ${label} (${logState.eventsTransportStatus})`;
+    };
+
+    const updateLogOutputLines = () => {
+      const shouldRebuild =
+        logState.forceLiveOutputRebuild ||
+        logState.liveOutputRenderedFilter !== logState.outputFilter ||
+        logState.liveOutputRenderedEventCount > logState.events.length;
+
+      if (shouldRebuild) {
+        const lines = [];
+        logState.events.forEach((event) => {
+          if (eventMatchesOutputFilter(event, logState.outputFilter)) {
+            lines.push(formatLiveOutputLine(event));
+          }
+        });
+        if (lines.length > logState.maxLiveOutputLines) {
+          lines.splice(0, lines.length - logState.maxLiveOutputLines);
+        }
+        logState.liveOutputLines = lines;
+        logState.liveOutputRenderedEventCount = logState.events.length;
+        logState.liveOutputRenderedFilter = logState.outputFilter;
+        logState.forceLiveOutputRebuild = false;
+        return;
+      }
+
+      if (logState.liveOutputRenderedEventCount < logState.events.length) {
+        for (
+          let index = logState.liveOutputRenderedEventCount;
+          index < logState.events.length;
+          index += 1
+        ) {
+          const event = logState.events[index];
+          if (eventMatchesOutputFilter(event, logState.outputFilter)) {
+            logState.liveOutputLines.push(formatLiveOutputLine(event));
+          }
+        }
+        if (logState.liveOutputLines.length > logState.maxLiveOutputLines) {
+          logState.liveOutputLines.splice(
+            0,
+            logState.liveOutputLines.length - logState.maxLiveOutputLines,
+          );
+        }
+        logState.liveOutputRenderedEventCount = logState.events.length;
+      }
+    };
+
+    const renderLogOutput = () => {
+      const outputNode = document.getElementById("temporal-live-output");
+      if (!outputNode) {
+        return;
+      }
+      updateLogOutputLines();
+      outputNode.textContent = logState.liveOutputLines.join("\n");
+      if (logState.followOutput) {
+        outputNode.scrollTop = outputNode.scrollHeight;
+      }
+    };
+
+    const flushLogRender = () => {
+      renderLogOutput();
+      renderLogTransportStatus();
+    };
+
+    const scheduleLogRender = ({ forceLiveOutputRebuild = false } = {}) => {
+      if (forceLiveOutputRebuild) {
+        logState.forceLiveOutputRebuild = true;
+      }
+      if (logState.eventsRenderTimer !== null) {
+        return;
+      }
+      logState.eventsRenderTimer = window.setTimeout(() => {
+        logState.eventsRenderTimer = null;
+        flushLogRender();
+      }, logState.eventsRenderIntervalMs);
+    };
+
+    const toSortableLogTs = (value) => Date.parse(String(value || "")) || 0;
+    const compareLogEventsAsc = (left, right) => {
+      const leftTs = toSortableLogTs(pick(left, "createdAt"));
+      const rightTs = toSortableLogTs(pick(right, "createdAt"));
+      if (leftTs !== rightTs) {
+        return leftTs - rightTs;
+      }
+      return String(pick(left, "id") || "").localeCompare(String(pick(right, "id") || ""));
+    };
+
+    const normalizeLogEventsAsc = (events) =>
+      (events || []).slice().sort(compareLogEventsAsc);
+
+    const refreshLogCursors = () => {
+      const newestEvent =
+        logState.events.length > 0 ? logState.events[logState.events.length - 1] : null;
+      logState.after = newestEvent ? pick(newestEvent, "createdAt") || null : null;
+      logState.afterEventId = newestEvent ? String(pick(newestEvent, "id") || "") || null : null;
+    };
+
+    const trimLogEvents = () => {
+      if (logState.events.length <= logState.maxEvents) {
+        return;
+      }
+      const overflow = logState.events.length - logState.maxEvents;
+      const removed = logState.events.splice(0, overflow);
+      removed.forEach((event) => {
+        const eventId = String(pick(event, "id") || "");
+        if (eventId) {
+          logState.eventIds.delete(eventId);
+        }
+      });
+      logState.forceLiveOutputRebuild = true;
+    };
+
+    const appendLogEvents = (incoming) => {
+      let changed = false;
+      const ordered = normalizeLogEventsAsc(incoming);
+      ordered.forEach((event) => {
+        const eventId = String(pick(event, "id") || "");
+        if (!eventId || logState.eventIds.has(eventId)) {
+          return;
+        }
+        logState.eventIds.add(eventId);
+        logState.events.push(event);
+        changed = true;
+      });
+      if (!changed) {
+        return false;
+      }
+      trimLogEvents();
+      refreshLogCursors();
+      scheduleLogRender();
+      return true;
+    };
+
+    const buildLogEventsQuery = ({ limit = 200, after = null, afterEventId = null, sort = "asc" }) => {
+      const parts = [`limit=${encodeURIComponent(String(limit))}`];
+      if (after) {
+        parts.push(`after=${encodeURIComponent(String(after))}`);
+      }
+      if (afterEventId) {
+        parts.push(`afterEventId=${encodeURIComponent(String(afterEventId))}`);
+      }
+      if (sort && sort !== "asc") {
+        parts.push(`sort=${encodeURIComponent(String(sort))}`);
+      }
+      return `?${parts.join("&")}`;
+    };
+
+    const loadLogLatestEvents = async () => {
+      const query = buildLogEventsQuery({ limit: 200, sort: "desc" });
+      try {
+        const payload = await fetchJson(
+          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: workflowId }) + query,
+        );
+        logState.events = [];
+        logState.eventIds.clear();
+        const newestFirst = Array.isArray(payload?.items) ? payload.items : [];
+        const orderedAsc = normalizeLogEventsAsc(newestFirst);
+        orderedAsc.forEach((event) => {
+          const eventId = String(pick(event, "id") || "");
+          if (!eventId || logState.eventIds.has(eventId)) {
+            return;
+          }
+          logState.eventIds.add(eventId);
+          logState.events.push(event);
+        });
+        refreshLogCursors();
+        scheduleLogRender({ forceLiveOutputRebuild: true });
+      } catch (error) {
+        console.warn("temporal log initial event load failed", error);
+      }
+    };
+
+    const loadLogNewEvents = async () => {
+      const query = buildLogEventsQuery({
+        limit: 200,
+        after: logState.after,
+        afterEventId: logState.afterEventId,
+      });
+      try {
+        const payload = await fetchJson(
+          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: workflowId }) + query,
+        );
+        appendLogEvents(payload?.items || []);
+      } catch (error) {
+        console.warn("temporal log event poll failed", error);
+      }
+    };
+
+    const beginLogPolling = () => {
+      logState.eventsTransport = "polling";
+      logState.eventsTransportStatus = isAutoRefreshActive() ? "active" : "paused";
+      renderLogTransportStatus();
+      startPolling(loadLogNewEvents, pollIntervals.events, {
+        runImmediately: isAutoRefreshActive(),
+      });
+    };
+
+    const startLogEventStream = () => {
+      if (!isAutoRefreshActive()) {
+        logState.eventsTransport = "sse";
+        logState.eventsTransportStatus = "paused";
+        renderLogTransportStatus();
+        return;
+      }
+      if (logEventSource) {
+        return;
+      }
+      const streamTemplate =
+        queueSourceConfig.eventsStream || "/api/queue/jobs/{id}/events/stream";
+      if (typeof window.EventSource !== "function") {
+        logState.eventsTransport = "polling";
+        logState.eventsTransportStatus = "unsupported";
+        renderLogTransportStatus();
+        beginLogPolling();
+        return;
+      }
+
+      const query = buildLogEventsQuery({
+        limit: 200,
+        after: logState.after,
+        afterEventId: logState.afterEventId,
+      });
+      const streamUrl = endpoint(streamTemplate, { id: workflowId }) + query;
+      logState.eventsTransport = "sse";
+      logState.eventsTransportStatus = "connecting";
+      renderLogTransportStatus();
+
+      logEventSource = new window.EventSource(streamUrl);
+
+      const handleMessage = (rawData) => {
+        if (!rawData || !isAutoRefreshActive()) {
+          return;
+        }
+        try {
+          const parsed = JSON.parse(rawData);
+          appendLogEvents([parsed]);
+        } catch (error) {
+          console.error("temporal log event stream parse failed", error);
+        }
+      };
+
+      logEventSource.addEventListener("open", () => {
+        logState.eventsTransport = "sse";
+        logState.eventsTransportStatus = "active";
+        renderLogTransportStatus();
+      });
+
+      logEventSource.addEventListener("queue_event", (event) => {
+        if (logState.eventsTransportStatus !== "active") {
+          logState.eventsTransport = "sse";
+          logState.eventsTransportStatus = "active";
+          renderLogTransportStatus();
+        }
+        handleMessage(event.data);
+      });
+
+      logEventSource.onmessage = (event) => {
+        if (logState.eventsTransportStatus !== "active") {
+          logState.eventsTransport = "sse";
+          logState.eventsTransportStatus = "active";
+          renderLogTransportStatus();
+        }
+        handleMessage(event.data);
+      };
+
+      logEventSource.onerror = (error) => {
+        console.warn("temporal log event stream failed; switching to polling", error);
+        logState.eventsTransport = "polling";
+        logState.eventsTransportStatus = "error";
+        renderLogTransportStatus();
+        stopLogEventStream();
+        beginLogPolling();
+      };
+    };
+
+    const stopLogTailing = () => {
+      logState.tailing = false;
+      stopLogEventStream();
+      const inactiveNode = document.getElementById("temporal-live-logs-inactive");
+      const activeNode = document.getElementById("temporal-live-logs-active");
+      if (inactiveNode) {
+        inactiveNode.style.display = "";
+      }
+      if (activeNode) {
+        activeNode.style.display = "none";
+      }
+      logState.eventsTransport = "idle";
+      logState.eventsTransportStatus = "idle";
+    };
+
+    const startLogTailing = async () => {
+      logState.tailing = true;
+      const inactiveNode = document.getElementById("temporal-live-logs-inactive");
+      const activeNode = document.getElementById("temporal-live-logs-active");
+      if (inactiveNode) {
+        inactiveNode.style.display = "none";
+      }
+      if (activeNode) {
+        activeNode.style.display = "";
+      }
+      await loadLogLatestEvents();
+      startLogEventStream();
+    };
+
+    const attachLogHandlers = () => {
+      const startBtn = document.getElementById("temporal-start-tailing");
+      if (startBtn) {
+        startBtn.addEventListener("click", () => {
+          startLogTailing();
+        });
+      }
+      const stopBtn = document.getElementById("temporal-stop-tailing");
+      if (stopBtn) {
+        stopBtn.addEventListener("click", () => {
+          stopLogTailing();
+        });
+      }
+      const followToggle = document.getElementById("temporal-follow-output");
+      if (followToggle instanceof HTMLInputElement) {
+        followToggle.addEventListener("change", () => {
+          logState.followOutput = followToggle.checked;
+          if (logState.followOutput) {
+            const outputNode = document.getElementById("temporal-live-output");
+            if (outputNode) {
+              outputNode.scrollTop = outputNode.scrollHeight;
+            }
+          }
+        });
+      }
+      const filterSelect = document.getElementById("temporal-output-filter");
+      if (filterSelect instanceof HTMLSelectElement) {
+        filterSelect.addEventListener("change", () => {
+          logState.outputFilter = filterSelect.value;
+          scheduleLogRender({ forceLiveOutputRebuild: true });
+        });
+      }
+      const copyBtn = document.getElementById("temporal-copy-output");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", () => {
+          const outputNode = document.getElementById("temporal-live-output");
+          if (outputNode && navigator.clipboard) {
+            navigator.clipboard.writeText(outputNode.textContent || "").catch(() => {
+              console.warn("temporal log copy failed");
+            });
+          }
+        });
+      }
+    };
+
+    const restoreLogTailingState = () => {
+      if (!logState.tailing) {
+        return;
+      }
+      const inactiveNode = document.getElementById("temporal-live-logs-inactive");
+      const activeNode = document.getElementById("temporal-live-logs-active");
+      if (inactiveNode) {
+        inactiveNode.style.display = "none";
+      }
+      if (activeNode) {
+        activeNode.style.display = "";
+      }
+      flushLogRender();
+    };
 
     const runTemporalAction = async (execution, action) => {
       const normalizedAction = String(action || "").trim().toLowerCase();
@@ -9523,6 +9962,8 @@
           { showAutoRefreshControls: true },
         );
         attachTemporalActionHandlers(execution, load);
+        attachLogHandlers();
+        restoreLogTailingState();
       } catch (error) {
         console.error("temporal detail load failed", error);
         if (silent && detailNotice) {
