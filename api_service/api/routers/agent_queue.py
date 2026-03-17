@@ -122,7 +122,7 @@ from moonmind.workflows.temporal import TemporalExecutionService
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
 logger = logging.getLogger(__name__)
 
-_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini", "claude", "jules")
+_RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini_cli", "claude", "jules")
 
 _QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
 

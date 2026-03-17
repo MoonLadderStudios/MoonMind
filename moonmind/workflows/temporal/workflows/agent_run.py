@@ -94,7 +94,7 @@ class MoonMindAgentRun:
                 # Acquire auth slot if managed
                 if request.agent_kind == "managed":
                     runtime_mapping = {
-                        "gemini": "gemini_cli",
+                        "gemini_cli": "gemini_cli",
                         "claude": "claude_code",
                         "codex": "codex_cli",
                     }
@@ -109,7 +109,15 @@ class MoonMindAgentRun:
                     )
                     
                     # Wait for assigned slot
-                    await workflow.wait_condition(lambda: self.slot_assigned_event.is_set())
+                    try:
+                        await workflow.wait_condition(
+                            lambda: self.slot_assigned_event.is_set(),
+                            timeout=timedelta(minutes=5)
+                        )
+                    except asyncio.TimeoutError:
+                        workflow.logger.error("Timed out waiting for auth profile slot.")
+                        self.run_status = AgentRunStatus.timed_out
+                        return AgentRunResult(failure_class="execution_error")
                     request.execution_profile_ref = self._assigned_profile_id
 
                     # Wire ManagedAgentAdapter with real DI callables.
@@ -145,6 +153,15 @@ class MoonMindAgentRun:
                             "cooldown_seconds": kw.get("cooldown_seconds", 300),
                         })
 
+                    import os
+                    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+                    
+                    store_root = os.path.join(
+                        os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
+                        "managed_runs",
+                    )
+                    run_store = ManagedRunStore(store_root)
+
                     adapter: AgentAdapter = ManagedAgentAdapter(
                         profile_fetcher=_profile_fetcher,
                         slot_requester=_slot_requester,
@@ -152,6 +169,7 @@ class MoonMindAgentRun:
                         cooldown_reporter=_cooldown_reporter,
                         workflow_id=wf_id,
                         runtime_id=runtime_id,
+                        run_store=run_store,
                     )
                 elif request.agent_kind == "external":
                     # Validate adapter availability in an activity (deterministic-safe).
@@ -231,7 +249,7 @@ class MoonMindAgentRun:
             self.run_status = AgentRunStatus.timed_out
             if request.agent_kind == "managed" and hasattr(request, "execution_profile_ref") and request.execution_profile_ref:
                 try:
-                    runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                    runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                     runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                     manager_id = f"auth-profile-manager:{runtime_id}"
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
@@ -242,7 +260,7 @@ class MoonMindAgentRun:
 
         except CancelledError:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
-                runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = f"auth-profile-manager:{runtime_id}"
                 try:

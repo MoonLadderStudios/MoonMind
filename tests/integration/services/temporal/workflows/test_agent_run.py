@@ -75,7 +75,7 @@ async def test_agent_run_workflow():
             )
             
             # Start dummy manager
-            runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+            runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
             runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
             manager_id = f"auth-profile-manager:{runtime_id}"
             await env.client.start_workflow(
@@ -121,7 +121,7 @@ async def test_agent_run_workflow_cancellation():
             )
             
             # Start dummy manager
-            runtime_mapping = {"gemini": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+            runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
             runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
             manager_id = f"auth-profile-manager:{runtime_id}"
             await env.client.start_workflow(

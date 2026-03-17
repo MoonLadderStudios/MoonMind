@@ -165,12 +165,6 @@ class ManagedAgentAdapter:
         profile_id: str = profile["profile_id"]
         auth_mode: str = profile.get("auth_mode", "api_key")
 
-        # Request a slot lease from the AuthProfileManager (DOC-REQ-003).
-        await self._request_slot(
-            requester_workflow_id=self._workflow_id,
-            runtime_id=request.agent_id,
-        )
-
         # Shape environment according to auth mode (DOC-REQ-005, DOC-REQ-006).
         base_env = dict(os.environ)
         if auth_mode == "oauth":
@@ -189,6 +183,18 @@ class ManagedAgentAdapter:
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = profile_id
         run_id = str(uuid4())
+        
+        if self._run_store is not None:
+            from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+            record = ManagedRunRecord(
+                run_id=run_id,
+                agent_id=request.agent_id,
+                runtime_id=self._runtime_id or request.agent_id,
+                status="launching",
+                started_at=datetime.now(tz=UTC),
+            )
+            self._run_store.save(record)
+
         logger.info(
             "ManagedAgentAdapter.start profile_id=%s run_id=%s workflow_id=%s",
             profile_id,

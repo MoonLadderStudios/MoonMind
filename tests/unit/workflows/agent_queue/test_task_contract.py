@@ -384,7 +384,7 @@ def test_normalize_task_payload_rejects_forbidden_step_override_fields() -> None
                         {
                             "id": "bad-step",
                             "instructions": "should fail",
-                            "runtime": {"mode": "gemini"},
+                            "runtime": {"mode": "gemini_cli"},
                         }
                     ],
                 },

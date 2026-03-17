@@ -4541,8 +4541,8 @@ async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        worker_runtime="gemini",
-        worker_capabilities=("gemini", "git"),
+        worker_runtime="gemini_cli",
+        worker_capabilities=("gemini_cli", "git"),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -4985,11 +4985,11 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
         type="task",
         payload={
             "repository": "MoonLadderStudios/MoonMind",
-            "targetRuntime": "gemini",
+            "targetRuntime": "gemini_cli",
             "task": {
                 "instructions": "run",
                 "skill": {"id": "auto", "args": {}},
-                "runtime": {"mode": "gemini"},
+                "runtime": {"mode": "gemini_cli"},
                 "git": {"startingBranch": None, "newBranch": None},
                 "publish": {"mode": "none"},
             },
@@ -5007,7 +5007,7 @@ async def test_run_once_universal_worker_executes_gemini_task(tmp_path: Path) ->
         lease_seconds=120,
         workdir=tmp_path,
         worker_runtime="universal",
-        worker_capabilities=("codex", "gemini", "claude", "git"),
+        worker_capabilities=("codex", "gemini_cli", "claude", "git"),
     )
     worker = CodexWorker(config=config, queue_client=queue, codex_exec_handler=handler)  # type: ignore[arg-type]
 
@@ -6114,7 +6114,7 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
     config = CodexWorkerConfig.from_env()
 
     assert config.worker_runtime == "universal"
-    assert config.worker_capabilities == ("codex", "gemini", "claude", "git", "gh")
+    assert config.worker_capabilities == ("codex", "gemini_cli", "claude", "git", "gh")
 
 
 async def test_config_from_env_rejects_jules_runtime_when_disabled(
@@ -6243,13 +6243,13 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
         canonical_payload={
             "task": {
                 "runtime": {
-                    "mode": "gemini",
+                    "mode": "gemini_cli",
                     "model": None,
                     "effort": None,
                 }
             }
         },
-        runtime_mode="gemini",
+        runtime_mode="gemini_cli",
     )
     assert model == "gemini-default"
     assert effort == "medium"
@@ -6258,13 +6258,13 @@ async def test_runtime_override_precedence_prefers_task_then_worker_defaults(
         canonical_payload={
             "task": {
                 "runtime": {
-                    "mode": "gemini",
+                    "mode": "gemini_cli",
                     "model": "gemini-2.5-pro",
                     "effort": "high",
                 }
             }
         },
-        runtime_mode="gemini",
+        runtime_mode="gemini_cli",
     )
     assert model_override == "gemini-2.5-pro"
     assert effort_override == "high"
@@ -7261,7 +7261,7 @@ async def test_derive_default_pr_body_contains_required_correlation_footer() -> 
     job_id = uuid4()
     body = CodexWorker._derive_default_pr_body(
         job_id=job_id,
-        runtime_mode="gemini",
+        runtime_mode="gemini_cli",
         base_branch="main",
         head_branch="task/20260219/abcd1234",
     )
@@ -7612,7 +7612,7 @@ async def test_run_publish_stage_uses_verbatim_overrides_and_redacts_command_log
     canonical_payload = {
         "task": {
             "instructions": "unused",
-            "runtime": {"mode": "gemini"},
+            "runtime": {"mode": "gemini_cli"},
             "publish": {
                 "mode": "pr",
                 "commitMessage": commit_override,
@@ -8570,7 +8570,7 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
         poll_interval_ms=1500,
         lease_seconds=120,
         workdir=tmp_path,
-        worker_runtime="gemini",
+        worker_runtime="gemini_cli",
         gemini_allowed_tools=(
             "activate_skill",
             "run_shell_command",
@@ -8590,14 +8590,14 @@ async def test_build_non_codex_runtime_command_allows_required_gemini_tools(
     prepared_mock.job_root = tmp_path
 
     command = worker._build_non_codex_runtime_command(
-        runtime_mode="gemini",
+        runtime_mode="gemini_cli",
         instruction="resolve the task",
         model="gemini-2.5-pro",
         effort="high",
         prepared=prepared_mock,
     )
 
-    assert command[:3] == ["gemini", "--prompt", "resolve the task"]
+    assert command[:3] == ["gemini_cli", "--prompt", "resolve the task"]
     assert "--include-directories" in command
     include_directories_index = command.index("--include-directories")
     assert command[include_directories_index + 1] == str(tmp_path / "skills_active")

@@ -19,7 +19,7 @@ _POLL_INTERVALS_MS = {
     "events": 1000,
 }
 
-_SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini", "claude", "jules", "universal")
+_SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini_cli", "claude", "jules", "universal")
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "queue": {
@@ -112,7 +112,7 @@ def status_maps() -> dict[str, dict[str, str]]:
 
 
 def _build_supported_task_runtimes() -> list[str]:
-    supported: list[str] = ["codex", "gemini", "claude"]
+    supported: list[str] = ["codex", "gemini_cli", "claude"]
     if settings.jules_runtime_gate.enabled:
         supported.append("jules")
     return supported

@@ -35,7 +35,7 @@ function createVmContext() {
         },
       },
       system: {
-        supportedTaskRuntimes: ["codex", "gemini"],
+        supportedTaskRuntimes: ["codex", "gemini_cli"],
       },
     }),
   };

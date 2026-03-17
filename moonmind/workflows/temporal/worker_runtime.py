@@ -51,7 +51,7 @@ from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini", "claude", "jules"})
+_SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -63,7 +63,7 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        return str(settings.workflow.default_task_runtime or "gemini").strip().lower()
+        return str(settings.workflow.default_task_runtime or "gemini_cli").strip().lower()
     return normalized
 
 

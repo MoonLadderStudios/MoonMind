@@ -324,7 +324,7 @@ class TestWorkflowSettings:
 
         settings = WorkflowSettings(_env_file=None)
         assert settings.vision_context_enabled is True
-        assert settings.vision_provider == "gemini"
+        assert settings.vision_provider == "gemini_cli"
         assert settings.vision_model == "models/gemini-2.5-flash"
         assert settings.vision_max_tokens == 512
         assert settings.vision_ocr_enabled is True

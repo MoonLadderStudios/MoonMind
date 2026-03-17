@@ -627,7 +627,7 @@ async def test_create_task_job_uses_default_model_for_configured_runtime(
 ) -> None:
     """Missing runtime model should resolve from the configured default runtime."""
 
-    monkeypatch.setattr(settings.workflow, "default_task_runtime", "gemini")
+    monkeypatch.setattr(settings.workflow, "default_task_runtime", "gemini_cli")
     monkeypatch.setenv("MOONMIND_GEMINI_MODEL", "gemini-2.5-pro")
 
     async with queue_db(tmp_path) as session_maker:
@@ -646,11 +646,11 @@ async def test_create_task_job_uses_default_model_for_configured_runtime(
                 },
             )
 
-    assert job.payload["targetRuntime"] == "gemini"
-    assert job.payload["task"]["runtime"]["mode"] == "gemini"
+    assert job.payload["targetRuntime"] == "gemini_cli"
+    assert job.payload["task"]["runtime"]["mode"] == "gemini_cli"
     assert job.payload["task"]["runtime"]["model"] == "gemini-2.5-pro"
     assert job.payload["task"]["runtime"]["effort"] is None
-    assert job.payload["requiredCapabilities"] == ["gemini", "git"]
+    assert job.payload["requiredCapabilities"] == ["gemini_cli", "git"]
 
 
 async def test_create_task_job_rejects_claude_runtime_without_api_key(

@@ -330,11 +330,11 @@ async def test_promote_proposal_applies_runtime_defaults() -> None:
     queue.normalize_task_job_payload = MagicMock(
         return_value={
             "repository": "Moon/Repo",
-            "targetRuntime": "gemini",
+            "targetRuntime": "gemini_cli",
             "task": {
                 "instructions": "edited",
                 "runtime": {
-                    "mode": "gemini",
+                    "mode": "gemini_cli",
                     "model": "gemini-3.1-pro-preview",
                     "effort": None,
                 },
@@ -375,11 +375,11 @@ async def test_promote_proposal_applies_runtime_defaults() -> None:
     )
 
     _, kwargs = queue.create_job.await_args
-    assert kwargs["payload"]["targetRuntime"] == "gemini"
-    assert kwargs["payload"]["task"]["runtime"]["mode"] == "gemini"
+    assert kwargs["payload"]["targetRuntime"] == "gemini_cli"
+    assert kwargs["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
     assert kwargs["payload"]["task"]["runtime"]["model"] == "gemini-3.1-pro-preview"
     assert (
-        proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini"
+        proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
     )
 
 

@@ -10,14 +10,14 @@ DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 _DEFAULT_RUNTIME_MODELS: dict[str, str] = {
     "codex": "gpt-5.3-codex",
-    "gemini": "gemini-3.1-pro",
+    "gemini_cli": "gemini-3.1-pro",
 }
 _DEFAULT_RUNTIME_EFFORTS: dict[str, str] = {
     "codex": "high",
 }
 _RUNTIME_MODEL_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "codex": ("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
-    "gemini": ("MOONMIND_GEMINI_MODEL", "GEMINI_MODEL"),
+    "gemini_cli": ("MOONMIND_GEMINI_MODEL", "GEMINI_MODEL"),
     "claude": ("MOONMIND_CLAUDE_MODEL", "CLAUDE_MODEL"),
     "jules": ("MOONMIND_JULES_MODEL", "JULES_MODEL"),
 }
@@ -27,7 +27,7 @@ _RUNTIME_EFFORT_ENV_KEYS: dict[str, tuple[str, ...]] = {
         "CODEX_MODEL_REASONING_EFFORT",
         "MODEL_REASONING_EFFORT",
     ),
-    "gemini": ("MOONMIND_GEMINI_EFFORT", "GEMINI_REASONING_EFFORT"),
+    "gemini_cli": ("MOONMIND_GEMINI_EFFORT", "GEMINI_REASONING_EFFORT"),
     "claude": ("MOONMIND_CLAUDE_EFFORT", "CLAUDE_REASONING_EFFORT"),
     "jules": ("MOONMIND_JULES_EFFORT", "JULES_REASONING_EFFORT"),
 }

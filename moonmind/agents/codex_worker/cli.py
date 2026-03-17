@@ -55,7 +55,7 @@ def _resolve_worker_runtime(env: Mapping[str, str]) -> str:
     runtime = (
         str(env.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower() or "codex"
     )
-    allowed = {"codex", "gemini", "claude", "jules", "universal"}
+    allowed = {"codex", "gemini_cli", "claude", "jules", "universal"}
     if runtime not in allowed:
         supported = ", ".join(sorted(allowed))
         raise RuntimeError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
@@ -158,7 +158,7 @@ def _effective_worker_capabilities(
     if configured:
         return configured
     if runtime == "universal":
-        capabilities = ["codex", "gemini", "claude", "git", "gh"]
+        capabilities = ["codex", "gemini_cli", "claude", "git", "gh"]
         if _jules_runtime_gate_from_env(source).enabled:
             capabilities.insert(3, "jules")
         return tuple(capabilities)
@@ -302,10 +302,10 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     source = env if env is not None else os.environ
     runtime = _resolve_worker_runtime(source)
     capabilities = _effective_worker_capabilities(source, runtime)
-    runtime_verification_order = ("codex", "gemini", "claude", "jules")
+    runtime_verification_order = ("codex", "gemini_cli", "claude", "jules")
     resolved_paths: dict[str, str | None] = {
         "codex": None,
-        "gemini": None,
+        "gemini_cli": None,
         "claude": None,
         "jules": None,
         "rg": None,
@@ -374,7 +374,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
             if runtime_name not in capabilities:
                 continue
             binary = (
-                str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
+                str(source.get("MOONMIND_GEMINI_BINARY", "gemini_cli")).strip() or "gemini_cli"
             )
 
         try:
@@ -419,7 +419,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
             redaction_values=redaction_values,
         )
 
-    if resolved_paths["gemini"] is not None:
+    if resolved_paths["gemini_cli"] is not None:
         gemini_auth_mode, gemini_auth_mode_raw = resolve_gemini_cli_auth_mode(
             env=source
         )
@@ -452,7 +452,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth"
             )
         _run_checked_command(
-            [resolved_paths["gemini"], "--version"],
+            [resolved_paths["gemini_cli"], "--version"],
             redaction_values=redaction_values,
         )
 

@@ -579,15 +579,15 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
 
     cli.run_preflight(
         env={
-            "MOONMIND_WORKER_RUNTIME": "gemini",
+            "MOONMIND_WORKER_RUNTIME": "gemini_cli",
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
         }
     )
 
-    assert verifications == ["gemini", "agentkit"]
+    assert verifications == ["gemini_cli", "agentkit"]
     assert calls == [
         ["/usr/bin/agentkit", "--version"],
-        ["/usr/bin/gemini", "--version"],
+        ["/usr/bin/gemini_cli", "--version"],
     ]
 
 
@@ -707,16 +707,15 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
         env={
             "MOONMIND_WORKER_RUNTIME": "universal",
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-            "MOONMIND_WORKER_CAPABILITIES": "codex,gemini",
-        }
+            "MOONMIND_WORKER_CAPABILITIES": "codex,gemini_cli",        }
     )
 
-    assert verifications == ["codex", "gemini", "rg", "agentkit"]
+    assert verifications == ["codex", "gemini_cli", "rg", "agentkit"]
     assert calls == [
         ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
-        ["/usr/bin/gemini", "--version"],
+        ["/usr/bin/gemini_cli", "--version"],
     ]
 
 
@@ -734,7 +733,7 @@ def test_run_preflight_universal_with_claude_capability_requires_key(
             env={
                 "MOONMIND_WORKER_RUNTIME": "universal",
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-                "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini",
+                "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini_cli",
             }
         )
 
@@ -782,17 +781,17 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
         env={
             "MOONMIND_WORKER_RUNTIME": "universal",
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
-            "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini",
+            "MOONMIND_WORKER_CAPABILITIES": "codex,claude,gemini_cli",
             "ANTHROPIC_API_KEY": "secret",
         }
     )
 
-    assert verifications == ["codex", "gemini", "claude", "rg", "agentkit"]
+    assert verifications == ["codex", "gemini_cli", "claude", "rg", "agentkit"]
     assert calls == [
         ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
-        ["/usr/bin/gemini", "--version"],
+        ["/usr/bin/gemini_cli", "--version"],
         ["/usr/bin/claude", "--version"],
     ]
 
@@ -822,7 +821,7 @@ def test_run_preflight_gemini_oauth_requires_gemini_home(monkeypatch) -> None:
     ):
         cli.run_preflight(
             env={
-                "MOONMIND_WORKER_RUNTIME": "gemini",
+                "MOONMIND_WORKER_RUNTIME": "gemini_cli",
                 "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
@@ -851,7 +850,7 @@ def test_run_preflight_gemini_invalid_auth_mode_redacts_value(monkeypatch) -> No
     with pytest.raises(RuntimeError, match=r"received <redacted:\d+ chars>"):
         cli.run_preflight(
             env={
-                "MOONMIND_WORKER_RUNTIME": "gemini",
+                "MOONMIND_WORKER_RUNTIME": "gemini_cli",
                 "MOONMIND_GEMINI_CLI_AUTH_MODE": "AIza-secret-like-value",
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             }
@@ -889,7 +888,7 @@ def test_run_preflight_gemini_oauth_requires_writable_gemini_home(monkeypatch) -
     ):
         cli.run_preflight(
             env={
-                "MOONMIND_WORKER_RUNTIME": "gemini",
+                "MOONMIND_WORKER_RUNTIME": "gemini_cli",
                 "MOONMIND_GEMINI_CLI_AUTH_MODE": "oauth",
                 "GEMINI_HOME": "/tmp/gemini-auth",
                 "DEFAULT_EMBEDDING_PROVIDER": "ollama",

@@ -129,12 +129,12 @@ def test_gemini_generate_invalid_json(mock_run, mock_verify):
     [
         (
             subprocess.CalledProcessError(
-                1, cmd=["gemini"], stderr="Error generating content"
+                1, cmd=["gemini_cli"], stderr="Error generating content"
             ),
             "Error generating content",
         ),
         (
-            subprocess.TimeoutExpired(cmd=["gemini"], timeout=300),
+            subprocess.TimeoutExpired(cmd=["gemini_cli"], timeout=300),
             "Gemini CLI timed out",
         ),
         (ValueError("boom"), "boom"),

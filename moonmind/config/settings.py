@@ -510,7 +510,7 @@ class WorkflowSettings(BaseSettings):
         description="Enable attachment vision context generation during worker prepare stages.",
     )
     vision_provider: str = Field(
-        "gemini",
+        "gemini_cli",
         env="MOONMIND_VISION_PROVIDER",
         validation_alias=AliasChoices("MOONMIND_VISION_PROVIDER"),
         description="Vision provider identifier (gemini, openai, anthropic, off).",
@@ -1220,8 +1220,8 @@ class WorkflowSettings(BaseSettings):
     @field_validator("vision_provider", mode="before")
     @classmethod
     def _normalize_vision_provider(cls, value: object) -> str:
-        candidate = str(value or "").strip().lower() or "gemini"
-        allowed = {"gemini", "openai", "anthropic", "off"}
+        candidate = str(value or "").strip().lower() or "gemini_cli"
+        allowed = {"gemini_cli", "openai", "anthropic", "off"}
         if candidate not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"MOONMIND_VISION_PROVIDER must be one of: {supported}")
@@ -1248,7 +1248,7 @@ class WorkflowSettings(BaseSettings):
         """Normalize queue runtime fallback and reject unknown values."""
 
         normalized = str(value or "").strip().lower() or "codex"
-        allowed = {"codex", "gemini", "claude", "jules"}
+        allowed = {"codex", "gemini_cli", "claude", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_task_runtime must be one of: {supported}")
@@ -2032,7 +2032,7 @@ class AppSettings(BaseSettings):
         "gemini/gemini-2.5-pro-exp-03-25", env="OPENHANDS__LLM__MODEL"
     )
     openhands_llm_custom_llm_provider: str = Field(
-        "gemini", env="OPENHANDS__LLM__CUSTOM_LLM_PROVIDER"
+        "gemini_cli", env="OPENHANDS__LLM__CUSTOM_LLM_PROVIDER"
     )
     openhands_llm_timeout: int = Field(600, env="OPENHANDS__LLM__TIMEOUT")
     openhands_llm_embedding_model: str = Field(

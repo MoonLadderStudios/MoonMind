@@ -170,7 +170,7 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
         (
             "{"
             '"runtime":"codex",'
-            '"runtimeConfig":{"mode":"gemini","model":"gemini-2.5-pro","effort":"medium"}'
+            '"runtimeConfig":{"mode":"gemini_cli","model":"gemini-2.5-pro","effort":"medium"}'
             "}"
         ),
         encoding="utf-8",
@@ -178,7 +178,7 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
 
     runtime = load_parent_runtime_selection(str(task_context))
     assert runtime is not None
-    assert runtime.mode == "gemini"
+    assert runtime.mode == "gemini_cli"
     assert runtime.model == "gemini-2.5-pro"
     assert runtime.effort == "medium"
 
@@ -227,14 +227,14 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
         (),
         {
             "task_context_path": str(task_context),
-            "runtime_mode": "gemini",
+            "runtime_mode": "gemini_cli",
             "runtime_model": "gemini-2.5-pro",
             "runtime_effort": "high",
         },
     )()
 
     runtime = resolve_runtime_selection(args)
-    assert runtime.mode == "gemini"
+    assert runtime.mode == "gemini_cli"
     assert runtime.model == "gemini-2.5-pro"
     assert runtime.effort == "high"
 
@@ -255,7 +255,7 @@ def test_resolve_runtime_selection_defaults_to_gemini_without_inheritance():
     )()
 
     runtime = resolve_runtime_selection(args)
-    assert runtime.mode == "gemini"
+    assert runtime.mode == "gemini_cli"
     assert runtime.model is None
     assert runtime.effort is None
 

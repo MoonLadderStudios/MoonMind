@@ -70,7 +70,7 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _MANAGED_AGENT_IDS = frozenset(
-    {"gemini", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
+    {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
 
 

@@ -89,7 +89,7 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_managed_agent_ids(self) -> None:
         wf = MoonMindRunWorkflow()
-        for agent_id in ("gemini", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"):
+        for agent_id in ("gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"):
             self.assertEqual(wf._agent_kind_for_id(agent_id), "managed", f"{agent_id} should be managed")
 
     def test_external_agent_ids(self) -> None:
@@ -99,7 +99,7 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_case_insensitive(self) -> None:
         wf = MoonMindRunWorkflow()
-        self.assertEqual(wf._agent_kind_for_id("Gemini"), "managed")
+        self.assertEqual(wf._agent_kind_for_id("Gemini_cli"), "managed")
         self.assertEqual(wf._agent_kind_for_id("CLAUDE_CODE"), "managed")
 
 

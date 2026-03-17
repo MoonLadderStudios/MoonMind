@@ -396,7 +396,7 @@ class CodexWorkerConfig:
     default_claude_effort: str | None = None
     default_jules_model: str | None = None
     default_jules_effort: str | None = None
-    gemini_binary: str = "gemini"
+    gemini_binary: str = "gemini_cli"
     gemini_cli_auth_mode: str = "api_key"
     gemini_allowed_tools: tuple[str, ...] = _DEFAULT_GEMINI_ALLOWED_TOOLS
     claude_binary: str = "claude"
@@ -459,8 +459,8 @@ class CodexWorkerConfig:
                     self.default_codex_effort,
                 ),
             }
-        if self.worker_runtime in {"gemini", "universal"}:
-            runtime_capabilities["gemini"] = {
+        if self.worker_runtime in {"gemini_cli", "universal"}:
+            runtime_capabilities["gemini_cli"] = {
                 "models": self._normalize_runtime_option_values(
                     self.default_gemini_model,
                 ),
@@ -607,7 +607,7 @@ class CodexWorkerConfig:
             str(source.get("MOONMIND_WORKER_RUNTIME", "codex")).strip().lower()
             or "codex"
         )
-        allowed_worker_runtimes = {"codex", "gemini", "claude", "jules", "universal"}
+        allowed_worker_runtimes = {"codex", "gemini_cli", "claude", "jules", "universal"}
         if worker_runtime not in allowed_worker_runtimes:
             supported = ", ".join(sorted(allowed_worker_runtimes))
             raise ValueError(f"MOONMIND_WORKER_RUNTIME must be one of: {supported}")
@@ -669,7 +669,7 @@ class CodexWorkerConfig:
             or None
         )
         gemini_binary = (
-            str(source.get("MOONMIND_GEMINI_BINARY", "gemini")).strip() or "gemini"
+            str(source.get("MOONMIND_GEMINI_BINARY", "gemini_cli")).strip() or "gemini_cli"
         )
         gemini_cli_auth_mode = (
             str(source.get("MOONMIND_GEMINI_CLI_AUTH_MODE", "api_key")).strip().lower()
@@ -765,7 +765,7 @@ class CodexWorkerConfig:
             )
         else:
             if worker_runtime == "universal":
-                runtime_caps = ["codex", "gemini", "claude"]
+                runtime_caps = ["codex", "gemini_cli", "claude"]
                 if jules_gate.enabled:
                     runtime_caps.append("jules")
                 worker_capabilities = tuple([*runtime_caps, "git", "gh"])
@@ -10094,7 +10094,7 @@ class CodexWorker:
         effort: str | None,
         prepared: PreparedTaskWorkspace,
     ) -> list[str]:
-        if runtime_mode == "gemini":
+        if runtime_mode == "gemini_cli":
             command = [self._config.gemini_binary, "--prompt", instruction]
             skills_active_path = prepared.job_root / "skills_active"
             command.extend(["--include-directories", str(skills_active_path)])
@@ -10115,7 +10115,7 @@ class CodexWorker:
 
         if model:
             command.extend(["--model", model])
-        if effort and runtime_mode != "gemini":
+        if effort and runtime_mode != "gemini_cli":
             command.extend(["--effort", effort])
         return command
 
@@ -10124,7 +10124,7 @@ class CodexWorker:
         *,
         runtime_mode: str,
     ) -> Mapping[str, str] | None:
-        if runtime_mode != "gemini":
+        if runtime_mode != "gemini_cli":
             return None
         if self._config.gemini_cli_auth_mode != "oauth":
             return None
@@ -10484,7 +10484,7 @@ class CodexWorker:
                 model_override or self._config.default_codex_model,
                 effort_override or self._config.default_codex_effort,
             )
-        if runtime_mode == "gemini":
+        if runtime_mode == "gemini_cli":
             return (
                 model_override or self._config.default_gemini_model,
                 effort_override or self._config.default_gemini_effort,

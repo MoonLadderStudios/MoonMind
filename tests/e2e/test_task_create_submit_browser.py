@@ -90,7 +90,7 @@ def _route_handlers(
                 {
                     "items": {
                         "codex": {"models": ["gpt-5.3-codex"], "efforts": ["high"]},
-                        "gemini": {"models": [], "efforts": []},
+                        "gemini_cli": {"models": [], "efforts": []},
                         "claude": {"models": [], "efforts": []},
                     },
                 }

@@ -207,7 +207,7 @@
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
       systemConfig.supportedWorkerRuntimes.length > 0
       ? systemConfig.supportedWorkerRuntimes
-      : ["codex", "gemini", "claude", "jules", "universal"];
+      : ["codex", "gemini_cli", "claude", "jules", "universal"];
 
   function normalizeRuntimeIdentifier(value) {
     return String(value || "").trim().toLowerCase();
@@ -245,7 +245,7 @@
       ? configuredTaskRuntimes
       : inferredTaskRuntimes.length > 0
         ? inferredTaskRuntimes
-        : ["codex", "gemini", "claude", "jules"];
+        : ["codex", "gemini_cli", "claude", "jules"];
   const normalizedDefaultTaskRuntime = normalizeRuntimeIdentifier(
     systemConfig.defaultTaskRuntime,
   );

@@ -59,7 +59,7 @@ _ATTACHMENT_EXTENSION_MAP = {
     "image/jpeg": ".jpg",
     "image/webp": ".webp",
 }
-_RUNTIME_CAPABILITY_RUNTIMES = {"codex", "gemini", "claude", "jules"}
+_RUNTIME_CAPABILITY_RUNTIMES = {"codex", "gemini_cli", "claude", "jules"}
 _PUBLISH_PREFLIGHT_VERIFICATION_GAP_TEXT = (
     "publish preflight failed: source-code changes detected but no "
     "verification command result was captured in artifacts"
