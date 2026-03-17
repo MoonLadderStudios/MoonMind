@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from collections.abc import Callable
 from typing import Any
 
 from moonmind.schemas.agent_runtime_models import (
@@ -11,6 +10,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    ProviderCapabilityDescriptor,
 )
 from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
@@ -18,6 +18,9 @@ from moonmind.schemas.jules_models import (
     JulesResolveTaskRequest,
     JulesTaskResponse,
     normalize_jules_status,
+)
+from moonmind.workflows.adapters.base_external_agent_adapter import (
+    BaseExternalAgentAdapter,
 )
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
 
@@ -38,52 +41,27 @@ def _to_agent_status(raw_status: str | None) -> str:
     return _JULES_TO_AGENT_RUN_STATUS[normalized]
 
 
-def _extract_parameters_metadata(
-    parameters: Mapping[str, Any] | None,
-) -> tuple[str, str, dict[str, Any]]:
-    payload = dict(parameters or {})
-    title = str(payload.get("title") or "MoonMind Agent Task").strip()
-    description = str(payload.get("description") or "").strip()
-    metadata = payload.get("metadata")
-    if metadata is None:
-        metadata_payload: dict[str, Any] = {}
-    elif isinstance(metadata, Mapping):
-        metadata_payload = dict(metadata)
-    else:
-        raise ValueError("parameters.metadata must be an object")
-    return title, description, metadata_payload
+_JULES_CAPABILITY = ProviderCapabilityDescriptor(
+    providerName="jules",
+    supportsCallbacks=False,
+    supportsCancel=True,
+    supportsResultFetch=True,
+    defaultPollHintSeconds=15,
+)
 
 
-class JulesAgentAdapter:
+class JulesAgentAdapter(BaseExternalAgentAdapter):
     """Normalize Jules provider interactions into canonical agent contracts.
 
-    Notes on client lifecycle:
-        A single ``JulesClient`` is created at construction time and reused
-        for all operations, allowing HTTP connection pooling via the
-        underlying ``httpx.AsyncClient``.
-
-    Notes on in-memory idempotency:
-        ``_starts_by_idempotency`` is intentionally an in-memory dict.  Each
-        ``JulesAgentAdapter`` is instantiated per Temporal Activity execution
-        (owned by ``TemporalJulesActivities``).  Temporal itself guarantees
-        at-most-once delivery at the workflow level; the in-memory cache
-        serves only as a cheap guard against accidental double-submit
-        *within the same Activity attempt*.  Cross-attempt deduplication
-        is the responsibility of the Temporal Workflow and the provider's
-        own idempotency semantics.
-
-        Known limitation: if the Activity worker process restarts mid-attempt
-        (before the Activity completes), the in-memory cache is lost.  A
-        subsequent retry could issue a duplicate request to Jules.  This risk
-        is accepted because the Jules API exposes its own idempotency key
-        (passed via ``idempotencyKey`` in the payload), so the provider is
-        responsible for deduplication at the API layer across retries.
+    Extends ``BaseExternalAgentAdapter`` to inherit shared validation,
+    idempotency caching, and correlation metadata injection.  Only
+    provider-specific transport calls remain in this subclass.
     """
 
     def __init__(self, *, client_factory: JulesClientFactory) -> None:
+        super().__init__(accepted_agent_ids=frozenset({"jules", "jules_api"}))
         self._client_factory = client_factory
         self.__client: JulesClient | None = None
-        self._starts_by_idempotency: dict[str, AgentRunHandle] = {}
 
     @property
     def _client(self) -> JulesClient:
@@ -91,31 +69,17 @@ class JulesAgentAdapter:
             self.__client = self._client_factory()
         return self.__client
 
-    async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
-        if request.agent_kind != "external":
-            raise ValueError("JulesAgentAdapter only supports external agent_kind")
-        if str(request.agent_id).strip().lower() not in {"jules", "jules_api"}:
-            raise ValueError("JulesAgentAdapter only supports agent_id=jules")
+    @property
+    def provider_capability(self) -> ProviderCapabilityDescriptor:
+        return _JULES_CAPABILITY
 
-        cached = self._starts_by_idempotency.get(request.idempotency_key)
-        if cached is not None:
-            return cached
-
-        title, description, metadata = _extract_parameters_metadata(request.parameters)
-        if not description and request.instruction_ref:
-            description = request.instruction_ref
-        if not description and request.input_refs:
-            description = f"MoonMind artifact refs: {', '.join(request.input_refs)}"
-        if not description:
-            description = f"MoonMind delegated run {request.correlation_id}"
-
-        moonmind_meta = metadata.setdefault("moonmind", {})
-        if isinstance(moonmind_meta, Mapping):
-            moonmind_payload = dict(moonmind_meta)
-            moonmind_payload.setdefault("correlationId", request.correlation_id)
-            moonmind_payload.setdefault("idempotencyKey", request.idempotency_key)
-            metadata["moonmind"] = moonmind_payload
-
+    async def do_start(
+        self,
+        request: AgentExecutionRequest,
+        title: str,
+        description: str,
+        metadata: dict[str, Any],
+    ) -> AgentRunHandle:
         response = await self._client.create_task(
             JulesCreateTaskRequest(
                 title=title,
@@ -123,61 +87,42 @@ class JulesAgentAdapter:
                 metadata=metadata,
             )
         )
-
-        handle = AgentRunHandle(
-            runId=response.task_id,
-            agentKind="external",
-            agentId="jules",
+        provider_status = str(response.status or "").strip() or "unknown"
+        return self.build_handle(
+            run_id=response.task_id,
+            agent_id="jules",
             status=_to_agent_status(response.status),
-            startedAt=datetime.now(tz=UTC),
-            metadata={
-                "providerStatus": str(response.status or "").strip() or "unknown",
-                "normalizedStatus": normalize_jules_status(response.status),
-                "externalUrl": str(response.url or "").strip() or None,
-            },
+            provider_status=provider_status,
+            normalized_status=normalize_jules_status(response.status),
+            external_url=str(response.url or "").strip() or None,
         )
-        self._starts_by_idempotency[request.idempotency_key] = handle
-        return handle
 
-    async def status(self, run_id: str) -> AgentRunStatus:
+    async def do_status(self, run_id: str) -> AgentRunStatus:
         response = await self._get_task(run_id)
         provider_status = str(response.status or "").strip() or "unknown"
         normalized_status = normalize_jules_status(provider_status)
-        return AgentRunStatus(
-            runId=response.task_id,
-            agentKind="external",
-            agentId="jules",
+        return self.build_status(
+            run_id=response.task_id,
+            agent_id="jules",
             status=_to_agent_status(provider_status),
-            metadata={
-                "providerStatus": provider_status,
-                "normalizedStatus": normalized_status,
-                "externalUrl": str(response.url or "").strip() or None,
-            },
+            provider_status=provider_status,
+            normalized_status=normalized_status,
+            external_url=str(response.url or "").strip() or None,
         )
 
-    async def fetch_result(self, run_id: str) -> AgentRunResult:
+    async def do_fetch_result(self, run_id: str) -> AgentRunResult:
         response = await self._get_task(run_id)
         provider_status = str(response.status or "").strip() or "unknown"
         normalized_status = normalize_jules_status(provider_status)
-        failure_class = None
-        if normalized_status == "failed":
-            failure_class = "integration_error"
-        elif normalized_status == "canceled":
-            failure_class = "execution_error"
-
-        summary = f"Jules task {run_id} ended with provider status '{provider_status}'."
-        return AgentRunResult(
-            outputRefs=[],
-            summary=summary,
-            failureClass=failure_class,
-            providerErrorCode=provider_status if failure_class else None,
-            metadata={
-                "normalizedStatus": normalized_status,
-                "externalUrl": str(response.url or "").strip() or None,
-            },
+        return self.build_result(
+            run_id=run_id,
+            provider_status=provider_status,
+            normalized_status=normalized_status,
+            provider_name="Jules",
+            external_url=str(response.url or "").strip() or None,
         )
 
-    async def cancel(self, run_id: str) -> AgentRunStatus:
+    async def do_cancel(self, run_id: str) -> AgentRunStatus:
         try:
             response = await self._client.resolve_task(
                 JulesResolveTaskRequest(
@@ -196,17 +141,14 @@ class JulesAgentAdapter:
             )
 
         provider_status = str(response.status or "").strip() or "canceled"
-        return AgentRunStatus(
-            runId=response.task_id,
-            agentKind="external",
-            agentId="jules",
+        return self.build_status(
+            run_id=response.task_id,
+            agent_id="jules",
             status=_to_agent_status(provider_status),
-            metadata={
-                "providerStatus": provider_status,
-                "normalizedStatus": normalize_jules_status(provider_status),
-                "externalUrl": str(response.url or "").strip() or None,
-                "cancelAccepted": True,
-            },
+            provider_status=provider_status,
+            normalized_status=normalize_jules_status(provider_status),
+            external_url=str(response.url or "").strip() or None,
+            extra_metadata={"cancelAccepted": True},
         )
 
     async def _get_task(self, run_id: str) -> JulesTaskResponse:

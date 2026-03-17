@@ -2169,7 +2169,7 @@ class AppSettings(BaseSettings):
                 enabled=self.jules.jules_enabled,
                 api_url=self.jules.jules_api_url,
                 api_key=self.jules.jules_api_key,
-                error_message="default_task_runtime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured",
+                error_message="default_task_runtime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)",
             )
             if not default_runtime_gate.enabled:
                 raise ValueError(default_runtime_gate.error_message)

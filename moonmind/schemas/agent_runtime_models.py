@@ -307,6 +307,39 @@ class ManagedRunRecord(BaseModel):
 
 
 
+class ProviderCapabilityDescriptor(BaseModel):
+    """Declares what an external agent provider supports at runtime."""
+
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    provider_name: str = Field(
+        ...,
+        alias="providerName",
+        description="Canonical provider identifier (e.g. 'jules', 'codex_cloud').",
+    )
+    supports_callbacks: bool = Field(
+        False,
+        alias="supportsCallbacks",
+        description="Whether the provider reliably delivers completion callbacks.",
+    )
+    supports_cancel: bool = Field(
+        True,
+        alias="supportsCancel",
+        description="Whether the provider accepts best-effort cancel requests.",
+    )
+    supports_result_fetch: bool = Field(
+        True,
+        alias="supportsResultFetch",
+        description="Whether terminal results can be fetched after completion.",
+    )
+    default_poll_hint_seconds: int = Field(
+        15,
+        alias="defaultPollHintSeconds",
+        ge=1,
+        description="Recommended initial polling interval in seconds.",
+    )
+
+
 __all__ = [
     "AgentExecutionRequest",
     "AgentKind",
@@ -318,6 +351,7 @@ __all__ = [
     "ManagedAgentAuthProfile",
     "ManagedRunRecord",
     "ManagedRuntimeProfile",
+    "ProviderCapabilityDescriptor",
     "TERMINAL_AGENT_RUN_STATES",
     "WorkspaceMode",
     "is_terminal_agent_run_state",

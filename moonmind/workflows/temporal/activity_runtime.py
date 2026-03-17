@@ -178,6 +178,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "integration_jules_fetch_result",
     ),
+    "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -1568,6 +1569,53 @@ class TemporalJulesActivities:
                 )
             )
         return tuple(output_refs)
+
+    async def integration_jules_cancel(
+        self,
+        *,
+        external_id: str,
+        principal: str,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> IntegrationStatusResult:
+        """Attempt best-effort cancellation of one Jules task."""
+
+        adapter = self._build_adapter()
+        result = await adapter.cancel(external_id)
+
+        provider_status = str(
+            result.metadata.get("providerStatus") or ""
+        ).strip() or "canceled"
+        normalized = self._normalize_status(provider_status)
+
+        tracking_ref: ArtifactRef | None = None
+        if self._artifact_service is not None:
+            tracking_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload={
+                    "activity": "integration.jules.cancel",
+                    "externalId": external_id,
+                    "providerStatus": provider_status,
+                    "normalizedStatus": normalized.normalized_status,
+                    "cancelAccepted": result.metadata.get("cancelAccepted", False),
+                },
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "jules_cancel.json",
+                    "producer": "activity:integration.jules.cancel",
+                    "labels": ["integration", "jules", "cancel"],
+                },
+            )
+
+        return IntegrationStatusResult(
+            external_id=external_id,
+            status=result.status,
+            tracking_ref=tracking_ref,
+            url=str(result.metadata.get("externalUrl") or "").strip() or None,
+            normalized_status=normalized.normalized_status,
+            provider_status=provider_status,
+            terminal=normalized.terminal,
+        )
 
 
 class TemporalProposalActivities:

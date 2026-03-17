@@ -678,7 +678,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
                     "message": "targetRuntime=claude is not available in the current server configuration",
                 },
             )
-        if "targetruntime=jules requires jules_enabled=true" in lowered:
+        if "targetruntime=jules" in lowered and ("jules_api_key" in lowered or "jules_enabled" in lowered):
             return HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={

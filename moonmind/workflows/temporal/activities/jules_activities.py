@@ -33,7 +33,7 @@ def _build_adapter() -> JulesAgentAdapter:
             f"{JULES_RUNTIME_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
 
-    jules_url = os.environ.get("JULES_API_URL", "").strip()
+    jules_url = os.environ.get("JULES_API_URL", "").strip() or "https://jules.googleapis.com/v1alpha"
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     client = JulesClient(base_url=jules_url, api_key=jules_key)
     return JulesAgentAdapter(client_factory=lambda: client)
@@ -63,7 +63,16 @@ async def jules_fetch_result_activity(run_id: str) -> AgentRunResult:
     return await adapter.fetch_result(run_id)
 
 
+@activity.defn(name="integration.jules.cancel")
+async def jules_cancel_activity(run_id: str) -> AgentRunStatus:
+    """Attempt best-effort cancellation for one Jules task."""
+
+    adapter = _build_adapter()
+    return await adapter.cancel(run_id)
+
+
 __all__ = [
+    "jules_cancel_activity",
     "jules_fetch_result_activity",
     "jules_start_activity",
     "jules_status_activity",

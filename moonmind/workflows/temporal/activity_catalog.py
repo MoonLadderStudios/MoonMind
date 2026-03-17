@@ -475,6 +475,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(
+            activity_type="integration.jules.cancel",
+            family="integration",
+            capability_class="integration:jules",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.publish_artifacts",
             family="agent_runtime",
             capability_class="agent_runtime",

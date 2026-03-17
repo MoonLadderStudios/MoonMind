@@ -14,7 +14,7 @@ class JulesSettings(BaseSettings):
     """Jules API settings."""
 
     jules_api_url: Optional[str] = Field(
-        None,
+        "https://jules.googleapis.com/v1alpha",
         validation_alias=AliasChoices("jules_api_url", "JULES_API_URL"),
     )
     jules_api_key: Optional[str] = Field(

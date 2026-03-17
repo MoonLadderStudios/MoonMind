@@ -755,7 +755,7 @@ def test_create_job_rejects_jules_runtime_without_config(
 
     test_client, service = client
     service.create_job.side_effect = AgentQueueValidationError(
-        "targetRuntime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured"
+        "targetRuntime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)"
     )
 
     response = test_client.post(

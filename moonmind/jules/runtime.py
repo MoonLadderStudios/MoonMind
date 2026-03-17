@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-JULES_RUNTIME_DISABLED_MESSAGE = "targetRuntime=jules requires JULES_ENABLED=true with JULES_API_URL and JULES_API_KEY configured"
+JULES_RUNTIME_DISABLED_MESSAGE = "targetRuntime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)"
 """Canonical error text for disabled Jules runtime configuration."""
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -42,19 +42,25 @@ def _clean_value(value: object | None) -> str:
 
 def _resolve_enabled_flag(
     *, enabled: bool | None = None, env: Mapping[str, Any] | None = None
-) -> bool:
+) -> bool | None:
+    """Resolve the JULES_ENABLED flag.
+
+    Returns ``True``/``False`` when explicitly set, or ``None`` when unset
+    so the caller can infer enablement from other signals (e.g. API key
+    presence).
+    """
     if isinstance(enabled, bool):
         return enabled
     source = env if env is not None else os.environ
     raw = _clean_value(source.get("JULES_ENABLED"))  # type: ignore[arg-type]
     if not raw:
-        return False
+        return None  # not set → caller infers from API key
     lowered = raw.lower()
     if lowered in _TRUE_VALUES:
         return True
     if lowered in _FALSE_VALUES:
         return False
-    return False
+    return None
 
 
 def build_runtime_gate_state(
@@ -65,25 +71,36 @@ def build_runtime_gate_state(
     env: Mapping[str, Any] | None = None,
     error_message: str = JULES_RUNTIME_DISABLED_MESSAGE,
 ) -> RuntimeGateState:
-    """Return normalized gate state, including missing configuration fields."""
+    """Return normalized gate state, including missing configuration fields.
+
+    Jules is considered enabled when:
+    - ``JULES_API_KEY`` is present, AND
+    - ``JULES_ENABLED`` is NOT explicitly ``false``
+
+    This means ``JULES_ENABLED`` does not need to be set at all — just
+    providing the API key is sufficient to activate Jules.
+    """
 
     source = env if env is not None else os.environ
-    runtime_enabled = _resolve_enabled_flag(enabled=enabled, env=source)
+    explicit_enabled = _resolve_enabled_flag(enabled=enabled, env=source)
     resolved_url = _clean_value(api_url) or _clean_value(
         source.get("JULES_API_URL")  # type: ignore[arg-type]
-    )
+    ) or "https://jules.googleapis.com/v1alpha"
     resolved_key = _clean_value(api_key) or _clean_value(
         source.get("JULES_API_KEY")  # type: ignore[arg-type]
     )
 
     missing: list[str] = []
-    if not runtime_enabled:
+
+    # Explicitly disabled → gate fails
+    if explicit_enabled is False:
         missing.append("JULES_ENABLED")
-    if not resolved_url:
-        missing.append("JULES_API_URL")
+
+    # No API key → gate fails
     if not resolved_key:
         missing.append("JULES_API_KEY")
 
+    # Auto-enable: if key is present and not explicitly disabled, gate passes
     return RuntimeGateState(
         enabled=not missing,
         missing=tuple(missing),

@@ -84,7 +84,7 @@ def build_default_registry(
         from moonmind.workflows.adapters.jules_client import JulesClient
 
         source = env if env is not None else dict(os.environ)
-        jules_url = str(source.get("JULES_API_URL", "")).strip()
+        jules_url = str(source.get("JULES_API_URL", "")).strip() or "https://jules.googleapis.com/v1alpha"
         jules_key = str(source.get("JULES_API_KEY", "")).strip()
 
         def _jules_factory() -> AgentAdapter:
