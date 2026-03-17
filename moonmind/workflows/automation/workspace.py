@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "RunWorkspacePaths",
-    "SpecWorkspaceManager",
+    "WorkflowWorkspaceManager",
     "WorkspaceConfigurationError",
     "generate_branch_name",
     "sanitize_branch_component",
@@ -157,7 +157,7 @@ class RunWorkspacePaths:
     gemini_skills_path: Path
 
 
-class SpecWorkspaceManager:
+class WorkflowWorkspaceManager:
     """Manage run-scoped directories for workflow automation.
 
     Parameters
@@ -194,7 +194,7 @@ class SpecWorkspaceManager:
     # Construction helpers
     # ------------------------------------------------------------------
     @classmethod
-    def from_settings(cls) -> "SpecWorkspaceManager":
+    def from_settings(cls) -> "WorkflowWorkspaceManager":
         """Create a manager using the application settings configuration."""
 
         return cls(settings.workflow.workspace_root)
@@ -218,7 +218,7 @@ class SpecWorkspaceManager:
     def job_container_name(run_id: UUID | str) -> str:
         """Return the deterministic container name for a workflow run."""
 
-        return f"{SpecWorkspaceManager._CONTAINER_PREFIX}{run_id}"
+        return f"{WorkflowWorkspaceManager._CONTAINER_PREFIX}{run_id}"
 
     def run_root(self, run_id: UUID | str) -> Path:
         """Path to the root directory for the provided run identifier."""
