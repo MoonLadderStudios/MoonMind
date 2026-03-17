@@ -887,10 +887,11 @@ class TestAppSettingsRuntimeValidation:
             monkeypatch.delenv(key, raising=False)
         defaults = dict(app_settings_defaults)
         defaults["workflow"] = {"default_task_runtime": "jules"}
+        defaults["jules"] = {"jules_api_key": None}
 
         with pytest.raises(
             ValueError,
-            match="default_task_runtime=jules requires JULES_ENABLED=true",
+            match="default_task_runtime=jules requires JULES_API_KEY configured",
         ):
             AppSettings(_env_file=None, **defaults)
 

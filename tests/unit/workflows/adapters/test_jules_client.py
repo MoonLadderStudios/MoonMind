@@ -19,8 +19,8 @@ from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientErr
 pytestmark = [pytest.mark.asyncio]
 
 _TASK_RESPONSE_DATA = {
-    "taskId": "task-001",
-    "status": "pending",
+    "id": "task-001",
+    "state": "pending",
     "url": "https://jules.example.com/tasks/task-001",
 }
 
@@ -49,7 +49,7 @@ def _make_client(
 async def test_create_task_success():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
-        assert request.url.path == "/tasks"
+        assert request.url.path == "/sessions"
         return httpx.Response(200, json=_TASK_RESPONSE_DATA)
 
     client = _make_client(handler)
@@ -65,12 +65,12 @@ async def test_create_task_success():
 async def test_resolve_task_success():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
-        assert "/tasks/task-001/finish" in request.url.path
+        assert "/sessions/task-001/finish" in request.url.path
         body = json.loads(request.content)
         assert "taskId" not in body
         return httpx.Response(
             200,
-            json={"taskId": "task-001", "status": "completed", "url": None},
+            json={"id": "task-001", "state": "completed", "url": None},
         )
 
     client = _make_client(handler)
@@ -87,7 +87,7 @@ async def test_resolve_task_success():
 async def test_get_task_success():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
-        assert "/tasks/task-001" in request.url.path
+        assert "/sessions/task-001" in request.url.path
         return httpx.Response(200, json=_TASK_RESPONSE_DATA)
 
     client = _make_client(handler)
@@ -108,13 +108,12 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
 async def test_start_integration_builds_provider_neutral_result():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        assert body["metadata"]["moonmind"]["correlationId"] == "corr-1"
-        assert body["metadata"]["moonmind"]["idempotencyKey"] == "idem-1"
+        assert "prompt" in body  # description mapped to prompt
         return httpx.Response(
             200,
             json={
-                "taskId": "task-123",
-                "status": "pending",
+                "id": "task-123",
+                "state": "pending",
                 "url": "https://jules.example.com/tasks/task-123",
             },
         )
@@ -171,16 +170,16 @@ async def test_fetch_and_cancel_integration_return_normalized_results():
             return httpx.Response(
                 200,
                 json={
-                    "taskId": "task-123",
-                    "status": "completed",
+                    "id": "task-123",
+                    "state": "completed",
                     "url": "https://jules.example.com/tasks/task-123",
                 },
             )
         return httpx.Response(
             200,
             json={
-                "taskId": "task-123",
-                "status": "canceled",
+                "id": "task-123",
+                "state": "canceled",
                 "url": "https://jules.example.com/tasks/task-123",
             },
         )
@@ -286,7 +285,7 @@ async def test_error_has_structured_fields():
         await client.create_task(JulesCreateTaskRequest(title="X", description="Y"))
     err = exc_info.value
     assert err.status_code == 422
-    assert err.request_path == "/tasks"
+    assert err.request_path == "/sessions"
 
 
 @pytest.mark.asyncio

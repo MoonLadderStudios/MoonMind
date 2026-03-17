@@ -53,13 +53,18 @@ def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
 
 
 class JulesCreateTaskRequest(BaseModel):
-    """Request payload for creating a Jules task."""
+    """Request payload for creating a Jules session.
+
+    Maps internal field names to Jules API wire format:
+    ``prompt`` (required), ``title`` (optional), ``sourceContext`` (optional).
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
-    title: str = Field(..., alias="title")
-    description: str = Field(..., alias="description")
-    metadata: Optional[dict[str, Any]] = Field(None, alias="metadata")
+    title: Optional[str] = Field(None, alias="title")
+    description: str = Field(..., alias="prompt")
+    metadata: Optional[dict[str, Any]] = Field(None, exclude=True)
+    source_context: Optional[dict[str, Any]] = Field(None, alias="sourceContext")
 
 
 class JulesResolveTaskRequest(BaseModel):
@@ -81,13 +86,18 @@ class JulesGetTaskRequest(BaseModel):
 
 
 class JulesTaskResponse(BaseModel):
-    """Response payload for Jules task operations."""
+    """Response payload for Jules session operations.
+
+    Maps Jules API wire format (``id``, ``state``) to internal field
+    names (``task_id``, ``status``) for backwards compatibility.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    task_id: str = Field(..., alias="taskId")
-    status: str = Field(..., alias="status")
+    task_id: str = Field(..., alias="id")
+    status: Optional[str] = Field(None, alias="state")
     url: Optional[str] = Field(None, alias="url")
+    name: Optional[str] = Field(None, alias="name")
 
 
 class JulesIntegrationStartRequest(BaseModel):

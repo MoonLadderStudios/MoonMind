@@ -269,9 +269,108 @@ def test_build_result_no_failure_for_succeeded():
 # ---------------------------------------------------------------------------
 
 
+
 async def test_provider_capability_returns_descriptor():
     adapter = _StubAdapter()
     cap = adapter.provider_capability
     assert isinstance(cap, ProviderCapabilityDescriptor)
     assert cap.provider_name == "stub"
     assert cap.supports_cancel is True
+
+
+# ---------------------------------------------------------------------------
+# Capability-aware poll_hint_seconds auto-population (DOC-REQ-010, FR-008)
+# ---------------------------------------------------------------------------
+
+
+async def test_start_populates_poll_hint_from_capability():
+    """start() should set poll_hint_seconds from defaultPollHintSeconds when
+    the provider hook returns a handle without it."""
+    adapter = _StubAdapter()
+    handle = await adapter.start(_request())
+    assert handle.poll_hint_seconds == _STUB_CAPABILITY.default_poll_hint_seconds
+
+
+async def test_start_preserves_explicit_poll_hint():
+    """If do_start returns a handle with poll_hint_seconds already set,
+    start() should NOT overwrite it."""
+
+    class _ExplicitPollAdapter(_StubAdapter):
+        async def do_start(self, request, title, description, metadata):
+            return self.build_handle(
+                run_id="run-explicit",
+                agent_id="stub",
+                status="queued",
+                provider_status="pending",
+                normalized_status="queued",
+            ).model_copy(update={"poll_hint_seconds": 99})
+
+    adapter = _ExplicitPollAdapter()
+    handle = await adapter.start(_request())
+    assert handle.poll_hint_seconds == 99, "explicit value must not be overwritten"
+
+
+# ---------------------------------------------------------------------------
+# Capability-aware cancel fallback (DOC-REQ-006, FR-006)
+# ---------------------------------------------------------------------------
+
+
+_NO_CANCEL_CAPABILITY = ProviderCapabilityDescriptor(
+    providerName="no_cancel_stub",
+    supportsCallbacks=False,
+    supportsCancel=False,
+    supportsResultFetch=True,
+    defaultPollHintSeconds=10,
+)
+
+
+class _NoCancelStubAdapter(_StubAdapter):
+    """Stub adapter that declares supportsCancel=False."""
+
+    @property
+    def provider_capability(self) -> ProviderCapabilityDescriptor:
+        return _NO_CANCEL_CAPABILITY
+
+
+async def test_cancel_returns_fallback_when_unsupported():
+    """cancel() should return a fallback status without calling do_cancel
+    when the provider does not support cancellation."""
+    adapter = _NoCancelStubAdapter()
+    result = await adapter.cancel("run-99")
+
+    assert result.status == "intervention_requested"
+    assert result.metadata.get("cancelAccepted") is False
+    assert result.metadata.get("unsupported") is True
+    assert adapter.do_cancel_calls == [], "do_cancel must NOT be called"
+
+
+async def test_cancel_delegates_when_supported():
+    """cancel() should still delegate to do_cancel when the provider
+    supports cancellation (default behaviour)."""
+    adapter = _StubAdapter()
+    result = await adapter.cancel("run-42")
+
+    assert result.metadata.get("cancelAccepted") is True
+    assert adapter.do_cancel_calls == ["run-42"]
+
+
+class _ExplodingCancelAdapter(_StubAdapter):
+    """Stub adapter whose do_cancel raises an unexpected exception."""
+
+    async def do_cancel(self, run_id: str) -> AgentRunStatus:
+        self.do_cancel_calls.append(run_id)
+        raise RuntimeError("transient provider error")
+
+
+async def test_cancel_returns_fallback_on_do_cancel_exception():
+    """cancel() should return a safe fallback status when do_cancel()
+    raises an unexpected exception (spec edge case, line 91)."""
+    adapter = _ExplodingCancelAdapter()
+    result = await adapter.cancel("run-boom")
+
+    assert result.status == "intervention_requested"
+    assert result.metadata.get("cancelAccepted") is False
+    assert result.metadata.get("error") is True
+    assert adapter.do_cancel_calls == ["run-boom"]
+
+

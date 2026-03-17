@@ -50,7 +50,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - External-agent integration system design doc
 
 ### Remaining tasks
-- [ ] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring incomplete
+- [x] **2.1** Jules end-to-end external event workflow — Spec 048/066, adapter exists, event wiring complete
 - [ ] **2.2** Codex Cloud integration adapter — No adapter yet for the hosted Codex product
 - [ ] **2.3** Generic external-agent adapter pattern — Designed in `ExternalAgentIntegrationSystem.md`, not generalized in code
 - [ ] **2.4** Status tracking dashboard for external runs — Mission Control only shows managed runs currently

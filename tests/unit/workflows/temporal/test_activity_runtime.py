@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -149,7 +150,7 @@ class _FakeJulesClient:
     async def create_task(self, request):
         self.created.append(request)
         return JulesTaskResponse(
-            taskId="task-001",
+            task_id="task-001",
             status=self._create_status,
             url="https://jules.test/task-001",
         )
@@ -157,7 +158,7 @@ class _FakeJulesClient:
     async def get_task(self, request):
         self.lookups.append(request)
         return JulesTaskResponse(
-            taskId=request.task_id,
+            task_id=request.task_id,
             status=self._get_status,
             url="https://jules.test/task-001",
         )
@@ -841,7 +842,7 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
 
     with pytest.raises(
         TemporalActivityRuntimeError,
-        match=JULES_RUNTIME_DISABLED_MESSAGE,
+        match=re.escape(JULES_RUNTIME_DISABLED_MESSAGE),
     ):
         await activities.integration_jules_start(
             principal="test-user",
