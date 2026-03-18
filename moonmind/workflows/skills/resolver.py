@@ -19,7 +19,7 @@ class SkillResolutionError(ValueError):
 
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_BUILTIN_FALLBACK_WARNED: set[str] = set()
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,8 +331,6 @@ def _resolve_source_uri(
     local_source = _resolve_local_source(skill_name)
     if local_source:
         return local_source
-
-
 
     raise SkillResolutionError(
         f"No source URI resolved for skill '{skill_name}:{version}'. "
