@@ -18,6 +18,7 @@ from api_service.api.routers.system_worker_pause import (
 )
 from api_service.auth import _DEFAULT_USER_ID
 from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue import models as aq_models
 from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
     QueueSystemMetadata,
@@ -29,26 +30,42 @@ from moonmind.workflows.agent_queue.service import (
 pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
 
 
-def _build_snapshot(paused: bool = False) -> WorkerPauseSnapshot:
+def _build_snapshot(
+    paused: bool = False,
+    running: int = 0,
+    queued: int = 3,
+    stale_running: int = 0,
+    metrics_source: str = "temporal",
+    mode=None,
+    audit_action: str | None = None,
+    audit_mode=None,  # accepts WorkerPauseMode or None
+    actor_user_id: UUID | None = None,
+) -> WorkerPauseSnapshot:
     now = datetime.now(UTC)
+    action = audit_action or ("pause" if paused else "resume")
     return WorkerPauseSnapshot(
         system=QueueSystemMetadata(
             workers_paused=paused,
-            mode=None,
+            mode=mode,
             reason="maintenance" if paused else None,
             version=2,
             requested_by_user_id=None,
             requested_at=now if paused else None,
             updated_at=now,
         ),
-        metrics=WorkerPauseMetrics(queued=3, running=0, stale_running=0),
+        metrics=WorkerPauseMetrics(
+            queued=queued,
+            running=running,
+            stale_running=stale_running,
+            metrics_source=metrics_source,
+        ),
         audit_events=(
             WorkerPauseAuditEvent(
                 id=uuid4(),
-                action="pause" if paused else "resume",
-                mode=None,
+                action=action,
+                mode=audit_mode or mode,
                 reason="maintenance",
-                actor_user_id=None,
+                actor_user_id=actor_user_id or uuid4(),
                 created_at=now,
             ),
         ),
@@ -205,3 +222,192 @@ def test_disabled_auth_allows_non_superuser_pause_control(monkeypatch) -> None:
     assert called["actor_user_id"] == UUID(
         settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
     )
+
+
+# ---- T007: Temporal Visibility metrics integration (DOC-REQ-007, FR-003) ----
+
+
+def test_response_includes_metrics_source_temporal(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """GET should expose metricsSource='temporal' when Visibility API is used."""
+
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=True, metrics_source="temporal"
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["metrics"]["metricsSource"] == "temporal"
+
+
+def test_response_includes_metrics_source_legacy(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """GET should expose metricsSource='legacy' when falling back to queue table."""
+
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=True, metrics_source="legacy"
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["metrics"]["metricsSource"] == "legacy"
+
+
+# ---- T008: isDrained when Temporal reports 0 running (DOC-REQ-002, FR-003) ----
+
+
+def test_is_drained_true_when_zero_running(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """isDrained should be true when Temporal reports 0 running and 0 stale."""
+
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=True, running=0, stale_running=0
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["metrics"]["isDrained"] is True
+    assert body["metrics"]["running"] == 0
+    assert body["metrics"]["staleRunning"] == 0
+
+
+def test_is_drained_false_when_workflows_running(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """isDrained should be false when there are still running workflows."""
+
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=True, running=5
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["metrics"]["isDrained"] is False
+    assert body["metrics"]["running"] == 5
+
+
+def test_is_drained_false_when_stale_workflows(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """isDrained should be false when there are stale running workflows."""
+
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=True, running=0, stale_running=2
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["metrics"]["isDrained"] is False
+    assert body["metrics"]["staleRunning"] == 2
+
+
+# ---- T009: Audit trail completeness (DOC-REQ-010, FR-002) ----
+
+
+def test_audit_trail_includes_actor_reason_mode_timestamps(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Audit events should include actor, reason, mode, and timestamps."""
+
+    actor_id = uuid4()
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=True,
+        mode=aq_models.WorkerPauseMode.DRAIN,
+        audit_action="pause",
+        audit_mode=aq_models.WorkerPauseMode.DRAIN,
+        actor_user_id=actor_id,
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    audit_events = response.json()["audit"]["latest"]
+    assert len(audit_events) >= 1
+
+    event = audit_events[0]
+    assert event["action"] == "pause"
+    assert event["mode"] == "drain"
+    assert event["reason"] is not None
+    assert event["actorUserId"] == str(actor_id)
+    assert event["createdAt"] is not None
+
+
+def test_audit_trail_resume_event_valid(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Resume audit events should be valid with mode=None."""
+
+    test_client, service = client
+    service.get_worker_pause_snapshot.return_value = _build_snapshot(
+        paused=False, audit_action="resume"
+    )
+
+    response = test_client.get("/api/system/worker-pause")
+
+    assert response.status_code == status.HTTP_200_OK
+    event = response.json()["audit"]["latest"][0]
+    assert event["action"] == "resume"
+
+
+# ---- T012: Batch Signal dispatch on quiesce (DOC-REQ-003, FR-007, FR-010) ----
+
+
+def test_quiesce_pause_delegates_to_service(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """POST with action=pause, mode=quiesce should be accepted."""
+
+    test_client, service = client
+    service.apply_worker_pause_action.return_value = _build_snapshot(
+        paused=True, mode=aq_models.WorkerPauseMode.QUIESCE
+    )
+
+    response = test_client.post(
+        "/api/system/worker-pause",
+        json={"action": "pause", "mode": "quiesce", "reason": "graceful shutdown"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["system"]["workersPaused"] is True
+    called = service.apply_worker_pause_action.await_args.kwargs
+    assert called["action"] == "pause"
+    assert called["mode"] == "quiesce"
+
+
+def test_quiesce_resume_delegates_to_service(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """POST with action=resume should be accepted after quiesce pause."""
+
+    test_client, service = client
+    service.apply_worker_pause_action.return_value = _build_snapshot(paused=False)
+
+    response = test_client.post(
+        "/api/system/worker-pause",
+        json={"action": "resume", "reason": "upgrade done", "forceResume": True},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["system"]["workersPaused"] is False
+    service.apply_worker_pause_action.assert_awaited_once()

@@ -35,9 +35,9 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 ### 3.2 Quiesce (System-Wide Suspend)
 
-* **Mechanism**: A global flag in the `system_worker_pause_state` database table OR a broadcast Temporal Signal to all running Workflows.
-* Workflows check this state between Activities. If paused, the Workflow blocks on a `workflow.wait_condition()` until resumed.
-* Running Activities may be signaled to stop processing and return early with a checkpoint, allowing the Workflow to safely suspend.
+* **Mechanism**: A broadcast Temporal Signal (or Temporal Batch Operations API) sent to all running Workflows.
+* Workflows check this state between Activities using a signal handler. If paused, the Workflow blocks on a `workflow.wait_condition()` until resumed.
+* Long-running Activities (e.g., LLM loops) yield checkpoint data back to Temporal history via heartbeats, allowing the Workflow to safely suspend when the Activity returns early with a checkpoint.
 
 ---
 
@@ -46,17 +46,19 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 ### 4.1 Components
 
 1. **System Pause State (DB, singleton)**
-   * Source of truth for whether the Mission Control UI accepts new workflow submissions.
+   * Source of truth for whether the Mission Control UI accepts new workflow submissions via the `POST /api/workflows` boundary.
+   * **Note**: This does not govern the Temporal workers themselves; it only prevents new tasks from being injected into the system from the frontend.
 
 2. **Mission Control API Guard**
-   * `POST /api/workflows` returns “system paused” metadata and **does not** trigger new Temporal Workflows while paused.
+   * `POST /api/workflows` returns “system paused” metadata and **does not** trigger new Temporal Workflows while the DB singleton is paused.
 
 3. **Temporal Worker Graceful Shutdown (Drain)**
    * Used by operators at the infrastructure level (e.g., `docker compose stop <worker>`) to gracefully drain inflight Activities without killing them instantly.
+   * This is the native Temporal way to halt new work assignments to a specific worker node.
 
 4. **Dashboard UX**
    * Global banner + a “Pause System / Resume System” control.
-   * Drain progress indicator (running workflow count pulled from Temporal Visibility APIs).
+   * Drain progress indicator (running workflow count pulled from Temporal Visibility APIs: `ExecutionStatus="Running"`).
 
 ---
 
@@ -86,11 +88,15 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 ### 6.1 Running Activity behavior (Quiesce mode)
 
-In Quiesce mode, the worker should:
-* Continue heartbeating.
-* Interceptors inject the pause state into the Activity context.
-* If the Activity supports checkpoints (e.g., LLM loops), it pauses at a safe checkpoint boundary and yields back to the Workflow.
-* The Workflow then enters a suspended state, waiting for the system to resume.
+In Quiesce mode, the system uses Temporal's Batch Operations API to Signal thousands of running workflows efficiently. The workflow implementation should:
+
+* Register a pause signal handler: `def pause_signal_handler(self, paused: bool)`.
+* Maintain an internal `self.is_paused` flag.
+* Before transitioning to the next Activity/Agent Step, the workflow calls `await workflow.wait_condition(lambda: not self.is_paused)`.
+* For long-running LLM activities, inject a Heartbeat interceptor that yields checkpoint data back to Temporal so progress isn't lost if the worker node is killed or the activity is asked to return early.
+
+**Worker Identity & Identity Reconnection**:
+Resumed workflows seamlessly handoff or continue on newly upgraded workers holding the same Task Queue, thanks to Temporal's execution guarantees.
 
 **Important**: Quiesce is meant for short maintenance where workflows need to suspend rapidly without losing long-running context. For infrastructure upgrades, Drain is the safe path.
 
@@ -125,8 +131,8 @@ In Quiesce mode, the worker should:
 ### Phase 1 (Temporal Alignment)
 
 * Connect the Mission Control Banner to Temporal visibility queries instead of the old queue tables.
-* Update `POST /api/system/worker-pause` to block `/api/workflows` and broadcast signals to Workflows for Quiesce mode.
+* Consolidate operational runbooks to strictly use `worker.shutdown()` for standard Drain upgrades.
 
 ### Phase 2 (Advanced Suspend)
 
-* Add deep Quiesce mode where LLM loops natively yield their state to Temporal history on receiving a pause signal.
+* Add deep Quiesce mode where workflows natively use `workflow.wait_condition()` and Batch Signals to suspend active execution safely.
