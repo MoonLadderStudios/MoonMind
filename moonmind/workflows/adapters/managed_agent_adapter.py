@@ -197,7 +197,6 @@ class ManagedAgentAdapter:
         
         if self._run_launcher is not None:
             from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-            import json
             
             profile_obj = ManagedRuntimeProfile(
                 profile_id=profile_id,

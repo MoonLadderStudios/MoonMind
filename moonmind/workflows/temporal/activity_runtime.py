@@ -1785,6 +1785,7 @@ class TemporalAgentRuntimeActivities:
         self._run_store = run_store
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
+        self._supervision_tasks: set[asyncio.Task] = set()
 
     async def agent_runtime_launch(
         self,
@@ -1806,7 +1807,6 @@ class TemporalAgentRuntimeActivities:
             AgentExecutionRequest,
             ManagedRuntimeProfile,
         )
-        import asyncio
 
         run_id = payload["run_id"]
         request = AgentExecutionRequest(**payload["request"])
@@ -1821,17 +1821,24 @@ class TemporalAgentRuntimeActivities:
             workspace_path=workspace_path,
         )
 
-        # Fire and forget supervision task
-        timeout_policy = payload.get("request", {}).get("timeout_policy", {})
-        timeout_seconds = timeout_policy.get("timeout_seconds", 3600)
-        
-        asyncio.create_task(
+        # Start background supervision — hold a strong reference so the task
+        # is not garbage-collected before it completes.
+        timeout_policy = getattr(request, "timeout_policy", None) or {}
+        timeout_seconds = (
+            timeout_policy.get("timeout_seconds", 3600)
+            if isinstance(timeout_policy, dict)
+            else getattr(timeout_policy, "timeout_seconds", 3600)
+        )
+
+        task = asyncio.create_task(
             self._run_supervisor.supervise(
                 run_id=run_id,
                 process=process,
                 timeout_seconds=timeout_seconds,
             )
         )
+        self._supervision_tasks.add(task)
+        task.add_done_callback(self._supervision_tasks.discard)
 
         return record.model_dump(mode="json")
 
