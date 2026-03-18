@@ -34,7 +34,7 @@ Adjacent / expected follow-ups:
 
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/Ui/TemporalDashboardIntegration.md`
+- `docs/UI/MissionControlArchitecture.md`
 - `docs/Temporal/RunHistoryAndRerunSemantics.md`
 
 Implementation touchpoints:

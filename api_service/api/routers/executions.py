@@ -275,6 +275,12 @@ def _serialize_execution(
         attention_required=attention_required,
     )
 
+    params = dict(getattr(record, "parameters", None) or {})
+    target_runtime, param_model, param_effort = [
+        str(params.get(key) or "").strip() or None
+        for key in ["targetRuntime", "model", "effort"]
+    ]
+
     return ExecutionModel(
         task_id=record.workflow_id,
         namespace=record.namespace,
@@ -299,6 +305,9 @@ def _serialize_execution(
         attention_required=attention_required,
         search_attributes=search_attributes,
         memo=memo,
+        target_runtime=target_runtime,
+        model=param_model,
+        effort=param_effort,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),

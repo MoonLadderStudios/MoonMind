@@ -9400,6 +9400,9 @@
         <div class="card"><strong>Source:</strong> Temporal</div>
         <div class="card"><strong>Title:</strong> ${escapeHtml(detailTitle)}</div>
         <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(pick(execution, "workflowType") || "-"))}</div>
+        ${pick(execution, "targetRuntime") ? `<div class="card"><strong>Runtime:</strong> ${escapeHtml(formatRuntimeLabel(pick(execution, "targetRuntime")))}</div>` : ""}
+        ${pick(execution, "model") ? `<div class="card"><strong>Model:</strong> <code>${escapeHtml(String(pick(execution, "model")))}</code></div>` : ""}
+        ${pick(execution, "effort") ? `<div class="card"><strong>Effort:</strong> ${escapeHtml(String(pick(execution, "effort")))}</div>` : ""}
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>

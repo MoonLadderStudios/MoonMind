@@ -1,17 +1,19 @@
-# Mission Control Style System
+# Mission Control Style Guide
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-13
+Last Updated: 2026-03-18
 
 ## 1. Purpose
 
-Introduce Tailwind CSS for the MoonMind Mission Control without changing the dashboard architecture (FastAPI HTML shell + vanilla JS renderer + static CSS).
+Style reference for the MoonMind Mission Control UI: Tailwind CSS integration, design tokens, dark mode, component recipes (buttons, glass, status chips), responsive patterns, and visual direction.
 
 This document is both:
 
 - A source of truth for what is already in production.
-- A design and implementation guide for upcoming dark mode and modern UI polish.
+- A design and implementation guide for upcoming UI polish.
+
+For architecture, routes, runtime config, and Temporal integration, see `docs/UI/MissionControlArchitecture.md`.
 
 ## 2. Background / Current State
 
@@ -68,7 +70,7 @@ MoonMind UI should feel like an operations console:
 - Liquid glass: translucent layers with blur and edge-light, never muddy.
 - Readable first: data density and contrast take priority over effects.
 
-### 4.1 Recommended palette and role mapping
+### 4.1 Recommended Palette and Role Mapping
 
 Use token values as RGB triplets so alpha blending remains flexible.
 
@@ -92,7 +94,7 @@ Highlight usage guidance:
 - Use yellow/orange highlights sparingly (roughly 10-20%) for signal hierarchy.
 - Reserve cyan for live/running/stream feedback.
 
-### 4.2 Liquid glass rules (practical)
+### 4.2 Liquid Glass Rules (Practical)
 
 1. Use blur on a small set of structural surfaces only:
    - `masthead`, major `panel`, optional sticky nav strip.
@@ -108,9 +110,9 @@ Recommended ranges:
 - Blur radius: `14px` to `20px`
 - Glow alpha: `<= 0.45`
 
-## 5. Approach Overview (Recommended)
+## 5. Styling Approach
 
-### 5.1 Keep semantic class names
+### 5.1 Keep Semantic Class Names
 
 Continue styling existing classes used by template and JS:
 
@@ -119,7 +121,7 @@ Continue styling existing classes used by template and JS:
 
 This keeps JS stable and avoids dynamic utility-generation problems.
 
-### 5.2 Compile into existing output file
+### 5.2 Compile into Existing Output File
 
 Build flow:
 
@@ -128,35 +130,15 @@ Build flow:
 
 Do not hand-edit `dashboard.css` during normal development.
 
-### 5.3 Token-first theming
+### 5.3 Token-First Theming
 
 - Theme behavior should be controlled by tokens (`--mm-*`).
 - Semantic classes consume tokens.
 - Dark mode flips tokens via `.dark`; components adapt automatically.
 
-## 6. File Layout
+## 6. Tailwind Configuration
 
-```text
-package.json
-package-lock.json
-tailwind.config.cjs
-postcss.config.cjs
-
-api_service/templates/
-└── task_dashboard.html
-
-api_service/static/task_dashboard/
-├── dashboard.js
-├── dashboard.tailwind.css   # source of truth
-└── dashboard.css            # generated + served
-
-tools/
-└── build-dashboard-css.sh   # optional helper
-```
-
-## 7. Tailwind Configuration
-
-### 7.1 `tailwind.config.cjs`
+### 6.1 `tailwind.config.cjs`
 
 Current config expectations:
 
@@ -195,7 +177,7 @@ module.exports = {
 };
 ```
 
-### 7.2 `postcss.config.cjs`
+### 6.2 `postcss.config.cjs`
 
 ```js
 module.exports = {
@@ -206,9 +188,9 @@ module.exports = {
 };
 ```
 
-## 8. Theme Tokens and Liquid-Glass Foundations
+## 7. Theme Tokens and Liquid-Glass Foundations
 
-### 8.1 Current shipped light tokens (accurate as of 2026-02-19)
+### 7.1 Current Shipped Light Tokens (accurate as of 2026-02-19)
 
 ```css
 :root {
@@ -228,7 +210,7 @@ module.exports = {
 }
 ```
 
-### 8.2 Target dark token overrides (Phase 3)
+### 7.2 Dark Token Overrides
 
 ```css
 .dark {
@@ -248,7 +230,7 @@ module.exports = {
 }
 ```
 
-### 8.3 Atmospheric background layers
+### 7.3 Atmospheric Background Layers
 
 Keep dark mode visually rich, not flat black.
 
@@ -270,7 +252,7 @@ body {
 }
 ```
 
-### 8.4 Core glass utilities
+### 7.4 Core Glass Utilities
 
 ```css
 @layer components {
@@ -297,9 +279,9 @@ body {
 }
 ```
 
-## 9. Dark Mode Implementation
+## 8. Dark Mode Implementation
 
-### 9.1 Template updates (`task_dashboard.html`)
+### 8.1 Template Updates (`task_dashboard.html`)
 
 1. Update viewport:
 
@@ -315,7 +297,7 @@ body {
 </button>
 ```
 
-### 9.2 Theme preference logic (`dashboard.js`)
+### 8.2 Theme Preference Logic (`dashboard.js`)
 
 Use local preference first, system preference second.
 
@@ -354,7 +336,7 @@ function initTheme() {
 
 Call `initTheme()` near the top of the dashboard IIFE.
 
-### 9.3 Prevent theme flash on load
+### 8.3 Prevent Theme Flash on Load
 
 Set the theme class before CSS paints by adding a tiny inline script in `<head>`:
 
@@ -370,86 +352,27 @@ Set the theme class before CSS paints by adding a tiny inline script in `<head>`
 </script>
 ```
 
-### 9.4 Styling strategy
+### 8.4 Styling Strategy
 
 - Prefer token swaps and semantic classes.
 - Avoid scattering many `dark:*` utility variants in JS-generated markup.
 - Keep focus indicators highly visible in both themes.
 
-## 10. Mobile-Friendly System (Responsive + Touch + Tables)
+## 9. Component Recipes (Modern + Glass + Purple)
 
-### 10.1 Layout targets
-
-- Mobile: 360-430px, single-column first.
-- Tablet: 768px, selective two-column layouts.
-- Desktop: 1024-1440px with max-width container.
-
-### 10.2 Navigation on small screens
-
-Switch nav pills from wrapping to horizontal scroll below `640px`.
-
-```css
-@media (max-width: 640px) {
-  .route-nav {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 0.25rem;
-  }
-}
-```
-
-Optional: make nav sticky with a glass strip.
-
-### 10.3 Tables
-
-Wrap tables in a scroll container:
-
-```html
-<div class="table-wrap"><table>...</table></div>
-```
-
-```css
-.table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.table-wrap table {
-  min-width: 760px;
-}
-```
-
-### 10.4 Touch targets and forms
-
-- Minimum 44px tap target height.
-- Keep `:focus-visible` styles obvious.
-- Avoid very low-contrast placeholders in dark mode.
-
-### 10.5 Queue list responsive layout (shipped 2026-02-23)
-
-- HTML contract: wrap queue listings in `<div class="queue-layouts">` with a `.queue-table-wrapper` div and `.queue-card-list` sibling. The cards list must use `<ul role="list">` and `<li class="queue-card">`.
-- Table behavior: `.queue-table-wrapper` stays visible on `@media (min-width: 768px)` and still renders orchestrator/manifests rows. When non-queue sources exist, set `data-sticky-table="true"` so tablets/phones keep the table available.
-- Card behavior: `.queue-card-list` is visible for `@media (max-width: 767px)` and hides on larger breakpoints. Each card uses `.queue-card-header`, `.queue-card-meta`, `.queue-card-fields`, and `.queue-card-actions` to keep typography consistent.
-- Definition list contract: iterate `queueFieldDefinitions` so `<dt>/<dd>` stacks match desktop columns. `.queue-card-fields` defaults to two columns and collapses to one column below 768px.
-- Buttons: reuse `.button.secondary` plus flexbox `.queue-card-actions` so “View details” spans the full card width on mobile.
-- Styling source of truth: selectors live in `dashboard.tailwind.css` and compiled into `dashboard.css`. Use MoonMind tokens (`--mm-border`, `--mm-panel`, `--mm-muted`) for color/alpha tweaks to stay dark-mode compatible.
-
-## 11. Component Recipes (Modern + Glass + Purple)
-
-### 11.1 Containers
+### 9.1 Containers
 
 - `masthead` and primary `panel` use `mm-glass` or `mm-glass-strong`.
 - Inner cards remain less transparent than outer shell.
 - Keep content rhythm tight but readable (`0.75rem` to `1rem` spacing).
 
-### 11.2 Typography
+### 9.2 Typography
 
 - Continue `IBM Plex Sans` for body, `Barlow Condensed` for headline, and `IBM Plex Mono` for logs/code.
 - Slight uppercase + tracking for overline labels only.
 - Avoid thin weights on glass backgrounds.
 
-### 11.3 Navigation pills (glass + glow + grow)
+### 9.3 Navigation Pills (Glass + Glow + Grow)
 
 Navigation pills (`.route-nav a`) should feel like small glass chips:
 
@@ -463,12 +386,12 @@ Recommended interaction rules:
 - Hover/active: slightly higher fill alpha + edge glow + `transform: scale(1.02)`.
 - Active text must remain high-contrast in both themes.
 
-### 11.4 Buttons (Glow + Grow system)
+### 9.4 Buttons (Glow + Grow System)
 
 Buttons must follow one consistent interaction model across:
 Add Step, Apply, Create, Promote, Dismiss, Cancel, Back, etc.
 
-#### 11.4.1 Principles
+#### 9.4.1 Principles
 
 1. Hover gets lighter/brighter (never darker).
 2. All buttons are slightly translucent so underlying glass/gradients influence them.
@@ -477,7 +400,7 @@ Add Step, Apply, Create, Promote, Dismiss, Cancel, Back, etc.
    - Hover: grow (for example, `scale(1.03)`).
    - Active/press: subtle press via scale (for example, `scale(0.99)`), still no translate.
 
-#### 11.4.2 Variants and when to use them
+#### 9.4.2 Variants and When to Use Them
 
 - Default (brand action): purple (`--mm-accent`) for most actions.
 - Secondary: glass surface for safe/navigation actions (Cancel, Back, View Details).
@@ -489,7 +412,7 @@ Implementation note (current pattern):
 - Commit/danger actions use a shared action-button class that sets `--queue-action-color` and derives fill/glow from it.
 - `--queue-action-color` defaults to `--mm-action-primary`; danger overrides set it to `--mm-danger`.
 
-#### 11.4.3 Interaction state contract (must be true for all variants)
+#### 9.4.3 Interaction State Contract (Must Be True for All Variants)
 
 Base (idle):
 
@@ -515,7 +438,7 @@ Disabled:
 
 - Lower opacity and disable transform/glow.
 
-#### 11.4.4 Thin outline rationale
+#### 9.4.4 Thin Outline Rationale
 
 A 1px outline plus edge-light inset highlight keeps buttons legible on:
 
@@ -525,7 +448,7 @@ A 1px outline plus edge-light inset highlight keeps buttons legible on:
 
 Without the outline, buttons visually blend into the panel surface.
 
-#### 11.4.5 CSS recipe (dashboard.tailwind.css)
+#### 9.4.5 CSS Recipe (`dashboard.tailwind.css`)
 
 Use this as the source-of-truth interaction recipe when editing `api_service/static/task_dashboard/dashboard.tailwind.css`:
 
@@ -613,7 +536,7 @@ button.secondary:hover,
 }
 ```
 
-#### 11.4.6 Optional dynamic edge-light outline (Liquid Glass vibe)
+#### 9.4.6 Optional Dynamic Edge-Light Outline (Liquid Glass Vibe)
 
 CSS cannot truly vary border width around a standard rectangle. Use gradient border opacity to create the perceived uneven edge thickness:
 
@@ -649,7 +572,7 @@ CSS cannot truly vary border width around a standard rectangle. Use gradient bor
 }
 ```
 
-### 11.5 Status chips
+### 9.5 Status Chips
 
 Map status consistently:
 
@@ -661,7 +584,7 @@ Map status consistently:
 
 Keep chip fills translucent and borders slightly stronger than fills.
 
-### 11.6 Live output pane
+### 9.6 Live Output Pane
 
 For `.queue-live-output`:
 
@@ -670,42 +593,74 @@ For `.queue-live-output`:
 - Subtle inset border and optional faint purple edge.
 - Preserve long-line wrapping and scanability.
 
-## 12. Build Commands (Local + CI)
+## 10. Responsive and Mobile-Friendly System
 
-### 12.1 `package.json` scripts (current)
+### 10.1 Layout Targets
 
-```json
-{
-  "devDependencies": {
-    "autoprefixer": "^10.4.0",
-    "postcss": "^8.4.0",
-    "tailwindcss": "^3.4.0"
-  },
-  "scripts": {
-    "dashboard:css": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css",
-    "dashboard:css:min": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --minify",
-    "dashboard:css:watch": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --watch"
+- Mobile: 360-430px, single-column first.
+- Tablet: 768px, selective two-column layouts.
+- Desktop: 1024-1440px with max-width container.
+
+### 10.2 Navigation on Small Screens
+
+Switch nav pills from wrapping to horizontal scroll below `640px`.
+
+```css
+@media (max-width: 640px) {
+  .route-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.25rem;
   }
 }
 ```
 
-### 12.2 Developer workflow
+Optional: make nav sticky with a glass strip.
 
-1. `npm install`
-2. During CSS work: `npm run dashboard:css:watch`
-3. Before commit: `npm run dashboard:css:min`
+### 10.3 Tables
 
-### 12.3 CI consistency check
+Wrap tables in a scroll container:
 
-1. `npm ci`
-2. `npm run dashboard:css:min`
-3. `git diff --exit-code -- api_service/static/task_dashboard/dashboard.css`
+```html
+<div class="table-wrap"><table>...</table></div>
+```
 
-> 2026-02-23 queue layout update: `gzip -c api_service/static/task_dashboard/dashboard.css | wc -c` reports **3,755 bytes**, which is a 281 byte increase versus `HEAD~1` and well under the 3 KB target.
+```css
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 
-> Temporary note: the local container does not include `npm`, so `.queue-card*` selectors were appended directly to `dashboard.css`. Re-run `npm run dashboard:css:min` in CI (or any host with Tailwind CLI available) to regenerate the bundle from `dashboard.tailwind.css`.
+.table-wrap table {
+  min-width: 760px;
+}
+```
 
-## 13. Migration Plan (Phased, Accurate to Current Status)
+### 10.4 Touch Targets and Forms
+
+- Minimum 44px tap target height.
+- Keep `:focus-visible` styles obvious.
+- Avoid very low-contrast placeholders in dark mode.
+
+### 10.5 Queue List Responsive Layout (shipped 2026-02-23)
+
+- HTML contract: wrap queue listings in `<div class="queue-layouts">` with a `.queue-table-wrapper` div and `.queue-card-list` sibling. The cards list must use `<ul role="list">` and `<li class="queue-card">`.
+- Table behavior: `.queue-table-wrapper` stays visible on `@media (min-width: 768px)` and still renders orchestrator/manifests rows. When non-queue sources exist, set `data-sticky-table="true"` so tablets/phones keep the table available.
+- Card behavior: `.queue-card-list` is visible for `@media (max-width: 767px)` and hides on larger breakpoints. Each card uses `.queue-card-header`, `.queue-card-meta`, `.queue-card-fields`, and `.queue-card-actions` to keep typography consistent.
+- Definition list contract: iterate `queueFieldDefinitions` so `<dt>/<dd>` stacks match desktop columns. `.queue-card-fields` defaults to two columns and collapses to one column below 768px.
+- Buttons: reuse `.button.secondary` plus flexbox `.queue-card-actions` so "View details" spans the full card width on mobile.
+- Styling source of truth: selectors live in `dashboard.tailwind.css` and compiled into `dashboard.css`. Use MoonMind tokens (`--mm-border`, `--mm-panel`, `--mm-muted`) for color/alpha tweaks to stay dark-mode compatible.
+
+#### 10.5.1 Shared Row Definition
+
+The components parse execution records into normalized properties: Source, Queue, Runtime, Status, Created, Started, Finished.
+The Table maps these into standard UI grids, while the Mobile Card iterates these definitions to format `<dt>/<dd>` lists inside vertical blocks.
+
+- The backend exposes these rows consistently over `GET /api/queue/jobs`.
+- UI CSS governs the CSS media queries hiding the Table at `max-width: 767px` and showing Cards instead.
+
+## 11. Migration Status
 
 ### Phase 1: Toolchain + generated CSS
 
@@ -746,7 +701,7 @@ Status: Planned
 - Tune glow and elevation hierarchy.
 - Keep motion subtle (opacity/scale only). Avoid translateY rising on hover/click.
 
-## 14. Validation Checklist
+## 12. Validation Checklist
 
 Current baseline:
 
@@ -771,7 +726,7 @@ Mobile release gate:
 - [x] Queue tables/cards share one responsive component and scroll without layout break
 - [ ] Touch targets meet minimum size guidelines
 
-## 15. Troubleshooting
+## 13. Troubleshooting
 
 ### Tailwind classes do not appear
 
@@ -797,10 +752,9 @@ Mobile release gate:
 2. Increase panel opacity slightly.
 3. Remove blur from high-frequency repaint regions.
 
-## 16. Related Documents
+## 14. Related Documents
 
-- `docs/TaskUiArchitecture.md`
-- `docs/TaskArchitecture.md`
+- `docs/UI/MissionControlArchitecture.md`
 - `specs/025-tailwind-dashboard/`
 - `api_service/templates/task_dashboard.html`
 - `api_service/static/task_dashboard/dashboard.js`

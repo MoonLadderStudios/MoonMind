@@ -26,8 +26,7 @@ This is a focused lifecycle document. It does **not** redefine the broader Tempo
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/Ui/TemporalDashboardIntegration.md`
-- `docs/TaskUiArchitecture.md`
+- `docs/UI/MissionControlArchitecture.md`
 
 ## 3. Scope and non-goals
 
@@ -340,7 +339,7 @@ This document should feed directly into:
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/Ui/TemporalDashboardIntegration.md`
+- `docs/UI/MissionControlArchitecture.md`
 
 Recommended follow-up implementation work:
 
