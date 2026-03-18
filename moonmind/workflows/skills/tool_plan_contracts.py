@@ -17,6 +17,7 @@ SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
 SUPPORTED_FAILURE_MODES = frozenset({"FAIL_FAST", "CONTINUE"})
 SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
 REVIEW_VERDICTS = frozenset({"PASS", "FAIL", "INCONCLUSIVE"})
+DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
 EXPLICIT_BINDING_REASONS = frozenset(
     {"stronger_isolation", "specialized_credentials", "clearer_routing"}
 )
@@ -608,7 +609,7 @@ class ReviewGatePolicy:
     max_review_attempts: int = 2
     reviewer_model: str = "default"
     review_timeout_seconds: int = 120
-    skip_tool_types: tuple[str, ...] = ()
+    skip_tool_types: tuple[str, ...] = DEFAULT_SKIP_TOOL_TYPES
 
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
@@ -642,7 +643,7 @@ class PlanPolicy:
 
     failure_mode: str = "FAIL_FAST"
     max_concurrency: int = 1
-    review_gate: ReviewGatePolicy = field(default_factory=ReviewGatePolicy)
+    review_gate: ReviewGatePolicy | None = None
 
     def __post_init__(self) -> None:
         if self.failure_mode not in SUPPORTED_FAILURE_MODES:
@@ -657,7 +658,7 @@ class PlanPolicy:
             "failure_mode": self.failure_mode,
             "max_concurrency": self.max_concurrency,
         }
-        if self.review_gate.enabled:
+        if self.review_gate is not None and self.review_gate.enabled:
             payload["review_gate"] = self.review_gate.to_payload()
         return payload
 
@@ -811,7 +812,7 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
         skip_raw = review_gate_raw.get("skip_tool_types", [])
         if not isinstance(skip_raw, list):
             skip_raw = []
-        review_gate = ReviewGatePolicy(
+        review_gate: ReviewGatePolicy | None = ReviewGatePolicy(
             enabled=bool(review_gate_raw.get("enabled", False)),
             max_review_attempts=int(review_gate_raw.get("max_review_attempts") or 2),
             reviewer_model=str(
@@ -822,10 +823,10 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
             ),
             skip_tool_types=tuple(
                 str(t).strip() for t in skip_raw if str(t).strip()
-            ),
+            ) if skip_raw else DEFAULT_SKIP_TOOL_TYPES,
         )
     else:
-        review_gate = ReviewGatePolicy()
+        review_gate = None  # Plan did not specify review_gate
 
     policy = PlanPolicy(
         failure_mode=str(policy_raw.get("failure_mode") or "FAIL_FAST").strip(),
@@ -958,6 +959,7 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
 __all__ = [
     "ARTIFACT_REF_PREFIX",
     "REGISTRY_DIGEST_PREFIX",
+    "DEFAULT_SKIP_TOOL_TYPES",
     "REVIEW_VERDICTS",
     "SUPPORTED_PLAN_VERSIONS",
     "SUPPORTED_FAILURE_MODES",

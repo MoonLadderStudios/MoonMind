@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from moonmind.workflows.skills.tool_plan_contracts import (
+    DEFAULT_SKIP_TOOL_TYPES,
     PlanPolicy,
     ReviewGatePolicy,
     parse_plan_definition,
@@ -33,18 +34,25 @@ _MINIMAL_PLAN = {
 
 
 class TestPlanPolicyReviewGate:
-    def test_default_plan_policy_has_disabled_review_gate(self):
+    def test_default_plan_policy_has_none_review_gate(self):
         policy = PlanPolicy()
-        assert policy.review_gate.enabled is False
+        assert policy.review_gate is None
 
     def test_plan_policy_with_enabled_review_gate(self):
         rg = ReviewGatePolicy(enabled=True, max_review_attempts=5)
         policy = PlanPolicy(review_gate=rg)
+        assert policy.review_gate is not None
         assert policy.review_gate.enabled is True
         assert policy.review_gate.max_review_attempts == 5
 
-    def test_to_payload_omits_review_gate_when_disabled(self):
+    def test_to_payload_omits_review_gate_when_none(self):
         policy = PlanPolicy()
+        payload = policy.to_payload()
+        assert "review_gate" not in payload
+
+    def test_to_payload_omits_review_gate_when_disabled(self):
+        rg = ReviewGatePolicy(enabled=False)
+        policy = PlanPolicy(review_gate=rg)
         payload = policy.to_payload()
         assert "review_gate" not in payload
 
@@ -57,10 +65,11 @@ class TestPlanPolicyReviewGate:
 
 
 class TestParsePlanDefinitionReviewGate:
-    def test_parse_without_review_gate(self):
+    def test_parse_without_review_gate_returns_none(self):
+        """When plan omits review_gate, PlanPolicy.review_gate is None."""
         plan_payload = {**_MINIMAL_PLAN, "policy": {"failure_mode": "FAIL_FAST"}}
         plan = parse_plan_definition(plan_payload)
-        assert plan.policy.review_gate.enabled is False
+        assert plan.policy.review_gate is None
 
     def test_parse_with_review_gate_enabled(self):
         plan_payload = {
@@ -96,6 +105,7 @@ class TestParsePlanDefinitionReviewGate:
         assert plan.policy.review_gate.enabled is False
 
     def test_parse_review_gate_defaults_on_empty_object(self):
+        """Explicit empty object means 'specified but with defaults'."""
         plan_payload = {
             **_MINIMAL_PLAN,
             "policy": {
@@ -105,11 +115,14 @@ class TestParsePlanDefinitionReviewGate:
         }
         plan = parse_plan_definition(plan_payload)
         rg = plan.policy.review_gate
+        assert rg is not None          # Present, not None
         assert rg.enabled is False
         assert rg.max_review_attempts == 2
         assert rg.reviewer_model == "default"
+        assert rg.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES
 
-    def test_parse_invalid_skip_tool_types_defaults_to_empty(self):
+    def test_parse_invalid_skip_tool_types_falls_back_to_defaults(self):
+        """Invalid skip_tool_types (non-list) falls back to DEFAULT_SKIP_TOOL_TYPES."""
         plan_payload = {
             **_MINIMAL_PLAN,
             "policy": {
@@ -118,4 +131,4 @@ class TestParsePlanDefinitionReviewGate:
             },
         }
         plan = parse_plan_definition(plan_payload)
-        assert plan.policy.review_gate.skip_tool_types == ()
+        assert plan.policy.review_gate.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES

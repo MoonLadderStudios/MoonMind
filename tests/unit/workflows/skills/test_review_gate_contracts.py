@@ -6,6 +6,7 @@ import pytest
 
 from moonmind.workflows.skills.tool_plan_contracts import (
     ContractValidationError,
+    DEFAULT_SKIP_TOOL_TYPES,
     ReviewGatePolicy,
 )
 from moonmind.workflows.skills.review_gate import (
@@ -28,7 +29,7 @@ class TestReviewGatePolicy:
         assert p.max_review_attempts == 2
         assert p.reviewer_model == "default"
         assert p.review_timeout_seconds == 120
-        assert p.skip_tool_types == ()
+        assert p.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES
 
     def test_enabled(self):
         p = ReviewGatePolicy(enabled=True, max_review_attempts=3)
