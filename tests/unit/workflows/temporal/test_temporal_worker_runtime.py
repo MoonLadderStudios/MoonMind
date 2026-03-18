@@ -143,7 +143,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     ):
         resources, handlers = await _build_runtime_activities(topology)
 
-    assert handlers == ["artifact_handler"]
+    assert handlers == ["artifact_handler", resolve_external_adapter]
     mock_repository_cls.assert_called_once_with("session")
     mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
     mock_artifact_activities_cls.assert_called_once_with(mock_service_cls.return_value)
