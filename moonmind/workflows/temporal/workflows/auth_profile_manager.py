@@ -393,11 +393,40 @@ class MoonMindAuthProfileManagerWorkflow:
         now = workflow.now()
         remaining: list[PendingRequest] = []
         for req in self._pending_requests:
+            # Check if this requester already has a lease (e.g. from a retried workflow task)
+            existing_profile_id = None
+            for p in self._profiles.values():
+                if req.requester_workflow_id in p.current_leases:
+                    existing_profile_id = p.profile_id
+                    break
+            
+            if existing_profile_id:
+                try:
+                    await self._signal_slot_assigned(
+                        req.requester_workflow_id, existing_profile_id
+                    )
+                except Exception as e:
+                    workflow.logger.warning(
+                        "Failed to signal existing slot to %s: %s",
+                        req.requester_workflow_id,
+                        e,
+                    )
+                    self._profiles[existing_profile_id].release(req.requester_workflow_id)
+                continue
+
             profile = self._find_available_profile()
             if profile and profile.reserve(req.requester_workflow_id, now):
-                await self._signal_slot_assigned(
-                    req.requester_workflow_id, profile.profile_id
-                )
+                try:
+                    await self._signal_slot_assigned(
+                        req.requester_workflow_id, profile.profile_id
+                    )
+                except Exception as e:
+                    workflow.logger.warning(
+                        "Failed to signal slot_assigned to %s (likely completed or dead): %s",
+                        req.requester_workflow_id,
+                        e,
+                    )
+                    profile.release(req.requester_workflow_id)
             else:
                 remaining.append(req)
         self._pending_requests = remaining

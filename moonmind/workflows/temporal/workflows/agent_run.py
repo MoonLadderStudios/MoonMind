@@ -383,3 +383,15 @@ class MoonMindAgentRun:
                 except Exception:
                     workflow.logger.warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
             raise
+            
+        except Exception:
+            if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
+                runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+                runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+                manager_id = f"auth-profile-manager:{runtime_id}"
+                try:
+                    manager_handle = workflow.get_external_workflow_handle(manager_id)
+                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                except Exception:
+                    workflow.logger.warning("Failed to release slot on unexpected exception, which may lead to a leak.", exc_info=True)
+            raise
