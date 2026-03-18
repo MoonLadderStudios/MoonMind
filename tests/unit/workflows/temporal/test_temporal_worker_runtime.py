@@ -125,8 +125,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_build_bindings,
     mock_build_deps,
 ):
-    mock_build_deps.return_value = (MagicMock(), MagicMock())
-
+    mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
     @asynccontextmanager
     async def _fake_session_context():
         yield "session"
@@ -162,6 +161,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         artifact_service=mock_service_cls.return_value,
         run_store=ANY,
         run_supervisor=ANY,
+        run_launcher=ANY,
     )
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(

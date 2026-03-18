@@ -180,6 +180,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_jules_fetch_result",
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
+    "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -1778,10 +1779,61 @@ class TemporalAgentRuntimeActivities:
         artifact_service: TemporalArtifactService | None = None,
         run_store: "ManagedRunStore | None" = None,
         run_supervisor: "ManagedRunSupervisor | None" = None,
+        run_launcher: "ManagedRuntimeLauncher | None" = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
         self._run_supervisor = run_supervisor
+        self._run_launcher = run_launcher
+
+    async def agent_runtime_launch(
+        self,
+        payload: dict[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Launch a managed agent and start background supervision.
+        
+        Payload must contain:
+        - run_id: str
+        - request: dict (AgentExecutionRequest dump)
+        - profile: dict (ManagedRuntimeProfile dump)
+        - workspace_path: str | None
+        """
+        if self._run_launcher is None or self._run_supervisor is None:
+            raise TemporalActivityRuntimeError("launcher and supervisor are required for agent_runtime_launch")
+
+        from moonmind.schemas.agent_runtime_models import (
+            AgentExecutionRequest,
+            ManagedRuntimeProfile,
+        )
+        import asyncio
+
+        run_id = payload["run_id"]
+        request = AgentExecutionRequest(**payload["request"])
+        profile = ManagedRuntimeProfile(**payload["profile"])
+        workspace_path = payload.get("workspace_path")
+
+        # Idempotency check handled in launcher
+        record, process = await self._run_launcher.launch(
+            run_id=run_id,
+            request=request,
+            profile=profile,
+            workspace_path=workspace_path,
+        )
+
+        # Fire and forget supervision task
+        timeout_policy = payload.get("request", {}).get("timeout_policy", {})
+        timeout_seconds = timeout_policy.get("timeout_seconds", 3600)
+        
+        asyncio.create_task(
+            self._run_supervisor.supervise(
+                run_id=run_id,
+                process=process,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+
+        return record.model_dump(mode="json")
 
     async def agent_runtime_publish_artifacts(
         self,

@@ -194,6 +194,14 @@ class MoonMindAgentRun:
                             "cooldown_seconds": kw.get("cooldown_seconds", 300),
                         })
 
+                    async def _run_launcher(**kw):
+                        return await workflow.execute_activity(
+                            "agent_runtime.launch",
+                            kw.get("payload", {}),
+                            task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                            start_to_close_timeout=timedelta(seconds=30),
+                        )
+
                     store_root = os.path.join(
                         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
                         "managed_runs",
@@ -208,6 +216,7 @@ class MoonMindAgentRun:
                         workflow_id=wf_id,
                         runtime_id=runtime_id,
                         run_store=run_store,
+                        run_launcher=_run_launcher,
                     )
 
                     # --- Managed agent: launch via adapter ---

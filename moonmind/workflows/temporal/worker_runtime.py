@@ -45,6 +45,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     resolve_external_adapter,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
@@ -195,8 +196,8 @@ def _build_runtime_planner():
     return _runtime_planner
 
 
-def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor]:
-    """Build shared store and supervisor for the agent_runtime fleet."""
+def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, ManagedRuntimeLauncher]:
+    """Build shared store, supervisor, and launcher for the agent_runtime fleet."""
     import os
 
     store_root = os.path.join(
@@ -214,7 +215,8 @@ def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor]:
     artifact_storage = AgentQueueArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
-    return store, supervisor
+    launcher = ManagedRuntimeLauncher(store)
+    return store, supervisor, launcher
 
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
@@ -233,8 +235,8 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         dispatcher = SkillActivityDispatcher()
 
-        # Build agent_runtime dependencies (store + supervisor)
-        run_store, run_supervisor = _build_agent_runtime_deps()
+        # Build agent_runtime dependencies (store + supervisor + launcher)
+        run_store, run_supervisor, run_launcher = _build_agent_runtime_deps()
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,
@@ -255,6 +257,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service,
                 run_store=run_store,
                 run_supervisor=run_supervisor,
+                run_launcher=run_launcher,
             ),
             # TODO: wire proposal_service_factory once full proposal
             # generation is implemented.  While the generator stub returns
