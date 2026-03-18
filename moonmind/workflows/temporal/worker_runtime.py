@@ -272,7 +272,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             topology.fleet,
             ", ".join(binding_descriptors) if binding_descriptors else "(none)",
         )
-        return resources, [binding.handler for binding in bindings]
+        return resources, [binding.handler for binding in bindings] + [resolve_external_adapter]
     except Exception:
         await resources.aclose()
         raise

@@ -144,7 +144,6 @@ class JulesClient:
                     title=request.title,
                     description=description,
                     metadata=metadata,
-                    source_context={"moonmind": metadata.get("moonmind", {})},
                 )
             )
         except JulesClientError as exc:
@@ -326,6 +325,11 @@ class JulesClient:
                     )
                     await asyncio.sleep(delay)
                     continue
+                logger.error(
+                    "Jules API %s %s returned HTTP %s: %s",
+                    method, path, status_code,
+                    exc.response.text[:2000] if exc.response else "(no body)",
+                )
                 raise JulesClientError(
                     f"HTTP {status_code}",
                     status_code=status_code,

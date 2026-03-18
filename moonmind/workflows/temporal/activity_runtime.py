@@ -23,6 +23,9 @@ from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
+from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
+from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
+from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
@@ -66,6 +69,8 @@ PlanGenerator = Callable[
 ]
 JulesClientFactory = Callable[[], JulesClient]
 JulesAgentAdapterFactory = Callable[[], JulesAgentAdapter]
+CodexCloudClientFactory = Callable[[], CodexCloudHttpClient]
+CodexCloudAdapterFactory = Callable[[], CodexCloudAgentAdapter]
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -180,6 +185,13 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_jules_fetch_result",
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
+    "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
+    "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
+    "integration.codex_cloud.fetch_result": (
+        "integrations",
+        "integration_codex_cloud_fetch_result",
+    ),
+    "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -1307,6 +1319,8 @@ class TemporalJulesActivities:
         artifact_service: TemporalArtifactService | None = None,
         client_factory: JulesClientFactory | None = None,
         adapter_factory: JulesAgentAdapterFactory | None = None,
+        codex_cloud_client_factory: CodexCloudClientFactory | None = None,
+        codex_cloud_adapter_factory: CodexCloudAdapterFactory | None = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._client_factory = client_factory or self._build_default_client
@@ -1314,6 +1328,16 @@ class TemporalJulesActivities:
             adapter_factory()
             if adapter_factory is not None
             else JulesAgentAdapter(client_factory=self._client_factory)
+        )
+        self._codex_cloud_client_factory = (
+            codex_cloud_client_factory or self._build_default_codex_cloud_client
+        )
+        self._codex_cloud_adapter = (
+            codex_cloud_adapter_factory()
+            if codex_cloud_adapter_factory is not None
+            else CodexCloudAgentAdapter(
+                client_factory=self._codex_cloud_client_factory
+            )
         )
 
     @staticmethod
@@ -1397,6 +1421,18 @@ class TemporalJulesActivities:
         parameters = dict(parameters or {})
         title = str(parameters.get("title") or "MoonMind Integration Task").strip()
         description = str(parameters.get("description") or "").strip()
+
+        # Fallback: when dispatched from AgentRun, the task description lives
+        # in instruction_ref / instructionRef of the serialised request, not
+        # in parameters.description.
+        if not description and request_payload:
+            instruction_ref_text = (
+                request_payload.get("instruction_ref")
+                or request_payload.get("instructionRef")
+                or ""
+            )
+            if isinstance(instruction_ref_text, str):
+                description = instruction_ref_text.strip()
 
         if not description and inputs_ref is not None:
             if self._artifact_service is None or principal is None:
@@ -1616,6 +1652,247 @@ class TemporalJulesActivities:
             normalized_status=normalized.normalized_status,
             provider_status=provider_status,
             terminal=normalized.terminal,
+        )
+
+    # ---- Codex Cloud integration handlers ----
+
+    @staticmethod
+    def _build_default_codex_cloud_client() -> CodexCloudHttpClient:
+        import os
+
+        gate = build_codex_cloud_gate()
+        if not gate.enabled:
+            raise TemporalActivityRuntimeError(
+                f"{CODEX_CLOUD_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
+            )
+        cloud_url = os.environ.get("CODEX_CLOUD_API_URL", "").strip()
+        cloud_key = os.environ.get("CODEX_CLOUD_API_KEY", "").strip()
+        return CodexCloudHttpClient(base_url=cloud_url, api_key=cloud_key)
+
+    async def integration_codex_cloud_start(
+        self,
+        request: Mapping[str, Any] | None = None,
+        /,
+        *,
+        principal: str | None = None,
+        parameters: Mapping[str, Any] | None = None,
+        correlation_id: str | None = None,
+        inputs_ref: ArtifactRef | str | None = None,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> IntegrationStartResult:
+        """Start a Codex Cloud-backed run via the canonical adapter contract."""
+        request_payload = _coerce_activity_request(
+            request, activity_type="integration.codex_cloud.start"
+        )
+        if request_payload:
+            if principal is None:
+                principal = request_payload.get("principal")
+            if parameters is None:
+                parameters = request_payload.get("parameters")
+            if correlation_id is None:
+                correlation_id = request_payload.get("correlation_id")
+            if inputs_ref is None:
+                inputs_ref = request_payload.get("inputs_ref")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+            if idempotency_key is None:
+                idempotency_key = request_payload.get("idempotency_key")
+
+        parameters = dict(parameters or {})
+        title = str(parameters.get("title") or "MoonMind Integration Task").strip()
+        description = str(parameters.get("description") or "").strip()
+
+        if not description and inputs_ref is not None:
+            if self._artifact_service is None or principal is None:
+                raise TemporalActivityRuntimeError(
+                    "integration.codex_cloud.start requires artifact_service and principal when inputs_ref is supplied"
+                )
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=_artifact_id_from_ref(inputs_ref),
+                principal=principal,
+                allow_restricted_raw=True,
+            )
+            description = payload.decode("utf-8", errors="replace")
+        if not description:
+            raise TemporalActivityRuntimeError(
+                "integration.codex_cloud.start requires parameters.description or inputs_ref"
+            )
+
+        resolved_correlation_id = str(
+            correlation_id or f"integration:codex_cloud:{title}"
+        ).strip()
+        resolved_idempotency_key = str(
+            idempotency_key or f"codex_cloud:{resolved_correlation_id}:{title}"
+        ).strip()
+
+        adapter_request = AgentExecutionRequest(
+            agentKind="external",
+            agentId="codex_cloud",
+            executionProfileRef=str(
+                parameters.get("execution_profile_ref") or "profile:codex-cloud-default"
+            ),
+            correlationId=resolved_correlation_id,
+            idempotencyKey=resolved_idempotency_key,
+            instructionRef=_artifact_locator(inputs_ref),
+            inputRefs=[]
+            if inputs_ref is None
+            else [_artifact_id_from_ref(inputs_ref)],
+            parameters={
+                "title": title,
+                "description": description,
+            },
+        )
+        handle = await self._codex_cloud_adapter.start(adapter_request)
+        provider_status = str(handle.metadata.get("providerStatus") or "unknown")
+        external_url = str(handle.metadata.get("externalUrl") or "").strip() or None
+
+        tracking_ref = None
+        if self._artifact_service is not None and principal is not None:
+            tracking_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload={
+                    "taskId": handle.run_id,
+                    "status": provider_status,
+                    "url": external_url,
+                    "metadata": dict(handle.metadata),
+                },
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "codex_cloud_start.json",
+                    "producer": "activity:integration.codex_cloud.start",
+                    "labels": ["integration", "codex_cloud", "tracking"],
+                },
+            )
+
+        from moonmind.workflows.adapters.codex_cloud_client import normalize_codex_cloud_status
+
+        normalized = normalize_codex_cloud_status(provider_status)
+        return IntegrationStartResult(
+            external_id=handle.run_id,
+            status=provider_status,
+            tracking_ref=tracking_ref,
+            url=external_url,
+            normalized_status=normalized,
+            provider_status=provider_status,
+            callback_supported=False,
+        )
+
+    async def integration_codex_cloud_status(
+        self,
+        *,
+        external_id: str,
+        principal: str | None = None,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> IntegrationStatusResult:
+        """Poll current status for one Codex Cloud task."""
+        status = await self._codex_cloud_adapter.status(external_id)
+        provider_status = str(status.metadata.get("providerStatus") or "unknown")
+        external_url = str(status.metadata.get("externalUrl") or "").strip() or None
+
+        from moonmind.workflows.adapters.codex_cloud_client import normalize_codex_cloud_status
+
+        normalized = normalize_codex_cloud_status(provider_status)
+
+        tracking_ref = None
+        if self._artifact_service is not None and principal is not None:
+            tracking_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload={
+                    "taskId": status.run_id,
+                    "status": provider_status,
+                    "url": external_url,
+                    "metadata": dict(status.metadata),
+                },
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "codex_cloud_status.json",
+                    "producer": "activity:integration.codex_cloud.status",
+                    "labels": ["integration", "codex_cloud", "tracking"],
+                },
+            )
+
+        return IntegrationStatusResult(
+            external_id=status.run_id,
+            status=provider_status,
+            tracking_ref=tracking_ref,
+            url=external_url,
+            normalized_status=normalized,
+            provider_status=provider_status,
+            terminal=status.terminal,
+        )
+
+    async def integration_codex_cloud_fetch_result(
+        self,
+        *,
+        external_id: str,
+        principal: str,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> tuple[ArtifactRef, ...]:
+        """Fetch terminal result for one completed Codex Cloud task."""
+        if self._artifact_service is None:
+            raise TemporalActivityRuntimeError(
+                "integration.codex_cloud.fetch_result requires artifact storage"
+            )
+
+        status = await self.integration_codex_cloud_status(
+            external_id=external_id,
+            principal=principal,
+            execution_ref=execution_ref,
+        )
+        output_refs: list[ArtifactRef] = []
+        if status.tracking_ref is not None:
+            output_refs.append(status.tracking_ref)
+        return tuple(output_refs)
+
+    async def integration_codex_cloud_cancel(
+        self,
+        *,
+        external_id: str,
+        principal: str,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> IntegrationStatusResult:
+        """Attempt best-effort cancellation of one Codex Cloud task."""
+        result = await self._codex_cloud_adapter.cancel(external_id)
+
+        provider_status = str(
+            result.metadata.get("providerStatus") or ""
+        ).strip() or "canceled"
+
+        from moonmind.workflows.adapters.codex_cloud_client import normalize_codex_cloud_status
+
+        normalized = normalize_codex_cloud_status(provider_status)
+
+        tracking_ref: ArtifactRef | None = None
+        if self._artifact_service is not None:
+            tracking_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload={
+                    "activity": "integration.codex_cloud.cancel",
+                    "externalId": external_id,
+                    "providerStatus": provider_status,
+                    "normalizedStatus": normalized,
+                    "cancelAccepted": result.metadata.get("cancelAccepted", False),
+                },
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "codex_cloud_cancel.json",
+                    "producer": "activity:integration.codex_cloud.cancel",
+                    "labels": ["integration", "codex_cloud", "cancel"],
+                },
+            )
+
+        return IntegrationStatusResult(
+            external_id=external_id,
+            status=result.status,
+            tracking_ref=tracking_ref,
+            url=str(result.metadata.get("externalUrl") or "").strip() or None,
+            normalized_status=normalized,
+            provider_status=provider_status,
+            terminal=result.terminal,
         )
 
 
