@@ -1935,7 +1935,7 @@ class WorkflowRun(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     feature_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    celery_chain_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    legacy_chain_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[WorkflowRunStatus] = mapped_column(
         Enum(
             WorkflowRunStatus,
@@ -2186,7 +2186,7 @@ class WorkflowTaskState(Base):
         ),
         nullable=True,
     )
-    celery_state: Mapped[Optional[OrchestratorTaskState]] = mapped_column(
+    worker_state: Mapped[Optional[OrchestratorTaskState]] = mapped_column(
         Enum(
             OrchestratorTaskState,
             name="orchestratortaskstate",
@@ -2196,7 +2196,7 @@ class WorkflowTaskState(Base):
         ),
         nullable=True,
     )
-    celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    worker_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     artifact_paths: Mapped[Optional[list[str]]] = mapped_column(
         "artifact_refs", mutable_json_list(), nullable=True

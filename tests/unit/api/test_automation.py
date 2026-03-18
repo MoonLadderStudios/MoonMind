@@ -64,7 +64,7 @@ class FakeTaskState:
         used_skills = metadata.get("usedTools")
         used_fallback = metadata.get("usedFallback")
         shadow_mode = metadata.get("shadowModeRequested")
-        if selected is None and self.phase.value.startswith("agentkit_"):
+        if selected is None and self.phase.value.startswith("speckit_"):
             selected = "auto"
         if adapter is None and selected == "auto":
             adapter = "auto"
@@ -157,7 +157,7 @@ def _build_run(run_id: UUID | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=run_id,
         status=models.AutomationRunStatus.SUCCEEDED,
-        branch_name="agentkit/branch",
+        branch_name="speckit/branch",
         pull_request_url="https://example.com/pr/1",
         result_summary="Spec automation completed",
         started_at=datetime.now(UTC),
@@ -175,10 +175,10 @@ def test_get_run_detail_success(
     task_state = FakeTaskState(
         phase=models.AutomationPhase.SPECKIT_SPECIFY,
         status=models.AutomationTaskStatus.SUCCEEDED,
-        metadata={"branch": "agentkit/branch"},
+        metadata={"branch": "speckit/branch"},
     )
     artifact = FakeArtifact(
-        name="phase-agentkit_specify.stdout",
+        name="phase-speckit_specify.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/stdout.log",
     )
@@ -193,7 +193,7 @@ def test_get_run_detail_success(
     assert data["run_id"] == str(run_id)
     assert data["status"] == models.AutomationRunStatus.SUCCEEDED.value
     assert data["phases"][0]["phase"] == task_state.phase.value
-    assert data["phases"][0]["metadata"] == {"branch": "agentkit/branch"}
+    assert data["phases"][0]["metadata"] == {"branch": "speckit/branch"}
     assert data["phases"][0]["selected_skill"] == "auto"
     assert data["phases"][0]["adapter_id"] == "auto"
     assert data["phases"][0]["execution_path"] == "skill"
@@ -234,7 +234,7 @@ def test_get_run_detail_uses_explicit_skill_metadata(
     assert phase_payload["shadow_mode_requested"] is False
 
 
-def test_get_run_detail_backfills_blank_agentkit_adapter_fields(
+def test_get_run_detail_backfills_blank_speckit_adapter_fields(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
@@ -262,7 +262,7 @@ def test_get_run_detail_backfills_blank_agentkit_adapter_fields(
     assert phase_payload["used_fallback"] is False
 
 
-def test_get_run_detail_keeps_non_agentkit_partial_metadata(
+def test_get_run_detail_keeps_non_speckit_partial_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
@@ -306,7 +306,7 @@ def test_get_artifact_detail_success(
     run_id = uuid4()
     run = _build_run(run_id)
     artifact = FakeArtifact(
-        name="phase-agentkit_plan.stdout",
+        name="phase-speckit_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/plan.log",
         run_id=run_id,
@@ -369,7 +369,7 @@ def test_get_artifact_detail_forbidden(
     run = _build_run(run_id)
     run.repository = "forbidden/repo"
     artifact = FakeArtifact(
-        name="phase-agentkit_plan.stdout",
+        name="phase-speckit_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/plan.log",
         run_id=run_id,
@@ -395,7 +395,7 @@ def test_download_artifact_success(
     run = _build_run(run_id)
     artifact_path = Path("runs/123/artifacts/stdout.log")
     artifact = FakeArtifact(
-        name="phase-agentkit_plan.stdout",
+        name="phase-speckit_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path=str(artifact_path),
         run_id=run_id,
@@ -420,7 +420,7 @@ def test_download_artifact_success(
     assert response.status_code == 200
     assert response.content == b"artifact body"
     assert (
-        'filename="phase-agentkit_plan.stdout"'
+        'filename="phase-speckit_plan.stdout"'
         in response.headers["content-disposition"]
     )
     assert response.headers["content-type"].startswith("text/plain")
@@ -435,7 +435,7 @@ def test_download_artifact_missing_file(
     run_id = uuid4()
     run = _build_run(run_id)
     artifact = FakeArtifact(
-        name="phase-agentkit_plan.stdout",
+        name="phase-speckit_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/missing.log",
         run_id=run_id,

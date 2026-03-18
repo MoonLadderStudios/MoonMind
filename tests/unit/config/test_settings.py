@@ -519,14 +519,14 @@ class TestWorkflowSettings:
             skills_enabled=False,
             skills_canary_percent=25,
             default_skill="custom",
-            allowed_skills=("agentkit", "custom"),
+            allowed_skills=("speckit", "custom"),
             submit_skill="custom",
         )
 
         assert settings.skills_enabled is False
         assert settings.skills_canary_percent == 25
         assert settings.default_skill == "custom"
-        assert settings.allowed_skills == ("agentkit", "custom")
+        assert settings.allowed_skills == ("speckit", "custom")
         assert settings.submit_skill == "custom"
 
     def test_skills_mirror_env_overrides(self, monkeypatch):
@@ -712,11 +712,11 @@ class TestWorkflowSettings:
             _env_file=None,
             skill_policy_mode="allowlist",
             default_skill="custom-default",
-            allowed_skills=("agentkit",),
+            allowed_skills=("speckit",),
         )
 
         assert settings.default_skill == "custom-default"
-        assert settings.allowed_skills == ("agentkit", "custom-default")
+        assert settings.allowed_skills == ("speckit", "custom-default")
 
     def test_permissive_mode_does_not_modify_allowlist(self):
         """Permissive mode should not force default skill into allowlist."""
@@ -725,11 +725,11 @@ class TestWorkflowSettings:
             _env_file=None,
             skill_policy_mode="permissive",
             default_skill="custom-default",
-            allowed_skills=("agentkit",),
+            allowed_skills=("speckit",),
         )
 
         assert settings.default_skill == "custom-default"
-        assert settings.allowed_skills == ("agentkit",)
+        assert settings.allowed_skills == ("speckit",)
 
     def test_app_settings_defaults_codex_queue_to_workflow_default(
         self, app_settings_defaults

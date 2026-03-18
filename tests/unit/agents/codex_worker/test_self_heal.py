@@ -63,7 +63,7 @@ def test_build_failure_signature_scrubs_secrets() -> None:
     signature = build_failure_signature(
         message="Command failed: token=TOKEN",
         step_id="step-1",
-        skill_id="agentkit",
+        skill_id="speckit",
         exit_code=137,
         secret_redactor=redactor,
     )

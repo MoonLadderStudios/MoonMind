@@ -926,7 +926,7 @@ async def test_create_legacy_skill_job_is_enriched_with_task_contract(
             job = await service.create_job(
                 job_type="codex_skill",
                 payload={
-                    "skillId": "agentkit",
+                    "skillId": "speckit",
                     "inputs": {"repo": "Moon/Mind", "instruction": "Run"},
                     "publishMode": "none",
                 },
@@ -934,7 +934,7 @@ async def test_create_legacy_skill_job_is_enriched_with_task_contract(
 
     assert job.payload["repository"] == "Moon/Mind"
     assert job.payload["targetRuntime"] == "codex"
-    assert job.payload["task"]["skill"]["id"] == "agentkit"
+    assert job.payload["task"]["skill"]["id"] == "speckit"
     assert "codex" in job.payload["requiredCapabilities"]
     assert "git" in job.payload["requiredCapabilities"]
 

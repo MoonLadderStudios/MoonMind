@@ -14,8 +14,8 @@ def test_normalize_status_maps_queue_dead_letter_to_failed() -> None:
     assert normalize_status("queue", "dead_letter") == "failed"
 
 
-def test_normalize_status_maps_removed_agentkit_to_fallback_queued() -> None:
-    assert normalize_status("agentkit", "retrying") == "queued"
+def test_normalize_status_maps_removed_source_to_fallback_queued() -> None:
+    assert normalize_status("speckit", "retrying") == "queued"
 
 
 def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
@@ -172,7 +172,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         config["sources"]["temporal"]["artifactDownload"]
         == "/api/artifacts/{artifactId}/download"
     )
-    assert "agentkit" not in config["sources"]
+    assert "speckit" not in config["sources"]
     assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
     assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"

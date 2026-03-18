@@ -1,6 +1,6 @@
 """Seed global speckit-orchestrate task preset.
 
-Replaces the previously removed agentkit-orchestrate preset with equivalent
+Replaces the previously removed speckit-orchestrate preset with equivalent
 speckit-orchestrate steps that reference speckit-* skills from
 .agents/skills/skills/.
 """

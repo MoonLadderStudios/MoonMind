@@ -106,7 +106,7 @@ def test_resolve_run_skill_selection_prefers_job_override(skills_mirror):
         run_id="run-2",
         context={
             "skill_selection": ["docs-lint:1.2.0"],
-            "queue_skill_selection": ["agentkit:1.0.0"],
+            "queue_skill_selection": ["speckit:1.0.0"],
             "skill_sources": {"docs-lint:1.2.0": "file:///tmp/custom/docs-lint"},
         },
     )
@@ -262,10 +262,10 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     local_skill.mkdir()
     (local_skill / "SKILL.md").write_text("name: local-tool\n", encoding="utf-8")
 
-    legacy_skill = legacy_nested_root / "agentkit-orchestrate"
+    legacy_skill = legacy_nested_root / "speckit-orchestrate"
     legacy_skill.mkdir()
     (legacy_skill / "SKILL.md").write_text(
-        "name: agentkit-orchestrate\n", encoding="utf-8"
+        "name: speckit-orchestrate\n", encoding="utf-8"
     )
 
     outside_cwd = tmp_path / "elsewhere"
@@ -305,7 +305,7 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
 
     assert list_available_skill_names() == (
         "local-tool",
-        "agentkit-orchestrate",
+        "speckit-orchestrate",
     )
 
 

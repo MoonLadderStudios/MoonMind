@@ -1,4 +1,4 @@
-"""Rebuild Spec workflow tables for Celery chain orchestration."""
+"""Rebuild Spec workflow tables for chain orchestration."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "workflow_runs": (
         "id",
         "feature_key",
-        "celery_chain_id",
+        "legacy_chain_id",
         "status",
         "phase",
         "branch_name",
@@ -164,8 +164,8 @@ LEGACY_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "orchestrator_run_id",
         "plan_step",
         "plan_step_status",
-        "celery_state",
-        "celery_task_id",
+        "worker_state",
+        "worker_task_id",
         "message",
         "artifact_refs",
     ),
@@ -367,7 +367,7 @@ def upgrade() -> None:  # noqa: D401
         "workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
-        sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
+        sa.Column("legacy_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
             WORKFLOW_RUN_STATUS,
@@ -508,11 +508,11 @@ def upgrade() -> None:  # noqa: D401
             nullable=True,
         ),
         sa.Column(
-            "celery_state",
+            "worker_state",
             postgresql.ENUM(name="orchestratortaskstate", create_type=False),
             nullable=True,
         ),
-        sa.Column("celery_task_id", sa.String(length=255), nullable=True),
+        sa.Column("worker_task_id", sa.String(length=255), nullable=True),
         sa.Column("message", sa.Text(), nullable=True),
         sa.Column(
             "artifact_refs",
@@ -719,7 +719,7 @@ def downgrade() -> None:  # noqa: D401
 
     # ------------------------------------------------------------------
     # Recreate the legacy workflow enums and tables that existed before
-    # the Celery chain migration. This mirrors the schema installed by
+    # the chain orchestration migration. This mirrors the schema installed by
     # historical migrations so that older code paths continue to work.
     # ------------------------------------------------------------------
     # Recreate legacy enums
@@ -796,7 +796,7 @@ def downgrade() -> None:  # noqa: D401
         "workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
-        sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
+        sa.Column("legacy_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
             legacy_run_status,
@@ -1040,14 +1040,14 @@ def downgrade() -> None:  # noqa: D401
     op.add_column(
         "workflow_task_states",
         sa.Column(
-            "celery_state",
+            "worker_state",
             postgresql.ENUM(name="orchestratortaskstate", create_type=False),
             nullable=True,
         ),
     )
     op.add_column(
         "workflow_task_states",
-        sa.Column("celery_task_id", sa.String(length=255), nullable=True),
+        sa.Column("worker_task_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
         "workflow_task_states",

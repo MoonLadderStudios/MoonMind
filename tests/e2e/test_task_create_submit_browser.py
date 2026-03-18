@@ -101,7 +101,7 @@ def _route_handlers(
         route.fulfill(
             status=200,
             content_type="application/json",
-            body=json.dumps({"items": [{"id": "agentkit-orchestrate"}]}),
+            body=json.dumps({"items": [{"id": "speckit-orchestrate"}]}),
         )
 
     def _mock_worker_pause(route):

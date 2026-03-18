@@ -30,15 +30,15 @@ def mock_settings(monkeypatch):
         (
             "auto",
             "test-skill",
-            "agentkit-discover",
-            "agentkit-submit",
-            "agentkit-publish",
+            "speckit-discover",
+            "speckit-submit",
+            "speckit-publish",
         ),
     )
     _set_setting("default_skill", "auto")
-    _set_setting("discover_skill", "agentkit-discover")
-    _set_setting("submit_skill", "agentkit-submit")
-    _set_setting("publish_skill", "agentkit-publish")
+    _set_setting("discover_skill", "speckit-discover")
+    _set_setting("submit_skill", "speckit-submit")
+    _set_setting("publish_skill", "speckit-publish")
 
     return _set_setting
 
@@ -64,9 +64,9 @@ def test_select_stage_skill_uses_override(mock_settings):
 
 
 def test_select_stage_skill_uses_stage_mappings(mock_settings):
-    assert registry._select_stage_skill("discover_next_phase", {}) == "agentkit-discover"
-    assert registry._select_stage_skill("submit_codex_job", {}) == "agentkit-submit"
-    assert registry._select_stage_skill("apply_and_publish", {}) == "agentkit-publish"
+    assert registry._select_stage_skill("discover_next_phase", {}) == "speckit-discover"
+    assert registry._select_stage_skill("submit_codex_job", {}) == "speckit-submit"
+    assert registry._select_stage_skill("apply_and_publish", {}) == "speckit-publish"
     assert registry._select_stage_skill("unknown_stage", {}) == "auto"
 
 
@@ -100,7 +100,7 @@ def test_resolve_stage_execution_uses_skills(mock_settings):
     )
 
     assert decision.stage_name == "discover_next_phase"
-    assert decision.selected_skill == "agentkit-discover"
+    assert decision.selected_skill == "speckit-discover"
     assert decision.use_skills is True
     assert decision.execution_path == "skill"
     assert decision.fallback_enabled is True

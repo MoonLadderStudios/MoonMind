@@ -39,16 +39,16 @@ def test_materialize_run_skill_workspace_creates_cache_and_links(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "run-1"
-    _make_skill(source_root, "agentkit")
+    _make_skill(source_root, "speckit")
 
     selection = RunSkillSelection(
         run_id="run-1",
         selection_source="job_override",
         skills=(
             ResolvedSkill(
-                skill_name="agentkit",
+                skill_name="speckit",
                 version="1.0.0",
-                source_uri=(source_root / "agentkit").resolve().as_uri(),
+                source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
     )
@@ -78,16 +78,16 @@ def test_materialize_run_skill_workspace_rejects_hash_mismatch(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "run-2"
-    _make_skill(source_root, "agentkit")
+    _make_skill(source_root, "speckit")
 
     selection = RunSkillSelection(
         run_id="run-2",
         selection_source="job_override",
         skills=(
             ResolvedSkill(
-                skill_name="agentkit",
+                skill_name="speckit",
                 version="1.0.0",
-                source_uri=(source_root / "agentkit").resolve().as_uri(),
+                source_uri=(source_root / "speckit").resolve().as_uri(),
                 content_hash="deadbeef",
             ),
         ),
@@ -107,16 +107,16 @@ def test_materialize_run_skill_workspace_requires_skill_md(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "run-3"
-    _make_skill(source_root, "agentkit", with_metadata=False)
+    _make_skill(source_root, "speckit", with_metadata=False)
 
     selection = RunSkillSelection(
         run_id="run-3",
         selection_source="job_override",
         skills=(
             ResolvedSkill(
-                skill_name="agentkit",
+                skill_name="speckit",
                 version="1.0.0",
-                source_uri=(source_root / "agentkit").resolve().as_uri(),
+                source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
     )
@@ -135,15 +135,15 @@ def test_materialize_run_skill_workspace_rejects_duplicate_names(tmp_path):
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "run-4"
-    _make_skill(source_root, "agentkit")
+    _make_skill(source_root, "speckit")
 
-    uri = (source_root / "agentkit").resolve().as_uri()
+    uri = (source_root / "speckit").resolve().as_uri()
     selection = RunSkillSelection(
         run_id="run-4",
         selection_source="job_override",
         skills=(
-            ResolvedSkill(skill_name="agentkit", version="1", source_uri=uri),
-            ResolvedSkill(skill_name="agentkit", version="2", source_uri=uri),
+            ResolvedSkill(skill_name="speckit", version="1", source_uri=uri),
+            ResolvedSkill(skill_name="speckit", version="2", source_uri=uri),
         ),
     )
 
@@ -162,16 +162,16 @@ def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "run-5"
     global_codex_config = tmp_path / ".codex" / "config.toml"
-    _make_skill(source_root, "agentkit")
+    _make_skill(source_root, "speckit")
 
     selection = RunSkillSelection(
         run_id="run-5",
         selection_source="job_override",
         skills=(
             ResolvedSkill(
-                skill_name="agentkit",
+                skill_name="speckit",
                 version="1.0.0",
-                source_uri=(source_root / "agentkit").resolve().as_uri(),
+                source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
     )
@@ -191,10 +191,10 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
     source_root = tmp_path / "source"
     cache_root = tmp_path / "cache"
     run_root = tmp_path / "runs" / "cache-incomplete"
-    _make_skill(source_root, "agentkit")
+    _make_skill(source_root, "speckit")
 
     digest_root = cache_root / "fixedhash"
-    incomplete_skill_dir = digest_root / "agentkit"
+    incomplete_skill_dir = digest_root / "speckit"
     incomplete_skill_dir.mkdir(parents=True)
     (incomplete_skill_dir / "steps.md").write_text("partial", encoding="utf-8")
 
@@ -208,9 +208,9 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
         selection_source="job_override",
         skills=(
             ResolvedSkill(
-                skill_name="agentkit",
+                skill_name="speckit",
                 version="1.0.0",
-                source_uri=(source_root / "agentkit").resolve().as_uri(),
+                source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
     )
@@ -388,7 +388,7 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
     )
 
     entry = ResolvedSkill(
-        skill_name="agentkit",
+        skill_name="speckit",
         version="1.0.0",
         source_uri="git+https://github.com/example/repo.git",
     )
@@ -401,7 +401,7 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
 
 def test_resolve_source_root_rejects_git_ext_transport(tmp_path):
     entry = ResolvedSkill(
-        skill_name="agentkit",
+        skill_name="speckit",
         version="1.0.0",
         source_uri="git+ext::sh -c echo pwned",
     )
@@ -422,7 +422,7 @@ def test_resolve_source_root_rejects_git_private_host(tmp_path, monkeypatch):
         ],
     )
     entry = ResolvedSkill(
-        skill_name="agentkit",
+        skill_name="speckit",
         version="1.0.0",
         source_uri="git+https://internal.example/repo.git",
     )

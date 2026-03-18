@@ -76,7 +76,6 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
     assert not _is_allowed_path("")
-    assert not _is_allowed_path("agentkit")
     assert not _is_allowed_path("queue/new/extra")
     assert not _is_allowed_path("queue//")
     assert not _is_allowed_path("queue/<script>alert(1)</script>")
@@ -131,11 +130,10 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert "task-dashboard-config" in response.text
 
 
-def test_agentkit_routes_return_404(client: TestClient) -> None:
+def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
     for path in (
-        "/tasks/agentkit",
-        "/tasks/agentkit/new",
-        f"/tasks/agentkit/{uuid4()}",
+        "/tasks/unknown/extra/segment",
+        "/tasks/queue/new/extra",
     ):
         response = client.get(path)
         assert response.status_code == 404
@@ -181,7 +179,7 @@ def test_skills_api_returns_available_skill_ids(
 ) -> None:
     monkeypatch.setattr(
         "api_service.api.routers.task_dashboard.list_available_skill_names",
-        lambda: ("agentkit", "agentkit-orchestrate"),
+        lambda: ("speckit", "speckit-orchestrate"),
     )
     monkeypatch.setattr(
         "api_service.api.routers.task_dashboard.list_runnable_skill_names",
@@ -193,12 +191,12 @@ def test_skills_api_returns_available_skill_ids(
     assert response.status_code == 200
     assert response.json() == {
         "items": {
-            "worker": ["agentkit", "agentkit-orchestrate"],
+            "worker": ["speckit", "speckit-orchestrate"],
             "orchestrator": ["update-moonmind"],
         },
         "legacyItems": [
-            {"id": "agentkit"},
-            {"id": "agentkit-orchestrate"},
+            {"id": "speckit"},
+            {"id": "speckit-orchestrate"},
             {"id": "update-moonmind"},
         ],
     }
