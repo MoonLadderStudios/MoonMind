@@ -291,7 +291,7 @@ components:
           type: string
           format: date-time
           nullable: true
-        celery_task_id:
+        worker_task_id:
           type: string
         message:
           type: string

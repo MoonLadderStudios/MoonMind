@@ -1,4 +1,8 @@
-"""Celery tasks powering the MoonMind orchestrator service."""
+"""Orchestrator plan-step execution logic.
+
+This module provides the framework-agnostic core that the DB queue worker
+(``queue_worker.py``) calls to execute individual plan steps.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +11,8 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final, Sequence
+from typing import Sequence
 from uuid import UUID
-
-from celery import Celery, chain, current_task
 
 from api_service.db import models as db_models
 from api_service.db.base import get_async_session_context
@@ -36,18 +38,6 @@ from .storage import (
 )
 
 logger = logging.getLogger(__name__)
-
-app = Celery("moonmind.workflows.orchestrator")
-app.config_from_object("moonmind.workflows.orchestrator.celeryconfig")
-
-_ENV_QUEUE = os.getenv("ORCHESTRATOR_CELERY_QUEUE")
-_DEFAULT_QUEUE: Final[str] = (
-    _ENV_QUEUE if _ENV_QUEUE else app.conf.get("task_default_queue", "orchestrator.run")
-)
-app.conf.update(
-    task_default_queue=_DEFAULT_QUEUE,
-    task_default_routing_key=app.conf.get("task_default_routing_key", _DEFAULT_QUEUE),
-)
 
 
 _STEP_HANDLER = {
@@ -76,13 +66,8 @@ def _duration_ms(started_at: datetime | None, finished_at: datetime) -> float | 
 
 
 def _resolve_current_task_id() -> str | None:
-    """Return Celery task id when running under Celery, else ``None``."""
-
-    try:
-        request = getattr(current_task, "request", None)
-    except Exception:
-        return None
-    return getattr(request, "id", None)
+    """Return the current execution context task id, or ``None``."""
+    return None
 
 
 def _artifact_root() -> Path:
@@ -205,7 +190,7 @@ async def _record_plan_failure(
     *,
     storage: ArtifactStorage | None = None,
     started_at: datetime | None = None,
-    celery_task_id: str | None = None,
+    worker_task_id: str | None = None,
 ) -> None:
     finished = _utcnow()
     artifact_ids: list[UUID] = []
@@ -231,8 +216,8 @@ async def _record_plan_failure(
         run_id=run.id,
         plan_step=step,
         plan_step_status=db_models.OrchestratorPlanStepStatus.FAILED,
-        celery_state=db_models.OrchestratorTaskState.FAILURE,
-        celery_task_id=celery_task_id,
+        worker_state=db_models.OrchestratorTaskState.FAILURE,
+        worker_task_id=worker_task_id,
         message=str(exc),
         artifact_refs=artifact_ids,
         payload=payload,
@@ -299,8 +284,8 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             run_id=run.id,
             plan_step=step,
             plan_step_status=db_models.OrchestratorPlanStepStatus.IN_PROGRESS,
-            celery_state=db_models.OrchestratorTaskState.STARTED,
-            celery_task_id=task_id,
+            worker_state=db_models.OrchestratorTaskState.STARTED,
+            worker_task_id=task_id,
             started_at=started_at,
         )
         record_step_started(step.value)
@@ -339,7 +324,7 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                 exc,
                 storage=storage,
                 started_at=started_at,
-                celery_task_id=task_id,
+                worker_task_id=task_id,
             )
             raise
 
@@ -353,7 +338,7 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                 exc,
                 storage=storage,
                 started_at=started_at,
-                celery_task_id=task_id,
+                worker_task_id=task_id,
             )
             raise
         else:
@@ -373,8 +358,8 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                 run_id=run.id,
                 plan_step=step,
                 plan_step_status=db_models.OrchestratorPlanStepStatus.SUCCEEDED,
-                celery_state=db_models.OrchestratorTaskState.SUCCESS,
-                celery_task_id=task_id,
+                worker_state=db_models.OrchestratorTaskState.SUCCESS,
+                worker_task_id=task_id,
                 message=result.message,
                 artifact_refs=artifact_ids,
                 payload=result.metadata,
@@ -418,7 +403,7 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
                         run_id=run.id,
                         plan_step=db_models.OrchestratorPlanStep.ROLLBACK,
                         plan_step_status=db_models.OrchestratorPlanStepStatus.SKIPPED,
-                        celery_state=db_models.OrchestratorTaskState.SUCCESS,
+                        worker_state=db_models.OrchestratorTaskState.SUCCESS,
                         message="Rollback not required",
                         finished_at=finished,
                     )
@@ -451,68 +436,4 @@ async def _execute_plan_step_async(run_id: UUID, step_name: str) -> dict[str, ob
             }
 
 
-@app.task(bind=True, name="moonmind.workflows.orchestrator.tasks.execute_plan_step")
-def execute_plan_step(self, run_id: str, step_name: str) -> dict[str, object]:
-    """Celery task entry point executing a single plan step."""
-
-    logger.info(
-        "Starting plan step %s for run %s (task_id=%s)",
-        step_name,
-        run_id,
-        getattr(self.request, "id", None),
-    )
-    result = asyncio.run(_execute_plan_step_async(UUID(run_id), step_name))
-    logger.info("Completed plan step %s for run %s", step_name, run_id)
-    return result
-
-
-def enqueue_action_plan(
-    run_id: UUID,
-    steps: Sequence[str | db_models.OrchestratorPlanStep],
-    *,
-    include_rollback: bool = False,
-):
-    """Queue the orchestrator plan steps for execution."""
-
-    normalized: list[str] = []
-    rollback_present = False
-    for raw in steps:
-        step = (
-            raw
-            if isinstance(raw, db_models.OrchestratorPlanStep)
-            else db_models.OrchestratorPlanStep(str(raw))
-        )
-        if step == db_models.OrchestratorPlanStep.ROLLBACK:
-            rollback_present = True
-            continue
-        normalized.append(step.value)
-
-    if not normalized:
-        raise ValueError("Action plan does not contain executable steps")
-
-    step_signatures = [
-        execute_plan_step.si(str(run_id), step_name) for step_name in normalized
-    ]
-
-    rollback_sig = None
-    if include_rollback and rollback_present:
-        rollback_sig = execute_plan_step.si(
-            str(run_id), db_models.OrchestratorPlanStep.ROLLBACK.value
-        ).set(queue=_DEFAULT_QUEUE)
-        for signature in step_signatures:
-            signature.link_error(rollback_sig.clone())
-
-    workflow = chain(*step_signatures)
-    logger.info("Queueing orchestrator run %s with steps=%s", run_id, normalized)
-
-    return workflow.apply_async(queue=_DEFAULT_QUEUE)
-
-
-@app.task(name="moonmind.workflows.orchestrator.tasks.health_check")
-def health_check() -> str:
-    """Basic health-check task to verify the worker boots successfully."""
-
-    return "ok"
-
-
-__all__ = ["app", "enqueue_action_plan", "execute_plan_step", "health_check"]
+__all__ = ["_execute_plan_step_async"]

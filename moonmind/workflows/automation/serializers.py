@@ -1,4 +1,4 @@
-"""Serialization helpers for workflow Celery workflow entities."""
+"""Serialization helpers for workflow automation entities."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ class SerializedRun(TypedDict, total=False):
     codexPreflightMessage: str | None
     codexLogsPath: str | None
     codexPatchPath: str | None
-    celeryChainId: str | None
+    legacyChainId: str | None
     requestedBy: str | None
     createdBy: str | None
     currentTaskName: str | None
@@ -258,7 +258,7 @@ def serialize_run(
         codexPreflightMessage=run.codex_preflight_message,
         codexLogsPath=run.codex_logs_path,
         codexPatchPath=run.codex_patch_path,
-        celeryChainId=run.celery_chain_id,
+        legacyChainId=run.celery_chain_id,
         requestedBy=(
             str(run.requested_by_user_id) if run.requested_by_user_id else None
         ),

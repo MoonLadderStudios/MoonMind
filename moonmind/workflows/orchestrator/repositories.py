@@ -335,8 +335,8 @@ class OrchestratorRepository:
                 attempt=1,
                 plan_step=plan_step,
                 plan_step_status=db_models.OrchestratorPlanStepStatus.PENDING,
-                celery_state=None,
-                celery_task_id=None,
+                worker_state=None,
+                worker_task_id=None,
                 message=None,
                 artifact_paths=[],
             )
@@ -352,8 +352,8 @@ class OrchestratorRepository:
         plan_step: db_models.OrchestratorPlanStep | str,
         attempt: int = 1,
         plan_step_status: db_models.OrchestratorPlanStepStatus | str | None = None,
-        celery_state: db_models.OrchestratorTaskState | str | None = None,
-        celery_task_id: Optional[str] = None,
+        worker_state: db_models.OrchestratorTaskState | str | None = None,
+        worker_task_id: Optional[str] = None,
         message: Optional[str] = None,
         artifact_refs: Optional[Sequence[UUID]] = None,
         payload: Optional[Mapping[str, Any]] = None,
@@ -386,13 +386,13 @@ class OrchestratorRepository:
             if mapped_status is not None:
                 insert_values["status"] = mapped_status
                 update_values["status"] = mapped_status
-        if celery_state is not None:
-            celery_status = _to_enum(celery_state, db_models.OrchestratorTaskState)
-            insert_values["celery_state"] = celery_status
-            update_values["celery_state"] = celery_status
-        if celery_task_id is not None:
-            insert_values["celery_task_id"] = celery_task_id
-            update_values["celery_task_id"] = celery_task_id
+        if worker_state is not None:
+            resolved_state = _to_enum(worker_state, db_models.OrchestratorTaskState)
+            insert_values["celery_state"] = resolved_state
+            update_values["celery_state"] = resolved_state
+        if worker_task_id is not None:
+            insert_values["celery_task_id"] = worker_task_id
+            update_values["celery_task_id"] = worker_task_id
         if message is not None:
             insert_values["message"] = message
             update_values["message"] = message
@@ -458,7 +458,7 @@ class OrchestratorRepository:
                 if bump_attempt:
                     state.attempt = (state.attempt or 0) + 1
                 state.plan_step_status = db_models.OrchestratorPlanStepStatus.PENDING
-                state.celery_state = db_models.OrchestratorTaskState.PENDING
+                state.celery_state = db_models.OrchestratorTaskState.PENDING  # DB column name
                 state.message = reason
                 state.started_at = None
                 state.finished_at = None

@@ -1,7 +1,6 @@
-"""Codex preflight check helpers for workflow automation.
+"""Pre-flight validation for workflow automation runs.
 
-Extracted from moonmind.workflows.automation.tasks during the Celery removal.
-This module has no Celery dependency.
+This module validates prerequisites before starting a workflow run.
 """
 
 from __future__ import annotations

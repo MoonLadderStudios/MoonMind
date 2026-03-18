@@ -17,6 +17,7 @@ from moonmind.schemas.jules_models import (
     JulesGetTaskRequest,
     JulesResolveTaskRequest,
     JulesTaskResponse,
+    SourceContext,
     normalize_jules_status,
 )
 from moonmind.workflows.adapters.base_external_agent_adapter import (
@@ -80,11 +81,26 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
         description: str,
         metadata: dict[str, Any],
     ) -> AgentRunHandle:
+        source_context: SourceContext | None = None
+        if request.workspace_spec:
+            repo = request.workspace_spec.get("repository") or request.workspace_spec.get("repo")
+            if repo:
+                branch = str(
+                    request.workspace_spec.get("branch", "main")
+                ).strip() or "main"
+                source_context = SourceContext.from_repo(repo, branch=branch)
+
+        automation_mode = None
+        if request.parameters:
+            automation_mode = request.parameters.get("automationMode")
+
         response = await self._client.create_task(
             JulesCreateTaskRequest(
                 title=title,
                 description=description,
                 metadata=metadata,
+                source_context=source_context,
+                automation_mode=automation_mode,
             )
         )
         provider_status = str(response.status or "").strip() or "unknown"

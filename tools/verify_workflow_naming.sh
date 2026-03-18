@@ -147,7 +147,7 @@ if [[ "$MODE" == "docs-spec" || "$MODE" == "all" ]]; then
 fi
 
 if [[ "$MODE" == "runtime" || "$MODE" == "all" ]]; then
-  if ! scan_mode "runtime" api_service moonmind services tests celery_worker; then
+  if ! scan_mode "runtime" api_service moonmind services tests; then
     status=1
   fi
 fi

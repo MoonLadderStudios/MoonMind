@@ -1,4 +1,4 @@
-"""API endpoints for interacting with Workflow Celery workflows."""
+"""API endpoints for interacting with workflow automation workflows."""
 
 from __future__ import annotations
 

@@ -2,13 +2,6 @@
 approval_policy = "never"
 
 [workflow]
-# Deprecated naming retained for compatibility. Prefer WORKFLOW_* env aliases
-# for new deployments where possible.
-# Provide explicit connection overrides when the Spec workflow should use
-# dedicated Celery infrastructure. Leave blank to inherit global Celery
-# settings.
-celery_broker_url = ""
-celery_result_backend = ""
 codex_queue = "codex"
 artifact_root = "var/artifacts/workflows"
 
