@@ -274,7 +274,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "actionsEnabled": True,
                 "submitEnabled": True,
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
-            }
+            },
+            "logTailingEnabled": bool(
+                os.environ.get("MOONMIND_LOG_TAILING_ENABLED", "true").strip().lower()
+                not in ("0", "false", "no", "off")
+            ),
         },
         "system": {
             "defaultQueue": "agent_jobs",
