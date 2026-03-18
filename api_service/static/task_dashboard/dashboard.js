@@ -189,6 +189,8 @@
     temporalDashboardEnabled && Boolean(temporalDashboardFeature.submitEnabled);
   const temporalDebugFieldsEnabled =
     temporalDashboardEnabled && Boolean(temporalDashboardFeature.debugFieldsEnabled);
+  const submitScheduleEnabled =
+    temporalDashboardEnabled && Boolean(temporalDashboardFeature.submitScheduleEnabled);
   const TEMPORAL_INLINE_INPUT_MAX_CHARS = 4000;
   const systemConfig = config.system || {};
   const temporalCompatibilityConfig =
@@ -5227,6 +5229,34 @@
       } />
           Propose Tasks
         </label>
+        ${submitScheduleEnabled && !isEditMode ? `
+        <details class="card" id="schedule-panel">
+          <summary><strong>Schedule (optional)</strong></summary>
+          <label>Schedule Mode
+            <select name="scheduleMode" id="schedule-mode-select">
+              <option value="immediate" selected>Immediate</option>
+              <option value="once">Deferred (run once at a specific time)</option>
+              <option value="recurring">Recurring (create a cron schedule)</option>
+            </select>
+          </label>
+          <div id="schedule-once-fields" class="hidden">
+            <label>Scheduled For
+              <input type="datetime-local" name="scheduledFor" id="schedule-datetime" />
+            </label>
+          </div>
+          <div id="schedule-recurring-fields" class="hidden">
+            <label>Cron Expression
+              <input name="scheduleCron" placeholder="*/30 * * * *" />
+            </label>
+            <label>Timezone
+              <input name="scheduleTimezone" placeholder="UTC" value="UTC" />
+            </label>
+            <label>Schedule Name
+              <input name="scheduleName" placeholder="My recurring task" />
+            </label>
+          </div>
+        </details>
+        ` : ""}
         <div class="actions" role="group" aria-label="Queue submission actions">
           <p class="small queue-submit-message" id="queue-submit-message"></p>
           ${isEditMode
@@ -6393,6 +6423,22 @@
       });
     }
 
+    // --- Schedule panel toggle ---
+    const scheduleModeSelect = form.querySelector("#schedule-mode-select");
+    const scheduleOnceFields = form.querySelector("#schedule-once-fields");
+    const scheduleRecurringFields = form.querySelector("#schedule-recurring-fields");
+    if (scheduleModeSelect) {
+      scheduleModeSelect.addEventListener("change", () => {
+        const mode = String(scheduleModeSelect.value || "immediate").trim();
+        if (scheduleOnceFields) {
+          scheduleOnceFields.classList.toggle("hidden", mode !== "once");
+        }
+        if (scheduleRecurringFields) {
+          scheduleRecurringFields.classList.toggle("hidden", mode !== "recurring");
+        }
+      });
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       message.className = "small queue-submit-message";
@@ -6822,6 +6868,43 @@
         maxAttempts,
         ...(affinityKey ? { affinityKey } : {}),
       };
+
+      // --- Schedule injection ---
+      if (submitScheduleEnabled && !isEditMode) {
+        const scheduleMode = String(formData.get("scheduleMode") || "immediate").trim();
+        if (scheduleMode === "once") {
+          const scheduledForRaw = String(formData.get("scheduledFor") || "").trim();
+          if (!scheduledForRaw) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Scheduled time is required for deferred scheduling.";
+            return;
+          }
+          const scheduledForDate = new Date(scheduledForRaw);
+          if (isNaN(scheduledForDate.getTime()) || scheduledForDate <= new Date()) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Scheduled time must be a valid future date.";
+            return;
+          }
+          requestBody.payload.schedule = {
+            mode: "once",
+            scheduledFor: scheduledForDate.toISOString(),
+          };
+        } else if (scheduleMode === "recurring") {
+          const scheduleCron = String(formData.get("scheduleCron") || "").trim();
+          if (!scheduleCron) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Cron expression is required for recurring scheduling.";
+            return;
+          }
+          requestBody.payload.schedule = {
+            mode: "recurring",
+            cron: scheduleCron,
+            timezone: String(formData.get("scheduleTimezone") || "UTC").trim(),
+            name: String(formData.get("scheduleName") || "Inline schedule").trim(),
+          };
+        }
+      }
+
       const attachmentValidation =
         attachmentPolicy.enabled && !isEditMode
           ? renderAttachmentSelection() || validateAttachmentFiles(selectedAttachmentFiles())

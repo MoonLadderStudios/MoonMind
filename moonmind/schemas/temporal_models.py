@@ -42,6 +42,40 @@ NormalizedIntegrationStatus = Literal[
 ]
 
 
+class ScheduleParameters(BaseModel):
+    """Inline scheduling parameters for deferred or recurring execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: Literal["once", "recurring"] = Field(..., alias="mode")
+
+    # mode=once fields
+    scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
+
+    # mode=recurring fields
+    name: Optional[str] = Field(None, alias="name")
+    description: Optional[str] = Field(None, alias="description")
+    cron: Optional[str] = Field(None, alias="cron")
+    timezone: Optional[str] = Field(None, alias="timezone")
+    enabled: bool = Field(True, alias="enabled")
+    scope_type: Optional[Literal["personal", "global"]] = Field(
+        None, alias="scopeType"
+    )
+    policy: Optional[dict[str, Any]] = Field(None, alias="policy")
+
+    @model_validator(mode="after")
+    def _validate_mode_fields(self) -> "ScheduleParameters":
+        if self.mode == "once" and self.scheduled_for is None:
+            raise ValueError(
+                "scheduledFor is required when schedule mode is 'once'"
+            )
+        if self.mode == "recurring" and not self.cron:
+            raise ValueError(
+                "cron is required when schedule mode is 'recurring'"
+            )
+        return self
+
+
 class CreateExecutionRequest(BaseModel):
     """Request payload for starting a workflow execution."""
 
@@ -65,6 +99,7 @@ class CreateExecutionRequest(BaseModel):
         default_factory=dict, alias="initialParameters"
     )
     idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
+    schedule: Optional[ScheduleParameters] = Field(None, alias="schedule")
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> "CreateExecutionRequest":
@@ -326,6 +361,7 @@ class ExecutionModel(BaseModel):
     paused: Optional[bool] = Field(None, alias="paused")
     counts: Optional[ManifestNodeCountsModel] = Field(None, alias="counts")
     artifacts_count: int = Field(0, alias="artifactsCount")
+    scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
     created_at: datetime = Field(..., alias="createdAt")
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
@@ -368,6 +404,20 @@ class UpdateExecutionResponse(BaseModel):
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
     execution: ExecutionModel | None = Field(None, alias="execution")
     refresh: ExecutionRefreshEnvelope | None = Field(None, alias="refresh")
+
+
+class ScheduleCreatedResponse(BaseModel):
+    """Response returned when a recurring schedule is created from the create endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    scheduled: Literal[True] = Field(True, alias="scheduled")
+    definition_id: str = Field(..., alias="definitionId")
+    name: str = Field(..., alias="name")
+    cron: str = Field(..., alias="cron")
+    timezone: str = Field(..., alias="timezone")
+    next_run_at: datetime = Field(..., alias="nextRunAt")
+    redirect_path: str = Field(..., alias="redirectPath")
 
 
 class ExecutionListResponse(BaseModel):

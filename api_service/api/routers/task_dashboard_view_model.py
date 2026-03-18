@@ -274,6 +274,14 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "detailEnabled": True,
                 "actionsEnabled": True,
                 "submitEnabled": True,
+                "submitScheduleEnabled": bool(
+                    os.environ.get(
+                        "MOONMIND_SUBMIT_SCHEDULE_ENABLED", "false"
+                    )
+                    .strip()
+                    .lower()
+                    not in ("0", "false", "no", "off", "")
+                ),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
             "logTailingEnabled": bool(

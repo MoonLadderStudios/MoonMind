@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ from moonmind.schemas.temporal_models import (
     ExecutionModel,
     ExecutionRefreshEnvelope,
     PollIntegrationRequest,
+    ScheduleCreatedResponse,
+    ScheduleParameters,
     SignalExecutionRequest,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
@@ -56,6 +58,7 @@ router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
+    MoonMindWorkflowState.SCHEDULED: "queued",
     MoonMindWorkflowState.INITIALIZING: "queued",
     MoonMindWorkflowState.PLANNING: "running",
     MoonMindWorkflowState.EXECUTING: "running",
@@ -552,7 +555,8 @@ async def _create_execution_from_task_request(
     request: CreateJobRequest,
     service: TemporalExecutionService,
     user: User,
-) -> ExecutionModel:
+    session: Any = None,
+) -> ExecutionModel | ScheduleCreatedResponse:
     if str(request.type).strip().lower() != "task":
         raise _invalid_task_request(
             "Only task-shaped submit requests can be mapped to Temporal executions."
@@ -564,6 +568,32 @@ async def _create_execution_from_task_request(
         raise _invalid_task_request(
             "Task-shaped Temporal submit requests require payload.task."
         )
+
+    # --- Schedule extraction ---
+    schedule: ScheduleParameters | None = None
+    raw_schedule = getattr(request, "schedule", None) or payload.get("schedule")
+    if isinstance(raw_schedule, dict):
+        schedule = ScheduleParameters.model_validate(raw_schedule)
+    elif isinstance(raw_schedule, ScheduleParameters):
+        schedule = raw_schedule
+
+    if schedule is not None and schedule.mode == "recurring" and session is not None:
+        return await _handle_recurring_schedule(
+            schedule=schedule,
+            request_payload=payload,
+            user=user,
+            session=session,
+        )
+
+    start_delay: timedelta | None = None
+    scheduled_for_dt: datetime | None = None
+    if schedule is not None and schedule.mode == "once":
+        if schedule.scheduledFor is None:
+            raise _invalid_task_request(
+                "scheduledFor is required when schedule.mode is 'once'."
+            )
+        scheduled_for_dt = schedule.scheduledFor
+        start_delay = _compute_schedule_delay(scheduled_for_dt)
 
     required_capabilities = _coerce_string_list(
         payload.get("requiredCapabilities"),
@@ -650,6 +680,8 @@ async def _create_execution_from_task_request(
             repository=repository,
             integration=integration,
             summary=_derive_task_summary(task_payload, input_artifact_ref),
+            start_delay=start_delay,
+            scheduled_for=scheduled_for_dt,
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -763,12 +795,65 @@ async def _get_owned_execution(
     return record
 
 
-@router.post("", response_model=ExecutionModel, status_code=status.HTTP_201_CREATED)
+def _compute_schedule_delay(
+    scheduled_for: datetime,
+) -> timedelta:
+    """Return a positive timedelta from *now* to *scheduled_for*.
+
+    Raises ``HTTPException`` if the target is in the past or negative.
+    """
+    now = datetime.now(UTC)
+    delay = scheduled_for - now
+    if delay.total_seconds() < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "schedule_in_past",
+                "message": "scheduledFor must be a future datetime.",
+            },
+        )
+    return delay
+
+
+async def _handle_recurring_schedule(
+    *,
+    schedule: ScheduleParameters,
+    request_payload: dict[str, Any],
+    user: User,
+    session: Any,
+) -> ScheduleCreatedResponse:
+    """Delegate recurring schedule creation to RecurringTasksService."""
+    from api_service.services.recurring_tasks_service import RecurringTasksService
+
+    svc = RecurringTasksService(session)
+    definition = await svc.create_definition(
+        name=schedule.name or "Inline schedule",
+        description=None,
+        enabled=True,
+        schedule_type="cron",
+        cron=schedule.cron or "* * * * *",
+        timezone=schedule.timezone or "UTC",
+        scope_type="personal",
+        scope_ref=None,
+        owner_user_id=user.id,
+        target=request_payload,
+        policy=None,
+    )
+    return ScheduleCreatedResponse(
+        definitionId=str(definition.id),
+        cron=definition.cron,
+        nextRunAt=definition.next_run_at,
+        redirectPath=f"/schedules/{definition.id}",
+    )
+
+
+@router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
-) -> ExecutionModel:
+) -> ExecutionModel | ScheduleCreatedResponse:
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)
@@ -776,9 +861,34 @@ async def create_execution(
                 request=request,
                 service=service,
                 user=user,
+                session=session,
             )
 
         request = CreateExecutionRequest.model_validate(payload)
+
+        # --- Schedule routing ---
+        start_delay: timedelta | None = None
+        scheduled_for_dt: datetime | None = None
+        if request.schedule is not None:
+            if request.schedule.mode == "recurring":
+                return await _handle_recurring_schedule(
+                    schedule=request.schedule,
+                    request_payload=payload,
+                    user=user,
+                    session=session,
+                )
+            # mode == "once"
+            if request.schedule.scheduledFor is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "code": "invalid_execution_request",
+                        "message": "scheduledFor is required when schedule.mode is 'once'.",
+                    },
+                )
+            scheduled_for_dt = request.schedule.scheduledFor
+            start_delay = _compute_schedule_delay(scheduled_for_dt)
+
         record = await service.create_execution(
             workflow_type=request.workflow_type,
             owner_id=user.id,
@@ -790,6 +900,8 @@ async def create_execution(
             failure_policy=request.failure_policy,
             initial_parameters=request.initial_parameters,
             idempotency_key=request.idempotency_key,
+            start_delay=start_delay,
+            scheduled_for=scheduled_for_dt,
         )
     except ValidationError as exc:
         raise HTTPException(

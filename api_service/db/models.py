@@ -868,6 +868,7 @@ class TemporalWorkflowType(str, enum.Enum):
 class MoonMindWorkflowState(str, enum.Enum):
     """Domain lifecycle states exposed for dashboard filtering."""
 
+    SCHEDULED = "scheduled"
     INITIALIZING = "initializing"
     PLANNING = "planning"
     EXECUTING = "executing"
@@ -1211,6 +1212,9 @@ class TemporalExecutionRecord(Base):
         onupdate=func.now(),
     )
     closed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scheduled_for: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

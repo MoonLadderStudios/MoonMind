@@ -25,6 +25,7 @@ class CreateJobRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
     affinity_key: Optional[str] = Field(None, alias="affinityKey")
     max_attempts: int = Field(3, alias="maxAttempts", ge=1)
+    schedule: Optional[Any] = Field(None, alias="schedule")
 
 
 class UpdateQueuedJobRequest(BaseModel):

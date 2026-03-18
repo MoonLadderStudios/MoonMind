@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
@@ -99,8 +100,16 @@ class TemporalClientAdapter:
         input_args: Mapping[str, Any] | None = None,
         memo: Mapping[str, Any] | None = None,
         search_attributes: Mapping[str, Any] | None = None,
+        start_delay: timedelta | None = None,
     ) -> WorkflowStartResult:
-        """Start a new Temporal workflow."""
+        """Start a new Temporal workflow.
+
+        Args:
+            start_delay: Optional delay before the workflow is dispatched
+                to a worker. The workflow is created immediately (visible in
+                Visibility) but task dispatch is deferred by the specified
+                duration.
+        """
         client = await self.get_client()
 
         task_queue = self._get_task_queue()
@@ -114,14 +123,20 @@ class TemporalClientAdapter:
                 for k, v in search_attributes.items()
             }
 
+        start_kwargs: dict[str, Any] = {
+            "id": workflow_id,
+            "task_queue": task_queue,
+            "memo": memo,
+            "search_attributes": formatted_search_attributes,
+        }
+        if start_delay is not None:
+            start_kwargs["start_delay"] = start_delay
+
         try:
             handle = await client.start_workflow(
                 workflow_type,
                 *args,
-                id=workflow_id,
-                task_queue=task_queue,
-                memo=memo,
-                search_attributes=formatted_search_attributes,
+                **start_kwargs,
             )
             return WorkflowStartResult(
                 workflow_id=handle.id,
