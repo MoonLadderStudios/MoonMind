@@ -649,3 +649,275 @@ async def test_start_manifest_child_runs_preserves_lineage_and_request_cancel_po
             assert child.parameters["manifestIngestWorkflowId"] == parent.workflow_id
             assert child.parameters["nodeId"] == nodes[0].node_id
             assert child.parameters["parentClosePolicy"] == "REQUEST_CANCEL"
+
+
+def test_apply_manifest_node_update_append_adds_new_nodes() -> None:
+    """T008 DOC-REQ-005: APPEND mode adds new nodes without modifying existing ones."""
+    updated = _apply_manifest_node_update(
+        {
+            "node-existing": {"nodeId": "node-existing", "state": "running"},
+        },
+        updated_nodes=[
+            {"nodeId": "node-new", "state": "ready"},
+        ],
+        mode="APPEND",
+    )
+
+    assert "node-existing" in updated
+    assert updated["node-existing"]["state"] == "running"
+    assert "node-new" in updated
+    assert updated["node-new"]["state"] == "ready"
+
+
+def test_apply_manifest_node_update_append_rejects_duplicate_node_ids() -> None:
+    """T008 DOC-REQ-005: APPEND mode rejects duplicate node IDs."""
+    with pytest.raises(
+        ManifestIngestValidationError,
+        match="APPEND updates cannot redefine existing node IDs",
+    ):
+        _apply_manifest_node_update(
+            {
+                "node-a": {"nodeId": "node-a", "state": "running"},
+            },
+            updated_nodes=[
+                {"nodeId": "node-a", "state": "ready"},
+            ],
+            mode="APPEND",
+        )
+
+
+def test_execution_policy_from_parameters_uses_defaults_for_missing_fields() -> None:
+    """T006 DOC-REQ-008: Execution policy only allows maxConcurrency and failurePolicy."""
+    from moonmind.workflows.temporal.manifest_ingest import (
+        _execution_policy_from_parameters,
+    )
+
+    policy = _execution_policy_from_parameters({})
+    assert policy.max_concurrency == DEFAULT_MANIFEST_MAX_CONCURRENCY
+    assert policy.failure_policy == "fail_fast"
+
+    policy_override = _execution_policy_from_parameters(
+        {"executionPolicy": {"maxConcurrency": 10, "failurePolicy": "continue_and_report"}}
+    )
+    assert policy_override.max_concurrency == 10
+    assert policy_override.failure_policy == "continue_and_report"
+
+
+def test_compile_manifest_plan_node_ids_differ_for_different_content() -> None:
+    """T004 DOC-REQ-002: Different manifest content produces different node IDs."""
+    different_yaml = """
+version: "v0"
+metadata:
+  name: "other"
+embeddings:
+  provider: "google"
+vectorStore:
+  type: "qdrant"
+dataSources:
+  - id: "other-source"
+    type: "SimpleDirectoryReader"
+run:
+  dryRun: false
+""".strip()
+    requested_by = {"type": "user", "id": "user-1"}
+    execution_policy = {"failurePolicy": "fail_fast", "maxConcurrency": 3}
+
+    first = compile_manifest_plan(
+        manifest_ref="art_manifest_1",
+        manifest_payload=MANIFEST_YAML,
+        action="run",
+        options={},
+        requested_by=requested_by,
+        execution_policy=execution_policy,
+    )
+    second = compile_manifest_plan(
+        manifest_ref="art_manifest_2",
+        manifest_payload=different_yaml,
+        action="run",
+        options={},
+        requested_by=requested_by,
+        execution_policy=execution_policy,
+    )
+
+    assert first.manifest_digest != second.manifest_digest
+    first_ids = {node.node_id for node in first.nodes}
+    second_ids = {node.node_id for node in second.nodes}
+    assert first_ids != second_ids
+
+
+def test_manifest_workflow_fail_fast_cancels_remaining_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T013 DOC-REQ-009: fail_fast cancels pending/ready nodes on first failure."""
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-ff",
+            run_id="run-ff",
+            search_attributes={"mm_owner_id": "user-1"},
+        ),
+    )
+
+    async def fake_execute_activity(name: str, *, args, **_kwargs):
+        if name == "manifest_read":
+            return MANIFEST_YAML
+        if name == "manifest_compile":
+            return {
+                "plan_ref": "art_plan_1",
+                "nodes": [
+                    {
+                        "nodeId": "node-a",
+                        "title": "A",
+                        "sourceType": "github",
+                        "sourceId": "src-a",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": [],
+                    },
+                    {
+                        "nodeId": "node-b",
+                        "title": "B",
+                        "sourceType": "github",
+                        "sourceId": "src-b",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": ["node-a"],
+                    },
+                ],
+            }
+        if name == "manifest_write_summary":
+            return ("art_summary_1", "art_index_1")
+        raise AssertionError(f"unexpected activity {name}")
+
+    async def fake_execute_child_workflow(_name: str, *, args, id, **_kwargs):
+        if "node-a" in id:
+            raise RuntimeError("node-a failed")
+        return {"output_artifact_ref": "art_result_b"}
+
+    async def fake_wait_condition(_predicate):
+        return None
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+    result = asyncio.run(
+        workflow_instance.run(
+            {
+                "manifestArtifactRef": "art_manifest_1",
+                "requestedBy": {"type": "user", "id": "user-1"},
+                "executionPolicy": {
+                    "failurePolicy": "fail_fast",
+                    "maxConcurrency": 50,
+                },
+            }
+        )
+    )
+
+    # Workflow should report failure status
+    assert result["status"] == "failed"
+    # node-a failed, node-b (dependent on node-a) should be canceled
+    assert workflow_instance._nodes["node-a"]["state"] == "failed"
+    assert workflow_instance._nodes["node-b"]["state"] == "canceled"
+
+
+
+def test_manifest_workflow_dependency_ordering_blocks_dependents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T015 DOC-REQ-009: Nodes with unmet dependencies do not start."""
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-dep",
+            run_id="run-dep",
+            search_attributes={"mm_owner_id": "user-1"},
+        ),
+    )
+
+    child_execution_order: list[str] = []
+
+    async def fake_execute_activity(name: str, *, args, **_kwargs):
+        if name == "manifest_read":
+            return MANIFEST_YAML
+        if name == "manifest_compile":
+            return {
+                "plan_ref": "art_plan_dep",
+                "nodes": [
+                    {
+                        "nodeId": "node-a",
+                        "title": "A",
+                        "sourceType": "github",
+                        "sourceId": "src-a",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": [],
+                    },
+                    {
+                        "nodeId": "node-b",
+                        "title": "B (depends on A)",
+                        "sourceType": "github",
+                        "sourceId": "src-b",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": ["node-a"],
+                    },
+                ],
+            }
+        if name == "manifest_write_summary":
+            return ("art_summary_dep", "art_index_dep")
+        raise AssertionError(f"unexpected activity {name}")
+
+    async def fake_execute_child_workflow(_name: str, *, args, id, **_kwargs):
+        node_id = next(
+            (part for part in id.split(":") if part.startswith("node-")), id
+        )
+        child_execution_order.append(node_id)
+        return {"output_artifact_ref": f"art_result_{node_id}"}
+
+    async def fake_wait_condition(_predicate):
+        return None
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+    result = asyncio.run(
+        workflow_instance.run(
+            {
+                "manifestArtifactRef": "art_manifest_dep",
+                "requestedBy": {"type": "user", "id": "user-1"},
+            }
+        )
+    )
+
+    assert result["status"] == "succeeded"
+    assert child_execution_order == ["node-a", "node-b"]
