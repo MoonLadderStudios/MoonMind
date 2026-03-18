@@ -276,9 +276,10 @@ def _serialize_execution(
     )
 
     params = dict(getattr(record, "parameters", None) or {})
-    target_runtime = str(params.get("targetRuntime") or "").strip() or None
-    param_model = str(params.get("model") or "").strip() or None
-    param_effort = str(params.get("effort") or "").strip() or None
+    target_runtime, param_model, param_effort = [
+        str(params.get(key) or "").strip() or None
+        for key in ["targetRuntime", "model", "effort"]
+    ]
 
     return ExecutionModel(
         task_id=record.workflow_id,
