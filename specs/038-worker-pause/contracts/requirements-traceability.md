@@ -1,16 +1,14 @@
-# Requirements Traceability Matrix: Worker Pause System
+# Requirements Traceability: Worker Pause System (038)
 
-**Feature**: `034-worker-pause`  
-**Source**: `docs/WorkerPauseSystem.md`
-
-| DOC-REQ ID | Mapped FR(s) | Planned Implementation Surface | Validation Strategy |
-|------------|--------------|--------------------------------|--------------------|
-| `DOC-REQ-001` | `FR-001` | New SQLAlchemy model + migration for `system_worker_pause_state`; repository helpers in `moonmind/workflows/agent_queue/repositories.py` | Migration tests ensure defaults + version increments; repository unit tests cover singleton fetch/update semantics |
-| `DOC-REQ-002` | `FR-002` | `SystemControlEvent` model + append helper + audit API response in `GET /api/system/worker-pause` | Repository tests assert events written per toggle; API tests verify event count increments |
-| `DOC-REQ-003` | `FR-003`, `FR-004`, `FR-010` | FastAPI router `api_service/api/routers/system_worker_pause.py`, new Pydantic schemas, integration into dashboard + MCP | API unit tests hit GET/POST, ensuring metrics, validation, and error handling; dashboard Cypress/unit tests stub endpoints |
-| `DOC-REQ-004` | `FR-005`, `FR-010` | `AgentQueueService.claim_job` guard, `ClaimJobResponse` schema updates, queue service tests | Service tests verify `_requeue_expired_jobs` not invoked when paused; REST tests assert `system` block + HTTP 200 |
-| `DOC-REQ-005` | `FR-006` | `JobModel` / heartbeat response extended with `system` metadata, service packaging that metadata | API tests simulate heartbeat to ensure `system` block appears; worker unit tests confirm new payload shape respected |
-| `DOC-REQ-006` | `FR-007` | `QueueApiClient` + `CodexWorker` loop updates to read `system` metadata, adjust logging/backoff | Worker unit tests assert pause-aware sleep/backoff; integration test ensures logs emitted once per version |
-| `DOC-REQ-007` | `FR-008` | `CodexWorker` safe-checkpoint pause wiring triggered by quiesce mode metadata; future worker runtime hooks share same event | Worker tests cover `_wait_if_paused` triggered by heartbeat `system.mode="quiesce"` |
-| `DOC-REQ-008` | `FR-009` | Dashboard banner + controls in `api_service/static/task_dashboard/dashboard.js` + view model; new `/api/system/worker-pause` fetchers | Frontend Jest/unit tests (or jsdom) for new components; manual quickstart ensures banner + controls operate |
-| `DOC-REQ-009` | `FR-003`, `FR-006` | Shared schema `SystemWorkerPauseStatusModel` reused by REST and `moonmind/mcp/tool_registry.py` results | MCP router tests confirm `queue.claim` and `queue.heartbeat` responses now carry `system` metadata |
+| DOC-REQ | Spec FR | Plan Phase | Implementation Surface | Validation Strategy |
+|---------|---------|------------|----------------------|---------------------|
+| DOC-REQ-001 | FR-001, FR-004, FR-005 | Phase 3-4 | `system_worker_pause.py` (router), `main.py` (guard), `service.py` | Unit tests: pause/resume toggle + API guard |
+| DOC-REQ-002 | FR-006 | Phase 1 | `temporal_client.py` (drain metrics), docs (`quickstart.md`) | Unit test: Visibility query returns drain metrics |
+| DOC-REQ-003 | FR-007, FR-010 | Phase 1-3 | `temporal_client.py` (batch signal), `service.py`, `system_worker_pause.py` | Integration test: signal delivery → workflow pause |
+| DOC-REQ-004 | FR-001 | Existing | `models.py` (DB model), migration | Existing unit tests |
+| DOC-REQ-005 | FR-005 | Phase 4 | `main.py` (guard before `start_workflow`) | Unit test: POST /api/workflows returns 503 when paused |
+| DOC-REQ-006 | FR-009 | Phase 5 (future) | Dashboard JavaScript (frontend) | Manual verification / browser test |
+| DOC-REQ-007 | FR-003, FR-004 | Phase 2-3 | `system_worker_pause.py`, `service.py` | Unit tests: GET/POST endpoints |
+| DOC-REQ-008 | FR-007 | Existing | `run.py` (`@workflow.signal pause/resume`, `wait_condition`) | Integration test: signal → workflow blocks |
+| DOC-REQ-009 | FR-008 | Phase 1 | `temporal_client.py` (heartbeat checkpoint helper) | Unit test: checkpoint data yielded |
+| DOC-REQ-010 | FR-002 | Existing | `service.py` (audit event insertion) | Existing unit tests |

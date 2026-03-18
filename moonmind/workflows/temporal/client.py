@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -23,6 +24,17 @@ if TYPE_CHECKING:
     from moonmind.workflows.temporal.service import TemporalExecutionService
 
 MANIFEST_CHILD_PARENT_CLOSE_POLICY = "REQUEST_CANCEL"
+
+# All MoonMind-owned Temporal task queues.  Used to scope Visibility queries
+# so that drain metrics and batch signals only target our own workflows.
+_MOONMIND_TASK_QUEUES: tuple[str, ...] = (
+    "mm.workflow",
+    "mm.activity.artifacts",
+    "mm.activity.llm",
+    "mm.activity.sandbox",
+    "mm.activity.integrations",
+    "mm.activity.agent_runtime",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +167,121 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(workflow_id)
         return await handle.describe()
 
+    # --- Worker Pause: Temporal Visibility drain metrics (DOC-REQ-002) ---
+
+    async def get_drain_metrics(
+        self,
+        *,
+        task_queues: Sequence[str] | None = None,
+    ) -> dict[str, int]:
+        """Query Temporal Visibility for running workflow counts.
+
+        Returns a dict with ``running``, ``queued`` (pending), and ``stale_running``
+        counts derived from ``ListWorkflowExecutions`` with
+        ``ExecutionStatus="Running"``.
+
+        ``task_queues``: optional list of task queues to filter.  When omitted the
+        ``task_queues``: optional list of task queues to filter.  Defaults to
+        ``_MOONMIND_TASK_QUEUES`` so queries are scoped to MoonMind workflows.
+        """
+        client = await self.get_client()
+
+        if task_queues is None:
+            task_queues = _MOONMIND_TASK_QUEUES
+
+        visibility_filter = 'ExecutionStatus="Running"'
+        if task_queues:
+            quoted = ", ".join(f'"{tq}"' for tq in task_queues)
+            visibility_filter += f" AND TaskQueue IN ({quoted})"
+
+        count_result = await client.count_workflows(query=visibility_filter)
+        running_count = count_result.count
+
+        return {
+            "running": running_count,
+            "queued": 0,  # Temporal doesn't distinguish "queued" from "running"
+            "stale_running": 0,
+        }
+
+    # --- Worker Pause: Batch Signals for Quiesce mode (DOC-REQ-003) ---
+
+    async def send_batch_pause_signal(
+        self,
+        *,
+        task_queues: Sequence[str] | None = None,
+    ) -> int:
+        """Send a ``pause`` signal to all running workflows (Quiesce mode).
+
+        Returns the number of workflows signaled.
+        """
+        return await self._send_signal_to_running_workflows(
+            signal_name="pause",
+            task_queues=task_queues,
+        )
+
+    async def send_batch_resume_signal(
+        self,
+        *,
+        task_queues: Sequence[str] | None = None,
+    ) -> int:
+        """Send a ``resume`` signal to all running workflows.
+
+        Returns the number of workflows signaled.
+        """
+        return await self._send_signal_to_running_workflows(
+            signal_name="resume",
+            task_queues=task_queues,
+        )
+
+    async def _send_signal_to_running_workflows(
+        self,
+        *,
+        signal_name: str,
+        task_queues: Sequence[str] | None = None,
+    ) -> int:
+        """Iterate running workflows via Visibility and signal each one.
+
+        This approach works with all Temporal server versions.  When the
+        Temporal Batch Operations API becomes available in the Python SDK,
+        this can be replaced with a single ``StartBatchOperation`` call.
+        """
+        client = await self.get_client()
+
+        if task_queues is None:
+            task_queues = _MOONMIND_TASK_QUEUES
+
+        visibility_filter = 'ExecutionStatus="Running"'
+        if task_queues:
+            quoted = ", ".join(f'"{tq}"' for tq in task_queues)
+            visibility_filter += f" AND TaskQueue IN ({quoted})"
+
+        signaled = 0
+        _log = logging.getLogger(__name__)
+        _sem = asyncio.Semaphore(50)
+
+        async def _signal_one(wf_id: str) -> bool:
+            async with _sem:
+                try:
+                    handle = client.get_workflow_handle(wf_id)
+                    await handle.signal(signal_name)
+                    return True
+                except Exception:
+                    _log.warning(
+                        "Failed to signal workflow %s with %s",
+                        wf_id,
+                        signal_name,
+                        exc_info=True,
+                    )
+                    return False
+
+        tasks: list[asyncio.Task[bool]] = []
+        async for execution in client.list_workflows(query=visibility_filter):
+            tasks.append(asyncio.create_task(_signal_one(execution.id)))
+
+        results = await asyncio.gather(*tasks)
+        signaled = sum(1 for ok in results if ok)
+        return signaled
+
 
 class TemporalExecutionCreatorProtocol(Protocol):
     """Protocol for the execution service used by manifest child scheduling."""
@@ -240,6 +367,7 @@ async def start_manifest_child_runs(
             idempotency_key=(
                 f"{parent_execution.workflow_id}:{parent_execution.run_id}:{node.node_id}"
             ),
+            _skip_pause_guard=True,
         )
         starts.append(
             ManifestChildWorkflowStart(

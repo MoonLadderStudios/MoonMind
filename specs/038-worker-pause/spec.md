@@ -1,134 +1,121 @@
-# Feature Specification: Worker Pause System
+# Feature Specification: Worker Pause System (Temporal Era)
 
-**Feature Branch**: `034-worker-pause`  
+**Feature Branch**: `038-worker-pause`  
 **Created**: 2026-02-20  
+**Updated**: 2026-03-17  
 **Status**: Draft  
-**Input**: User description: "Implement the Worker Pause System described in docs/WorkerPauseSystem.md"
+**Input**: User description: "Update 038-worker-pause spec and fully implement docs/Temporal/WorkerPauseSystem.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."  
+**Implementation Intent**: Production runtime code changes and companion validation tests are mandatory deliverables for this feature.  
+**Source Document**: docs/Temporal/WorkerPauseSystem.md (last updated 2026-03-17)
 
-MoonMind operators need a deterministic, auditable switch that halts new queue work without disturbing queued jobs so infrastructure upgrades can run safely. The Worker Pause System introduces a persistent pause state, API guardrails, worker runtime changes, and dashboard controls aligned with the reference design in `docs/WorkerPauseSystem.md`.
+MoonMind operators need a single, auditable control that pauses all workflow execution so maintenance windows (image rebuilds, schema migrations, credential rotations) can occur safely. With the migration to Temporal, we rely on Temporal's native primitives — **graceful worker shutdown** for Drain and **Batch Signals** for Quiesce — rather than legacy REST API claim blocking.
 
 ## Source Document Requirements
 
-| ID | Source | Requirement |
+| ID | Source Reference | Requirement Summary |
 | --- | --- | --- |
-| DOC-REQ-001 | docs/WorkerPauseSystem.md §5.1-§6 | Provide a singleton `system_worker_pause_state` record (id=1) storing `paused`, `mode`, `reason`, operator metadata, timestamps, and a monotonic `version` that serves as the source of truth for whether claims are allowed. |
-| DOC-REQ-002 | §6.2, §12 | Append every pause/resume action to `system_control_events` with `control="worker_pause"`, action, mode, reason, actor, and timestamp for auditing. |
-| DOC-REQ-003 | §2, §7.1 | Expose operator endpoints `GET /api/system/worker-pause` and `POST /api/system/worker-pause` that reveal the pause state, require a reason, and compute drain metrics (`queued`, `running`, `staleRunning`, `isDrained`). |
-| DOC-REQ-004 | §2, §5.1-§5.3, §7.2, §9 | When paused, `POST /api/queue/jobs/claim` must return `{job:null, system:{...}}` and **skip** repository claim logic (no `_requeue_expired_jobs`) so queue contents stay untouched. |
-| DOC-REQ-005 | §7.2 | `POST /api/queue/jobs/{jobId}/heartbeat` responses must remain backward compatible but add a `system` object telling running jobs about pause/quiesce status. |
-| DOC-REQ-006 | §4-§8.1 | All worker runtimes must treat `workersPaused=true` claim responses as an idle loop with pause-aware backoff and per-version logging (no crashes or job failures). |
-| DOC-REQ-007 | §4.1, §8.2 | Quiesce mode instructs workers to pause at safe checkpoints (stage boundaries, task steps, or tool invocations) while continuing to heartbeat so leases remain valid. |
-| DOC-REQ-008 | §5, §10 | The dashboard must show a global Workers badge, allow Pause/Resume with mode + reason input, and display drain progress (running vs queued counts, safe-to-upgrade indicator). |
-| DOC-REQ-009 | §7.3 | MCP tools (`queue.claim`, `queue.heartbeat`) must propagate the same pause metadata as REST APIs to keep CLI integrations consistent. |
+| DOC-REQ-001 | §2 Goals | Provide an operator-driven pause/resume control that blocks new work across all Managed Agents and Orchestrator processes while keeping queued Temporal workflows untouched. |
+| DOC-REQ-002 | §3.1 Drain Mode | Support Drain mode via `worker.shutdown()` which blocks new Activity claims immediately but lets currently executing Activities finish or hit their heartbeat timeout. |
+| DOC-REQ-003 | §3.2 Quiesce Mode | Support Quiesce mode via Temporal Batch Signals sent to all running Workflows. Workflows register a signal handler and block on `workflow.wait_condition()` until resumed. |
+| DOC-REQ-004 | §4.1 System Pause State | Persist a singleton DB record that controls whether Mission Control UI accepts new workflow submissions via the `POST /api/workflows` boundary. This does NOT govern Temporal workers directly. |
+| DOC-REQ-005 | §4.1 Mission Control API Guard | `POST /api/workflows` returns "system paused" metadata and does not trigger new Temporal Workflows while the DB singleton is paused. |
+| DOC-REQ-006 | §4.1 Dashboard UX | Dashboard shows a global banner, Pause/Resume controls, and drain progress indicator using Temporal Visibility APIs (`ExecutionStatus="Running"`). |
+| DOC-REQ-007 | §5.1 API Surface | Expose `GET /api/system/worker-pause` (state + drain metrics from Temporal) and `POST /api/system/worker-pause` (action, mode, reason). |
+| DOC-REQ-008 | §6.1 Quiesce Workflow Impl | Workflows register `pause_signal_handler(paused: bool)`, maintain `self.is_paused`, and call `await workflow.wait_condition(lambda: not self.is_paused)` before each Activity/Agent Step. |
+| DOC-REQ-009 | §6.1 Activity Checkpoints | For long-running LLM activities, inject a Heartbeat interceptor that yields checkpoint data back to Temporal so progress isn't lost. |
+| DOC-REQ-010 | §8 Security | Only authenticated operators/admins can call pause endpoints. All actions audited in `system_control_events`. |
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Pause for upgrades (Priority: P1)
+### User Story 1 — Pause for Infrastructure Upgrades (Priority: P1)
 
-MoonMind operators pause all workers in Drain mode to perform an orchestrator upgrade without new jobs starting.
+An operator needs to halt all new Temporal Workflow execution before rolling out image rebuilds or schema migrations. They use the Dashboard or API to set Drain mode, then gracefully shut down worker containers.
 
-**Why this priority**: The pause/drain workflow prevents in-flight state corruption during deployments and is the primary reason the system exists.
+**Why this priority**: Without a reliable pause, upgrades can corrupt workflow state or trigger unexpected retries.
 
-**Independent Test**: Call `POST /api/system/worker-pause` (Drain) and verify that subsequent claim attempts immediately return `job=null` with pause metadata while running jobs complete naturally and audit entries are recorded.
+**Independent Test**: Call `POST /api/system/worker-pause` with `action: "pause", mode: "drain"`, then verify that `POST /api/workflows` returns a "system paused" response and Dashboard banner flips to "Paused (Drain)". Gracefully stop workers with `docker compose stop temporal-worker-sandbox` and confirm Temporal Visibility shows 0 running workflows.
 
 **Acceptance Scenarios**:
 
-1. **Given** workers are running jobs, **When** an operator pauses in Drain mode, **Then** the pause state is persisted, claim endpoints return `workersPaused=true`, and no additional jobs begin.
-2. **Given** the system is paused, **When** the running job count reaches zero, **Then** `GET /api/system/worker-pause` reports `isDrained=true`, signalling it is safe to restart workers.
+1. **Given** active workers processing workflows, **When** the operator pauses in Drain mode, **Then** the API guard blocks new submissions, workers gracefully shut down via `worker.shutdown()`, and inflight Activities complete naturally.
+2. **Given** the system is paused, **When** Temporal Visibility reports 0 running workflows on the target Task Queues, **Then** `GET /api/system/worker-pause` reports `isDrained=true`, signalling it is safe to restart workers.
+3. **Given** the operator resumes the system, **When** workers reconnect to Temporal, **Then** the Task Queue resumes processing and the Dashboard banner restores to "Running".
 
 ---
 
-### User Story 2 - Resume after maintenance (Priority: P2)
+### User Story 2 — Monitor Drain Progress and Resume Safely (Priority: P2)
 
-Operators need to resume normal throughput quickly after maintenance, with assurance that the queue remained intact.
+Operators need confidence that maintenance can proceed without disrupting workflows. They monitor running/queued counts from Temporal Visibility and an `isDrained` indicator.
 
-**Why this priority**: Fast recovery keeps SLAs stable and proves the pause workflow does not lose or reorder queued work.
+**Why this priority**: Drain visibility determines when maintenance can proceed.
 
-**Independent Test**: Resume via `POST /api/system/worker-pause` with `action="resume"` and confirm claims/repository flows reactivate, audit events include the resume, and dashboard badge swaps back to Running.
+**Independent Test**: Pause the system, poll `GET /api/system/worker-pause` until `isDrained=true`, perform worker restarts, and verify workflows resume cleanly.
 
 **Acceptance Scenarios**:
 
-1. **Given** workers are paused with queued jobs, **When** an operator resumes, **Then** claims immediately start handing out queued jobs without dead-lettering side effects.
-2. **Given** multiple pauses occur in one day, **When** the operator checks system control events, **Then** every pause/resume pair is logged with timestamp, actor, reason, and mode for compliance.
+1. **Given** a pause is active, **When** the operator polls the pause endpoint, **Then** the response includes `queuedCount`, `runningCount`, and `isDrained` derived from Temporal Visibility queries.
+2. **Given** `isDrained=true`, **When** the operator resumes and restarts workers, **Then** queued workflows are picked up by the new workers as expected.
+3. **Given** multiple pause/resume cycles occur, **When** the operator reviews `system_control_events`, **Then** every action is logged with timestamp, actor, reason, and mode.
 
 ---
 
-### User Story 3 - Quiesce running jobs (Priority: P3)
+### User Story 3 — Quiesce Running Workflows at Safe Boundaries (Priority: P3)
 
-During a short maintenance window, operators pause in Quiesce mode so workers checkpoint and wait without terminating processes.
+During a short maintenance window, operators request Quiesce mode so running workflows pause at safe Activity boundaries using Temporal Signals, without losing long-running context.
 
-**Why this priority**: Quiesce protects long-running or stateful tool executions when restarts are not desired, fulfilling the optional goal outlined in the design.
+**Why this priority**: Quiesce reduces disruption during brief maintenance without forcing workflows to restart from scratch.
 
-**Independent Test**: Enable Quiesce, monitor heartbeat responses returning `system.mode="quiesce"`, and assert that workers pause between stage or step boundaries while heartbeating to prevent lease expiry.
+**Independent Test**: Send a Quiesce pause, confirm that running workflows receive the Signal, block at `workflow.wait_condition()`, and resume execution after the system is unpaused.
 
 **Acceptance Scenarios**:
 
-1. **Given** Quiesce is active, **When** a worker completes a stage boundary, **Then** it pauses before starting the next stage yet continues heartbeating.
-2. **Given** an operator resumes from Quiesce, **When** workers receive the updated version via heartbeat, **Then** they resume progression within one poll interval.
+1. **Given** the operator requests `Pause (Quiesce)`, **When** the system uses the Temporal Batch Operations API to Signal all running workflows, **Then** each workflow's `pause_signal_handler` sets `is_paused=True` and the workflow blocks before the next Activity.
+2. **Given** a workflow has paused at its `wait_condition`, **When** the operator resumes the system and a resume Signal is sent, **Then** the workflow's `is_paused` clears and execution continues from the blocked point without duplicating work.
+3. **Given** a long-running LLM Activity receives a quiesce Signal, **When** the Activity supports heartbeat checkpoints, **Then** checkpoint data is yielded to Temporal history before the Activity returns early, allowing the workflow to suspend safely.
 
 ### Edge Cases
 
-- Pause requested while the system is already paused should update reason/mode only if it represents a meaningful change and must still append an audit entry so intent is traceable.
-- Resume requested when not paused should be rejected with a clear error to avoid accidental toggles.
-- Network partitions during pause must default workers to safe idle behavior once they eventually receive pause metadata, and stale running jobs must surface in `staleRunning` counts to highlight risk.
-- Heartbeat failures in Quiesce must not drop leases silently; workers should alert operators if checkpointing exceeds a configurable timeout.
+- Pause requested while the system is already paused should update reason/mode only if it represents a meaningful change and must still append an audit entry.
+- Resume requested when not paused should be rejected with a clear error.
+- Workers that reconnect after a pause read the current state from Temporal and the API and immediately enter the correct behavior.
+- Temporal Batch Signal failures should be retried; partial signal delivery must be detectable via Visibility queries.
+- Network partitions during pause must default workers to safe idle behavior. Temporal's durable execution model inherently handles this for Quiesced workflows since the `wait_condition` is persisted in workflow history.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001 (DOC-REQ-001)**: Persist a singleton `system_worker_pause_state` row with columns defined in the document, enforce `id=1`, increment `version` on every change, and expose helper queries so API handlers can atomically read and update the record.
-- **FR-002 (DOC-REQ-002)**: Insert an audit `system_control_events` row for every pause/resume request capturing action, mode, reason, actor (if available), and timestamps to satisfy compliance reviews.
-- **FR-003 (DOC-REQ-003, DOC-REQ-009)**: Implement `GET /api/system/worker-pause` returning pause metadata plus queue metrics (`queued`, `running`, `staleRunning`, `isDrained`) and ensure both REST and MCP transports expose the same schema.
-- **FR-004 (DOC-REQ-003)**: Implement `POST /api/system/worker-pause` that validates `action`, `mode`, and `reason`, flips pause state, records requester metadata, and rejects illegal transitions (e.g., resume while already running).
-- **FR-005 (DOC-REQ-004)**: Short-circuit `POST /api/queue/jobs/claim` when `paused=true` so repository claim logic and `_requeue_expired_jobs` are skipped, returning `{job:null, system:{workersPaused,...}}` immediately.
-- **FR-006 (DOC-REQ-005, DOC-REQ-009)**: Extend claim and heartbeat responses (including MCP equivalents) with a `system` object containing `workersPaused`, `mode`, `reason`, `version`, and timestamps without breaking existing consumers.
-- **FR-007 (DOC-REQ-006)**: Update worker runtimes to treat paused responses as non-fatal idle loops by backing off with `pause_poll_interval_ms` (default to existing poll interval), logging once per version, and keeping telemetry noise low.
-- **FR-008 (DOC-REQ-007)**: Implement Quiesce checkpoint handlers so workers pause between wrapper stages, task steps, or tool invocations while heartbeating to hold leases, and expose configuration for safe checkpoint detection.
-- **FR-009 (DOC-REQ-008)**: Update the dashboard to show a global Workers badge, Pause/Resume controls (mode selector + reason), and a drain progress card with queued/running counts plus “Safe to upgrade” when running count hits zero.
-- **FR-010 (DOC-REQ-003, DOC-REQ-004)**: Compute drain status server-side, surface `isDrained` and `staleRunning` counts, and document the recommended Pause → Drain → Upgrade → Resume playbook so operators know when to restart workers.
-
-### Non-Functional Requirements
-
-- **NFR-001 (DOC-REQ-004, DOC-REQ-005)**: Claim and heartbeat endpoints must continue responding in <200 ms while paused by short-circuiting the repository path and caching the singleton pause row in memory so workers never assume the queue is unavailable.
-- **NFR-002 (DOC-REQ-001, DOC-REQ-002)**: Pause state transitions are atomic and monotonic—the API must perform `SELECT ... FOR UPDATE` writes, bump `version` exactly once per change, and emit structured audit/StatsD events so operators can correlate dashboard badges with backend changes.
-- **NFR-003 (DOC-REQ-006, DOC-REQ-007)**: Worker runtimes must log a single structured line per pause `version`, respect `pause_poll_interval_ms`, and surface a warning if Quiesce checkpoints exceed the configured timeout to avoid noisy logs during long pauses.
-- **NFR-004 (DOC-REQ-008, DOC-REQ-009)**: Dashboard and MCP clients treat the pause metadata as an additive schema—existing consumers that ignore `system` blocks keep working, and UI components show degraded banners instead of crashing when the pause API times out.
+- **FR-001 (DOC-REQ-004)**: Persist a singleton `system_worker_pause_state` DB record (id=1) storing `paused`, `mode`, `reason`, operator metadata, timestamps, and a monotonic `version`. This record controls whether the Mission Control API accepts new workflow submissions.
+- **FR-002 (DOC-REQ-010)**: Insert an audit `system_control_events` row for every pause/resume request capturing action, mode, reason, actor (when available), and timestamps.
+- **FR-003 (DOC-REQ-007)**: Implement `GET /api/system/worker-pause` returning pause state plus drain metrics derived from Temporal Visibility queries (`queuedCount`, `runningCount`, `isDrained`).
+- **FR-004 (DOC-REQ-007)**: Implement `POST /api/system/worker-pause` that validates `action`, `mode`, and `reason`, flips the DB singleton, records audit events, and rejects illegal transitions.
+- **FR-005 (DOC-REQ-005)**: Guard `POST /api/workflows` (and any other task ingestion endpoints) so that when `paused=true`, no new Temporal Workflows are started and a "system paused" response is returned.
+- **FR-006 (DOC-REQ-002)**: Document and support Drain mode via Temporal's native `worker.shutdown()`. The API pause action sets the DB flag; operators send graceful shutdown signals (SIGINT/SIGTERM) to Temporal worker containers.
+- **FR-007 (DOC-REQ-003, DOC-REQ-008)**: Implement Quiesce mode using Temporal Batch Signals. The API sends a `pause` Signal to all running Workflows. Each workflow registers a `pause_signal_handler` that sets an internal `is_paused` flag. Before each Activity, workflows call `await workflow.wait_condition(lambda: not self.is_paused)`.
+- **FR-008 (DOC-REQ-009)**: For long-running LLM Activities, support heartbeat-based checkpointing so that progress is yielded back to Temporal history when an Activity is asked to return early during Quiesce.
+- **FR-009 (DOC-REQ-006)**: Dashboard displays a global "Workers" banner with Pause/Resume controls (mode selector + reason), drain progress from Temporal Visibility, and a "Safe to upgrade" indicator when `isDrained=true`.
+- **FR-010 (DOC-REQ-003)**: On resume, the API sends a `resume` Signal (via Temporal Batch Operations) to all paused workflows so they clear `is_paused` and continue execution.
 
 ### Key Entities *(include if feature involves data)*
 
-- **SystemWorkerPauseState**: Singleton record cached in API layer; fields `paused`, `mode`, `reason`, `requested_by_user_id`, `requested_at`, `updated_at`, and `version` drive claim guards and UI badges.
-- **SystemControlEvent**: Append-only audit row keyed by UUID capturing `control`, `action`, `mode`, `reason`, `actor_user_id`, and `created_at` for every pause/resume.
-- **SystemPauseMetrics**: Aggregated counts `queued`, `running`, `staleRunning`, plus derived `isDrained` computed from repository queries and exposed via API/UI for operator visibility.
+- **SystemWorkerPauseState**: Singleton DB record; fields `paused`, `mode`, `reason`, `requested_by_user_id`, `requested_at`, `updated_at`, `version`. Guards Mission Control API submission endpoints.
+- **SystemControlEvent**: Append-only audit row capturing every pause/resume action with `control`, `action`, `mode`, `reason`, `actor_user_id`, `created_at`.
 
 ### Assumptions & Dependencies
 
-- In external auth modes, existing authentication already distinguishes operators/admins and this feature relies on that gating to protect the pause endpoint.
-- With `AUTH_PROVIDER=disabled`, pause control is intentionally available without auth gates for local development, attributed to the local default user identity.
-- Worker Pause controls are rendered in the `/tasks` dashboard shell as a global banner and should remain visible even when the queue is idle.
-- Queue repository APIs expose efficient metrics for queued/running/stale counts so `GET /api/system/worker-pause` can compute drain progress without degrading performance.
-- Worker runtimes already implement checkpoint semantics for per-run pause controls; Quiesce will leverage the same hooks.
-
-## Operational Workflow & Observability
-
-### Pause → Drain → Upgrade → Resume
-
-1. **Pause (Drain or Quiesce)**: Operators issue `POST /api/system/worker-pause` with mode + reason. The API validates action/mode, records `SystemControlEvent`, bumps `version`, and returns the latest state so dashboards can refresh immediately.
-2. **Drain Monitoring**: `GET /api/system/worker-pause` aggregates `queued`, `running`, `staleRunning`, and derives `isDrained`. `staleRunning` specifically surfaces expired leases that still require operator intervention before restarting workers.
-3. **Upgrade Window**: Once `isDrained=true`, operators proceed with image rebuilds, migrations, or credential rotations. Claims remain blocked because the API short-circuits before repository normalization, ensuring the queue contents stay untouched during maintenance.
-4. **Resume**: Operators send `action="resume"`, which clears `paused`, nulls `mode`, records the audit entry, and unlocks claim behavior without losing queued work. Workers resume polling on their next interval after observing a new `system.version` in either claim or heartbeat responses.
-
-### Observability Expectations
-
-- **Metrics & Logging**: Every pause/resume emits an audit record and StatsD counters (e.g., `worker_pause.state` gauge, `worker_pause.resume` counter) so operations dashboards can alert when the system remains paused longer than a configurable SLA.
-- **Dashboard UX Contract**: The dashboard shows `Workers: Paused (Drain|Quiesce)` or `Workers: Running`, includes the operator-provided reason, and highlights when `running=0` to declare “Safe to upgrade.”
-- **MCP & Worker Feedback Loop**: MCP tools and worker clients propagate the full `system` block (including `version`, `updatedAt`, and `reason`) so third-party workflows align with the dashboard status and do not start new work unexpectedly.
+- Temporal Server is running and accessible to all worker instances.
+- Temporal Visibility API (`ListWorkflowExecutions`) is available for drain progress queries.
+- Temporal Batch Operations API is available for sending Signals to multiple workflows.
+- Workers use Temporal's `worker.shutdown()` for graceful exit; no custom drain polling is needed.
+- Quiesce workflow signal handler pattern will be added to `MoonMind.Run` and `MoonMind.AgentRun` workflow definitions.
+- `AUTH_PROVIDER=disabled` allows open access to pause endpoints for local development.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: 100% of claim requests made while paused return `job=null` with `system.workersPaused=true` in under 200 ms, proving no new work starts.
-- **SC-002**: `GET /api/system/worker-pause` reflects the latest pause toggle (state + reason + version) within 2 seconds of request completion, ensuring operators trust the control plane.
-- **SC-003**: During Quiesce, 95% of running jobs pause at their next safe checkpoint without lease expiry, shown by heartbeats remaining healthy throughout the pause window.
-- **SC-004**: Dashboard drain panel reaches and displays `isDrained=true` before any documented upgrade restarts proceed, and audit logs capture every pause/resume with zero missing events in regression tests.
+- **SC-001**: Within 5 seconds of submitting a pause request, `POST /api/workflows` returns "system paused" responses, ensuring no new workflows start during maintenance windows.
+- **SC-002**: Drain mode correctly reports `isDrained=true` when Temporal Visibility shows 0 running workflows on the target Task Queues.
+- **SC-003**: In Quiesce mode, 95% of running workflows receive the Batch Signal and reach their `wait_condition` within 60 seconds.
+- **SC-004**: 100% of pause/resume actions produce corresponding entries in `system_control_events` with populated reason, mode, actor, and timestamps.
+- **SC-005**: Dashboard drain panel reaches and displays `isDrained=true` before any documented upgrade restarts proceed.

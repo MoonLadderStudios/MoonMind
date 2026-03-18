@@ -176,6 +176,7 @@ class WorkerPauseMetrics:
     queued: int
     running: int
     stale_running: int
+    metrics_source: str = "legacy"  # "temporal" or "legacy"
 
     @property
     def is_drained(self) -> bool:
@@ -214,6 +215,7 @@ class WorkerPauseSnapshot:
     system: QueueSystemMetadata
     metrics: WorkerPauseMetrics
     audit_events: tuple[WorkerPauseAuditEvent, ...]
+    signal_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1239,6 +1241,8 @@ class AgentQueueService:
         state = await self._repository.get_pause_state()
         now = datetime.now(UTC)
 
+        pause_mode: models.WorkerPauseMode | None = None
+
         if action_key == "pause":
             mode_value = (mode or "").strip().lower()
             if not mode_value:
@@ -1313,7 +1317,38 @@ class AgentQueueService:
             )
 
         await self._repository.commit()
-        return await self._build_worker_pause_snapshot(audit_limit=audit_limit)
+
+        # --- Quiesce Batch Signal Dispatch (DOC-REQ-003, FR-007, FR-010) ---
+        _is_quiesce_pause = action_key == "pause" and pause_mode == models.WorkerPauseMode.QUIESCE
+        _is_quiesce_resume = action_key == "resume" and state.mode == models.WorkerPauseMode.QUIESCE
+        _signal_status: str | None = None
+        if _is_quiesce_pause or _is_quiesce_resume:
+            try:
+                from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+                adapter = TemporalClientAdapter()
+                if _is_quiesce_pause:
+                    signaled = await adapter.send_batch_pause_signal()
+                else:
+                    signaled = await adapter.send_batch_resume_signal()
+                logger.info(
+                    "quiesce %s signals dispatched",
+                    action_key,
+                    extra={"signaled_count": signaled},
+                )
+                _signal_status = f"signals_dispatched:{signaled}"
+            except Exception:
+                logger.warning(
+                    "quiesce %s signal dispatch failed (best-effort)",
+                    action_key,
+                    exc_info=True,
+                )
+                _signal_status = "signal_dispatch_failed"
+
+        return await self._build_worker_pause_snapshot(
+            audit_limit=audit_limit,
+            signal_status=_signal_status,
+        )
 
     async def complete_job(
         self,
@@ -2626,19 +2661,36 @@ class AgentQueueService:
         return None
 
     async def _build_worker_pause_metrics(self) -> WorkerPauseMetrics:
-        """Compute queued/running/stale counters for worker pause UX."""
+        """Compute queued/running/stale counters for worker pause UX.
 
-        counts = await self._repository.fetch_worker_pause_metrics()
+        Prefers Temporal Visibility metrics (DOC-REQ-002, FR-003) and falls back
+        to legacy queue-table counts when Temporal is unreachable.
+        """
+        source = "temporal"
+        try:
+            from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+            adapter = TemporalClientAdapter()
+            counts = await adapter.get_drain_metrics()
+        except Exception:
+            logger.warning(
+                "Temporal Visibility drain metrics unavailable, falling back to queue table",
+                exc_info=True,
+            )
+            source = "legacy"
+            counts = await self._repository.fetch_worker_pause_metrics()
         return WorkerPauseMetrics(
             queued=counts.get("queued", 0),
             running=counts.get("running", 0),
             stale_running=counts.get("stale_running", 0),
+            metrics_source=source,
         )
 
     async def _build_worker_pause_snapshot(
         self,
         *,
         audit_limit: int = 5,
+        signal_status: str | None = None,
     ) -> WorkerPauseSnapshot:
         """Return aggregated worker pause metadata/metrics/audit entries."""
 
@@ -2646,7 +2698,12 @@ class AgentQueueService:
         metrics = await self._build_worker_pause_metrics()
         events = await self._repository.list_system_control_events(limit=audit_limit)
         audit = tuple(self._serialize_control_event(event) for event in events)
-        return WorkerPauseSnapshot(system=metadata, metrics=metrics, audit_events=audit)
+        return WorkerPauseSnapshot(
+            system=metadata,
+            metrics=metrics,
+            audit_events=audit,
+            signal_status=signal_status,
+        )
 
     @staticmethod
     def _to_queue_system_metadata(

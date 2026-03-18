@@ -4,17 +4,20 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from moonmind.config.paths import ENV_FILE
+
+
+JULES_DEFAULT_API_URL = "https://jules.googleapis.com/v1alpha"
 
 
 class JulesSettings(BaseSettings):
     """Jules API settings."""
 
     jules_api_url: Optional[str] = Field(
-        "https://jules.googleapis.com/v1alpha",
+        JULES_DEFAULT_API_URL,
         validation_alias=AliasChoices("jules_api_url", "JULES_API_URL"),
     )
     jules_api_key: Optional[str] = Field(
@@ -92,3 +95,10 @@ class JulesSettings(BaseSettings):
         env_file=str(ENV_FILE),
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def _normalize_api_url(self) -> "JulesSettings":
+        """Treat empty/blank ``jules_api_url`` as unset and fall back to default."""
+        if not self.jules_api_url or not self.jules_api_url.strip():
+            self.jules_api_url = JULES_DEFAULT_API_URL
+        return self
