@@ -554,12 +554,7 @@ for changed_file in "${CHANGED_FILES[@]}"; do
     init_db/*)
       add_target "api"
       ;;
-    celery_worker/*)
-      add_target "celery-worker"
-      for service in "${COMPOSE_SERVICES[@]}"; do
-        [[ "$service" == celery-codex-* ]] && add_target "$service"
-      done
-      ;;
+
     keycloak/*)
       add_target "keycloak"
       add_target "keycloak-db"
