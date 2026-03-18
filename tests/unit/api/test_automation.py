@@ -65,10 +65,10 @@ class FakeTaskState:
         used_fallback = metadata.get("usedFallback")
         shadow_mode = metadata.get("shadowModeRequested")
         if selected is None and self.phase.value.startswith("agentkit_"):
-            selected = "agentkit"
-        if adapter is None and selected == "agentkit":
-            adapter = "agentkit"
-        if execution is None and selected == "agentkit":
+            selected = "auto"
+        if adapter is None and selected == "auto":
+            adapter = "auto"
+        if execution is None and selected == "auto":
             execution = "skill"
         if used_skills is None and execution is not None:
             used_skills = execution != "direct_only"
@@ -194,8 +194,8 @@ def test_get_run_detail_success(
     assert data["status"] == models.AutomationRunStatus.SUCCEEDED.value
     assert data["phases"][0]["phase"] == task_state.phase.value
     assert data["phases"][0]["metadata"] == {"branch": "agentkit/branch"}
-    assert data["phases"][0]["selected_skill"] == "agentkit"
-    assert data["phases"][0]["adapter_id"] == "agentkit"
+    assert data["phases"][0]["selected_skill"] == "auto"
+    assert data["phases"][0]["adapter_id"] == "auto"
     assert data["phases"][0]["execution_path"] == "skill"
     assert data["artifacts"][0]["artifact_id"] == str(artifact.id)
     repo.get_run_detail.assert_awaited_once_with(run_id)
@@ -244,7 +244,7 @@ def test_get_run_detail_backfills_blank_agentkit_adapter_fields(
         phase=models.AutomationPhase.SPECKIT_ANALYZE,
         status=models.AutomationTaskStatus.SUCCEEDED,
         metadata={
-            "selectedTool": "agentkit",
+            "selectedTool": "auto",
             "adapterId": "   ",
             "executionPath": "   ",
         },
@@ -255,8 +255,8 @@ def test_get_run_detail_backfills_blank_agentkit_adapter_fields(
 
     assert response.status_code == 200
     phase_payload = response.json()["phases"][0]
-    assert phase_payload["selected_skill"] == "agentkit"
-    assert phase_payload["adapter_id"] == "agentkit"
+    assert phase_payload["selected_skill"] == "auto"
+    assert phase_payload["adapter_id"] == "auto"
     assert phase_payload["execution_path"] == "skill"
     assert phase_payload["used_skills"] is True
     assert phase_payload["used_fallback"] is False

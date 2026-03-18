@@ -22,7 +22,7 @@ def skills_mirror(tmp_path, monkeypatch):
     mirror.mkdir(parents=True)
     legacy.mkdir(parents=True)
 
-    for root, name in ((mirror, "agentkit"), (mirror, "docs-lint"), (legacy, "legacy")):
+    for root, name in ((mirror, "auto"), (mirror, "docs-lint"), (legacy, "legacy")):
         skill_dir = root / name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
@@ -52,20 +52,20 @@ def test_resolve_run_skill_selection_uses_global_defaults(skills_mirror, monkeyp
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
-        ("agentkit",),
+        ("auto",),
         raising=False,
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
 
     resolved = resolve_run_skill_selection(run_id="run-1", context={})
 
     assert resolved.selection_source == "global_default"
-    assert [skill.skill_name for skill in resolved.skills] == ["agentkit"]
-    assert resolved.skills[0].source_uri == (mirror / "agentkit").resolve().as_uri()
+    assert [skill.skill_name for skill in resolved.skills] == ["auto"]
+    assert resolved.skills[0].source_uri == (mirror / "auto").resolve().as_uri()
 
 
 def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
@@ -79,12 +79,12 @@ def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
-        ("agentkit",),
+        ("auto",),
         raising=False,
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
 
@@ -92,11 +92,11 @@ def test_resolve_run_skill_selection_permissive_mode_discovers_local_skills(
 
     assert resolved.selection_source == "global_default"
     assert [skill.skill_name for skill in resolved.skills] == [
-        "agentkit",
+        "auto",
         "docs-lint",
         "legacy",
     ]
-    assert resolved.skills[0].source_uri == (mirror / "agentkit").resolve().as_uri()
+    assert resolved.skills[0].source_uri == (mirror / "auto").resolve().as_uri()
     assert resolved.skills[1].source_uri == (mirror / "docs-lint").resolve().as_uri()
     assert resolved.skills[2].source_uri == (legacy / "legacy").resolve().as_uri()
 
@@ -121,7 +121,7 @@ def test_resolve_run_skill_selection_rejects_duplicates(skills_mirror):
     with pytest.raises(SkillResolutionError, match="Duplicate skill name"):
         resolve_run_skill_selection(
             run_id="run-3",
-            context={"skill_selection": ["agentkit:1", "agentkit:2"]},
+            context={"skill_selection": ["docs-lint:1", "docs-lint:2"]},
         )
 
 
@@ -176,16 +176,16 @@ def test_list_available_skill_names_permissive_mode_discovers_local_roots(
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
-        ("agentkit",),
+        ("auto",),
         raising=False,
     )
 
-    assert list_available_skill_names() == ("agentkit", "docs-lint", "legacy")
+    assert list_available_skill_names() == ("auto", "docs-lint", "legacy")
 
 
 def test_list_available_skill_names_allowlist_filters_unlisted_local_skills(
@@ -198,21 +198,22 @@ def test_list_available_skill_names_allowlist_filters_unlisted_local_skills(
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
-        ("agentkit", "legacy"),
+        ("auto", "legacy"),
         raising=False,
     )
 
-    assert list_available_skill_names() == ("agentkit", "legacy")
+    assert list_available_skill_names() == ("auto", "legacy")
 
 
-def test_list_available_skill_names_includes_builtin_agentkit_without_local_mirror(
+def test_list_available_skill_names_default_skill_without_local_mirror(
     monkeypatch, tmp_path
 ):
+    """When default_skill has no local mirror, it should still appear via allowed_skills."""
     empty_root = tmp_path / "empty"
     empty_root.mkdir(parents=True)
 
@@ -233,7 +234,7 @@ def test_list_available_skill_names_includes_builtin_agentkit_without_local_mirr
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
     monkeypatch.setattr(
@@ -242,7 +243,9 @@ def test_list_available_skill_names_includes_builtin_agentkit_without_local_mirr
         raising=False,
     )
 
-    assert list_available_skill_names() == ("agentkit",)
+    # With no local mirror, the default_skill has no on-disk path, so
+    # list_available_skill_names returns an empty tuple.
+    assert list_available_skill_names() == ()
 
 
 def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
@@ -291,7 +294,7 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
     monkeypatch.setattr(
@@ -301,7 +304,6 @@ def test_list_available_skill_names_resolves_relative_roots_from_repo_root(
     )
 
     assert list_available_skill_names() == (
-        "agentkit",
         "local-tool",
         "agentkit-orchestrate",
     )
@@ -344,7 +346,7 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
     monkeypatch.setattr(
@@ -353,7 +355,7 @@ def test_list_available_skill_names_falls_back_to_cwd_when_repo_root_mirror_miss
         raising=False,
     )
 
-    assert list_available_skill_names() == ("agentkit", "local-gate-tool")
+    assert list_available_skill_names() == ("local-gate-tool",)
 
 
 def test_project_root_fallback_handles_shallow_paths(monkeypatch):
@@ -363,53 +365,5 @@ def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     assert resolver_module._project_root() == Path("/")
 
 
-def test_builtin_agentkit_fallback_logs_once(monkeypatch, tmp_path, caplog):
-    empty_root = tmp_path / "empty"
-    empty_root.mkdir(parents=True)
 
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.skills_local_mirror_root",
-        str(empty_root),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.skills_legacy_mirror_root",
-        str(empty_root),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.skill_policy_mode",
-        "permissive",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.default_skill",
-        "agentkit",
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.resolver.settings.workflow.allowed_skills",
-        (),
-        raising=False,
-    )
 
-    resolver_module._BUILTIN_FALLBACK_WARNED.clear()
-    try:
-        with caplog.at_level("WARNING"):
-            first = resolve_run_skill_selection(run_id="warn-1", context={})
-            second = resolve_run_skill_selection(run_id="warn-2", context={})
-
-        assert first.skills[0].source_uri == "builtin://agentkit"
-        assert second.skills[0].source_uri == "builtin://agentkit"
-        assert (
-            len(
-                [
-                    rec
-                    for rec in caplog.records
-                    if "deprecated builtin source fallback" in rec.message
-                ]
-            )
-            == 1
-        )
-    finally:
-        resolver_module._BUILTIN_FALLBACK_WARNED.clear()

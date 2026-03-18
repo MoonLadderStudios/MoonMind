@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 from moonmind.workflows.skills.registry import resolve_stage_execution
 from moonmind.workflows.skills.runner import execute_stage
-from moonmind.workflows.skills.agentkit_adapter import SkillAdapterError
 
 
 def _set_skill_defaults(monkeypatch) -> None:
@@ -32,7 +29,7 @@ def _set_skill_defaults(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.workflow.default_skill",
-        "agentkit",
+        "auto",
         raising=False,
     )
     monkeypatch.setattr(
@@ -57,7 +54,7 @@ def _set_skill_defaults(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
-        ("agentkit",),
+        ("auto",),
         raising=False,
     )
 
@@ -79,10 +76,11 @@ def test_execute_stage_uses_skill_path_by_default(monkeypatch):
     )
 
     assert outcome.result == "ok"
-    assert outcome.selected_skill == "agentkit"
+    assert outcome.selected_skill == "auto"
     assert outcome.execution_path == "skill"
     assert outcome.used_skills is True
     assert outcome.used_fallback is False
+    assert outcome.adapter_id is None
     assert calls == ["direct"]
 
 
@@ -103,14 +101,15 @@ def test_execute_stage_uses_direct_path_when_skills_disabled(monkeypatch):
 
     assert outcome.execution_path == "direct_only"
     assert outcome.used_skills is False
-    assert outcome.selected_skill == "agentkit"
+    assert outcome.selected_skill == "auto"
+    assert outcome.adapter_id is None
 
 
 def test_stage_override_respects_allowlist(monkeypatch):
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
-        ("agentkit", "custom"),
+        ("auto", "custom"),
         raising=False,
     )
 
@@ -134,7 +133,7 @@ def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
     )
     monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
-        ("agentkit",),
+        ("auto",),
         raising=False,
     )
 
@@ -149,53 +148,27 @@ def test_stage_override_ignores_allowlist_in_permissive_mode(monkeypatch):
     assert decision.execution_path == "skill"
 
 
-def test_execute_stage_unregistered_skill_fails_fast(monkeypatch):
+def test_execute_stage_custom_skill_still_runs_directly(monkeypatch):
+    """All skills now execute directly — custom overrides just change metadata."""
+
     _set_skill_defaults(monkeypatch)
     monkeypatch.setattr(
         "moonmind.workflows.skills.registry.settings.workflow.allowed_skills",
-        ("agentkit", "custom"),
+        ("auto", "custom"),
         raising=False,
     )
 
     calls: list[str] = []
     context = {"skill_overrides": {"submit_codex_job": "custom"}}
 
-    with pytest.raises(SkillAdapterError, match="skill_adapter_not_registered"):
-        execute_stage(
-            stage_name="submit_codex_job",
-            run_id="run-unregistered",
-            context=context,
-            execute_direct=lambda: calls.append("direct"),
-        )
-
-    assert calls == []
-
-
-def test_execute_stage_fallback_when_adapter_errors(monkeypatch):
-    _set_skill_defaults(monkeypatch)
-
-    def raise_adapter_error(*, execute_direct):
-        raise SkillAdapterError("adapter unavailable")
-
-    monkeypatch.setattr(
-        "moonmind.workflows.skills.runner.run_agentkit_stage",
-        raise_adapter_error,
-    )
-
-    calls: list[str] = []
-
-    def run_direct() -> str:
-        calls.append("fallback")
-        return "fallback-ok"
-
     outcome = execute_stage(
         stage_name="submit_codex_job",
-        run_id="run-4",
-        context={},
-        execute_direct=run_direct,
+        run_id="run-custom",
+        context=context,
+        execute_direct=lambda: calls.append("direct") or "ok",
     )
 
-    assert outcome.result == "fallback-ok"
-    assert outcome.execution_path == "direct_fallback"
-    assert outcome.used_fallback is True
-    assert calls == ["fallback"]
+    assert outcome.selected_skill == "custom"
+    assert outcome.execution_path == "skill"
+    assert outcome.adapter_id is None
+    assert calls == ["direct"]

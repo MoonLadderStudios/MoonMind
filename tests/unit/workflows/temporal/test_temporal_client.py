@@ -9,7 +9,7 @@ import pytest
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 class _FakeWorkflowExecution:

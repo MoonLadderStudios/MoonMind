@@ -11,7 +11,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionValidationError,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 def _make_pause_state(paused: bool):

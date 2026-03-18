@@ -66,13 +66,6 @@ def test_run_preflight_login_failure_raises(monkeypatch) -> None:
     )
 
     def fake_run(command, *args, **kwargs):
-        if command == ["/usr/bin/agentkit", "--version"]:
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="agentkit 0.4.0",
-                stderr="",
-            )
         if command == ["/usr/bin/rg", "--version"]:
             return subprocess.CompletedProcess(
                 args=command,
@@ -118,10 +111,9 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         }
     )
 
-    assert calls[0] == (["/usr/bin/agentkit", "--version"], None, None)
-    assert calls[1] == (["/usr/bin/rg", "--version"], None, None)
-    assert calls[2] == (["/usr/bin/codex", "login", "status"], None, None)
-    assert calls[3][0] == [
+    assert calls[0] == (["/usr/bin/rg", "--version"], None, None)
+    assert calls[1] == (["/usr/bin/codex", "login", "status"], None, None)
+    assert calls[2][0] == [
         "/usr/bin/gh",
         "auth",
         "login",
@@ -129,25 +121,25 @@ def test_run_preflight_with_github_token_runs_gh_auth_commands(monkeypatch) -> N
         "github.com",
         "--with-token",
     ]
-    assert calls[3][1] == "ghp-test-token"
+    assert calls[2][1] == "ghp-test-token"
+    assert calls[2][2] is not None
+    assert calls[2][2].get("MOONMIND_TEST_ENV") == "preserved"
+    assert "GITHUB_TOKEN" not in calls[2][2]
+    assert "GH_TOKEN" not in calls[2][2]
+    assert calls[3][0] == ["/usr/bin/gh", "auth", "setup-git"]
+    assert calls[3][1] is None
     assert calls[3][2] is not None
     assert calls[3][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[3][2]
     assert "GH_TOKEN" not in calls[3][2]
-    assert calls[4][0] == ["/usr/bin/gh", "auth", "setup-git"]
+    assert calls[4][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
     assert calls[4][1] is None
     assert calls[4][2] is not None
     assert calls[4][2].get("MOONMIND_TEST_ENV") == "preserved"
     assert "GITHUB_TOKEN" not in calls[4][2]
     assert "GH_TOKEN" not in calls[4][2]
-    assert calls[5][0] == ["/usr/bin/gh", "auth", "status", "--hostname", "github.com"]
-    assert calls[5][1] is None
-    assert calls[5][2] is not None
-    assert calls[5][2].get("MOONMIND_TEST_ENV") == "preserved"
-    assert "GITHUB_TOKEN" not in calls[5][2]
-    assert "GH_TOKEN" not in calls[5][2]
 
-    for idx in (3, 4, 5):
+    for idx in (2, 3, 4):
         env = calls[idx][2]
         assert env is not None
         assert "PATH" in env
@@ -176,9 +168,8 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
 
     cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
-    assert verifications == ["codex", "rg", "agentkit"]
+    assert verifications == ["codex", "rg"]
     assert calls == [
-        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
     ]
@@ -457,87 +448,6 @@ def test_run_checked_command_error_message_without_detail_uses_compact_hint(
     assert "run now" not in message
 
 
-def test_run_preflight_missing_agentkit_raises(monkeypatch) -> None:
-    """Preflight should fail when agentkit binary is unavailable."""
-
-    def fake_verify(name: str) -> str:
-        if name == "agentkit":
-            raise CliVerificationError("missing agentkit")
-        return f"/usr/bin/{name}"
-
-    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
-
-    with pytest.raises(RuntimeError, match="missing agentkit"):
-        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
-
-
-def test_run_preflight_agentkit_version_fallback_to_help(monkeypatch) -> None:
-    """Preflight should accept agentkit shims that only support --help."""
-
-    calls: list[list[str]] = []
-
-    monkeypatch.setattr(
-        cli,
-        "verify_cli_is_executable",
-        lambda name: f"/usr/bin/{name}",
-    )
-
-    def fake_run(command, *args, **kwargs):
-        calls.append(list(command))
-        if command == ["/usr/bin/agentkit", "--version"]:
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=2,
-                stdout="Usage: specify",
-                stderr="No such option: --version",
-            )
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="ok",
-            stderr="",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
-
-    assert calls[:4] == [
-        ["/usr/bin/agentkit", "--version"],
-        ["/usr/bin/agentkit", "--help"],
-        ["/usr/bin/rg", "--version"],
-        ["/usr/bin/codex", "login", "status"],
-    ]
-
-
-def test_run_preflight_agentkit_non_version_error_raises(monkeypatch) -> None:
-    """Fallback should not mask unrelated Workflow execution failures."""
-
-    monkeypatch.setattr(
-        cli,
-        "verify_cli_is_executable",
-        lambda name: f"/usr/bin/{name}",
-    )
-
-    def fake_run(command, *args, **kwargs):
-        if command == ["/usr/bin/agentkit", "--version"]:
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=1,
-                stdout="",
-                stderr="permission denied",
-            )
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    with pytest.raises(RuntimeError, match="permission denied"):
-        cli.run_preflight(env={"DEFAULT_EMBEDDING_PROVIDER": "ollama"})
 
 
 def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None:
@@ -584,9 +494,8 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
         }
     )
 
-    assert verifications == ["gemini_cli", "agentkit"]
+    assert verifications == ["gemini_cli"]
     assert calls == [
-        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/gemini_cli", "--version"],
     ]
 
@@ -630,9 +539,8 @@ def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> 
         }
     )
 
-    assert verifications == ["claude", "agentkit"]
+    assert verifications == ["claude"]
     assert calls == [
-        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/claude", "--version"],
     ]
 
@@ -678,8 +586,8 @@ def test_run_preflight_jules_runtime_succeeds_with_configuration(monkeypatch) ->
         }
     )
 
-    assert verifications == ["agentkit"]
-    assert calls == [["/usr/bin/agentkit", "--version"]]
+    assert verifications == []
+    assert calls == []
 
 
 def test_run_preflight_universal_without_claude_capability_skips_checks(
@@ -710,9 +618,8 @@ def test_run_preflight_universal_without_claude_capability_skips_checks(
             "MOONMIND_WORKER_CAPABILITIES": "codex,gemini_cli",        }
     )
 
-    assert verifications == ["codex", "gemini_cli", "rg", "agentkit"]
+    assert verifications == ["codex", "gemini_cli", "rg"]
     assert calls == [
-        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
         ["/usr/bin/gemini_cli", "--version"],
@@ -786,9 +693,8 @@ def test_run_preflight_universal_with_claude_capability_runs_checks(
         }
     )
 
-    assert verifications == ["codex", "gemini_cli", "claude", "rg", "agentkit"]
+    assert verifications == ["codex", "gemini_cli", "claude", "rg"]
     assert calls == [
-        ["/usr/bin/agentkit", "--version"],
         ["/usr/bin/rg", "--version"],
         ["/usr/bin/codex", "login", "status"],
         ["/usr/bin/gemini_cli", "--version"],

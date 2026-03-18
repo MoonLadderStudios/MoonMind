@@ -531,7 +531,7 @@ def sanitize_branch_component(component: str) -> str:
 def generate_branch_name(
     run_id: UUID | str,
     *,
-    prefix: str = "agentkit",
+    prefix: str = "workflow",
     timestamp: Optional[datetime] = None,
     suffix: Optional[str] = None,
 ) -> str:

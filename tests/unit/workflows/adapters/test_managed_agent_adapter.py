@@ -7,7 +7,7 @@ Tests cover:
 - 429 cooldown reporting
 - auth_profile_list activity method (happy path + empty DB)
 
-Marked with pytest.mark.agentkit to align with the existing test suite
+Marked with pytest.mark.asyncio to align with the existing test suite
 convention (see test_activity_runtime.py).
 """
 
@@ -41,7 +41,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 # ---------------------------------------------------------------------------

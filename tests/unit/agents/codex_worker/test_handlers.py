@@ -20,7 +20,7 @@ from moonmind.agents.codex_worker.handlers import (
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 @pytest.fixture(autouse=True)

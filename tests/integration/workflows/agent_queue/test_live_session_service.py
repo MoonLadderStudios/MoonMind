@@ -23,7 +23,7 @@ from moonmind.workflows.agent_queue.service import (
     LiveSessionStateError,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 @asynccontextmanager

@@ -19,7 +19,7 @@ class SkillResolutionError(ValueError):
 
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_BUILTIN_FALLBACK_WARNED: set[str] = set()
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,8 +262,8 @@ def list_available_skill_names() -> tuple[str, ...]:
 
     raw_candidates.extend(_discover_local_skill_names())
 
-    # Include explicit allowlist entries so builtin skills (for example `agentkit`)
-    # still surface even when they are not mirrored locally.
+    # Include explicit allowlist entries so configured skills still surface
+    # even when they are not mirrored locally.
     raw_candidates.extend(str(item).strip() for item in (cfg.allowed_skills or ()))
 
     # 2) Validate and deduplicate while preserving order.
@@ -331,17 +331,6 @@ def _resolve_source_uri(
     local_source = _resolve_local_source(skill_name)
     if local_source:
         return local_source
-
-    # Deprecated compatibility path: prefer local/shared skill mirrors instead.
-    if skill_name == "agentkit":
-        if skill_name not in _BUILTIN_FALLBACK_WARNED:
-            logger.warning(
-                "Skill '%s' resolved through deprecated builtin source fallback. "
-                "Configure local/shared skill mirrors to remove this compatibility path.",
-                skill_name,
-            )
-            _BUILTIN_FALLBACK_WARNED.add(skill_name)
-        return "builtin://agentkit"
 
     raise SkillResolutionError(
         f"No source URI resolved for skill '{skill_name}:{version}'. "
