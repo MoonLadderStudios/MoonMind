@@ -27,7 +27,10 @@ from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgen
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    ManagedRuntimeProfile,
+)
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
@@ -185,6 +188,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_jules_fetch_result",
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
+    "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
     "integration.codex_cloud.fetch_result": (
@@ -2055,10 +2059,68 @@ class TemporalAgentRuntimeActivities:
         artifact_service: TemporalArtifactService | None = None,
         run_store: "ManagedRunStore | None" = None,
         run_supervisor: "ManagedRunSupervisor | None" = None,
+        run_launcher: "ManagedRuntimeLauncher | None" = None,
     ) -> None:
         self._artifact_service = artifact_service
         self._run_store = run_store
         self._run_supervisor = run_supervisor
+        self._run_launcher = run_launcher
+        self._supervision_tasks: set[asyncio.Task] = set()
+
+    async def agent_runtime_launch(
+        self,
+        payload: dict[str, Any],
+        /,
+    ) -> dict[str, Any]:
+        """Launch a managed agent and start background supervision.
+        
+        Payload must contain:
+        - run_id: str
+        - request: dict (AgentExecutionRequest dump)
+        - profile: dict (ManagedRuntimeProfile dump)
+        - workspace_path: str | None
+        """
+        if self._run_launcher is None or self._run_supervisor is None:
+            raise TemporalActivityRuntimeError("launcher and supervisor are required for agent_runtime_launch")
+
+        run_id = payload.get("run_id")
+        request_data = payload.get("request")
+        profile_data = payload.get("profile")
+        if not run_id or request_data is None or profile_data is None:
+            raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
+
+        request = AgentExecutionRequest(**request_data)
+        profile = ManagedRuntimeProfile(**profile_data)
+        workspace_path = payload.get("workspace_path")
+
+        # Idempotency check handled in launcher
+        record, process = await self._run_launcher.launch(
+            run_id=run_id,
+            request=request,
+            profile=profile,
+            workspace_path=workspace_path,
+        )
+
+        # Start background supervision — hold a strong reference so the task
+        # is not garbage-collected before it completes.
+        timeout_policy = getattr(request, "timeout_policy", None) or {}
+        timeout_seconds = (
+            timeout_policy.get("timeout_seconds", 3600)
+            if isinstance(timeout_policy, dict)
+            else getattr(timeout_policy, "timeout_seconds", 3600)
+        )
+
+        task = asyncio.create_task(
+            self._run_supervisor.supervise(
+                run_id=run_id,
+                process=process,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+        self._supervision_tasks.add(task)
+        task.add_done_callback(self._supervision_tasks.discard)
+
+        return record.model_dump(mode="json")
 
     async def agent_runtime_publish_artifacts(
         self,

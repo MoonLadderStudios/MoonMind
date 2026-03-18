@@ -36,6 +36,8 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    ManagedRunRecord,
+    ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -61,6 +63,7 @@ ProfileFetcherFunc = Callable[..., Awaitable[dict[str, Any]]]
 SlotRequestFunc = Callable[..., Awaitable[Any]]
 SlotReleaseFunc = Callable[..., Awaitable[Any]]
 CooldownReportFunc = Callable[..., Awaitable[Any]]
+RunLauncherFunc = Callable[..., Awaitable[Any]]
 
 
 def _shape_environment_for_oauth(
@@ -124,6 +127,8 @@ class ManagedAgentAdapter:
         Temporal workflow ID of the *current* AgentRun workflow.  Used in
         slot-request/release signals so the AuthProfileManager can correlate
         requests to callers.
+    run_launcher:
+        Optional async callable that launches the managed agent process via an activity.
     """
 
     def __init__(
@@ -136,6 +141,7 @@ class ManagedAgentAdapter:
         workflow_id: str,
         runtime_id: str | None = None,
         run_store: ManagedRunStore | None = None,
+        run_launcher: RunLauncherFunc | None = None,
     ) -> None:
         self._fetch_profiles = profile_fetcher
         self._request_slot = slot_requester
@@ -144,6 +150,7 @@ class ManagedAgentAdapter:
         self._workflow_id = workflow_id
         self._runtime_id = runtime_id
         self._run_store = run_store
+        self._run_launcher = run_launcher
         self._active_profile_id: str | None = None
 
     # ------------------------------------------------------------------
@@ -190,8 +197,28 @@ class ManagedAgentAdapter:
             runtime_id=self._runtime_id or request.agent_id,
         )
         
-        if self._run_store is not None:
-            from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+        if self._run_launcher is not None:
+            profile_obj = ManagedRuntimeProfile(
+                profile_id=profile_id,
+                runtime_id=self._runtime_id or request.agent_id,
+                auth_mode=auth_mode,
+                env_overrides=shaped_env,
+                command_template=profile.get("command_template", []),
+            )
+            
+            # The workspace path is usually managed by the worker, but we can pass it if known
+            workspace_path = None
+            
+            record_dict = await self._run_launcher(
+                payload={
+                    "run_id": run_id,
+                    "request": request.model_dump(mode="json", by_alias=True) if hasattr(request, "model_dump") else request,
+                    "profile": profile_obj.model_dump(mode="json", by_alias=True),
+                    "workspace_path": workspace_path,
+                }
+            )
+            status = record_dict.get("status", "launching")
+        elif self._run_store is not None:
             record = ManagedRunRecord(
                 run_id=run_id,
                 agent_id=request.agent_id,
@@ -200,6 +227,9 @@ class ManagedAgentAdapter:
                 started_at=datetime.now(tz=UTC),
             )
             self._run_store.save(record)
+            status = "launching"
+        else:
+            status = "launching"
 
         logger.info(
             "ManagedAgentAdapter.start profile_id=%s run_id=%s workflow_id=%s",
@@ -211,7 +241,7 @@ class ManagedAgentAdapter:
             runId=run_id,
             agentKind="managed",
             agentId=request.agent_id,
-            status="launching",
+            status=status,
             startedAt=datetime.now(tz=UTC),
             metadata={
                 "profile_id": profile_id,
