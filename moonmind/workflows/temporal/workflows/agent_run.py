@@ -3,6 +3,7 @@ import os
 from datetime import timedelta
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
+from temporalio.workflow import ActivityCancellationType
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
@@ -98,6 +99,7 @@ class MoonMindAgentRun:
                 {"runtime_id": runtime_id},
                 task_queue="mm.activity.artifacts",
                 start_to_close_timeout=timedelta(seconds=30),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
             # Re-acquire handle and retry signal once.
             manager_handle = workflow.get_external_workflow_handle(manager_id)
@@ -174,6 +176,7 @@ class MoonMindAgentRun:
                             {"runtime_id": kw.get("runtime_id", runtime_id)},
                             task_queue="mm.activity.artifacts",
                             start_to_close_timeout=timedelta(seconds=30),
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
                     async def _slot_requester(**kw):
@@ -200,6 +203,7 @@ class MoonMindAgentRun:
                             kw.get("payload", {}),
                             task_queue=AGENT_RUNTIME_TASK_QUEUE,
                             start_to_close_timeout=timedelta(seconds=30),
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
                     store_root = os.path.join(
@@ -232,6 +236,7 @@ class MoonMindAgentRun:
                         request.agent_id,
                         task_queue="mm.workflow",
                         start_to_close_timeout=timedelta(seconds=30),
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
                     # Store the validated agent_id for activity routing.
                     self._external_agent_id = validated_id
@@ -243,6 +248,7 @@ class MoonMindAgentRun:
                         request,
                         task_queue=INTEGRATIONS_TASK_QUEUE,
                         start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
                     handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
                     self.run_id = handle.run_id
@@ -273,6 +279,7 @@ class MoonMindAgentRun:
                                 self.run_id,
                                 task_queue=INTEGRATIONS_TASK_QUEUE,
                                 start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                             status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
                         else:
@@ -299,6 +306,7 @@ class MoonMindAgentRun:
                             self.run_id,
                             task_queue=INTEGRATIONS_TASK_QUEUE,
                             start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
@@ -323,6 +331,7 @@ class MoonMindAgentRun:
                     self.final_result.model_dump(mode="json", by_alias=True) if hasattr(self.final_result, "model_dump") else self.final_result,
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
 
                 if isinstance(enriched_result, dict):
