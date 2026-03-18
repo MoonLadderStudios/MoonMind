@@ -1485,6 +1485,10 @@ class TemporalJulesActivities:
         metadata_payload.setdefault("idempotencyKey", resolved_idempotency_key)
         metadata_payload.setdefault("requestId", resolved_idempotency_key)
 
+        workspace_spec = {}
+        if request_payload:
+            workspace_spec = dict(request_payload.get("workspace_spec") or request_payload.get("workspaceSpec") or {})
+
         adapter_request = AgentExecutionRequest(
             agentKind="external",
             agentId="jules",
@@ -1497,7 +1501,9 @@ class TemporalJulesActivities:
             inputRefs=[]
             if inputs_ref is None
             else [_artifact_id_from_ref(inputs_ref)],
+            workspaceSpec=workspace_spec,
             parameters={
+                **parameters,
                 "title": title,
                 "description": description,
                 "metadata": metadata_payload,
@@ -1730,6 +1736,10 @@ class TemporalJulesActivities:
             idempotency_key or f"codex_cloud:{resolved_correlation_id}:{title}"
         ).strip()
 
+        workspace_spec = {}
+        if request_payload:
+            workspace_spec = dict(request_payload.get("workspace_spec") or request_payload.get("workspaceSpec") or {})
+
         adapter_request = AgentExecutionRequest(
             agentKind="external",
             agentId="codex_cloud",
@@ -1742,7 +1752,9 @@ class TemporalJulesActivities:
             inputRefs=[]
             if inputs_ref is None
             else [_artifact_id_from_ref(inputs_ref)],
+            workspaceSpec=workspace_spec,
             parameters={
+                **parameters,
                 "title": title,
                 "description": description,
             },

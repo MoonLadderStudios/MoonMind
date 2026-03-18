@@ -97,6 +97,8 @@ def _shape_environment_for_api_key(
     is delegated to the runtime launcher (out of scope for Phase 5).
     """
     env = dict(base_env)
+    for key in _OAUTH_CLEARED_VARS:
+        env.pop(key, None)
     if api_key_ref:
         # Pass only the reference, never the real value.
         env["MANAGED_API_KEY_REF"] = api_key_ref
@@ -173,7 +175,11 @@ class ManagedAgentAdapter:
         auth_mode: str = profile.get("auth_mode", "api_key")
 
         # Shape environment according to auth mode (DOC-REQ-005, DOC-REQ-006).
-        base_env = dict(os.environ)
+        _bad_frags = ["password", "token", "secret", "credential", "api_key", "private_key"]
+        base_env = {
+            k: v for k, v in os.environ.items()
+            if not any(frag in k.lower() for frag in _bad_frags)
+        }
         if auth_mode == "oauth":
             shaped_env = _shape_environment_for_oauth(
                 base_env,
@@ -198,12 +204,24 @@ class ManagedAgentAdapter:
         )
         
         if self._run_launcher is not None:
+            runtime_id_for_profile = self._runtime_id or request.agent_id
+            cmd_template = profile.get("command_template")
+            if not cmd_template:
+                if runtime_id_for_profile == "gemini_cli":
+                    cmd_template = ["gemini"]
+                elif runtime_id_for_profile == "claude_code":
+                    cmd_template = ["claude"]
+                elif runtime_id_for_profile == "codex_cli":
+                    cmd_template = ["codex"]
+                else:
+                    cmd_template = [runtime_id_for_profile]
+
             profile_obj = ManagedRuntimeProfile(
                 profile_id=profile_id,
-                runtime_id=self._runtime_id or request.agent_id,
+                runtime_id=runtime_id_for_profile,
                 auth_mode=auth_mode,
                 env_overrides=shaped_env,
-                command_template=profile.get("command_template", []),
+                command_template=cmd_template,
             )
             
             # The workspace path is usually managed by the worker, but we can pass it if known

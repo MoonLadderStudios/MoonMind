@@ -53,7 +53,8 @@ def _contains_sensitive_key(value: Any) -> bool:
         for key, nested in value.items():
             normalized = str(key).strip().lower()
             if any(fragment in normalized for fragment in _SENSITIVE_KEY_FRAGMENTS):
-                return True
+                if not normalized.endswith("_ref"):
+                    return True
             if _contains_sensitive_key(nested):
                 return True
         return False
