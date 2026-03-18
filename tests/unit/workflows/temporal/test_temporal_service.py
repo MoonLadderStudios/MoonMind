@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -235,12 +236,20 @@ async def test_create_execution_rejects_empty_failure_policy(tmp_path):
 async def test_create_execution_returns_existing_record_after_idempotency_race(
     tmp_path, monkeypatch
 ):
-    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_lifecycle_race.db"
-    engine = create_async_engine(db_url, future=True)
-    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    db_url = "sqlite+aiosqlite://"
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_async_engine(
+        db_url,
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     try:
         async with (
