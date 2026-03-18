@@ -102,6 +102,44 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
     assert normalize_jules_status("completed") == "succeeded"
     assert normalize_jules_status("canceled") == "canceled"
     assert normalize_jules_status("mystery") == "unknown"
+    # Actual Jules API State enum values
+    assert normalize_jules_status("QUEUED") == "queued"
+    assert normalize_jules_status("PLANNING") == "running"
+    assert normalize_jules_status("AWAITING_PLAN_APPROVAL") == "running"
+    assert normalize_jules_status("AWAITING_USER_FEEDBACK") == "running"
+    assert normalize_jules_status("IN_PROGRESS") == "running"
+    assert normalize_jules_status("PAUSED") == "running"
+    assert normalize_jules_status("FAILED") == "failed"
+    assert normalize_jules_status("COMPLETED") == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_create_task_sends_correct_source_context_format():
+    """Verify that sourceContext is serialized per the Jules API spec."""
+    from moonmind.schemas.jules_models import SourceContext
+
+    captured_body = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(200, json=_TASK_RESPONSE_DATA)
+
+    client = _make_client(handler)
+    source_ctx = SourceContext.from_repo("owner/repo", branch="develop")
+    await client.create_task(
+        JulesCreateTaskRequest(
+            title="Test",
+            description="Check source context",
+            source_context=source_ctx,
+        )
+    )
+
+    assert captured_body["sourceContext"] == {
+        "source": "sources/github/owner/repo",
+        "githubRepoContext": {"startingBranch": "develop"},
+    }
+    assert captured_body["prompt"] == "Check source context"
+
 
 
 @pytest.mark.asyncio
