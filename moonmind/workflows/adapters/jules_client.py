@@ -92,7 +92,7 @@ class JulesClient:
     async def create_task(self, request: JulesCreateTaskRequest) -> JulesTaskResponse:
         data = await self._post_json(
             "/sessions",
-            json=request.model_dump(by_alias=True, mode="json"),
+            json=request.model_dump(by_alias=True, mode="json", exclude_none=True),
         )
         return JulesTaskResponse.model_validate(data)
 
