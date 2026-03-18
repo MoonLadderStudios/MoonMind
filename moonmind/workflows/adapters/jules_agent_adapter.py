@@ -80,11 +80,18 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
         description: str,
         metadata: dict[str, Any],
     ) -> AgentRunHandle:
+        source_context = None
+        if request.workspace_spec:
+            repo = request.workspace_spec.get("repository") or request.workspace_spec.get("repo")
+            if repo:
+                source_context = {"github": {"repo": repo}}
+
         response = await self._client.create_task(
             JulesCreateTaskRequest(
                 title=title,
                 description=description,
                 metadata=metadata,
+                source_context=source_context,
             )
         )
         provider_status = str(response.status or "").strip() or "unknown"
