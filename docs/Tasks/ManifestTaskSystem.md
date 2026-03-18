@@ -96,7 +96,7 @@ A single data source entry from the compiled plan, materialized as a `ManifestNo
 - Data plane: embeddings + vector store upserts/deletes (worker direct to Qdrant via Activities within child `MoonMind.Run` workflows).
 
 **Execution Policy**
-Per-workflow configuration controlling `failurePolicy` (`fail_fast` or `continue`) and `maxConcurrency` (1–500, default 50).
+Per-workflow configuration controlling `failurePolicy` (`fail_fast`, `continue_and_report`, or `best_effort`) and `maxConcurrency` (1–500, default 50).
 
 ## 5. High-Level Architecture
 
