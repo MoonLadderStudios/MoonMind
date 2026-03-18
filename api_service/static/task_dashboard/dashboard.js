@@ -3998,25 +3998,30 @@
       const showingRange = paginationState.pageEnd > 0
         ? `${paginationState.pageStart}-${paginationState.pageEnd}`
         : "0";
-      const temporalCountText =
-        filterState.source === "temporal" && typeof currentTemporalCount === "number"
-          ? ` Exact count: ${currentTemporalCount}${currentTemporalCountMode ? ` (${currentTemporalCountMode})` : ""
-          }.`
+      
+      let totalCountInfo = "";
+      if (filterState.source === "temporal" && typeof currentTemporalCount === "number") {
+        const modeLabel = currentTemporalCountMode && currentTemporalCountMode !== "exact" 
+          ? ` (${currentTemporalCountMode})` 
           : "";
+        totalCountInfo = ` of ${currentTemporalCount}${modeLabel}`;
+      }
+
       return `
-        <div class="actions">
-          <div class="small">
-            Page ${escapeHtml(page)} · Showing ${escapeHtml(
-        showingRange,
-      )} · ${escapeHtml(filteredRows.length)} of ${escapeHtml(rows.length)} tasks in this page.${escapeHtml(
-        temporalCountText,
-      )}
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; margin-bottom: 1rem; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; background: rgba(0, 0, 0, 0.2);">
+          <div style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.7);">
+            <strong style="color: rgba(255, 255, 255, 0.95); font-weight: 500;">Page ${escapeHtml(page)}</strong>
+            <span style="margin: 0 0.5rem; opacity: 0.3;">|</span>
+            Showing ${escapeHtml(showingRange)}${escapeHtml(totalCountInfo)} tasks
+            ${filteredRows.length !== rows.length ? `<span style="opacity: 0.8; margin-left: 0.25rem;">(${escapeHtml(filteredRows.length)} filtered on page)</span>` : ""}
           </div>
-          <div>
-            <button type="button" class="secondary" data-queue-page-prev ${paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
-        }>Previous</button>
-            <button type="button" class="secondary" data-queue-page-next ${paginationState.hasMore ? "" : "disabled"
-        }>Next</button>
+          <div style="display: flex; gap: 0.4rem;">
+            <button type="button" class="secondary" title="Previous page" data-queue-page-prev ${
+              paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
+            } style="padding: 0.2rem 0.6rem; min-width: unset; line-height: 1;">&#8592;</button>
+            <button type="button" class="secondary" title="Next page" data-queue-page-next ${
+              paginationState.hasMore ? "" : "disabled"
+            } style="padding: 0.2rem 0.6rem; min-width: unset; line-height: 1;">&#8594;</button>
           </div>
         </div>
       `;
