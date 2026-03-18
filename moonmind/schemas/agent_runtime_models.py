@@ -244,6 +244,8 @@ class ManagedRuntimeProfile(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     runtime_id: str = Field(..., alias="runtimeId", min_length=1)
+    profile_id: str | None = Field(None, alias="profileId")
+    auth_mode: str | None = Field(None, alias="authMode")
     command_template: list[str] = Field(..., alias="commandTemplate")
     default_model: str | None = Field(None, alias="defaultModel")
     default_effort: str | None = Field(None, alias="defaultEffort")
