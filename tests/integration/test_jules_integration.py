@@ -61,6 +61,10 @@ def _integration_request() -> AgentExecutionRequest:
         executionProfileRef="profile:jules-integration-test",
         correlationId=correlation_id,
         idempotencyKey=f"idem-{correlation_id}",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "branch": "main",
+        },
         parameters={
             "title": "[Integration Test] MoonMind adapter lifecycle check",
             "description": (

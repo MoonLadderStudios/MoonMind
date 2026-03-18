@@ -49,78 +49,6 @@ class DatabaseSettings(BaseSettings):
     )
 
 
-class CelerySettings(BaseSettings):
-    """Celery broker and result backend settings."""
-
-    broker_url: str = Field(
-        "amqp://guest:guest@rabbitmq:5672//",
-        env="CELERY_BROKER_URL",
-        description="AMQP URL for the Celery broker (RabbitMQ).",
-    )
-    result_backend: Optional[str] = Field(
-        None,
-        env="CELERY_RESULT_BACKEND",
-        description="Database URL used by Celery to persist task results.",
-    )
-    default_queue: str = Field(
-        "moonmind.jobs",
-        validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE", "CELERY_DEFAULT_QUEUE"),
-        description="Default queue name for workflow tasks.",
-    )
-    default_exchange: str = Field(
-        "moonmind.jobs",
-        validation_alias=AliasChoices(
-            "WORKFLOW_DEFAULT_EXCHANGE", "CELERY_DEFAULT_EXCHANGE"
-        ),
-        description="Default exchange for workflow tasks.",
-    )
-    default_routing_key: str = Field(
-        "moonmind.jobs",
-        validation_alias=AliasChoices(
-            "WORKFLOW_DEFAULT_ROUTING_KEY", "CELERY_DEFAULT_ROUTING_KEY"
-        ),
-        description="Default routing key used by the workflow queue.",
-    )
-    task_serializer: str = Field("json", env="CELERY_TASK_SERIALIZER")
-    result_serializer: str = Field("json", env="CELERY_RESULT_SERIALIZER")
-    accept_content: tuple[str, ...] = Field(
-        ("json",),
-        env="CELERY_ACCEPT_CONTENT",
-        description="Accepted content types for Celery tasks.",
-    )
-    task_acks_late: bool = Field(True, env="CELERY_TASK_ACKS_LATE")
-    task_acks_on_failure_or_timeout: bool = Field(
-        True, env="CELERY_TASK_ACKS_ON_FAILURE_OR_TIMEOUT"
-    )
-    task_reject_on_worker_lost: bool = Field(
-        True, env="CELERY_TASK_REJECT_ON_WORKER_LOST"
-    )
-    worker_prefetch_multiplier: int = Field(1, env="CELERY_WORKER_PREFETCH_MULTIPLIER")
-    imports: tuple[str, ...] = Field(
-        (),
-        env="CELERY_IMPORTS",
-        description="Celery modules imported by the worker on startup.",
-    )
-    result_extended: bool = Field(True, env="CELERY_RESULT_EXTENDED")
-    result_expires: int = Field(7 * 24 * 60 * 60, env="CELERY_RESULT_EXPIRES")
-
-    model_config = SettingsConfigDict(
-        env_prefix="",
-        env_file=str(ENV_FILE),
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    @field_validator("accept_content", "imports", mode="before")
-    @classmethod
-    def _split_csv(cls, value):
-        """Allow comma-delimited strings for tuple fields."""
-        if isinstance(value, str):
-            items = [item.strip() for item in value.split(",") if item.strip()]
-            return tuple(items)
-        if isinstance(value, (list, tuple)):
-            return tuple(value)
-        return value
 
 
 class TemporalSettings(BaseSettings):
@@ -582,23 +510,20 @@ class WorkflowSettings(BaseSettings):
         env="WORKFLOW_WORKSPACE_ROOT",
         description="Host-mounted root directory for workflow automation workspaces.",
     )
-    celery_broker_url: Optional[str] = Field(
-        None,
-        env=(
-            "WORKFLOW_CELERY_BROKER_URL",
-            "WORKFLOW_CELERY_BROKER_URL",
-            "CELERY_BROKER_URL",
-        ),
-        description="Override Celery broker URL dedicated to workflow chains.",
+    default_queue: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices("WORKFLOW_DEFAULT_QUEUE"),
+        description="Default queue name for workflow tasks.",
     )
-    celery_result_backend: Optional[str] = Field(
-        None,
-        env=(
-            "WORKFLOW_CELERY_RESULT_BACKEND",
-            "WORKFLOW_CELERY_RESULT_BACKEND",
-            "CELERY_RESULT_BACKEND",
-        ),
-        description="Override Celery result backend for workflow chains.",
+    default_exchange: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices("WORKFLOW_DEFAULT_EXCHANGE"),
+        description="Default exchange for workflow tasks.",
+    )
+    default_routing_key: str = Field(
+        "moonmind.jobs",
+        validation_alias=AliasChoices("WORKFLOW_DEFAULT_ROUTING_KEY"),
+        description="Default routing key used by the workflow queue.",
     )
     metrics_enabled: bool = Field(
         False,
@@ -621,7 +546,7 @@ class WorkflowSettings(BaseSettings):
         description="Namespace/prefix applied to emitted workflow automation metrics.",
     )
     default_feature_key: str = Field(
-        "001-celery-chain-workflow",
+        "001-workflow",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_FEATURE_KEY", "WORKFLOW_DEFAULT_FEATURE_KEY"
         ),
@@ -1112,8 +1037,6 @@ class WorkflowSettings(BaseSettings):
 
     @field_validator(
         "metrics_host",
-        "celery_broker_url",
-        "celery_result_backend",
         "codex_environment",
         "codex_model",
         "codex_effort",
@@ -1355,7 +1278,7 @@ class WorkflowSettings(BaseSettings):
             )
 
 
-# Spec workflow Celery overrides rely on pydantic ``env`` fallbacks and
+# Workflow overrides rely on pydantic ``env`` fallbacks and
 # ``AppSettings.model_post_init`` to populate sensible defaults.
 
 
@@ -1795,7 +1718,7 @@ class AppSettings(BaseSettings):
     atlassian: AtlassianSettings = Field(default_factory=AtlassianSettings)
     local_data: LocalDataSettings = Field(default_factory=LocalDataSettings)
     oidc: OIDCSettings = Field(default_factory=OIDCSettings)
-    celery: CelerySettings = Field(default_factory=CelerySettings)
+
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
     temporal_dashboard: TemporalDashboardSettings = Field(
         default_factory=TemporalDashboardSettings
@@ -2115,24 +2038,10 @@ class AppSettings(BaseSettings):
         )
 
     def model_post_init(self, __context: Any) -> None:  # type: ignore[override]
-        """Populate derived Celery defaults after settings load."""
+        """Populate derived defaults after settings load."""
         super().model_post_init(__context)
-        if not self.celery.result_backend:
-            db = self.database
-            self.celery.result_backend = "db+postgresql://{}:{}@{}:{}/{}".format(
-                db.POSTGRES_USER,
-                db.POSTGRES_PASSWORD,
-                db.POSTGRES_HOST,
-                db.POSTGRES_PORT,
-                db.POSTGRES_DB,
-            )
-
-        if not self.workflow.celery_broker_url:
-            self.workflow.celery_broker_url = self.celery.broker_url
-        if not self.workflow.celery_result_backend:
-            self.workflow.celery_result_backend = self.celery.result_backend
         if not self.workflow.codex_queue:
-            self.workflow.codex_queue = self.celery.default_queue
+            self.workflow.codex_queue = self.workflow.default_queue
         if self.worker_enable_task_proposals is not None:
             self.workflow.enable_task_proposals = self.worker_enable_task_proposals
         if self.worker_stage_command_timeout_seconds is not None:

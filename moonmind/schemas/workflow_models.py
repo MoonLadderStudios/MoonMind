@@ -42,7 +42,7 @@ def _validate_repository_slug(value: str) -> str:
 
 
 class WorkflowTaskStateModel(BaseModel):
-    """Schema for individual Celery task states."""
+    """Schema for individual workflow task states."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -118,7 +118,7 @@ class WorkflowRunModel(BaseModel):
     codex_preflight_message: Optional[str] = Field(None, alias="codexPreflightMessage")
     codex_logs_path: Optional[str] = Field(None, alias="codexLogsPath")
     codex_patch_path: Optional[str] = Field(None, alias="codexPatchPath")
-    celery_chain_id: Optional[str] = Field(None, alias="celeryChainId")
+    legacy_chain_id: Optional[str] = Field(None, alias="celeryChainId")
     requested_by: Optional[UUID] = Field(None, alias="requestedBy")
     created_by: Optional[UUID] = Field(None, alias="createdBy")
     current_task_name: Optional[WorkflowTaskName] = Field(
@@ -329,8 +329,8 @@ class OrchestratorPlanStepStateModel(BaseModel):
     status: OrchestratorPlanStepStatus | None = Field(None, alias="status")
     started_at: datetime | None = Field(None, alias="startedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
-    celery_task_id: Optional[str] = Field(None, alias="celeryTaskId")
-    celery_state: Optional[OrchestratorTaskState] = Field(None, alias="celeryState")
+    worker_task_id: Optional[str] = Field(None, alias="celeryTaskId")
+    worker_state: Optional[OrchestratorTaskState] = Field(None, alias="celeryState")
     message: Optional[str] = Field(None, alias="message")
     artifact_refs: list[UUID] = Field(default_factory=list, alias="artifactRefs")
 

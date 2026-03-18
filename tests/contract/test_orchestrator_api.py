@@ -29,7 +29,7 @@ from moonmind.schemas.workflow_models import (
     OrchestratorRunDetailModel,
     OrchestratorRunListResponse,
 )
-from moonmind.workflows.agentkit_celery import models as workflow_models
+from moonmind.workflows.automation import models as workflow_models
 
 
 def _override_current_user_dependencies() -> None:

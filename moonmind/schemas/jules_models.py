@@ -18,6 +18,9 @@ JulesNormalizedStatus = Literal[
 _JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
     "accepted": "queued",
     "assigned": "queued",
+    # -- Actual Jules API State enum values (case-insensitive) --
+    "awaiting_plan_approval": "running",
+    "awaiting_user_feedback": "running",
     "blocked": "running",
     "canceled": "canceled",
     "cancelled": "canceled",
@@ -30,11 +33,14 @@ _JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
     "finished": "succeeded",
     "in_progress": "running",
     "open": "queued",
+    "paused": "running",
     "pending": "queued",
+    "planning": "running",
     "queued": "queued",
     "resolved": "succeeded",
     "running": "running",
     "started": "running",
+    "state_unspecified": "unknown",
     "submitted": "queued",
     "success": "succeeded",
     "succeeded": "succeeded",
@@ -52,11 +58,52 @@ def normalize_jules_status(raw_status: str | None) -> JulesNormalizedStatus:
     return _JULES_STATUS_MAP.get(normalized, "unknown")
 
 
+class GitHubRepoContext(BaseModel):
+    """Context to use a GitHub repo in a Jules session.
+
+    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions#GitHubRepoContext
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    starting_branch: str = Field("main", alias="startingBranch")
+
+
+class SourceContext(BaseModel):
+    """Source context for a Jules session.
+
+    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions#SourceContext
+
+    The ``source`` field must be a resource name in the format
+    ``sources/github/{owner}/{repo}``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: str = Field(..., alias="source")
+    github_repo_context: GitHubRepoContext = Field(
+        ..., alias="githubRepoContext"
+    )
+
+    @staticmethod
+    def from_repo(
+        owner_slash_repo: str,
+        *,
+        branch: str = "main",
+    ) -> "SourceContext":
+        """Build a ``SourceContext`` from an ``owner/repo`` string."""
+        return SourceContext(
+            source=f"sources/github/{owner_slash_repo}",
+            github_repo_context=GitHubRepoContext(starting_branch=branch),
+        )
+
+
 class JulesCreateTaskRequest(BaseModel):
     """Request payload for creating a Jules session.
 
     Maps internal field names to Jules API wire format:
-    ``prompt`` (required), ``title`` (optional), ``sourceContext`` (optional).
+    ``prompt`` (required), ``title`` (optional), ``sourceContext`` (required),
+    ``automationMode`` (optional).
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -64,7 +111,8 @@ class JulesCreateTaskRequest(BaseModel):
     title: Optional[str] = Field(None, alias="title")
     description: str = Field(..., alias="prompt")
     metadata: Optional[dict[str, Any]] = Field(None, exclude=True)
-    source_context: Optional[dict[str, Any]] = Field(None, alias="sourceContext")
+    source_context: Optional[SourceContext] = Field(None, alias="sourceContext")
+    automation_mode: Optional[str] = Field(None, alias="automationMode")
 
 
 class JulesResolveTaskRequest(BaseModel):
@@ -203,6 +251,7 @@ class JulesIntegrationCancelResult(BaseModel):
 
 
 __all__ = [
+    "GitHubRepoContext",
     "JulesCreateTaskRequest",
     "JulesIntegrationCancelResult",
     "JulesIntegrationFetchResult",
@@ -213,5 +262,6 @@ __all__ = [
     "JulesGetTaskRequest",
     "JulesTaskResponse",
     "JulesNormalizedStatus",
+    "SourceContext",
     "normalize_jules_status",
 ]

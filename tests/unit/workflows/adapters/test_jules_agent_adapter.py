@@ -133,5 +133,50 @@ async def test_start_passes_repository_in_source_context():
 
     assert len(client.created) == 1
     create_req = client.created[0]
-    assert create_req.source_context == {"github": {"repo": "owner/repo"}}
+    # Must match Jules API SourceContext format
+    assert create_req.source_context is not None
+    assert create_req.source_context.source == "sources/github/owner/repo"
+    assert create_req.source_context.github_repo_context.starting_branch == "main"
+
+
+async def test_start_passes_explicit_branch_in_source_context():
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="jules",
+        executionProfileRef="profile:jules-default",
+        correlationId="corr-1",
+        idempotencyKey="idem-branch",
+        workspaceSpec={"repository": "owner/repo", "branch": "develop"},
+        parameters={"description": "foo"}
+    )
+
+    await adapter.start(req)
+
+    assert len(client.created) == 1
+    create_req = client.created[0]
+    assert create_req.source_context.source == "sources/github/owner/repo"
+    assert create_req.source_context.github_repo_context.starting_branch == "develop"
+
+
+async def test_start_without_workspace_spec_sends_no_source_context():
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="jules",
+        executionProfileRef="profile:jules-default",
+        correlationId="corr-1",
+        idempotencyKey="idem-no-ws",
+        parameters={"description": "foo"}
+    )
+
+    await adapter.start(req)
+
+    assert len(client.created) == 1
+    create_req = client.created[0]
+    assert create_req.source_context is None
 

@@ -1,4 +1,4 @@
-"""Database repositories for the workflow Celery workflow."""
+"""Database repositories for workflow automation."""
 
 from __future__ import annotations
 
@@ -177,7 +177,7 @@ class WorkflowRepository:
         branch_name: Optional[str] = None,
         pr_url: Optional[str] = None,
         artifacts_path: Optional[str] = None,
-        celery_chain_id: Optional[str] = None,
+        legacy_chain_id: Optional[str] = None,
         status: models.WorkflowRunStatus = models.WorkflowRunStatus.PENDING,
         phase: models.WorkflowRunPhase = models.WorkflowRunPhase.DISCOVER,
         codex_task_id: Optional[str] = None,
@@ -205,7 +205,7 @@ class WorkflowRepository:
             artifacts_path=artifacts_path,
             status=status,
             phase=phase,
-            celery_chain_id=celery_chain_id,
+            celery_chain_id=legacy_chain_id,
             codex_task_id=codex_task_id,
             codex_queue=codex_queue,
             codex_volume=codex_volume,
@@ -502,8 +502,8 @@ class WorkflowRepository:
     ) -> Sequence[models.WorkflowTaskState]:
         """Ensure placeholder task state rows exist for the given tasks.
 
-        The UI expects every step in the Celery chain to have a visible state as
-        soon as a workflow run is triggered. This helper guarantees that a
+        The UI expects every step in the workflow chain to have a visible state as
+        soon as a workflow run is triggered.  This helper guarantees that a
         ``queued`` record exists for each task/attempt combination while
         avoiding duplicate inserts when invoked multiple times.
         """

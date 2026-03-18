@@ -1,4 +1,4 @@
-"""Celery routing helpers for workflow Codex queue bindings."""
+"""Routing helpers for workflow Codex queue bindings."""
 
 from __future__ import annotations
 
@@ -6,13 +6,21 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Tuple
 
-from kombu import Queue
-
 from moonmind.config.settings import settings
 
 CODEX_QUEUE_PREFIX = "codex-"
 CODEX_QUEUE_HEADER = "codex-queue"
 CODEX_AFFINITY_HEADER = "codex-affinity"
+
+
+@dataclass(frozen=True, slots=True)
+class QueueDefinition:
+    """Lightweight replacement for ``kombu.Queue``."""
+
+    name: str
+    exchange: str = ""
+    routing_key: str = ""
+    durable: bool = True
 
 
 def _ensure_positive(value: int, *, field: str) -> int:
@@ -53,11 +61,11 @@ class CodexShardRouter:
 
     @property
     def default_exchange(self) -> str:
-        return settings.celery.default_exchange
+        return settings.workflow.default_exchange
 
     @property
     def default_queue(self) -> str:
-        return settings.celery.default_queue
+        return settings.workflow.default_queue
 
     def queue_name(self, shard_index: int) -> str:
         if self.codex_queue:
@@ -92,24 +100,26 @@ class CodexShardRouter:
             return self.codex_queue
         return self.queue_name(self.shard_for_key(affinity_key))
 
-    def build_queues(self, *, include_default: bool = False) -> Tuple[Queue, ...]:
-        queues: list[Queue] = []
+    def build_queues(
+        self, *, include_default: bool = False
+    ) -> Tuple[QueueDefinition, ...]:
+        queues: list[QueueDefinition] = []
         if include_default:
             queues.append(
-                Queue(
-                    self.default_queue,
+                QueueDefinition(
+                    name=self.default_queue,
                     exchange=self.default_exchange,
-                    routing_key=settings.celery.default_routing_key,
+                    routing_key=settings.workflow.default_routing_key,
                     durable=True,
                 )
             )
-        configured_names = {queue.name for queue in queues}
+        configured_names = {q.name for q in queues}
         for name in self.queue_names():
             if name in configured_names:
                 continue
             queues.append(
-                Queue(
-                    name,
+                QueueDefinition(
+                    name=name,
                     exchange=self.default_exchange,
                     routing_key=name,
                     durable=True,
@@ -126,7 +136,7 @@ def get_codex_shard_router(
 ) -> CodexShardRouter:
     if codex_queue is None:
         codex_queue = (
-            settings.workflow.codex_queue or settings.celery.default_queue
+            settings.workflow.codex_queue or settings.workflow.default_queue
         )
     if codex_queue:
         return CodexShardRouter(shard_count=1, codex_queue=codex_queue)
@@ -172,8 +182,8 @@ def build_task_router(
             return {"queue": queue_name, "routing_key": queue_name}
 
         return {
-            "queue": settings.celery.default_queue,
-            "routing_key": settings.celery.default_routing_key,
+            "queue": settings.workflow.default_queue,
+            "routing_key": settings.workflow.default_routing_key,
         }
 
     return (_route_task,)
@@ -189,6 +199,7 @@ __all__ = [
     "CODEX_QUEUE_PREFIX",
     "CODEX_QUEUE_HEADER",
     "CODEX_AFFINITY_HEADER",
+    "QueueDefinition",
     "CodexShardRouter",
     "get_codex_shard_router",
     "iter_codex_queue_names",

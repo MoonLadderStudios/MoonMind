@@ -441,10 +441,10 @@ components:
           type: string
           format: date-time
           nullable: true
-        celeryTaskId:
+        workerTaskId:
           type: string
           nullable: true
-        celeryState:
+        workerState:
           type: string
           nullable: true
         message:

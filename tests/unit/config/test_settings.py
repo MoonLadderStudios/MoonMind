@@ -4,7 +4,6 @@ from pydantic import ValidationError
 from moonmind.config.settings import (
     AppSettings,
     AtlassianSettings,
-    CelerySettings,
     FeatureFlagsSettings,
     GoogleSettings,
     OIDCSettings,
@@ -732,22 +731,22 @@ class TestWorkflowSettings:
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("agentkit",)
 
-    def test_app_settings_defaults_codex_queue_to_celery_default(
+    def test_app_settings_defaults_codex_queue_to_workflow_default(
         self, app_settings_defaults
     ):
         """When codex queue is unset, app settings should align it to default queue."""
 
         settings = AppSettings(
             **app_settings_defaults,
-            celery={
+            workflow={
                 "default_queue": "moonmind.jobs",
                 "default_exchange": "moonmind.jobs",
                 "default_routing_key": "moonmind.jobs",
+                "codex_queue": None,
             },
-            workflow={"codex_queue": None},
         )
 
-        assert settings.celery.default_queue == "moonmind.jobs"
+        assert settings.workflow.default_queue == "moonmind.jobs"
         assert settings.workflow.codex_queue == "moonmind.jobs"
 
 
@@ -788,17 +787,14 @@ def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) 
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
 
 
-def test_celery_settings_accept_workflow_queue_aliases(monkeypatch) -> None:
-    """WORKFLOW_DEFAULT_* aliases should configure Celery queue defaults."""
+def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
+    """WORKFLOW_DEFAULT_* aliases should configure workflow queue defaults."""
 
     monkeypatch.setenv("WORKFLOW_DEFAULT_QUEUE", "workflow.jobs")
     monkeypatch.setenv("WORKFLOW_DEFAULT_EXCHANGE", "workflow.jobs")
     monkeypatch.setenv("WORKFLOW_DEFAULT_ROUTING_KEY", "workflow.jobs")
-    monkeypatch.delenv("CELERY_DEFAULT_QUEUE", raising=False)
-    monkeypatch.delenv("CELERY_DEFAULT_EXCHANGE", raising=False)
-    monkeypatch.delenv("CELERY_DEFAULT_ROUTING_KEY", raising=False)
 
-    settings = CelerySettings(_env_file=None)
+    settings = WorkflowSettings(_env_file=None)
 
     assert settings.default_queue == "workflow.jobs"
     assert settings.default_exchange == "workflow.jobs"
