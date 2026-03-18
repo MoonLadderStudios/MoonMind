@@ -3,7 +3,7 @@ ARG CODEX_CLI_VERSION=0.104.0
 ARG AGENT_KIT_VERSION=0.4.0
 ARG CLAUDE_CLI_VERSION=2.1.50
 # Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
-# the API, orchestrator, and Celery workers can run from the same image tag.
+# the API, orchestrator, and Temporal workers can run from the same image tag.
 # Disable selectively in test-only or constrained builds when needed.
 ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_GEMINI_CLI=true
@@ -285,7 +285,7 @@ RUN apt-get update && \
         docker-compose-plugin && \
     rm -rf /var/lib/apt/lists/*
 
-# Ensure the non-root ``app`` user exists for Celery workers and the bundled
+# Ensure the non-root ``app`` user exists for Temporal workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
     chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude

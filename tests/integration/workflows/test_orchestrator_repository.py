@@ -21,7 +21,7 @@ from api_service.db.models import (
     OrchestratorTaskStepStatus,
 )
 from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
-from moonmind.workflows.agentkit_celery import models as workflow_models
+from moonmind.workflows.automation import models as workflow_models
 
 
 @pytest.mark.asyncio

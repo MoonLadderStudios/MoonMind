@@ -104,20 +104,6 @@ _DEFAULT_PROFILES: Mapping[str, ServiceProfile] = {
         ),
         healthcheck=HealthCheck(url="http://api:5000/health"),
     ),
-    "celery-worker": ServiceProfile(
-        key="celery-worker",
-        compose_service="celery-worker",
-        workspace_path=Path("."),
-        description="Celery worker responsible for workflow tasks",
-        allowlist_globs=(
-            "celery_worker/Dockerfile",
-            "celery_worker/Dockerfile.*",
-            "celery_worker/requirements*.txt",
-            "celery_worker/pyproject.toml",
-            "celery_worker/poetry.lock",
-        ),
-        healthcheck=None,
-    ),
 }
 
 

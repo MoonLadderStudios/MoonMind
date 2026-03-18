@@ -714,7 +714,7 @@ class WorkflowTaskStatus(str, enum.Enum):
 
 
 class WorkflowTaskName(str, enum.Enum):
-    """Supported Celery task identifiers for the chain."""
+    """Supported workflow task identifiers for the chain."""
 
     DISCOVER = "discover"
     SUBMIT = "submit"
@@ -838,7 +838,7 @@ class OrchestratorRunArtifactType(str, enum.Enum):
 
 
 class OrchestratorTaskState(str, enum.Enum):
-    """Celery state transitions recorded for orchestrator steps."""
+    """State transitions recorded for orchestrator steps."""
 
     PENDING = "PENDING"
     STARTED = "STARTED"

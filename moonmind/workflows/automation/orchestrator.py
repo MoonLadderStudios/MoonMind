@@ -1,8 +1,8 @@
-"""Workflow orchestration for workflow automation runs.
+"""Orchestrator dispatch module for workflow automation.
 
-This module replaces the Celery-based orchestrator from agentkit_celery.
-The trigger/retry functions previously dispatched Celery task chains;
-they are now stubs that will be wired to Temporal or another executor.
+This module handles creation and retry of automation workflow runs.
+The trigger/retry functions create/update DB records and enqueue jobs via
+t will be wired to Temporal or another executor.
 """
 
 from __future__ import annotations
@@ -74,9 +74,7 @@ async def trigger_workflow_run(
     force_phase: Optional[str] = None,
     repository: Optional[str] = None,
 ) -> TriggeredWorkflow:
-    """Trigger a new workflow automation workflow run.
-
-    Previously dispatched a Celery task chain. Now creates the DB record
+    """Create a new workflow run and enqueue its steps.
     and is expected to be wired to a Temporal workflow or similar executor.
     """
 
@@ -111,9 +109,7 @@ async def retry_workflow_run(
     notes: Optional[str] = None,
     mode: RetryWorkflowMode = RetryWorkflowMode.RESUME_FAILED_TASK,
 ) -> TriggeredWorkflow:
-    """Retry a failed workflow run.
-
-    Previously dispatched a Celery task chain. Now updates the DB record
+    """Retry a failed or stalled workflow run.
     and is expected to be wired to a Temporal workflow or similar executor.
     """
 

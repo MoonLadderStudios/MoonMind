@@ -14,7 +14,7 @@ During the build the stage:
 3. Runs `npm install -g @openai/codex@${CODEX_CLI_VERSION}` and `npm install -g @githubnext/spec-kit@${AGENT_KIT_VERSION}`.
 4. Cleans the npm cache before handing control back to the Python runtime stage.
 
-The final runtime image copies only the produced binaries, supporting node modules, and licenses from the builder. Python remains the only runtime dependency while both CLIs are available on the default `PATH` for Celery workers and FastAPI.
+The final runtime image copies only the produced binaries, supporting node modules, and licenses from the builder. Python remains the only runtime dependency while both CLIs are available on the default `PATH` for Temporal workers and FastAPI.
 
 The runtime stage also includes additional shell tooling required by bootstrap and diagnostics workflows, including `rg` (`ripgrep`) so Codex preflight and maintenance shells can perform reliable search checks without ad-hoc runtime installs.
 

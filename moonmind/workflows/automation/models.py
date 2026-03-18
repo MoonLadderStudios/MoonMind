@@ -1,7 +1,6 @@
 """SQLAlchemy models for workflow automation workflow persistence.
 
-This module was formerly part of moonmind.workflows.agentkit_celery.models
-and has been moved here as part of the Celery removal.
+This module defines the data models used by the workflow automation system.
 """
 
 from __future__ import annotations
