@@ -818,7 +818,7 @@ class WorkflowSettings(BaseSettings):
         le=100,
     )
     default_skill: str = Field(
-        "agentkit",
+        "auto",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_SKILL",
             "WORKFLOW_DEFAULT_SKILL",
@@ -864,7 +864,7 @@ class WorkflowSettings(BaseSettings):
         description="Skill policy mode. 'permissive' allows any resolvable skill; 'allowlist' enforces allowed skills list.",
     )
     allowed_skills: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("agentkit",),
+        ("auto",),
         validation_alias=AliasChoices(
             "WORKFLOW_ALLOWED_SKILLS",
             "WORKFLOW_ALLOWED_SKILLS",
@@ -1325,7 +1325,7 @@ class WorkflowSettings(BaseSettings):
                 setattr(self, attr, normalized or None)
 
         if not self.default_skill:
-            self.default_skill = "agentkit"
+            self.default_skill = "auto"
         if (
             self.skill_policy_mode == "allowlist"
             and self.default_skill

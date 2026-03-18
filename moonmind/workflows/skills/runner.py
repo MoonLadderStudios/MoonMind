@@ -7,7 +7,6 @@ from typing import TypeVar
 
 from .contracts import StageExecutionOutcome
 from .registry import resolve_stage_execution
-from .agentkit_adapter import SkillAdapterError, run_agentkit_stage
 
 T = TypeVar("T")
 
@@ -43,7 +42,7 @@ def execute_stage(
     context: dict[str, object],
     execute_direct: Callable[[], T],
 ) -> StageExecutionOutcome:
-    """Execute a stage with skills policy and direct fallback semantics."""
+    """Execute a stage with skills policy semantics."""
 
     decision = resolve_stage_execution(
         stage_name=stage_name,
@@ -51,87 +50,28 @@ def execute_stage(
         context=context,
     )
 
-    if not decision.use_skills:
-        _set_context_execution(
-            context=context,
-            stage_name=stage_name,
-            selected_skill=decision.selected_skill,
-            adapter_id=decision.adapter_id,
-            execution_path="direct_only",
-            used_skills=False,
-            used_fallback=False,
-            shadow_mode_requested=decision.shadow_mode,
-        )
-        result = execute_direct()
-        return StageExecutionOutcome(
-            stage_name=stage_name,
-            selected_skill=decision.selected_skill,
-            adapter_id=decision.adapter_id,
-            execution_path="direct_only",
-            used_fallback=False,
-            used_skills=False,
-            shadow_mode_requested=decision.shadow_mode,
-            result=result,
-        )
+    execution_path = "skill" if decision.use_skills else "direct_only"
 
-    adapter_id = decision.adapter_id
-    if adapter_id is None:
-        raise SkillAdapterError(
-            "skill_adapter_not_registered: "
-            f"No adapter is registered for skill '{decision.selected_skill}' "
-            f"while executing stage '{stage_name}'. Register a skill adapter or "
-            "select a supported skill."
-        )
-    if adapter_id != "agentkit":
-        raise SkillAdapterError(
-            "skill_adapter_not_registered: "
-            f"Adapter '{adapter_id}' for skill '{decision.selected_skill}' "
-            "is not wired into the stage runner."
-        )
+    _set_context_execution(
+        context=context,
+        stage_name=stage_name,
+        selected_skill=decision.selected_skill,
+        adapter_id=None,
+        execution_path=execution_path,
+        used_skills=decision.use_skills,
+        used_fallback=False,
+        shadow_mode_requested=decision.shadow_mode,
+    )
 
-    try:
-        _set_context_execution(
-            context=context,
-            stage_name=stage_name,
-            selected_skill=decision.selected_skill,
-            adapter_id=adapter_id,
-            execution_path="skill",
-            used_skills=True,
-            used_fallback=False,
-            shadow_mode_requested=decision.shadow_mode,
-        )
-        result = run_agentkit_stage(execute_direct=execute_direct)
-        return StageExecutionOutcome(
-            stage_name=stage_name,
-            selected_skill=decision.selected_skill,
-            adapter_id=adapter_id,
-            execution_path="skill",
-            used_fallback=False,
-            used_skills=True,
-            shadow_mode_requested=decision.shadow_mode,
-            result=result,
-        )
-    except SkillAdapterError:
-        if not decision.fallback_enabled:
-            raise
-        _set_context_execution(
-            context=context,
-            stage_name=stage_name,
-            selected_skill=decision.selected_skill,
-            adapter_id=adapter_id,
-            execution_path="direct_fallback",
-            used_skills=True,
-            used_fallback=True,
-            shadow_mode_requested=decision.shadow_mode,
-        )
-        fallback_result = execute_direct()
-        return StageExecutionOutcome(
-            stage_name=stage_name,
-            selected_skill=decision.selected_skill,
-            adapter_id=adapter_id,
-            execution_path="direct_fallback",
-            used_fallback=True,
-            used_skills=True,
-            shadow_mode_requested=decision.shadow_mode,
-            result=fallback_result,
-        )
+    result = execute_direct()
+
+    return StageExecutionOutcome(
+        stage_name=stage_name,
+        selected_skill=decision.selected_skill,
+        adapter_id=None,
+        execution_path=execution_path,
+        used_fallback=False,
+        used_skills=decision.use_skills,
+        shadow_mode_requested=decision.shadow_mode,
+        result=result,
+    )

@@ -38,7 +38,41 @@ from moonmind.agents.codex_worker.worker import (
 )
 from moonmind.config.settings import settings
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
+
+
+@pytest.fixture(autouse=True)
+def _stub_skill_resolution(monkeypatch):
+    """Stub skill resolution so tests using arbitrary skill names don't fail.
+
+    With the removal of the builtin://agentkit fallback, arbitrary skill names
+    like 'agentkit' in test payloads can no longer be resolved. This fixture
+    provides a no-op stub. Tests that explicitly verify materialization behavior
+    override these stubs via their own monkeypatch.setattr calls.
+    """
+
+    class _StubSelection:
+        def __init__(self, skills):
+            self.skills = skills
+
+    class _StubWorkspace:
+        def to_payload(self):
+            return {}
+
+    def _fake_resolve(*, run_id, context):
+        return _StubSelection(context.get("skill_selection", []))
+
+    def _fake_materialize(*, selection, run_root, cache_root, verify_signatures=False):
+        return _StubWorkspace()
+
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.resolve_run_skill_selection",
+        _fake_resolve,
+    )
+    monkeypatch.setattr(
+        "moonmind.agents.codex_worker.worker.materialize_run_skill_workspace",
+        _fake_materialize,
+    )
 
 
 class FakeQueueClient:
@@ -1193,15 +1227,15 @@ async def test_run_once_codex_skill_routes_through_skill_path(tmp_path: Path) ->
 
     assert processed is True
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_skill:agentkit:True"]
     claimed = next(
         event for event in queue.events if event["message"] == "Worker claimed job"
     )
     payload = claimed["payload"]
     assert isinstance(payload, dict)
-    assert payload["executionPath"] == "skill"
+    assert payload["executionPath"] == "direct_fallback"
     assert payload["usedSkills"] is True
-    assert payload["usedFallback"] is False
+    assert payload["usedFallback"] is True
 
 
 async def test_run_once_task_routes_through_direct_exec_path(tmp_path: Path) -> None:
@@ -1304,7 +1338,7 @@ async def test_run_once_task_skill_routes_through_skill_path(tmp_path: Path) -> 
 
     assert processed is True
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_skill:agentkit:True"]
     assert "ref" not in handler.skill_payloads[0]
     inputs = handler.skill_payloads[0].get("inputs")
     assert isinstance(inputs, dict)
@@ -1397,7 +1431,7 @@ async def test_run_once_task_steps_execute_in_order_with_step_events(
     assert processed is True
     assert len(queue.completed) == 1
     assert queue.failed == []
-    assert handler.calls == ["codex_exec", "codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_exec", "codex_skill:agentkit:True"]
     assert "logs/steps/step-0000.log" in queue.uploaded
     assert "logs/steps/step-0001.log" in queue.uploaded
     assert "patches/steps/step-0000.patch" in queue.uploaded
@@ -3889,7 +3923,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_reports_failure(
     assert queue.completed == []
     assert len(queue.failed) == 1
     assert "quality-gate gate failed" in queue.failed[0]
-    assert handler.calls == ["codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_skill:agentkit:True"]
     assert "gates/steps/step-0000.json" in queue.uploaded
     assert not any(
         event["message"] == "moonmind.task.publish" for event in queue.events
@@ -4002,7 +4036,7 @@ async def test_run_once_skill_gate_step_succeeds_when_gate_reports_pass(
     assert processed is True
     assert queue.failed == []
     assert len(queue.completed) == 1
-    assert handler.calls == ["codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_skill:agentkit:True"]
     assert "gates/steps/step-0000.json" in queue.uploaded
     finished_events = [
         event for event in queue.events if event["message"] == "task.step.finished"
@@ -4075,7 +4109,7 @@ async def test_run_once_skill_gate_step_fails_when_gate_path_is_outside_allowed_
         "quality-gate gate failed: quality-gate gate artifact path is outside allowed "
         "artifacts directories" in queue.failed[0]
     )
-    assert handler.calls == ["codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_skill:agentkit:True"]
     assert "gates/steps/step-0000.json" in queue.uploaded
 
 
@@ -4507,7 +4541,7 @@ async def test_run_once_task_steps_materialize_union_of_selected_skills(
     assert processed is True
     assert len(queue.completed) == 1
     assert set(captured["skills"]) == {"custom", "agentkit"}
-    assert handler.calls == ["codex_skill:custom:True", "codex_skill:agentkit:False"]
+    assert handler.calls == ["codex_skill:custom:True", "codex_skill:agentkit:True"]
 
 
 async def test_run_once_rejects_runtime_not_supported_by_worker_mode(
@@ -5986,7 +6020,7 @@ async def test_config_from_env_supports_legacy_moonmind_allowed_skills(
 
     config = CodexWorkerConfig.from_env()
 
-    assert config.allowed_skills == ("custom", "agentkit")
+    assert config.allowed_skills == ("custom", "agentkit", "auto")
 
 
 async def test_config_from_env_uses_defaults(monkeypatch) -> None:
@@ -6021,9 +6055,9 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.poll_interval_ms == 1500
     assert config.lease_seconds == 120
     assert str(config.workdir) == "var/worker"
-    assert config.default_skill == "agentkit"
+    assert config.default_skill == "auto"
     assert config.skill_policy_mode == "permissive"
-    assert config.allowed_skills == ("agentkit",)
+    assert config.allowed_skills == ("auto",)
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
     assert config.legacy_job_types_enabled is True

@@ -16,7 +16,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentQueueValidationError,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 def _tests_root() -> Path:

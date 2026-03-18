@@ -23,7 +23,7 @@ from moonmind.workflows.agent_queue.service import (
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.agentkit]
+pytestmark = [pytest.mark.asyncio]
 
 
 @asynccontextmanager

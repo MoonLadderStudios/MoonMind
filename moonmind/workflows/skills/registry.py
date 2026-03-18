@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 from moonmind.config.settings import settings
 
@@ -21,11 +21,6 @@ from .tool_registry import validate_tool_registry as validate_contract_tool_regi
 
 SkillRegistryError = ToolRegistryError
 SkillRegistrySnapshot = ToolRegistrySnapshot
-
-_SPECKIT_ADAPTER_ID = "agentkit"
-_SKILL_ADAPTERS: dict[str, str] = {
-    "agentkit": _SPECKIT_ADAPTER_ID,
-}
 
 
 def _stable_percent(run_id: str, stage_name: str) -> int:
@@ -75,7 +70,6 @@ def resolve_stage_execution(
     selected_skill = _select_stage_skill(stage_name, context)
     if not _skill_allowed(selected_skill):
         selected_skill = cfg.default_skill
-    adapter_id = get_stage_adapter(selected_skill)
 
     canary_bucket = _stable_percent(run_id, stage_name)
     canary_enabled = canary_bucket < cfg.skills_canary_percent
@@ -85,27 +79,12 @@ def resolve_stage_execution(
     return StageExecutionDecision(
         stage_name=stage_name,
         selected_skill=selected_skill,
-        adapter_id=adapter_id,
+        adapter_id=None,
         use_skills=use_skills,
         execution_path=execution_path,
         fallback_enabled=bool(cfg.skills_fallback_enabled),
         shadow_mode=bool(cfg.skills_shadow_mode),
     )
-
-
-def get_stage_adapter(skill_name: str) -> Optional[str]:
-    """Return the adapter id for a configured stage skill."""
-
-    normalized = str(skill_name or "").strip()
-    if not normalized:
-        return None
-    return _SKILL_ADAPTERS.get(normalized)
-
-
-def skill_requires_agentkit(skill_name: str) -> bool:
-    """Return whether the provided stage skill uses the Workflow adapter."""
-
-    return get_stage_adapter(skill_name) == _SPECKIT_ADAPTER_ID
 
 
 def configured_stage_skills() -> tuple[str, ...]:
@@ -122,14 +101,6 @@ def configured_stage_skills() -> tuple[str, ...]:
     if not values:
         return ()
     return tuple(dict.fromkeys(values))
-
-
-def configured_stage_skills_require_agentkit() -> bool:
-    """Return whether current stage configuration requires Workflow CLI checks."""
-
-    return any(
-        skill_requires_agentkit(skill_name) for skill_name in configured_stage_skills()
-    )
 
 
 def load_tool_registry(path: Path) -> tuple[Any, ...]:
@@ -199,16 +170,13 @@ __all__ = [
     "SkillRegistryError",
     "SkillRegistrySnapshot",
     "configured_stage_skills",
-    "configured_stage_skills_require_agentkit",
     "create_registry_snapshot",
-    "get_stage_adapter",
     "load_registry_snapshot_from_artifact",
     "load_skill_registry",
     "load_tool_registry",
     "parse_skill_registry",
     "parse_tool_registry",
     "resolve_stage_execution",
-    "skill_requires_agentkit",
     "validate_skill_registry",
     "validate_tool_registry",
 ]

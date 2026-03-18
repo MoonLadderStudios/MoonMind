@@ -54,7 +54,7 @@ router = APIRouter()
 canonical_router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 legacy_router = APIRouter(
     prefix="/api/workflows",
-    tags=["agentkit-workflows"],
+    tags=["workflows"],
 )
 
 

@@ -501,9 +501,9 @@ class TestWorkflowSettings:
         settings = WorkflowSettings(_env_file=None)
         assert settings.skills_enabled is True
         assert settings.skills_canary_percent == 100
-        assert settings.default_skill == "agentkit"
+        assert settings.default_skill == "auto"
         assert settings.skill_policy_mode == "permissive"
-        assert settings.allowed_skills == ("agentkit",)
+        assert settings.allowed_skills == ("auto",)
         assert settings.skills_local_mirror_root == ".agents/skills/local"
         assert settings.skills_legacy_mirror_root == ".agents/skills"
         assert settings.live_session_enabled_default is True

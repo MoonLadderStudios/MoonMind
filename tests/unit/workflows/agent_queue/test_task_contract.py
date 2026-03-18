@@ -14,7 +14,7 @@ from moonmind.workflows.agent_queue.task_contract import (
     resolve_publish_mode_for_skill,
 )
 
-pytestmark = [pytest.mark.agentkit]
+pytestmark = []
 
 
 def test_normalize_task_payload_derives_capabilities() -> None:

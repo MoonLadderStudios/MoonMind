@@ -1,6 +1,6 @@
 """SQLAlchemy models for workflow automation workflow persistence.
 
-This module was formerly part of moonmind.workflows.agentkit_celery.models
+This module was formerly part of moonmind.workflows.automation.models.
 and has been moved here as part of the Celery removal.
 """
 
@@ -411,10 +411,10 @@ class AutomationTaskState(Base):
         shadow_mode_requested = metadata.get("shadowModeRequested")
 
         if selected_skill is None and self.phase.value.startswith("agentkit_"):
-            selected_skill = "agentkit"
-        if adapter_id is None and selected_skill == "agentkit":
-            adapter_id = "agentkit"
-        if execution_path is None and selected_skill == "agentkit":
+            selected_skill = "auto"
+        if adapter_id is None and selected_skill == "auto":
+            adapter_id = None
+        if execution_path is None and selected_skill == "auto":
             execution_path = "skill"
 
         def _coerce_bool(value: Any) -> Optional[bool]:

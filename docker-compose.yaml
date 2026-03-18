@@ -62,7 +62,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./.agents:/app/.agents:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
-      - agentkit_workspaces:/work/runs:ro
+      - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:
       - local-network
@@ -774,7 +774,7 @@ volumes:
   qdrant-storage:
   postgres-data:
   minio-data:
-  agentkit_workspaces:
+  workflow_workspaces:
   agent_workspaces:
     name: ${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
   unreal_ccache_volume:

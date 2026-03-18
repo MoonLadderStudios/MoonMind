@@ -37,7 +37,6 @@ from moonmind.jules.runtime import (
 )
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.workflows.skills.registry import get_stage_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +85,7 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
             "WORKFLOW_DEFAULT_SKILL",
             "MOONMIND_DEFAULT_SKILL",
         ),
-        default="agentkit",
+        default="auto",
     )
     discover_skill = _first_non_empty(
         source,
@@ -121,18 +120,6 @@ def _configured_stage_skills(source: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
 
-def _configured_skills_require_agentkit(source: Mapping[str, str]) -> bool:
-    """Return whether current worker config requires Workflow executable checks."""
-
-    if not _env_flag(
-        _first_non_empty(source, ("WORKFLOW_USE_SKILLS",)),
-        default=True,
-    ):
-        return False
-    return any(
-        get_stage_adapter(skill_name) == "agentkit"
-        for skill_name in _configured_stage_skills(source)
-    )
 
 
 def _worker_capabilities(source: Mapping[str, str]) -> tuple[str, ...]:
@@ -236,29 +223,6 @@ def _run_checked_command(
     )
 
 
-def _verify_agentkit_cli(
-    agentkit_path: str,
-    *,
-    redaction_values: Sequence[str] = (),
-) -> None:
-    """Validate Workflow CLI across legacy and shimmed command variants."""
-
-    try:
-        _run_checked_command(
-            [agentkit_path, "--version"],
-            redaction_values=redaction_values,
-        )
-        return
-    except RuntimeError as exc:
-        # Some environments ship `agentkit` as a `specify` shim that does not
-        # expose `--version`. Fall back to `--help` to verify executability.
-        if "no such option: --version" not in str(exc).lower():
-            raise
-
-    _run_checked_command(
-        [agentkit_path, "--help"],
-        redaction_values=redaction_values,
-    )
 
 
 def _validate_embedding_profile(env: Mapping[str, str]) -> None:
@@ -394,18 +358,6 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
     github_token = str(source.get("GITHUB_TOKEN", "")).strip()
     redaction_values = (github_token,) if github_token else ()
 
-    agentkit_path: str | None = None
-    if _configured_skills_require_agentkit(source):
-        try:
-            agentkit_path = verify_cli_is_executable("agentkit")
-        except CliVerificationError as exc:
-            raise RuntimeError(str(exc)) from exc
-
-    if agentkit_path is not None:
-        _verify_agentkit_cli(
-            agentkit_path,
-            redaction_values=redaction_values,
-        )
 
     if resolved_paths["rg"] is not None:
         _run_checked_command(
