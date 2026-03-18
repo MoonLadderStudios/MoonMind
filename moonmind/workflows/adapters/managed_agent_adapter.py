@@ -198,24 +198,12 @@ class ManagedAgentAdapter:
         )
         
         if self._run_launcher is not None:
-            runtime_id_resolved = self._runtime_id or request.agent_id
-            cmd_template = profile.get("command_template")
-            if not cmd_template:
-                if runtime_id_resolved == "gemini_cli":
-                    cmd_template = ["gemini"]
-                elif runtime_id_resolved == "codex_cli":
-                    cmd_template = ["codex", "run"]
-                elif runtime_id_resolved == "claude_code":
-                    cmd_template = ["claude"]
-                else:
-                    cmd_template = [runtime_id_resolved]
-
             profile_obj = ManagedRuntimeProfile(
                 profile_id=profile_id,
-                runtime_id=runtime_id_resolved,
+                runtime_id=self._runtime_id or request.agent_id,
                 auth_mode=auth_mode,
                 env_overrides=shaped_env,
-                command_template=cmd_template,
+                command_template=profile.get("command_template", []),
             )
             
             # The workspace path is usually managed by the worker, but we can pass it if known
