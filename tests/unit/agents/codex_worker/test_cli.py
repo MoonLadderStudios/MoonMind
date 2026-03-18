@@ -175,8 +175,8 @@ def test_run_preflight_without_github_token_skips_gh_auth(monkeypatch) -> None:
     ]
 
 
-def test_run_preflight_skips_agentkit_for_non_agentkit_stage_skills(monkeypatch) -> None:
-    """Non-agentkit stage skill configuration should not require Workflow preflight."""
+def test_run_preflight_skips_non_matching_stage_skills(monkeypatch) -> None:
+    """Non-matching stage skill configuration should not require Workflow preflight."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -212,7 +212,7 @@ def test_run_preflight_skips_agentkit_for_non_agentkit_stage_skills(monkeypatch)
 
 
 def test_run_preflight_uses_workflow_skill_aliases(monkeypatch) -> None:
-    """Canonical WORKFLOW_* aliases should drive agentkit dependency checks."""
+    """Canonical WORKFLOW_* aliases should drive speckit dependency checks."""
 
     verifications: list[str] = []
     calls: list[list[str]] = []
@@ -270,7 +270,7 @@ def test_run_preflight_respects_workflow_use_skills_alias(monkeypatch) -> None:
         env={
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             "WORKFLOW_USE_SKILLS": "false",
-            "WORKFLOW_DEFAULT_SKILL": "agentkit",
+            "WORKFLOW_DEFAULT_SKILL": "speckit",
         }
     )
 

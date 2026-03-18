@@ -130,7 +130,7 @@ class WorkflowRepository:
     """Repository exposing CRUD helpers for workflow runs and related records."""
 
     _UPDATABLE_RUN_FIELDS = {
-        "celery_chain_id",
+        "legacy_chain_id",
         "status",
         "phase",
         "branch_name",
@@ -205,7 +205,7 @@ class WorkflowRepository:
             artifacts_path=artifacts_path,
             status=status,
             phase=phase,
-            celery_chain_id=legacy_chain_id,
+            legacy_chain_id=legacy_chain_id,
             codex_task_id=codex_task_id,
             codex_queue=codex_queue,
             codex_volume=codex_volume,

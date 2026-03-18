@@ -199,11 +199,11 @@ class AutomationPhase(str, enum.Enum):
     PREPARE_JOB = "prepare_job"
     START_JOB_CONTAINER = "start_job_container"
     GIT_CLONE = "git_clone"
-    SPECIFY = "agentkit_specify"
-    PLAN = "agentkit_plan"
-    TASKS = "agentkit_tasks"
-    ANALYZE = "agentkit_analyze"
-    IMPLEMENT = "agentkit_implement"
+    SPECIFY = "speckit_specify"
+    PLAN = "speckit_plan"
+    TASKS = "speckit_tasks"
+    ANALYZE = "speckit_analyze"
+    IMPLEMENT = "speckit_implement"
     # Backward-compatible aliases for persisted values and legacy clients.
     SPECKIT_SPECIFY = SPECIFY
     SPECKIT_PLAN = PLAN
@@ -409,7 +409,7 @@ class AutomationTaskState(Base):
         used_fallback = metadata.get("usedFallback")
         shadow_mode_requested = metadata.get("shadowModeRequested")
 
-        if selected_skill is None and self.phase.value.startswith("agentkit_"):
+        if selected_skill is None and self.phase.value.startswith("speckit_"):
             selected_skill = "auto"
         if adapter_id is None and selected_skill == "auto":
             adapter_id = None

@@ -104,8 +104,8 @@ def _convert_task_states(
                 status=state.plan_step_status,
                 started_at=state.started_at,
                 completed_at=state.finished_at,
-                worker_task_id=state.celery_task_id,
-                worker_state=state.celery_state,
+                worker_task_id=state.worker_task_id,
+                worker_state=state.worker_state,
                 message=state.message,
                 artifact_refs=artifact_refs,
             )

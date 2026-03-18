@@ -107,7 +107,7 @@ def upgrade() -> None:  # noqa: D401
         "workflow_runs",
         sa.Column("id", sa.Uuid(), primary_key=True, nullable=False),
         sa.Column("feature_key", sa.String(length=255), nullable=False),
-        sa.Column("celery_chain_id", sa.String(length=255), nullable=True),
+        sa.Column("legacy_chain_id", sa.String(length=255), nullable=True),
         sa.Column(
             "status",
             WORKFLOW_RUN_STATUS,

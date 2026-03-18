@@ -347,14 +347,14 @@ def upgrade() -> None:  # noqa: D401
     op.add_column(
         "workflow_task_states",
         sa.Column(
-            "celery_state",
+            "worker_state",
             ORCHESTRATOR_TASK_STATE,
             nullable=True,
         ),
     )
     op.add_column(
         "workflow_task_states",
-        sa.Column("celery_task_id", sa.String(length=255), nullable=True),
+        sa.Column("worker_task_id", sa.String(length=255), nullable=True),
     )
     op.add_column(
         "workflow_task_states",
@@ -410,8 +410,8 @@ def downgrade() -> None:  # noqa: D401
     )
     op.drop_column("workflow_task_states", "artifact_refs")
     op.drop_column("workflow_task_states", "message")
-    op.drop_column("workflow_task_states", "celery_task_id")
-    op.drop_column("workflow_task_states", "celery_state")
+    op.drop_column("workflow_task_states", "worker_task_id")
+    op.drop_column("workflow_task_states", "worker_state")
     op.drop_column("workflow_task_states", "plan_step_status")
     op.drop_column("workflow_task_states", "plan_step")
     op.drop_column("workflow_task_states", "orchestrator_run_id")

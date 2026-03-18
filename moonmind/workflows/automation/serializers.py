@@ -258,7 +258,7 @@ def serialize_run(
         codexPreflightMessage=run.codex_preflight_message,
         codexLogsPath=run.codex_logs_path,
         codexPatchPath=run.codex_patch_path,
-        legacyChainId=run.celery_chain_id,
+        legacyChainId=run.legacy_chain_id,
         requestedBy=(
             str(run.requested_by_user_id) if run.requested_by_user_id else None
         ),
