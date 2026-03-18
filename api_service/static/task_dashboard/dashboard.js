@@ -7266,6 +7266,7 @@
           <div id="queue-cancel-actions"></div>
           <div id="queue-job-summary"></div>
           <div class="stack">
+            <section id="queue-live-output-section"></section>
             <section id="queue-live-session-section"></section>
             <section>
               <h3>Events</h3>
@@ -7335,6 +7336,7 @@
       liveSessionRwGrantedUntil: "",
       liveActionNotice: "",
       liveActionNoticeIsError: false,
+      liveOutputPanelOpen: false,
       eventIds: new Set(),
       after: null,
       afterEventId: null,
@@ -7705,6 +7707,88 @@
       `;
     };
 
+    const renderLiveOutputPanel = () => {
+      const node = document.getElementById("queue-live-output-section");
+      if (!node) {
+        return;
+      }
+      const logTailingEnabled = Boolean(featuresConfig.logTailingEnabled);
+      if (!logTailingEnabled) {
+        node.innerHTML = "";
+        return;
+      }
+      const liveSession = state.liveSession;
+      const liveSessionRouteMissing = Boolean(state.liveSessionRouteMissing);
+      const liveSessionStatus = liveSession
+        ? String(pick(liveSession, "status") || "disabled")
+        : liveSessionRouteMissing
+          ? "unavailable"
+          : "disabled";
+      const webRoUrl = liveSession
+        ? sanitizeExternalHttpUrl(pick(liveSession, "webRo"))
+        : "";
+      const panelOpen = state.liveOutputPanelOpen;
+
+      let panelBody = "";
+      if (!panelOpen) {
+        panelBody = "";
+      } else if (liveSessionStatus === "ready" && webRoUrl) {
+        panelBody = `<iframe
+          id="queue-live-output-iframe"
+          src="${escapeHtml(webRoUrl)}"
+          style="width:100%;height:420px;border:1px solid var(--border-color, #333);border-radius:6px;background:#1a1a2e;"
+          sandbox="allow-scripts allow-same-origin"
+          title="Live terminal output"
+        ></iframe>`;
+      } else if (liveSessionStatus === "starting") {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">⏳ Live session is starting&hellip;</div>`;
+      } else if (liveSessionStatus === "ended" || liveSessionStatus === "revoked") {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Session ended.</div>`;
+      } else if (liveSessionStatus === "error") {
+        panelBody = `<div class="notice error" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
+      } else {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
+      }
+
+      node.innerHTML = `
+        <div style="border:1px solid var(--border-color, #333);border-radius:8px;overflow:hidden;">
+          <button
+            type="button"
+            id="queue-live-output-toggle"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:0.6rem 1rem;background:var(--card-bg, #16213e);border:none;color:inherit;cursor:pointer;font-size:0.95rem;font-weight:600;"
+          >
+            <span>▶ Live Output</span>
+            <span style="font-size:0.8rem;opacity:0.7;">${panelOpen ? "▼ collapse" : "▶ expand"}</span>
+          </button>
+          ${panelOpen ? `<div id="queue-live-output-body" style="padding:0;">${panelBody}</div>` : ""}
+        </div>
+      `;
+
+      const toggleButton = document.getElementById("queue-live-output-toggle");
+      if (toggleButton) {
+        toggleButton.addEventListener("click", () => {
+          state.liveOutputPanelOpen = !state.liveOutputPanelOpen;
+          renderLiveOutputPanel();
+        });
+      }
+    };
+
+    // Disconnect live output iframe when tab is hidden, reconnect when visible.
+    const handleVisibilityChange = () => {
+      if (document.hidden && state.liveOutputPanelOpen) {
+        // Remove iframe to stop streaming while tab is hidden.
+        const iframe = document.getElementById("queue-live-output-iframe");
+        if (iframe) {
+          iframe.remove();
+        }
+      } else if (!document.hidden && state.liveOutputPanelOpen) {
+        // Re-render to recreate iframe when tab becomes visible.
+        renderLiveOutputPanel();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    registerDisposer(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
+
     const renderLiveSession = () => {
       const node = document.getElementById("queue-live-session-section");
       if (!node) {
@@ -8070,6 +8154,7 @@
         state.liveSessionError = liveSessionError;
         state.liveSessionRouteMissing = liveSessionRouteMissing;
         renderJobSummary();
+        renderLiveOutputPanel();
         renderLiveSession();
         renderArtifacts();
         renderAttachments();
@@ -8083,6 +8168,7 @@
         state.liveSessionRouteMissing = false;
         setDetailNotice("Failed to load queue detail.");
         renderJobSummary();
+        renderLiveOutputPanel();
         renderLiveSession();
         renderArtifacts();
         renderAttachments();
@@ -8304,11 +8390,13 @@
 
       const runLiveAction = async (actionKey, action) => {
         state.pendingLiveControlAction = actionKey;
+        renderLiveOutputPanel();
         renderLiveSession();
         try {
           await action();
         } finally {
           state.pendingLiveControlAction = "";
+          renderLiveOutputPanel();
           renderLiveSession();
         }
       };
@@ -9370,6 +9458,7 @@
           <pre id="temporal-live-output" class="queue-live-output"></pre>
         </div>
       </section>
+      <section id="temporal-live-output-section"></section>
       ${debugFields}
     `;
   }
@@ -9403,6 +9492,9 @@
       maxEvents: 20000,
       eventsRenderTimer: null,
       eventsRenderIntervalMs: 120,
+      liveSession: null,
+      liveSessionRouteMissing: false,
+      liveOutputPanelOpen: false,
     };
 
     let logEventSource = null;
@@ -9424,6 +9516,85 @@
         logState.eventsRenderTimer = null;
       }
     });
+
+    const renderTemporalLiveOutputPanel = () => {
+      const node = document.getElementById("temporal-live-output-section");
+      if (!node) {
+        return;
+      }
+      const logTailingEnabled = Boolean(featuresConfig.logTailingEnabled);
+      if (!logTailingEnabled) {
+        node.innerHTML = "";
+        return;
+      }
+      const liveSession = logState.liveSession;
+      const liveSessionRouteMissing = Boolean(logState.liveSessionRouteMissing);
+      const liveSessionStatus = liveSession
+        ? String(pick(liveSession, "status") || "disabled")
+        : liveSessionRouteMissing
+          ? "unavailable"
+          : "disabled";
+      const webRoUrl = liveSession
+        ? sanitizeExternalHttpUrl(pick(liveSession, "webRo"))
+        : "";
+      const panelOpen = logState.liveOutputPanelOpen;
+
+      let panelBody = "";
+      if (!panelOpen) {
+        panelBody = "";
+      } else if (liveSessionStatus === "ready" && webRoUrl) {
+        panelBody = `<iframe
+          id="temporal-live-output-iframe"
+          src="${escapeHtml(webRoUrl)}"
+          style="width:100%;height:420px;border:1px solid var(--border-color, #333);border-radius:6px;background:#1a1a2e;"
+          sandbox="allow-scripts allow-same-origin"
+          title="Live terminal output"
+        ></iframe>`;
+      } else if (liveSessionStatus === "starting") {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">⏳ Live session is starting&hellip;</div>`;
+      } else if (liveSessionStatus === "ended" || liveSessionStatus === "revoked") {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Session ended.</div>`;
+      } else if (liveSessionStatus === "error") {
+        panelBody = `<div class="notice error" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
+      } else {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
+      }
+
+      node.innerHTML = `
+        <div style="border:1px solid var(--border-color, #333);border-radius:8px;overflow:hidden;">
+          <button
+            type="button"
+            id="temporal-live-output-toggle"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:0.6rem 1rem;background:var(--card-bg, #16213e);border:none;color:inherit;cursor:pointer;font-size:0.95rem;font-weight:600;"
+          >
+            <span>▶ Live Output</span>
+            <span style="font-size:0.8rem;opacity:0.7;">${panelOpen ? "▼ collapse" : "▶ expand"}</span>
+          </button>
+          ${panelOpen ? `<div id="temporal-live-output-body" style="padding:0;">${panelBody}</div>` : ""}
+        </div>
+      `;
+
+      const toggleButton = document.getElementById("temporal-live-output-toggle");
+      if (toggleButton) {
+        toggleButton.addEventListener("click", () => {
+          logState.liveOutputPanelOpen = !logState.liveOutputPanelOpen;
+          renderTemporalLiveOutputPanel();
+        });
+      }
+    };
+
+    const handleTemporalVisibilityChange = () => {
+      if (document.hidden && logState.liveOutputPanelOpen) {
+        const iframe = document.getElementById("temporal-live-output-iframe");
+        if (iframe) {
+          iframe.remove();
+        }
+      } else if (!document.hidden && logState.liveOutputPanelOpen) {
+        renderTemporalLiveOutputPanel();
+      }
+    };
+    document.addEventListener("visibilitychange", handleTemporalVisibilityChange);
+    registerDisposer(() => document.removeEventListener("visibilitychange", handleTemporalVisibilityChange));
 
     const renderLogTransportStatus = () => {
       const node = document.getElementById("temporal-live-transport-status");
@@ -9964,6 +10135,25 @@
         attachTemporalActionHandlers(execution, load);
         attachLogHandlers();
         restoreLogTailingState();
+
+        // Fetch live-session data and render the Live Output panel.
+        try {
+          const livePayload = await fetchJson(
+            endpoint(
+              temporalSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
+              { id: workflowId },
+            ),
+          );
+          logState.liveSession = pick(livePayload || {}, "session") || null;
+          logState.liveSessionRouteMissing = false;
+        } catch (liveError) {
+          const classification = classifyLiveSessionError(liveError);
+          if (classification === "route_missing") {
+            logState.liveSessionRouteMissing = true;
+          }
+          logState.liveSession = null;
+        }
+        renderTemporalLiveOutputPanel();
       } catch (error) {
         console.error("temporal detail load failed", error);
         if (silent && detailNotice) {

@@ -21,7 +21,7 @@ The following documents contain valuable architectural concepts or workflows but
 
 | Document | Status | Judgment |
 |----------|--------|----------|
-| `docs/LiveTaskHandoff.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/LiveTaskHandoff.md` and refactored) |
+| `docs/LiveTaskHandoff.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/LiveTaskManagement.md` and restructured to cover live log tailing + terminal handoff) |
 | `docs/ManifestTaskSystem.md` | Partially out-of-date | Updated (Moved to `docs/Tasks/ManifestTaskSystem.md` and refactored) |
 | `docs/OrchestratorArchitecture.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorArchitecture.md` and refactored) |
 | `docs/OrchestratorTaskRuntime.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorTaskRuntime.md` and refactored) |
