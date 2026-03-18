@@ -189,8 +189,7 @@
     temporalDashboardEnabled && Boolean(temporalDashboardFeature.submitEnabled);
   const temporalDebugFieldsEnabled =
     temporalDashboardEnabled && Boolean(temporalDashboardFeature.debugFieldsEnabled);
-  const submitScheduleEnabled =
-    temporalDashboardEnabled && Boolean(temporalDashboardFeature.submitScheduleEnabled);
+
   const TEMPORAL_INLINE_INPUT_MAX_CHARS = 4000;
   const systemConfig = config.system || {};
   const temporalCompatibilityConfig =
@@ -5229,7 +5228,7 @@
       } />
           Propose Tasks
         </label>
-        ${submitScheduleEnabled && !isEditMode ? `
+        ${!isEditMode ? `
         <details class="card" id="schedule-panel">
           <summary><strong>Schedule (optional)</strong></summary>
           <label>Schedule Mode
@@ -6870,7 +6869,7 @@
       };
 
       // --- Schedule injection ---
-      if (submitScheduleEnabled && !isEditMode) {
+      if (!isEditMode) {
         const scheduleMode = String(formData.get("scheduleMode") || "immediate").trim();
         if (scheduleMode === "once") {
           const scheduledForRaw = String(formData.get("scheduledFor") || "").trim();
