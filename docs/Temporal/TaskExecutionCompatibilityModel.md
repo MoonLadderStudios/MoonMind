@@ -30,7 +30,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/TaskArchitecture.md`
-- `docs/TaskUiArchitecture.md`
+- `docs/UI/MissionControlArchitecture.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 ---

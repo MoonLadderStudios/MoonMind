@@ -10,7 +10,7 @@ This document defines the **high-level control plane architecture** of MoonMind'
 
 It maps how user intentions in the Mission Control UI are translated into the durable execution system backed by Temporal. 
 
-Detailed UI behavior, route-level contracts, payload examples, and page interaction rules are documented natively in `docs/TaskUiArchitecture.md`.
+Detailed UI behavior, route-level contracts, payload examples, and page interaction rules are documented natively in `docs/UI/MissionControlArchitecture.md`.
 Detailed backend workflow execution logic (how the workers execute code safely) is defined in `docs/Temporal/TemporalArchitecture.md` and `docs/Tasks/SkillAndPlanContracts.md`.
 
 ---
@@ -116,7 +116,7 @@ The following invariants define how the UI interacts with the execution backend:
 Use this document to understand the "Big Picture" view of the Mission Control UI operating over the Execution Plane.
 
 For implementation-level specs, see:
-- `docs/TaskUiArchitecture.md`: Dashboard API routes, endpoint mappings, layout structures, and live UX component behavior.
+- `docs/UI/MissionControlArchitecture.md`: Dashboard API routes, endpoint mappings, layout structures, and live UX component behavior.
 - `docs/Tasks/SkillAndPlanContracts.md`: How commands generated in the control plane resolve to literal executions in the execution plane.
 - `docs/Temporal/TemporalArchitecture.md`: Pure Temporal execution philosophy, queue logic, visibility tables, and worker fleet design.
 - `docs/Tasks/ImageSystem.md`: The specific flow of image processing from UI `ArtifactRef` generation into LLM context chunks.

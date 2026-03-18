@@ -71,9 +71,9 @@ That implementation detail is important for current behavior, but it is **not** 
 - `docs/Temporal/SourceOfTruthAndProjectionModel.md`
 - `docs/Temporal/RunHistoryAndRerunSemantics.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/Ui/TemporalDashboardIntegration.md`
+- `docs/UI/MissionControlArchitecture.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/TaskUiArchitecture.md`
+- `docs/UI/MissionControlStyleGuide.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 ---

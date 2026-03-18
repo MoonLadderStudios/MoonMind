@@ -303,6 +303,9 @@ class ExecutionModel(BaseModel):
         default_factory=dict, alias="searchAttributes"
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
+    target_runtime: Optional[str] = Field(None, alias="targetRuntime")
+    model: Optional[str] = Field(None, alias="model")
+    effort: Optional[str] = Field(None, alias="effort")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"

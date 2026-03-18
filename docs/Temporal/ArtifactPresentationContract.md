@@ -20,7 +20,7 @@ This document is intentionally downstream of the broader Temporal architecture. 
   - Owns storage backend, artifact identity, lifecycle, linkage, and authorization design.
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
   - Owns execution identity, list/detail query semantics, and task compatibility rules.
-- `docs/Ui/TemporalDashboardIntegration.md`
+- `docs/UI/MissionControlArchitecture.md`
   - Owns dashboard route wiring, source resolution, and mixed-source UI integration.
 
 This document owns the consumer-facing artifact contract layered on top of those decisions.

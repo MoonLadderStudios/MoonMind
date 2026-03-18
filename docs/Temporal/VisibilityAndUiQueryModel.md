@@ -32,7 +32,7 @@ This document is intentionally the bridge between:
 - `docs/Temporal/TemporalPlatformFoundation.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
-- `docs/TaskUiArchitecture.md`
+- `docs/UI/MissionControlArchitecture.md`
 
 This document narrows several open items from the lifecycle doc so frontend and backend work can proceed without inventing ad hoc query behavior.
 
