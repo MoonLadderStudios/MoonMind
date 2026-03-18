@@ -24,7 +24,10 @@ from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    ManagedRuntimeProfile,
+)
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
@@ -1803,14 +1806,14 @@ class TemporalAgentRuntimeActivities:
         if self._run_launcher is None or self._run_supervisor is None:
             raise TemporalActivityRuntimeError("launcher and supervisor are required for agent_runtime_launch")
 
-        from moonmind.schemas.agent_runtime_models import (
-            AgentExecutionRequest,
-            ManagedRuntimeProfile,
-        )
+        run_id = payload.get("run_id")
+        request_data = payload.get("request")
+        profile_data = payload.get("profile")
+        if not run_id or request_data is None or profile_data is None:
+            raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
 
-        run_id = payload["run_id"]
-        request = AgentExecutionRequest(**payload["request"])
-        profile = ManagedRuntimeProfile(**payload["profile"])
+        request = AgentExecutionRequest(**request_data)
+        profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
 
         # Idempotency check handled in launcher

@@ -36,6 +36,8 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    ManagedRunRecord,
+    ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -196,8 +198,6 @@ class ManagedAgentAdapter:
         )
         
         if self._run_launcher is not None:
-            from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
-            
             profile_obj = ManagedRuntimeProfile(
                 profile_id=profile_id,
                 runtime_id=self._runtime_id or request.agent_id,
@@ -219,7 +219,6 @@ class ManagedAgentAdapter:
             )
             status = record_dict.get("status", "launching")
         elif self._run_store is not None:
-            from moonmind.schemas.agent_runtime_models import ManagedRunRecord
             record = ManagedRunRecord(
                 run_id=run_id,
                 agent_id=request.agent_id,
