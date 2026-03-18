@@ -7712,10 +7712,7 @@
       if (!node) {
         return;
       }
-      const logTailingEnabled = Boolean(
-        pick(runtimeConfig, "features") &&
-        pick(pick(runtimeConfig, "features"), "logTailingEnabled"),
-      );
+      const logTailingEnabled = Boolean(featuresConfig.logTailingEnabled);
       if (!logTailingEnabled) {
         node.innerHTML = "";
         return;
@@ -7790,6 +7787,7 @@
       }
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    registerDisposer(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
 
     const renderLiveSession = () => {
       const node = document.getElementById("queue-live-session-section");
@@ -9460,6 +9458,7 @@
           <pre id="temporal-live-output" class="queue-live-output"></pre>
         </div>
       </section>
+      <section id="temporal-live-output-section"></section>
       ${debugFields}
     `;
   }
@@ -9493,6 +9492,9 @@
       maxEvents: 20000,
       eventsRenderTimer: null,
       eventsRenderIntervalMs: 120,
+      liveSession: null,
+      liveSessionRouteMissing: false,
+      liveOutputPanelOpen: false,
     };
 
     let logEventSource = null;
@@ -9514,6 +9516,85 @@
         logState.eventsRenderTimer = null;
       }
     });
+
+    const renderTemporalLiveOutputPanel = () => {
+      const node = document.getElementById("temporal-live-output-section");
+      if (!node) {
+        return;
+      }
+      const logTailingEnabled = Boolean(featuresConfig.logTailingEnabled);
+      if (!logTailingEnabled) {
+        node.innerHTML = "";
+        return;
+      }
+      const liveSession = logState.liveSession;
+      const liveSessionRouteMissing = Boolean(logState.liveSessionRouteMissing);
+      const liveSessionStatus = liveSession
+        ? String(pick(liveSession, "status") || "disabled")
+        : liveSessionRouteMissing
+          ? "unavailable"
+          : "disabled";
+      const webRoUrl = liveSession
+        ? sanitizeExternalHttpUrl(pick(liveSession, "webRo"))
+        : "";
+      const panelOpen = logState.liveOutputPanelOpen;
+
+      let panelBody = "";
+      if (!panelOpen) {
+        panelBody = "";
+      } else if (liveSessionStatus === "ready" && webRoUrl) {
+        panelBody = `<iframe
+          id="temporal-live-output-iframe"
+          src="${escapeHtml(webRoUrl)}"
+          style="width:100%;height:420px;border:1px solid var(--border-color, #333);border-radius:6px;background:#1a1a2e;"
+          sandbox="allow-scripts allow-same-origin"
+          title="Live terminal output"
+        ></iframe>`;
+      } else if (liveSessionStatus === "starting") {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">⏳ Live session is starting&hellip;</div>`;
+      } else if (liveSessionStatus === "ended" || liveSessionStatus === "revoked") {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Session ended.</div>`;
+      } else if (liveSessionStatus === "error") {
+        panelBody = `<div class="notice error" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
+      } else {
+        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
+      }
+
+      node.innerHTML = `
+        <div style="border:1px solid var(--border-color, #333);border-radius:8px;overflow:hidden;">
+          <button
+            type="button"
+            id="temporal-live-output-toggle"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:0.6rem 1rem;background:var(--card-bg, #16213e);border:none;color:inherit;cursor:pointer;font-size:0.95rem;font-weight:600;"
+          >
+            <span>▶ Live Output</span>
+            <span style="font-size:0.8rem;opacity:0.7;">${panelOpen ? "▼ collapse" : "▶ expand"}</span>
+          </button>
+          ${panelOpen ? `<div id="temporal-live-output-body" style="padding:0;">${panelBody}</div>` : ""}
+        </div>
+      `;
+
+      const toggleButton = document.getElementById("temporal-live-output-toggle");
+      if (toggleButton) {
+        toggleButton.addEventListener("click", () => {
+          logState.liveOutputPanelOpen = !logState.liveOutputPanelOpen;
+          renderTemporalLiveOutputPanel();
+        });
+      }
+    };
+
+    const handleTemporalVisibilityChange = () => {
+      if (document.hidden && logState.liveOutputPanelOpen) {
+        const iframe = document.getElementById("temporal-live-output-iframe");
+        if (iframe) {
+          iframe.remove();
+        }
+      } else if (!document.hidden && logState.liveOutputPanelOpen) {
+        renderTemporalLiveOutputPanel();
+      }
+    };
+    document.addEventListener("visibilitychange", handleTemporalVisibilityChange);
+    registerDisposer(() => document.removeEventListener("visibilitychange", handleTemporalVisibilityChange));
 
     const renderLogTransportStatus = () => {
       const node = document.getElementById("temporal-live-transport-status");
@@ -10054,6 +10135,25 @@
         attachTemporalActionHandlers(execution, load);
         attachLogHandlers();
         restoreLogTailingState();
+
+        // Fetch live-session data and render the Live Output panel.
+        try {
+          const livePayload = await fetchJson(
+            endpoint(
+              temporalSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
+              { id: workflowId },
+            ),
+          );
+          logState.liveSession = pick(livePayload || {}, "session") || null;
+          logState.liveSessionRouteMissing = false;
+        } catch (liveError) {
+          const classification = classifyLiveSessionError(liveError);
+          if (classification === "route_missing") {
+            logState.liveSessionRouteMissing = true;
+          }
+          logState.liveSession = null;
+        }
+        renderTemporalLiveOutputPanel();
       } catch (error) {
         console.error("temporal detail load failed", error);
         if (silent && detailNotice) {
