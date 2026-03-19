@@ -1,0 +1,70 @@
+# Quickstart: Step Review Gate
+
+## Enable Review Gate on a Plan
+
+Add to a plan's JSON policy:
+
+```json
+{
+  "policy": {
+    "review_gate": {
+      "enabled": true,
+      "max_review_attempts": 2,
+      "reviewer_model": "default"
+    }
+  }
+}
+```
+
+## Enable via Workflow Parameters
+
+Include in `initialParameters` when creating a `MoonMind.Run`:
+
+```json
+{
+  "initialParameters": {
+    "reviewGate": {
+      "enabled": true
+    }
+  }
+}
+```
+
+## Enable via Environment Variable
+
+Set `MOONMIND_REVIEW_GATE_DEFAULT_ENABLED=true` in the worker environment. All workflows without explicit plan/workflow-level config will have the gate enabled.
+
+## Skip Specific Tool Types
+
+Exempt `agent_runtime` nodes from review:
+
+```json
+{
+  "policy": {
+    "review_gate": {
+      "enabled": true,
+      "skip_tool_types": ["agent_runtime"]
+    }
+  }
+}
+```
+
+## Verify Review Gate is Active
+
+Check the workflow memo during execution — it will show:
+
+```
+Executing plan step 2/5: repo.apply_patch (review attempt 1/3)
+```
+
+After completion, the finish summary includes review metrics:
+
+```json
+{
+  "reviewGate": {
+    "enabled": true,
+    "stepsReviewed": 5,
+    "totalReviewAttempts": 8
+  }
+}
+```

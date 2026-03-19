@@ -16,6 +16,8 @@ REGISTRY_DIGEST_PREFIX = "reg:sha256:"
 SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
 SUPPORTED_FAILURE_MODES = frozenset({"FAIL_FAST", "CONTINUE"})
 SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+REVIEW_VERDICTS = frozenset({"PASS", "FAIL", "INCONCLUSIVE"})
+DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
 EXPLICIT_BINDING_REASONS = frozenset(
     {"stronger_isolation", "specialized_credentials", "clearer_routing"}
 )
@@ -600,11 +602,48 @@ class PlanMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewGatePolicy:
+    """Per-plan review gate configuration."""
+
+    enabled: bool = False
+    max_review_attempts: int = 2
+    reviewer_model: str = "default"
+    review_timeout_seconds: int = 120
+    skip_tool_types: tuple[str, ...] = DEFAULT_SKIP_TOOL_TYPES
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ContractValidationError(
+                "invalid_policy", "review_gate.enabled must be a boolean"
+            )
+        if self.max_review_attempts < 0:
+            raise ContractValidationError(
+                "invalid_policy",
+                "review_gate.max_review_attempts must be >= 0",
+            )
+        if self.review_timeout_seconds <= 0:
+            raise ContractValidationError(
+                "invalid_policy",
+                "review_gate.review_timeout_seconds must be > 0",
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "max_review_attempts": self.max_review_attempts,
+            "reviewer_model": self.reviewer_model,
+            "review_timeout_seconds": self.review_timeout_seconds,
+            "skip_tool_types": list(self.skip_tool_types),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PlanPolicy:
     """Execution policy for a plan."""
 
     failure_mode: str = "FAIL_FAST"
     max_concurrency: int = 1
+    review_gate: ReviewGatePolicy | None = None
 
     def __post_init__(self) -> None:
         if self.failure_mode not in SUPPORTED_FAILURE_MODES:
@@ -615,10 +654,13 @@ class PlanPolicy:
         _ensure_positive_int(self.max_concurrency, field_name="policy.max_concurrency")
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "failure_mode": self.failure_mode,
             "max_concurrency": self.max_concurrency,
         }
+        if self.review_gate is not None and self.review_gate.enabled:
+            payload["review_gate"] = self.review_gate.to_payload()
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -765,9 +807,37 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
         ),
     )
 
+    review_gate_raw = policy_raw.get("review_gate")
+    if isinstance(review_gate_raw, Mapping):
+        skip_raw = review_gate_raw.get("skip_tool_types", [])
+        if not isinstance(skip_raw, list):
+            skip_raw = []
+        review_gate: ReviewGatePolicy | None = ReviewGatePolicy(
+            enabled=bool(review_gate_raw.get("enabled", False)),
+            max_review_attempts=(
+                int(raw_attempts)
+                if (raw_attempts := review_gate_raw.get("max_review_attempts")) is not None
+                else 2
+            ),
+            reviewer_model=str(
+                review_gate_raw.get("reviewer_model") or "default"
+            ).strip(),
+            review_timeout_seconds=(
+                int(raw_timeout)
+                if (raw_timeout := review_gate_raw.get("review_timeout_seconds")) is not None
+                else 120
+            ),
+            skip_tool_types=tuple(
+                str(t).strip() for t in skip_raw if str(t).strip()
+            ) if skip_raw else DEFAULT_SKIP_TOOL_TYPES,
+        )
+    else:
+        review_gate = None  # Plan did not specify review_gate
+
     policy = PlanPolicy(
         failure_mode=str(policy_raw.get("failure_mode") or "FAIL_FAST").strip(),
         max_concurrency=int(policy_raw.get("max_concurrency") or 1),
+        review_gate=review_gate,
     )
 
     return PlanDefinition(
@@ -895,6 +965,8 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
 __all__ = [
     "ARTIFACT_REF_PREFIX",
     "REGISTRY_DIGEST_PREFIX",
+    "DEFAULT_SKIP_TOOL_TYPES",
+    "REVIEW_VERDICTS",
     "SUPPORTED_PLAN_VERSIONS",
     "SUPPORTED_FAILURE_MODES",
     "SKILL_FAILURE_CODES",
@@ -911,6 +983,7 @@ __all__ = [
     "PlanMetadata",
     "PlanPolicy",
     "PlanRegistrySnapshot",
+    "ReviewGatePolicy",
     "ToolDefinition",
     "ToolExecutorBinding",
     "ToolFailure",
