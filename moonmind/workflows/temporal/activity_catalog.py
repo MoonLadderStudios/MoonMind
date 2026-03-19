@@ -538,6 +538,16 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="integration.openclaw.execute",
+            family="integration",
+            capability_class="integration:openclaw",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(3600, 7200, heartbeat_timeout_seconds=120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            heartbeat_required=True,
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.launch",
             family="agent_runtime",
             capability_class="agent_runtime",
@@ -653,7 +663,11 @@ def build_default_activity_catalog(
         TemporalWorkerFleet(
             fleet=INTEGRATIONS_FLEET,
             task_queues=(cfg.activity_integrations_task_queue,),
-            capabilities=("integration:jules", "integration:codex_cloud"),
+            capabilities=(
+                "integration:jules",
+                "integration:codex_cloud",
+                "integration:openclaw",
+            ),
             privileges=("provider_tokens",),
             scaling_notes="Protect with rate limiting and circuit breakers.",
             activity_types=tuple(

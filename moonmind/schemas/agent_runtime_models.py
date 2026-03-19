@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 AgentKind = Literal["external", "managed"]
+ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
 AgentRunState = Literal[
     "queued",
     "launching",
@@ -341,11 +342,17 @@ class ProviderCapabilityDescriptor(BaseModel):
         ge=1,
         description="Recommended initial polling interval in seconds.",
     )
+    execution_style: ExternalExecutionStyle = Field(
+        "polling",
+        alias="executionStyle",
+        description="polling: start/status/fetch loop; streaming_gateway: single execute activity.",
+    )
 
 
 __all__ = [
     "AgentExecutionRequest",
     "AgentKind",
+    "ExternalExecutionStyle",
     "AgentRunHandle",
     "AgentRunResult",
     "AgentRunState",

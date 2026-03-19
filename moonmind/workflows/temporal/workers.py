@@ -59,12 +59,19 @@ _FLEET_EGRESS_POLICIES = {
     AGENT_RUNTIME_FLEET: "restricted-sandbox-egress",
 }
 _FLEET_FORBIDDEN_CAPABILITIES = {
-    WORKFLOW_FLEET: ("artifacts", "llm", "sandbox", "integration:jules", "agent_runtime"),
-    ARTIFACTS_FLEET: ("llm", "sandbox", "integration:jules", "agent_runtime"),
-    LLM_FLEET: ("sandbox", "integration:jules", "agent_runtime"),
-    SANDBOX_FLEET: ("llm", "integration:jules", "agent_runtime"),
+    WORKFLOW_FLEET: (
+        "artifacts",
+        "llm",
+        "sandbox",
+        "integration:jules",
+        "integration:openclaw",
+        "agent_runtime",
+    ),
+    ARTIFACTS_FLEET: ("llm", "sandbox", "integration:jules", "integration:openclaw", "agent_runtime"),
+    LLM_FLEET: ("sandbox", "integration:jules", "integration:openclaw", "agent_runtime"),
+    SANDBOX_FLEET: ("llm", "integration:jules", "integration:openclaw", "agent_runtime"),
     INTEGRATIONS_FLEET: ("sandbox", "agent_runtime"),
-    AGENT_RUNTIME_FLEET: ("sandbox", "llm", "integration:jules"),
+    AGENT_RUNTIME_FLEET: ("sandbox", "llm", "integration:jules", "integration:openclaw"),
 }
 REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.Run",

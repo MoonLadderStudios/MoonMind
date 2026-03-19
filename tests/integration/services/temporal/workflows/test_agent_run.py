@@ -165,6 +165,12 @@ async def mock_resolve_external_adapter(agent_id: str) -> str:
     return agent_id
 
 
+@_activity.defn(name="integration.external_adapter_execution_style")
+async def mock_external_adapter_execution_style(agent_id: str) -> str:
+    _external_activity_calls.append(f"style:{agent_id}")
+    return "polling"
+
+
 @_activity.defn(name="integration.jules.start")
 async def mock_jules_start(request: dict) -> dict:
     from datetime import UTC, datetime
@@ -253,58 +259,70 @@ async def test_agent_run_external_agent_workflow():
     _external_activity_calls.clear()
 
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        # Workflow worker: hosts the workflow + agent_runtime activities.
+        # Workflow-queue activities (resolve + execution style) match production routing.
         async with Worker(
             env.client,
-            task_queue="agent-run-task-queue",
-            workflows=[MoonMindAgentRun],
-            activities=[mock_publish_artifacts, mock_cancel],
-            workflow_runner=UnsandboxedWorkflowRunner(),
+            task_queue="mm.workflow",
+            activities=[
+                mock_resolve_external_adapter,
+                mock_external_adapter_execution_style,
+            ],
         ):
-            # Integrations worker: hosts integration.* activities on
-            # mm.activity.integrations, matching production fleet separation.
+            # Workflow worker: hosts the workflow + agent_runtime activities.
             async with Worker(
                 env.client,
-                task_queue="mm.activity.integrations",
-                activities=[
-                    mock_resolve_external_adapter,
-                    mock_jules_start,
-                    mock_jules_status,
-                    mock_jules_fetch_result,
-                    mock_jules_cancel,
-                ],
+                task_queue="agent-run-task-queue",
+                workflows=[MoonMindAgentRun],
+                activities=[mock_publish_artifacts, mock_cancel],
+                workflow_runner=UnsandboxedWorkflowRunner(),
             ):
-                request = AgentExecutionRequest(
-                    agent_kind="external",
-                    agent_id="jules",
-                    execution_profile_ref="profile:jules-default",
-                    correlation_id="corr-ext-1",
-                    idempotency_key="idem-ext-1",
-                    parameters={
-                        "title": "External Test",
-                        "description": "Integration test for external agent workflow",
-                    },
-                )
+                # Integrations worker: hosts integration.* activities on
+                # mm.activity.integrations, matching production fleet separation.
+                async with Worker(
+                    env.client,
+                    task_queue="mm.activity.integrations",
+                    activities=[
+                        mock_jules_start,
+                        mock_jules_status,
+                        mock_jules_fetch_result,
+                        mock_jules_cancel,
+                    ],
+                ):
+                    request = AgentExecutionRequest(
+                        agent_kind="external",
+                        agent_id="jules",
+                        execution_profile_ref="profile:jules-default",
+                        correlation_id="corr-ext-1",
+                        idempotency_key="idem-ext-1",
+                        parameters={
+                            "title": "External Test",
+                            "description": "Integration test for external agent workflow",
+                        },
+                    )
 
-                handle = await env.client.start_workflow(
-                    MoonMindAgentRun.run,
-                    request,
-                    id="test-workflow-external-1",
-                    task_queue="agent-run-task-queue",
-                )
+                    handle = await env.client.start_workflow(
+                        MoonMindAgentRun.run,
+                        request,
+                        id="test-workflow-external-1",
+                        task_queue="agent-run-task-queue",
+                    )
 
-                result = await handle.result()
+                    result = await handle.result()
 
-                assert isinstance(result, AgentRunResult)
-                assert result.summary is not None
-                assert "jules-task-001" in result.summary
+                    assert isinstance(result, AgentRunResult)
+                    assert result.summary is not None
+                    assert "jules-task-001" in result.summary
 
-                # Verify activities were called in the correct order.
-                resolve_idx = _external_activity_calls.index("resolve:jules")
-                start_idx = _external_activity_calls.index("start")
-                fetch_idx = _external_activity_calls.index("fetch_result")
-                assert resolve_idx < start_idx < fetch_idx, (
-                    f"Expected resolve < start < fetch_result, got {_external_activity_calls}"
-                )
-                # At least one status poll should have happened between start and fetch_result.
-                assert any(c.startswith("status:") for c in _external_activity_calls[start_idx:fetch_idx])
+                    # Verify activities were called in the correct order.
+                    resolve_idx = _external_activity_calls.index("resolve:jules")
+                    style_idx = _external_activity_calls.index("style:jules")
+                    start_idx = _external_activity_calls.index("start")
+                    fetch_idx = _external_activity_calls.index("fetch_result")
+                    assert resolve_idx < style_idx < start_idx < fetch_idx, (
+                        f"Expected resolve < style < start < fetch_result, got {_external_activity_calls}"
+                    )
+                    # At least one status poll should have happened between start and fetch_result.
+                    assert any(
+                        c.startswith("status:")
+                        for c in _external_activity_calls[start_idx:fetch_idx]
+                    )
