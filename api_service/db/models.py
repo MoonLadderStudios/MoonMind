@@ -1229,6 +1229,13 @@ class TemporalExecutionRecord(Base):
             if candidate.startswith(prefix):
                 candidate = candidate[len(prefix) :].strip()
                 break
+        
+        # Strip trailing -retryX suffixes appended by retry triggers
+        import re
+        retry_match = re.search(r"^(.*?)-retry\d+$", candidate)
+        if retry_match:
+            candidate = retry_match.group(1)
+            
         return candidate
 
 

@@ -1874,7 +1874,7 @@
   function endpoint(template, replacements) {
     let resolved = template;
     Object.entries(replacements).forEach(([key, value]) => {
-      resolved = resolved.replace(`{${key}}`, encodeURIComponent(String(value)));
+      resolved = resolved.split(`{${key}}`).join(encodeURIComponent(String(value)));
     });
     return resolved;
   }
@@ -9433,7 +9433,7 @@
       withTemporalSourceFlag(
         endpoint(
           temporalSourceConfig.detail || "/api/executions/{workflowId}",
-          { workflowId },
+          { workflowId, id: workflowId, taskId: workflowId },
         ),
       ),
     );
@@ -9447,6 +9447,9 @@
             namespace: pick(execution, "namespace") || "moonmind",
             workflowId: latestWorkflowId,
             temporalRunId: latestRunId,
+            id: latestWorkflowId,
+            taskId: latestWorkflowId,
+            runId: latestRunId,
           },
         ),
       ).catch(() => ({ artifacts: [] }))
@@ -10281,7 +10284,7 @@
   async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
     const safeTaskId = normalizeDashboardDetailSegment(taskId);
     if (!safeTaskId) {
-      return "";
+      return { source: "", resolvedId: "" };
     }
     try {
       const resolutionUrl = new URL(
@@ -10294,9 +10297,20 @@
       }
       const payload = await fetchJson(`${resolutionUrl.pathname}${resolutionUrl.search}`);
       const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
+      
+      let resolvedId = safeTaskId;
+      const payloadWorkflowId = String(pick(payload, "workflowId") || "").trim();
+      const payloadTaskId = String(pick(payload, "taskId") || "").trim();
+      
+      if (resolvedSource === "temporal" && payloadWorkflowId) {
+        resolvedId = payloadWorkflowId;
+      } else if (payloadTaskId) {
+        resolvedId = payloadTaskId;
+      }
+
       return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
-        ? resolvedSource
-        : "";
+        ? { source: resolvedSource, resolvedId }
+        : { source: "", resolvedId: "" };
     }
     catch (_error) {
       try {
@@ -10305,10 +10319,10 @@
         );
         const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
         return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
-          ? resolvedSource
-          : "";
+          ? { source: resolvedSource, resolvedId: safeTaskId }
+          : { source: "", resolvedId: "" };
       } catch (_fallbackError) {
-        return "";
+        return { source: "", resolvedId: "" };
       }
     }
   }
@@ -10326,9 +10340,10 @@
         const detailEndpoint = orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}";
         const artifactsEndpoint =
           orchestratorSourceConfig.artifacts || "/orchestrator/tasks/{id}/artifacts";
+        const replacements = { id: runId, taskId: runId, runId };
         const [run, artifactsPayload] = await Promise.all([
-          fetchJson(endpoint(detailEndpoint, { id: runId })),
-          fetchJson(endpoint(artifactsEndpoint, { id: runId })),
+          fetchJson(endpoint(detailEndpoint, replacements)),
+          fetchJson(endpoint(artifactsEndpoint, replacements)),
         ]);
 
         const taskSteps = pick(run, "taskSteps");
@@ -11630,35 +11645,40 @@
       const explicitSource = String(searchParams?.get("source") || "")
         .trim()
         .toLowerCase();
+      
+      const { source: resolvedSource, resolvedId } = await resolveUnifiedTaskSource(candidateTaskId);
+      
       if (explicitSource === "queue") {
-        await renderQueueDetailPage(candidateTaskId);
+        await renderQueueDetailPage(resolvedId || candidateTaskId);
         return;
       }
       if (explicitSource === "orchestrator") {
-        await renderOrchestratorDetailPage(candidateTaskId);
+        await renderOrchestratorDetailPage(resolvedId || candidateTaskId);
         return;
       }
       if (explicitSource === "temporal" && temporalDetailEnabled) {
-        await renderTemporalDetailPage(candidateTaskId);
+        await renderTemporalDetailPage(resolvedId || candidateTaskId);
         return;
       }
-      const resolvedSource = await resolveUnifiedTaskSource(candidateTaskId);
+      
       if (resolvedSource === "queue") {
-        await renderQueueDetailPage(candidateTaskId);
+        await renderQueueDetailPage(resolvedId);
         return;
       }
       if (resolvedSource === "orchestrator") {
-        await renderOrchestratorDetailPage(candidateTaskId);
+        await renderOrchestratorDetailPage(resolvedId);
         return;
       }
       if (resolvedSource === "temporal" && temporalDetailEnabled) {
-        await renderTemporalDetailPage(candidateTaskId);
+        await renderTemporalDetailPage(resolvedId);
         return;
       }
       try {
         await fetchJson(
           endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
             id: candidateTaskId,
+            jobId: candidateTaskId,
+            taskId: candidateTaskId,
           }),
         );
         await renderQueueDetailPage(candidateTaskId);
@@ -11670,6 +11690,8 @@
         await fetchJson(
           endpoint(orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}", {
             id: candidateTaskId,
+            runId: candidateTaskId,
+            taskId: candidateTaskId,
           }),
         );
         await renderOrchestratorDetailPage(candidateTaskId);
@@ -11683,7 +11705,7 @@
             withTemporalSourceFlag(
               endpoint(
                 temporalSourceConfig.detail || "/api/executions/{workflowId}",
-                { workflowId: candidateTaskId },
+                { workflowId: candidateTaskId, id: candidateTaskId, taskId: candidateTaskId },
               ),
             ),
           );
