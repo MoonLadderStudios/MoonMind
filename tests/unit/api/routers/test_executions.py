@@ -490,6 +490,48 @@ def test_serialize_execution_treats_system_owner_id_as_system_owner_type() -> No
     assert payload.owner_id == "system"
 
 
+def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> None:
+    """Ensure runtime/model/effort stored in record.parameters are surfaced."""
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={"title": "RT test", "summary": "OK"},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="mm:rt-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        started_at="2026-03-19T00:00:00Z",
+        updated_at="2026-03-19T00:00:00Z",
+        closed_at=None,
+        integration_state=None,
+        parameters={
+            "targetRuntime": "codex",
+            "model": "gpt-5-codex",
+            "effort": "high",
+        },
+        paused=False,
+        waiting_reason=None,
+        attention_required=False,
+    )
+
+    payload = _serialize_execution(record)
+
+    # Verify Python field values
+    assert payload.target_runtime == "codex"
+    assert payload.model == "gpt-5-codex"
+    assert payload.effort == "high"
+
+    # Verify JSON serialization uses camelCase aliases (what the frontend sees)
+    dumped = payload.model_dump(by_alias=True)
+    assert dumped["targetRuntime"] == "codex"
+    assert dumped["model"] == "gpt-5-codex"
+    assert dumped["effort"] == "high"
+
+
 def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
