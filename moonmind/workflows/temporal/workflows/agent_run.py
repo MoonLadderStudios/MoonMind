@@ -250,7 +250,27 @@ class MoonMindAgentRun:
                         start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
-                    handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+                    
+                    if isinstance(handle_dict, dict) and "external_id" in handle_dict:
+                        status = handle_dict.get("normalized_status", "unknown")
+                        if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
+                            status = "running"
+                        handle = AgentRunHandle(
+                            runId=handle_dict["external_id"],
+                            agentKind="external",
+                            agentId=validated_id,
+                            status=status,
+                            startedAt=workflow.now(),
+                            metadata={
+                                "providerStatus": handle_dict.get("provider_status", "unknown"),
+                                "normalizedStatus": status,
+                                "externalUrl": handle_dict.get("url"),
+                                "callbackSupported": handle_dict.get("callback_supported", False),
+                            }
+                        )
+                    else:
+                        handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+                    
                     self.run_id = handle.run_id
                     self.run_status = handle.status
                     poll_interval = handle.poll_hint_seconds or 10

@@ -4,6 +4,11 @@
 
 Describe Jules as a provider-specific implementation of MoonMind's shared external-agent architecture.
 
+### Important References
+When working on the Jules adapter, consult the official documentation:
+- [Jules API Reference](https://developers.google.com/jules/api/reference/rest)
+- [Jules API Sessions Reference (Automation Mode Enum)](https://developers.google.com/jules/api/reference/rest/v1alpha/sessions)
+
 This document intentionally does **not** define a separate Jules-only integration model. The canonical shared model lives in:
 
 - [`ExternalAgentIntegrationSystem.md`](./ExternalAgentIntegrationSystem.md)
@@ -81,7 +86,7 @@ Current responsibilities:
 - normalize Jules status strings into canonical MoonMind run states
 - map Jules task responses into `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult`
 - provide truthful best-effort cancellation behavior
-- set `automationMode` to `FULLY_AUTONOMOUS` when `publishMode` is `"pr"` or `"branch"` so Jules creates a PR
+- set `automationMode` to `AUTO_CREATE_PR` when `publishMode` is `"pr"` or `"branch"` so Jules creates a PR
 
 ### 3.4 Workflow Orchestration
 
@@ -202,7 +207,7 @@ This decouples "where Jules works from" and "where changes should land."
 
 When `publishMode == "branch"` and `integration == "jules"`:
 
-1. **Adapter** — `JulesAgentAdapter.do_start()` sets `automation_mode = "FULLY_AUTONOMOUS"` for both `pr` and `branch` publish modes.
+1. **Adapter** — `JulesAgentAdapter.do_start()` sets `automation_mode = "AUTO_CREATE_PR"` for both `pr` and `branch` publish modes.
 2. **Integration stage** — `MoonMind.Run._run_integration_stage()` polls Jules until the session reaches a terminal state.
 3. **Fetch result** — On `succeeded`, the workflow calls `integration.jules.fetch_result` to get the session data and extracts the PR URL.
 4. **Update base** *(conditional)* — If `targetBranch` is set and differs from `startingBranch`, the activity calls `JulesClient.update_pull_request_base()` to change the PR's base branch using the GitHub API.

@@ -99,7 +99,7 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
                 "pr",
                 "branch",
             ):
-                automation_mode = "FULLY_AUTONOMOUS"
+                automation_mode = "AUTO_CREATE_PR"
 
         response = await self._client.create_task(
             JulesCreateTaskRequest(

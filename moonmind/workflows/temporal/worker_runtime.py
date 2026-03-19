@@ -177,6 +177,33 @@ def _build_runtime_planner():
         if failure_mode not in {"FAIL_FAST", "CONTINUE"}:
             failure_mode = "FAIL_FAST"
 
+        nodes: list[dict[str, Any]] = [
+            {
+                "id": node_id,
+                "tool": {
+                    "type": "agent_runtime",
+                    "name": runtime_mode,
+                    "version": "1.0",
+                },
+                "inputs": node_inputs,
+            }
+        ]
+
+        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+            pr_node_inputs = dict(node_inputs)
+            pr_node_inputs["instructions"] = "Create a GitHub pull request with the changes."
+            nodes.append(
+                {
+                    "id": f"{node_id}-publish-pr",
+                    "tool": {
+                        "type": "agent_runtime",
+                        "name": runtime_mode,
+                        "version": "1.0",
+                    },
+                    "inputs": pr_node_inputs,
+                }
+            )
+
         return {
             "plan_version": "1.0",
             "metadata": {
@@ -188,17 +215,7 @@ def _build_runtime_planner():
                 },
             },
             "policy": {"failure_mode": failure_mode, "max_concurrency": 1},
-            "nodes": [
-                {
-                    "id": node_id,
-                    "tool": {
-                        "type": "agent_runtime",
-                        "name": runtime_mode,
-                        "version": "1.0",
-                    },
-                    "inputs": node_inputs,
-                }
-            ],
+            "nodes": nodes,
             "edges": [],
         }
 

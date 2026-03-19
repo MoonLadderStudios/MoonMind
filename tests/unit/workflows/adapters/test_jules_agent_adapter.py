@@ -221,7 +221,7 @@ async def test_start_defaults_automation_mode_for_pr_publish():
 
     assert len(client.created) == 1
     create_req = client.created[0]
-    assert create_req.automation_mode == "FULLY_AUTONOMOUS"
+    assert create_req.automation_mode == "AUTO_CREATE_PR"
 
 
 async def test_start_defaults_automation_mode_for_branch_publish():
@@ -241,5 +241,5 @@ async def test_start_defaults_automation_mode_for_branch_publish():
 
     assert len(client.created) == 1
     create_req = client.created[0]
-    assert create_req.automation_mode == "FULLY_AUTONOMOUS"
+    assert create_req.automation_mode == "AUTO_CREATE_PR"
 

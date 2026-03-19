@@ -539,6 +539,34 @@ class MoonMindRunWorkflow:
                 continue
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
+                
+                # If still not found, check the diagnostics artifact if present
+                if pull_request_url is None and tool_type == "agent_runtime":
+                    outputs = self._get_from_result(execution_result, "outputs") or {}
+                    diag_ref = outputs.get("diagnostics_ref")
+                    if diag_ref:
+                        try:
+                            diag_payload = await workflow.execute_activity(
+                                "artifact.read",
+                                {
+                                    "principal": self._principal(),
+                                    "artifact_ref": diag_ref,
+                                },
+                                **self._execute_kwargs_for_route(artifact_read_route),
+                            )
+                            if isinstance(diag_payload, bytes):
+                                diag_text = diag_payload.decode("utf-8", errors="replace")
+                            elif isinstance(diag_payload, str):
+                                diag_text = diag_payload
+                            else:
+                                diag_text = str(diag_payload)
+                                
+                            pr_match = _GITHUB_PR_URL_PATTERN.search(diag_text)
+                            if pr_match:
+                                pull_request_url = pr_match.group(0)
+                        except Exception as e:
+                            workflow.logger.warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
+                            
         if require_pull_request_url and pull_request_url is None:
             raise ValueError(
                 "publishMode 'pr' requested but no plan step reported a GitHub pull request URL"
@@ -598,6 +626,8 @@ class MoonMindRunWorkflow:
             "pr_url",
             "prUrl",
             "url",
+            "external_url",
+            "externalUrl",
             "stdout_tail",
             "stderr_tail",
             "summary",
@@ -677,19 +707,28 @@ class MoonMindRunWorkflow:
             failure = result.get("failure_class") or result.get("failureClass")
             summary = result.get("summary") or ""
             output_refs = result.get("output_refs") or result.get("outputRefs") or []
+            diagnostics_ref = result.get("diagnostics_ref") or result.get("diagnosticsRef")
+            metadata = result.get("metadata") or {}
         else:
             failure = getattr(result, "failure_class", None)
             summary = getattr(result, "summary", "") or ""
             output_refs = getattr(result, "output_refs", []) or []
+            diagnostics_ref = getattr(result, "diagnostics_ref", None)
+            metadata = getattr(result, "metadata", {}) or {}
 
         status = "FAILED" if failure else "SUCCEEDED"
+        outputs = {
+            "summary": summary,
+            "output_refs": output_refs,
+            "error": failure or "",
+        }
+        if diagnostics_ref:
+            outputs["diagnostics_ref"] = diagnostics_ref
+        outputs.update(metadata)
+
         return {
             "status": status,
-            "outputs": {
-                "summary": summary,
-                "output_refs": output_refs,
-                "error": failure or "",
-            },
+            "outputs": outputs,
         }
 
     @staticmethod
