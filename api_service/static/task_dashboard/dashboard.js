@@ -9533,7 +9533,7 @@
       }</tbody>
         </table>
       </section>
-      ${["MoonMind.Run", "MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"].includes(String(pick(execution, "workflowType") || "")) ? "" : `
+      ${["MoonMind.Run", "MoonMind.ManifestIngest", "MoonMind.AuthProfileManager", "MoonMind.AgentRun"].includes(String(pick(execution, "workflowType") || "")) ? "" : `
       <section id="temporal-live-logs-section">
         <h3>Live Logs</h3>
         <div id="temporal-live-logs-inactive">
