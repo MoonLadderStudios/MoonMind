@@ -41,7 +41,10 @@ class ManagedRuntimeLauncher:
             cmd.extend(["--effort", effort])
 
         if request.instruction_ref:
-            cmd.extend(["--instruction-ref", request.instruction_ref])
+            if profile.runtime_id == "gemini_cli":
+                cmd.extend(["--yolo", "--prompt", request.instruction_ref])
+            else:
+                cmd.extend(["--instruction-ref", request.instruction_ref])
 
         return cmd
 
@@ -70,7 +73,15 @@ class ManagedRuntimeLauncher:
             )
 
         cmd = self.build_command(profile, request)
-        env_overrides = dict(profile.env_overrides) if profile.env_overrides else None
+        env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(os.environ)
+        
+        # Ensure HOME and GEMINI_HOME are set for gemini cli
+        if "GEMINI_HOME" not in env_overrides and "GEMINI_HOME" in os.environ:
+            env_overrides["GEMINI_HOME"] = os.environ["GEMINI_HOME"]
+        if "GEMINI_CLI_HOME" not in env_overrides and "GEMINI_CLI_HOME" in os.environ:
+            env_overrides["GEMINI_CLI_HOME"] = os.environ["GEMINI_CLI_HOME"]
+        if "HOME" not in env_overrides and "HOME" in os.environ:
+            env_overrides["HOME"] = os.environ["HOME"]
 
         process = await asyncio.create_subprocess_exec(
             *cmd,

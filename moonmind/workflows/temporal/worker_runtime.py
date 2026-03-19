@@ -18,6 +18,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalJulesActivities,
     TemporalPlanActivities,
     TemporalProposalActivities,
+    TemporalReviewActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
@@ -96,11 +97,19 @@ def _build_runtime_planner():
             or input_payload.get("instructions")
             or parameter_payload.get("instructions")
         )
-        if not isinstance(instructions, str) or not instructions.strip():
-            raise RuntimeError(
-                "agent_runtime plan requires non-empty instructions in "
-                "task.instructions, inputs.instructions, or parameters.instructions"
-            )
+        if instructions and (not isinstance(instructions, str) or not instructions.strip()):
+            instructions = None
+
+        if not instructions:
+            skill_info = task_payload.get("skill") or task_payload.get("tool")
+            if skill_info and isinstance(skill_info, dict) and skill_info.get("name"):
+                skill_name = skill_info["name"]
+                instructions = f"Execute skill '{skill_name}'"
+            else:
+                raise RuntimeError(
+                    "agent_runtime plan requires non-empty instructions in "
+                    "task.instructions, inputs.instructions, or parameters.instructions"
+                )
 
         # --- Resolve runtime mode ---
         runtime_payload = _coerce_mapping(task_payload.get("runtime"))
@@ -266,6 +275,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
             ),
+            review_activities=TemporalReviewActivities(),
         )
         binding_descriptors = sorted(
             f"{binding.activity_type}->{binding.task_queue}" for binding in bindings

@@ -203,6 +203,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
+    "step.review": ("reviews", "step_review"),
 }
 
 
@@ -2323,6 +2324,17 @@ def _bind_activity_handler(
     return decorated_func.__get__(implementation, type(implementation))
 
 
+class TemporalReviewActivities:
+    """Implementation helpers for ``step.review`` activities."""
+
+    async def step_review(
+        self,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities.step_review import step_review_activity
+        return await step_review_activity(payload)
+
+
 def build_activity_bindings(
     catalog: TemporalActivityCatalog,
     *,
@@ -2333,6 +2345,7 @@ def build_activity_bindings(
     integration_activities: Any | None = None,
     agent_runtime_activities: Any | None = None,
     proposal_activities: Any | None = None,
+    review_activities: Any | None = None,
     fleets: Sequence[str] | None = None,
 ) -> tuple[TemporalActivityBinding, ...]:
     """Bind catalog activity types to concrete runtime handlers."""
@@ -2346,6 +2359,7 @@ def build_activity_bindings(
         "integrations": integration_activities,
         "agent_runtime": agent_runtime_activities,
         "proposals": proposal_activities,
+        "reviews": review_activities,
     }
     bindings: list[TemporalActivityBinding] = []
     bound_keys: set[tuple[str, str]] = set()
