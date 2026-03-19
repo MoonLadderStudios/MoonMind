@@ -2,8 +2,8 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-16  
-Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`
+Last Updated: 2026-03-19  
+Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskFinishSummarySystem.md`, `docs/Tasks/SkillAndPlanContracts.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`
 
 ---
 
@@ -117,8 +117,10 @@ each step. This provides structured inputs for proposal generation:
   classification, and diagnostics. Proposal generators can analyze these to identify
   follow-up fixes, missed tests, or run-quality improvements.
 - **External agents** (Jules, BYOA) — the `ExternalAgentAdapter` normalizes provider
-  results into the same `AgentRunResult` contract. Proposal generators can analyze
-  external agent outputs using the same logic as managed agent outputs.
+  results into the same `AgentRunResult` contract via the `BaseExternalAgentAdapter`
+  pattern (see `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`). Proposal
+  generators consume only the normalized result and must not reach back into
+  provider-specific APIs or transport clients for additional data.
 
 This means proposal generation is runtime-agnostic at the generator level — it
 operates on `AgentRunResult` and step-level artifacts regardless of whether the
@@ -310,6 +312,10 @@ Rules:
 4. Generators must not include secrets, raw credentials, or unsafe command logs.
 5. The `tool.type` in proposed `taskCreateRequest` should be `"agent_runtime"` to
    route promoted tasks through the `MoonMind.AgentRun` execution path.
+6. The `runtime.mode` value (e.g. `codex`, `gemini_cli`, `jules`, `claude`) determines
+   which `AgentAdapter` implementation handles the promoted task — `ManagedAgentAdapter`
+   for managed runtimes, or the appropriate `ExternalAgentAdapter` subclass for
+   external agents. See `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` §4.
 
 ---
 
@@ -321,15 +327,132 @@ The lifecycle remains:
 
 1. `MoonMind.Run` creates proposal records via submission activities.
 2. Reviewers inspect, snooze, reprioritize, dismiss, or edit proposals.
-3. Promotion creates a new task request from the stored `taskCreateRequest`.
-4. That promoted task becomes a new `MoonMind.Run` workflow execution, which
-   dispatches its steps through `MoonMind.AgentRun` child workflows as usual.
+3. The operator selects a runtime (see §7.1) and promotes the proposal.
+4. Promotion creates a new task request from the stored `taskCreateRequest`,
+   with any operator overrides merged.
+5. That promoted task becomes a new `MoonMind.Run` workflow execution. Because
+   the proposed `taskCreateRequest` uses `tool.type = "agent_runtime"`, the
+   execution stage dispatches work as a `MoonMind.AgentRun` child workflow —
+   identical to any other task submission that targets an agent runtime.
 
 This separation matters:
 
 1. Proposal generation is exploratory and best-effort.
-2. Promotion is explicit human approval.
+2. Promotion is explicit human approval with runtime choice.
 3. Temporal is the execution substrate only after promotion.
+
+### 7.1 Runtime selection at promotion time
+
+Operators must be able to choose which agent runtime executes a promoted proposal.
+The proposal review UI presents a **runtime dropdown** alongside the Promote
+action.
+
+#### UX behavior
+
+1. The dropdown is pre-populated with the runtime from the proposal's
+   `taskCreateRequest.payload.task.runtime.mode` (e.g. `codex`).
+2. The operator may accept the default or select a different runtime before
+   promoting.
+3. The available options come from the backend — the dashboard view model
+   serves `system.supportedTaskRuntimes` in the runtime config payload that
+   initializes Mission Control. The UI must read this list from the config;
+   it must never hardcode its own list of runtimes.
+
+#### Runtime list — backend as source of truth
+
+The canonical list of available runtimes is built by the backend in
+`_build_supported_task_runtimes()` within `task_dashboard_view_model.py`.
+This function assembles the list from application settings and feature gates
+(e.g. `settings.jules_runtime_gate.enabled`) and includes only runtimes
+that are currently enabled for the deployment.
+
+The list is served to the UI as `system.supportedTaskRuntimes` inside the
+`build_runtime_config()` payload. The same list drives the create page
+runtime selector, the proposal detail runtime dropdown, and the
+Edit & Promote prompt. This ensures that adding a new runtime to the
+backend settings automatically surfaces it in all UI surfaces.
+
+The runtime-to-adapter mapping (reference only — the backend resolves this
+at execution time, not at promotion time):
+
+| Value | Adapter | Category |
+|-------|---------|----------|
+| `gemini_cli` | `ManagedAgentAdapter` | Managed |
+| `claude_code` | `ManagedAgentAdapter` | Managed |
+| `codex` | `ManagedAgentAdapter` | Managed |
+| `jules` | `JulesAgentAdapter` | External |
+| `codex_cloud` | `CodexCloudAgentAdapter` | External |
+
+New runtimes are added by updating `_build_supported_task_runtimes()` and
+the corresponding adapter registration. The UI inherits the change
+automatically through the served config.
+
+#### API contract
+
+The promote endpoint `POST /api/proposals/{id}/promote` accepts a
+`TaskProposalPromoteRequest` body. Runtime selection can be expressed in
+two ways:
+
+**Option A — `runtimeMode` shortcut** (preferred for UI):
+
+```json
+{
+  "runtimeMode": "gemini_cli",
+  "note": "Switching to Gemini CLI for this proposal"
+}
+```
+
+The router constructs a `taskCreateRequestOverride` from the shortcut,
+using the stored proposal's repository and other envelope fields.
+
+**Option B — full `taskCreateRequestOverride`** (for advanced use):
+
+```json
+{
+  "taskCreateRequestOverride": {
+    "payload": {
+      "task": {
+        "runtime": {
+          "mode": "gemini_cli"
+        }
+      }
+    }
+  },
+  "note": "Switching to Gemini CLI for this proposal"
+}
+```
+
+When both `runtimeMode` and `taskCreateRequestOverride` are provided,
+`taskCreateRequestOverride` takes precedence and `runtimeMode` is ignored.
+
+When `taskCreateRequestOverride` is provided, the API merges it into the
+stored `taskCreateRequest` before creating the new task. The merge follows
+JSON Merge Patch semantics — only the fields present in the override are
+replaced; all other fields in the original `taskCreateRequest` are preserved.
+
+#### Resolution precedence
+
+The final `runtime.mode` for a promoted task is resolved as (highest wins):
+
+1. `taskCreateRequestOverride.payload.task.runtime.mode` — operator choice
+   at promotion time.
+2. `taskCreateRequest.payload.task.runtime.mode` — value from the original
+   proposal (set by the generator or by `proposalPolicy.defaultRuntime`).
+3. System default runtime — fallback if neither the proposal nor the operator
+   specifies a runtime.
+
+#### Rules
+
+1. The dropdown must always show the current effective runtime so operators
+   know what will execute before clicking Promote.
+2. Runtime selection does not alter the stored proposal record — the override
+   is applied only to the promoted task.
+3. If an operator selects a runtime that is disabled or unavailable, the
+   promote request must fail with an actionable error before any workflow
+   starts.
+4. `TaskProposalTaskPreview.runtimeMode` (returned in proposal list/detail
+   responses) reflects the proposal's stored runtime, not any pending
+   override — the override exists only at promotion time.
 
 ---
 

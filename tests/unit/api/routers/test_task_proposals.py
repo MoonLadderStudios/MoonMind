@@ -296,3 +296,49 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock]) -> None:
 
     assert response.status_code == 200
     service.update_review_priority.assert_awaited()
+
+
+def test_promote_proposal_with_runtime_mode_shortcut(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """runtimeMode shortcut builds a task_create_request_override for the service."""
+    test_client, service = client
+    proposal = _build_proposal()
+    proposal.task_create_request = {
+        "type": "task",
+        "priority": 0,
+        "maxAttempts": 3,
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "do stuff",
+                "runtime": {"mode": "codex"},
+            },
+        },
+    }
+    now = datetime.now(UTC)
+    job = SimpleNamespace(
+        id=uuid4(),
+        type="task",
+        status="queued",
+        priority=0,
+        payload={"repository": "Moon/Repo"},
+        attempt=0,
+        max_attempts=3,
+        created_at=now,
+        updated_at=now,
+    )
+    service.get_proposal.return_value = proposal
+    service.promote_proposal.return_value = (proposal, job)
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/promote",
+        json={"runtimeMode": "gemini_cli"},
+    )
+
+    assert response.status_code == 200
+    kwargs = service.promote_proposal.await_args.kwargs
+    override = kwargs["task_create_request_override"]
+    assert override is not None
+    assert override["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
+    assert override["payload"]["repository"] == "Moon/Repo"

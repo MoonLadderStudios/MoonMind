@@ -3357,7 +3357,7 @@
         : {};
     taskNode.runtime = runtimeNode;
     const runtimeMode = window.prompt(
-      "Agent runtime (gemini_cli/jules/codex/claude, or leave blank for default)",
+      `Agent runtime (${supportedTaskRuntimes.join("/")}, or leave blank for default)`,
       runtimeNode.mode || "",
     );
     if (runtimeMode === null) {
@@ -10755,7 +10755,7 @@
           pick(row, "repository") || pick(preview, "repository") || "-",
         )}</div>
             <div class="card"><strong>Runtime:</strong> ${escapeHtml(
-          pick(preview, "runtimeMode") || "-",
+          pick(preview, "runtimeMode") || "(default)",
         )}</div>
             <div class="card"><strong>Publish Mode:</strong> ${escapeHtml(
           pick(preview, "publishMode") || "-",
@@ -10791,6 +10791,21 @@
             ${signalMarkup}
           </section>
           <div class="actions">
+            <label style="display:inline-flex;align-items:center;gap:0.5rem;margin-right:0.5rem">
+              Runtime
+              <select id="proposal-runtime-select">
+                ${supportedTaskRuntimes
+                  .map(
+                    (rt) =>
+                      `<option value="${escapeHtml(rt)}" ${
+                        rt === (pick(preview, "runtimeMode") || defaultTaskRuntime)
+                          ? "selected"
+                          : ""
+                      }>${escapeHtml(rt)}</option>`,
+                  )
+                  .join("")}
+              </select>
+            </label>
             <button
               type="button"
               class="queue-action"
@@ -10824,7 +10839,10 @@
         promoteButton.addEventListener("click", async () => {
           promoteButton.disabled = true;
           try {
-            await apiPromoteProposal(proposalId);
+            const runtimeSelect = document.getElementById("proposal-runtime-select");
+            const selectedRuntime = runtimeSelect ? runtimeSelect.value : null;
+            const overrides = selectedRuntime ? { runtimeMode: selectedRuntime } : {};
+            await apiPromoteProposal(proposalId, overrides);
             detailNotice = "Proposal promoted and consumed. It will disappear from the queue list.";
             await load(true);
             return;

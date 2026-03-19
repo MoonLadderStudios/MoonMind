@@ -120,6 +120,14 @@ class TaskProposalPromoteRequest(BaseModel):
     priority: Optional[int] = Field(None, alias="priority")
     max_attempts: Optional[int] = Field(None, alias="maxAttempts")
     note: Optional[str] = Field(None, alias="note")
+    runtime_mode: Optional[str] = Field(
+        None,
+        alias="runtimeMode",
+        description=(
+            "Shortcut to override the agent runtime mode (e.g. gemini_cli, "
+            "jules, codex). Ignored when taskCreateRequestOverride is provided."
+        ),
+    )
     task_create_request_override: Optional[CreateJobRequest] = Field(
         None, alias="taskCreateRequestOverride"
     )
