@@ -20,6 +20,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Path,
     Query,
     Request,
     UploadFile,
@@ -125,6 +126,25 @@ logger = logging.getLogger(__name__)
 _RUNTIME_CAPABILITY_RUNTIMES = ("codex", "gemini_cli", "claude", "jules")
 
 _QUEUE_LIST_TASK_INSTRUCTION_MAX_CHARS = 400
+
+
+def _parse_job_id(job_id: str = Path(...)) -> UUID:
+    """Parse job ID from path, transparently handling 'mm:' prefixes."""
+    if job_id.startswith("mm:"):
+        try:
+            return UUID(job_id[3:])
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid mm:-prefixed UUID format.",
+            )
+    try:
+        return UUID(job_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid UUID format.",
+        )
 
 
 def _log_queue_validation_failure(
@@ -843,7 +863,8 @@ async def create_job(
 
 @router.put("/jobs/{job_id}", response_model=JobModel)
 async def update_queued_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: UpdateQueuedJobRequest,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
@@ -875,7 +896,8 @@ async def update_queued_job(
     status_code=status.HTTP_201_CREATED,
 )
 async def resubmit_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: ResubmitJobRequest,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
@@ -1220,7 +1242,8 @@ async def queue_safeguards(
 
 @router.get("/jobs/{job_id}", response_model=JobModel)
 async def get_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
 ) -> JobModel:
@@ -1240,7 +1263,8 @@ async def get_job(
 
 @router.get("/jobs/{job_id}/finish-summary", response_model=dict[str, Any])
 async def get_job_finish_summary(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
@@ -1302,7 +1326,8 @@ async def claim_job(
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=JobModel)
 async def heartbeat_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: HeartbeatRequest,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1323,7 +1348,8 @@ async def heartbeat_job(
 
 @router.post("/jobs/{job_id}/runtime-state", response_model=JobModel)
 async def update_job_runtime_state(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: WorkerRuntimeStateRequest,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1347,7 +1373,8 @@ async def update_job_runtime_state(
     response_model=ManifestSecretResolutionResponse,
 )
 async def resolve_manifest_job_secrets(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: ManifestSecretResolutionRequest,
     service: AgentQueueService = Depends(_get_service),
     auth_manager=Depends(get_auth_manager),
@@ -1446,7 +1473,8 @@ async def resolve_manifest_job_secrets(
 
 @router.post("/jobs/{job_id}/complete", response_model=JobModel)
 async def complete_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: CompleteJobRequest,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1471,7 +1499,8 @@ async def complete_job(
 
 @router.post("/jobs/{job_id}/fail", response_model=JobModel)
 async def fail_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: FailJobRequest,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1497,7 +1526,8 @@ async def fail_job(
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobModel)
 async def cancel_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: CancelJobRequest | None = Body(None),
     service: AgentQueueService = Depends(_get_service),
     user: Optional[User] = Depends(get_current_user_optional()),
@@ -1519,7 +1549,8 @@ async def cancel_job(
 
 @router.post("/jobs/{job_id}/cancel/ack", response_model=JobModel)
 async def ack_cancel_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: CancelJobAckRequest,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1544,7 +1575,8 @@ async def ack_cancel_job(
 
 @router.post("/jobs/{job_id}/recover", response_model=RecoverJobResponse)
 async def recover_job(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: RecoverJobRequest,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
@@ -1572,7 +1604,8 @@ async def recover_job(
     response_model=TaskRunLiveSessionResponse,
 )
 async def create_job_live_session(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     service: AgentQueueService = Depends(_get_service),
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskRunLiveSessionResponse:
@@ -1596,7 +1629,8 @@ async def create_job_live_session(
     response_model=TaskRunLiveSessionResponse,
 )
 async def get_job_live_session(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> TaskRunLiveSessionResponse:
@@ -1628,7 +1662,8 @@ async def get_job_live_session(
     response_model=TaskRunLiveSessionWriteGrantResponse,
 )
 async def grant_job_live_session_write(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: GrantTaskRunLiveSessionWriteRequest = Body(
         default_factory=GrantTaskRunLiveSessionWriteRequest
     ),
@@ -1659,7 +1694,8 @@ async def grant_job_live_session_write(
     response_model=TaskRunLiveSessionResponse,
 )
 async def revoke_job_live_session(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: RevokeTaskRunLiveSessionRequest = Body(
         default_factory=RevokeTaskRunLiveSessionRequest
     ),
@@ -1684,7 +1720,8 @@ async def revoke_job_live_session(
 
 @router.post("/jobs/{job_id}/control", response_model=JobModel)
 async def apply_job_control_action(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: TaskRunControlRequest,
     service: AgentQueueService = Depends(_get_service),
     user: Optional[User] = Depends(get_current_user_optional()),
@@ -1709,7 +1746,8 @@ async def apply_job_control_action(
     status_code=status.HTTP_201_CREATED,
 )
 async def append_job_operator_message(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: TaskRunOperatorMessageRequest,
     service: AgentQueueService = Depends(_get_service),
     user: Optional[User] = Depends(get_current_user_optional()),
@@ -1734,7 +1772,8 @@ async def append_job_operator_message(
     status_code=status.HTTP_201_CREATED,
 )
 async def upload_artifact(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     file: UploadFile = File(...),
     worker_id: str = Form(..., alias="workerId"),
     name: str = Form(...),
@@ -1768,8 +1807,8 @@ async def upload_artifact(
 
 @router.get("/jobs/{job_id}/artifacts", response_model=ArtifactListResponse)
 async def list_artifacts(
-    job_id: UUID,
     *,
+    job_id: UUID = Depends(_parse_job_id),
     limit: int = Query(200, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -1785,7 +1824,8 @@ async def list_artifacts(
 
 @router.get("/jobs/{job_id}/artifacts/{artifact_id}/download")
 async def download_artifact(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     artifact_id: UUID,
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
@@ -1809,8 +1849,8 @@ async def download_artifact(
 
 @router.get("/jobs/{job_id}/attachments", response_model=ArtifactListResponse)
 async def list_job_attachments(
-    job_id: UUID,
     *,
+    job_id: UUID = Depends(_parse_job_id),
     limit: int = Query(50, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user_optional()),
@@ -1833,7 +1873,8 @@ async def list_job_attachments(
 
 @router.get("/jobs/{job_id}/attachments/{attachment_id}/download")
 async def download_job_attachment(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     attachment_id: UUID,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user_optional()),
@@ -1862,8 +1903,8 @@ async def download_job_attachment(
     response_model=ArtifactListResponse,
 )
 async def list_job_attachments_worker(
-    job_id: UUID,
     *,
+    job_id: UUID = Depends(_parse_job_id),
     limit: int = Query(50, ge=1, le=500),
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1894,7 +1935,8 @@ async def list_job_attachments_worker(
 
 @router.get("/jobs/{job_id}/attachments/{attachment_id}/download/worker")
 async def download_job_attachment_worker(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     attachment_id: UUID,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1932,7 +1974,8 @@ async def download_job_attachment_worker(
     status_code=status.HTTP_201_CREATED,
 )
 async def append_job_event(
-    job_id: UUID,
+    *,
+    job_id: UUID = Depends(_parse_job_id),
     payload: AppendJobEventRequest,
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
@@ -1954,8 +1997,8 @@ async def append_job_event(
 
 @router.get("/jobs/{job_id}/events", response_model=JobEventListResponse)
 async def list_job_events(
-    job_id: UUID,
     *,
+    job_id: UUID = Depends(_parse_job_id),
     after: Optional[datetime] = Query(None, alias="after"),
     after_event_id: UUID | None = Query(None, alias="afterEventId"),
     before: Optional[datetime] = Query(None, alias="before"),
@@ -1984,9 +2027,9 @@ async def list_job_events(
 
 @router.get("/jobs/{job_id}/events/stream")
 async def stream_job_events(
-    job_id: UUID,
-    request: Request,
     *,
+    job_id: UUID = Depends(_parse_job_id),
+    request: Request,
     after: Optional[datetime] = Query(None, alias="after"),
     after_event_id: UUID | None = Query(None, alias="afterEventId"),
     limit: int = Query(200, ge=1, le=500),
