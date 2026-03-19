@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from moonmind.workflows.skills.tool_plan_contracts import (
     DEFAULT_SKIP_TOOL_TYPES,
@@ -92,6 +91,21 @@ class TestParsePlanDefinitionReviewGate:
         assert rg.reviewer_model == "gpt-4"
         assert rg.review_timeout_seconds == 60
         assert rg.skip_tool_types == ("agent_runtime",)
+
+    def test_parse_max_review_attempts_zero_preserved(self):
+        """Explicit max_review_attempts: 0 must not be overwritten to 2."""
+        plan_payload = {
+            **_MINIMAL_PLAN,
+            "policy": {
+                "failure_mode": "FAIL_FAST",
+                "review_gate": {
+                    "enabled": True,
+                    "max_review_attempts": 0,
+                },
+            },
+        }
+        plan = parse_plan_definition(plan_payload)
+        assert plan.policy.review_gate.max_review_attempts == 0
 
     def test_parse_with_review_gate_disabled_explicitly(self):
         plan_payload = {

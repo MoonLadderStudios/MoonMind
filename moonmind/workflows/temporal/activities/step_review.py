@@ -6,7 +6,6 @@ Registered as ``step.review`` in the activity catalog.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Mapping
 
@@ -58,8 +57,8 @@ async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
         ),
     )
 
-    prompt = build_review_prompt(request)
-
+    # TODO: Wire LLM call using build_review_prompt(request) once
+    # the mm.activity.llm fleet integration is available.
     logger.info(
         "step.review: node=%s attempt=%d tool=%s",
         request.node_id,

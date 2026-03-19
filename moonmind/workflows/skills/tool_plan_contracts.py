@@ -814,12 +814,18 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
             skip_raw = []
         review_gate: ReviewGatePolicy | None = ReviewGatePolicy(
             enabled=bool(review_gate_raw.get("enabled", False)),
-            max_review_attempts=int(review_gate_raw.get("max_review_attempts") or 2),
+            max_review_attempts=(
+                int(raw_attempts)
+                if (raw_attempts := review_gate_raw.get("max_review_attempts")) is not None
+                else 2
+            ),
             reviewer_model=str(
                 review_gate_raw.get("reviewer_model") or "default"
             ).strip(),
-            review_timeout_seconds=int(
-                review_gate_raw.get("review_timeout_seconds") or 120
+            review_timeout_seconds=(
+                int(raw_timeout)
+                if (raw_timeout := review_gate_raw.get("review_timeout_seconds")) is not None
+                else 120
             ),
             skip_tool_types=tuple(
                 str(t).strip() for t in skip_raw if str(t).strip()

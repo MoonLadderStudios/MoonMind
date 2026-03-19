@@ -9,7 +9,8 @@ Data models for the step review gate system:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from moonmind.workflows.skills.tool_plan_contracts import (
@@ -32,6 +33,8 @@ class ReviewRequest:
     inputs: Mapping[str, Any]
     execution_result: Mapping[str, Any]
     workflow_context: Mapping[str, Any]
+    reviewer_model: str = "default"
+    review_timeout_seconds: int = 120
     previous_feedback: str | None = None
 
     def __post_init__(self) -> None:
@@ -60,6 +63,8 @@ class ReviewRequest:
             "inputs": dict(self.inputs),
             "execution_result": dict(self.execution_result),
             "workflow_context": dict(self.workflow_context),
+            "reviewer_model": self.reviewer_model,
+            "review_timeout_seconds": self.review_timeout_seconds,
             "previous_feedback": self.previous_feedback,
         }
 
@@ -192,7 +197,6 @@ Respond with JSON:
 
 def build_review_prompt(request: ReviewRequest) -> str:
     """Construct the LLM review prompt from a ``ReviewRequest``."""
-    import json
 
     plan_title = str(
         request.workflow_context.get("plan_title", "Untitled")
