@@ -898,6 +898,7 @@ class MoonMindRunWorkflow:
                 workflow.logger.warning(
                     "Jules branch-publish auto-merge failed (best-effort): %s",
                     exc,
+                    exc_info=True,
                 )
 
     async def _run_proposals_stage(

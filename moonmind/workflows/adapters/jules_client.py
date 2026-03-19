@@ -280,6 +280,42 @@ class JulesClient:
             summary=f"Jules task {external_operation_id} cancellation accepted.",
         )
 
+    # ------------------------------------------------------------------
+    # GitHub PR helpers (used by branch-publish auto-merge)
+    # ------------------------------------------------------------------
+
+    _GITHUB_PR_URL_RE = re.compile(
+        r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)"
+    )
+
+    @staticmethod
+    def _parse_github_pr_url(
+        pr_url: str,
+    ) -> tuple[str, str, str] | None:
+        """Extract ``(owner, repo, pr_number)`` from a GitHub PR URL.
+
+        Returns ``None`` when the URL does not match the expected format.
+        """
+        match = JulesClient._GITHUB_PR_URL_RE.match(pr_url)
+        if not match:
+            return None
+        return match.group(1), match.group(2), match.group(3)
+
+    @staticmethod
+    def _resolve_github_token(explicit_token: str | None = None) -> str:
+        """Return the GitHub token from the explicit arg or ``GITHUB_TOKEN`` env."""
+        token = (explicit_token or os.environ.get("GITHUB_TOKEN", "")).strip()
+        return token
+
+    @staticmethod
+    def _github_headers(token: str) -> dict[str, str]:
+        """Build standard GitHub API v3 request headers."""
+        return {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
     async def merge_pull_request(
         self,
         *,
@@ -293,18 +329,16 @@ class JulesClient:
         auto-merge the PR that Jules created into the target branch.
         """
 
-        match = re.match(
-            r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", pr_url
-        )
-        if not match:
+        parsed = self._parse_github_pr_url(pr_url)
+        if not parsed:
             return JulesIntegrationMergePRResult(
                 prUrl=pr_url,
                 merged=False,
                 summary=f"Could not parse PR URL: {pr_url}",
             )
 
-        owner, repo, pr_number = match.group(1), match.group(2), match.group(3)
-        token = github_token or os.environ.get("GITHUB_TOKEN", "").strip()
+        owner, repo, pr_number = parsed
+        token = self._resolve_github_token(github_token)
         if not token:
             return JulesIntegrationMergePRResult(
                 prUrl=pr_url,
@@ -313,11 +347,7 @@ class JulesClient:
             )
 
         api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/merge"
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
+        headers = self._github_headers(token)
         payload = {"merge_method": merge_method}
 
         async with httpx.AsyncClient(timeout=30.0) as gh_client:
@@ -377,23 +407,17 @@ class JulesClient:
         branch differs from the branch Jules started from.
         """
 
-        match = re.match(
-            r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", pr_url
-        )
-        if not match:
+        parsed = self._parse_github_pr_url(pr_url)
+        if not parsed:
             return False, f"Could not parse PR URL: {pr_url}"
 
-        owner, repo, pr_number = match.group(1), match.group(2), match.group(3)
-        token = github_token or os.environ.get("GITHUB_TOKEN", "").strip()
+        owner, repo, pr_number = parsed
+        token = self._resolve_github_token(github_token)
         if not token:
             return False, "GITHUB_TOKEN is not configured; cannot update PR base."
 
         api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
+        headers = self._github_headers(token)
         payload = {"base": new_base}
 
         async with httpx.AsyncClient(timeout=30.0) as gh_client:
