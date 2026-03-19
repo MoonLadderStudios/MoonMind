@@ -254,7 +254,7 @@ const helpers = loadTemporalHelpers();
 
 (function testTemporalDetailMarkupIncludesLiveLogsSection() {
   const html = helpers.renderTemporalDetailMarkup({
-    execution: { state: "executing", workflowType: "MoonMind.Run" },
+    execution: { state: "executing", workflowType: "MoonMind.LegacyWorkflow" },
     latestWorkflowId: "mm:wf-live-logs",
     latestRunId: "run-001",
     artifacts: { artifacts: [] },
@@ -279,7 +279,7 @@ const helpers = loadTemporalHelpers();
 
 (function testTemporalDetailMarkupLiveLogsDefaultsToCollapsed() {
   const html = helpers.renderTemporalDetailMarkup({
-    execution: { state: "succeeded", workflowType: "MoonMind.Run" },
+    execution: { state: "succeeded", workflowType: "MoonMind.LegacyWorkflow" },
     latestWorkflowId: "mm:wf-collapsed",
     latestRunId: "run-002",
     artifacts: { artifacts: [] },
