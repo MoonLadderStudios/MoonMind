@@ -6426,14 +6426,14 @@ test = ["pytest", "ruff"]
 
 [[package]]
 name = "tinytag"
-version = "2.2.0"
+version = "2.2.1"
 description = "Read audio file metadata"
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
-    {file = "tinytag-2.2.0-py3-none-any.whl", hash = "sha256:d2cf3ef8ee0f6c854663f77d9d5f8159ee1c834c70f5ea4f214ddc4af8148f79"},
-    {file = "tinytag-2.2.0.tar.gz", hash = "sha256:f15b082510f6e0fc717e597edc8759d6f2d3ff6194ac0f3bcd675a9a09d9b798"},
+    {file = "tinytag-2.2.1-py3-none-any.whl", hash = "sha256:ed8b1e6d25367937e3321e054f4974f9abfde1a3e0a538824c87da377130c2b6"},
+    {file = "tinytag-2.2.1.tar.gz", hash = "sha256:e6d06610ebe7cd66fd07be2d3b9495914ab32654a5e47657bb8cd44c2484523c"},
 ]
 
 [package.extras]
@@ -7300,4 +7300,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-xdist"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "ad5e0ea17b3363a9d1fbd2e58adada7a687022eb29786e49ead7ad3fc55d2810"
+content-hash = "cea92af2697336ea304c5dd6c5ac78b383c4647bd6cdca90b1a73520a80d6884"
