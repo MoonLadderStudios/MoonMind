@@ -161,6 +161,29 @@ async def test_start_passes_explicit_branch_in_source_context():
     assert create_req.source_context.github_repo_context.starting_branch == "develop"
 
 
+@pytest.mark.asyncio
+async def test_start_passes_starting_branch_in_source_context():
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="jules",
+        executionProfileRef="profile:jules-default",
+        correlationId="corr-1",
+        idempotencyKey="idem-starting-branch",
+        workspaceSpec={"repository": "owner/repo", "startingBranch": "feature-branch"},
+        parameters={"description": "foo"}
+    )
+
+    await adapter.start(req)
+
+    assert len(client.created) == 1
+    create_req = client.created[0]
+    assert create_req.source_context.source == "sources/github/owner/repo"
+    assert create_req.source_context.github_repo_context.starting_branch == "feature-branch"
+
+
 async def test_start_without_workspace_spec_sends_no_source_context():
     client = _FakeJulesAdapterClient()
     adapter = JulesAgentAdapter(client_factory=lambda: client)

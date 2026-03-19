@@ -86,7 +86,9 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             repo = request.workspace_spec.get("repository") or request.workspace_spec.get("repo")
             if repo:
                 branch = str(
-                    request.workspace_spec.get("branch", "main")
+                    request.workspace_spec.get("startingBranch")
+                    or request.workspace_spec.get("branch")
+                    or "main"
                 ).strip() or "main"
                 source_context = SourceContext.from_repo(repo, branch=branch)
 
