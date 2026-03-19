@@ -97,7 +97,14 @@ The panel manages its own connection lifecycle:
 
 Add `logTailingEnabled` to the existing features configuration object exposed by the view model. Default to `true` when the live session system is available. The dashboard checks this flag before rendering the panel.
 
-### 3. Existing Infrastructure Used
+### 3. ManagedRuntimeLauncher (launcher.py)
+
+To support this UI behavior for Managed Agents, the `ManagedRuntimeLauncher` must be updated:
+- Wrap the subprocess `cmd` in a headless `tmate` session instead of calling the raw binary directly.
+- Monitor `tmate wait tmate-ready` and use `tmate display -p` to extract `ssh_ro`, `ssh_rw`, `web_ro`, and `web_rw`.
+- Report these URLs back to the `TaskRunLiveSession` so the UI can embed them.
+
+### 4. Existing Infrastructure Used
 
 - `GET /api/queue/jobs/{id}/live-session` — already fetched by `loadQueueRunDetail()` in dashboard.js
 - `web_ro` field — already available in the live session response (see `agent_queue_models.py` line 225)

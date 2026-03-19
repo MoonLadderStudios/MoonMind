@@ -28,6 +28,10 @@ from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgen
 from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as CodexCloudHttpClient
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
+
+from api_service.db.base import get_async_session_context
+from moonmind.workflows import get_agent_queue_repository
+from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     ManagedRuntimeProfile,
@@ -2131,12 +2135,51 @@ class TemporalAgentRuntimeActivities:
         workspace_path = payload.get("workspace_path")
 
         # Idempotency check handled in launcher
-        record, process = await self._run_launcher.launch(
+        record, process, endpoints = await self._run_launcher.launch(
             run_id=run_id,
             request=request,
             profile=profile,
             workspace_path=workspace_path,
         )
+
+        if endpoints:
+            try:
+                async with get_async_session_context() as db_session:
+                    service = AgentQueueService(get_agent_queue_repository(db_session))
+                    from moonmind.workflows.agent_queue import models
+                    from datetime import UTC, datetime, timedelta
+                    from uuid import UUID
+                    
+                    # Convert run_id string to UUID if possible, else generate one based on string
+                    try:
+                        task_run_id = UUID(run_id)
+                    except ValueError:
+                        import hashlib
+                        task_run_id = UUID(hashlib.md5(run_id.encode('utf-8')).hexdigest())
+
+                    # If run_id is not a UUID, we must pass a valid UUID to the service. But wait, we dropped the FK.
+                    # We can just insert it. Wait, AgentQueueService expects UUID.
+                    # Let's just insert directly using the db_session to bypass strict UUID typing if necessary,
+                    # OR just ensure task_run_id is a UUID.
+                    # Actually AgentQueueService.report_live_session expects task_run_id as UUID.
+                    
+                    expires_at = (datetime.now(UTC) + timedelta(minutes=60)).isoformat()
+                    await service.report_live_session(
+                        task_run_id=task_run_id,
+                        worker_id="temporal-activity-worker",
+                        worker_hostname="localhost",
+                        status=models.AgentJobLiveSessionStatus.READY,
+                        provider=models.AgentJobLiveSessionProvider.TMATE,
+                        attach_ro=endpoints.get("attach_ro"),
+                        attach_rw=endpoints.get("attach_rw"),
+                        web_ro=endpoints.get("web_ro"),
+                        web_rw=endpoints.get("web_rw"),
+                        tmate_session_name=endpoints.get("tmate_session_name"),
+                        tmate_socket_path=endpoints.get("tmate_socket_path"),
+                        expires_at=expires_at,
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to report live session for run {run_id}", exc_info=True)
 
         # Start background supervision — hold a strong reference so the task
         # is not garbage-collected before it completes.

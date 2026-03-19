@@ -56,7 +56,7 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | None = None,
-    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process]:
+    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process, dict[str, str] | None]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
@@ -84,14 +84,77 @@ class ManagedRuntimeLauncher:
         if "HOME" not in env_overrides and "HOME" in os.environ:
             env_overrides["HOME"] = os.environ["HOME"]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env_overrides,
-            cwd=workspace_path,
-        )
+        import shutil
+        import shlex
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        use_tmate = shutil.which("tmate") is not None
+        endpoints = None
+
+        if use_tmate:
+            socket_dir = "/tmp/moonmind/tmate"
+            os.makedirs(socket_dir, exist_ok=True)
+            socket_path = os.path.join(socket_dir, f"{run_id}.sock")
+            if os.path.exists(socket_path):
+                os.remove(socket_path)
+                
+            session_name = f"mm-{run_id.replace('-', '')[:16]}"
+            cmd_str = " ".join(shlex.quote(c) for c in cmd)
+            
+            # Start tmate server in foreground
+            tmate_cmd = [
+                "tmate", "-S", socket_path, "-F",
+                "new-session", "-A", "-s", session_name, cmd_str
+            ]
+            
+            process = await asyncio.create_subprocess_exec(
+                *tmate_cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_overrides,
+                cwd=workspace_path,
+            )
+            
+            try:
+                # Wait for tmate-ready
+                async def _wait_for_ready():
+                    ready_proc = await asyncio.create_subprocess_exec("tmate", "-S", socket_path, "wait", "tmate-ready")
+                    await ready_proc.wait()
+                
+                await asyncio.wait_for(_wait_for_ready(), timeout=10.0)
+                
+                async def get_endpoint(key):
+                    p = await asyncio.create_subprocess_exec(
+                        "tmate", "-S", socket_path, "display", "-p", f"#{{{key}}}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    stdout, _ = await p.communicate()
+                    return stdout.decode().strip() or None
+
+                endpoints = {
+                    "attach_ro": await get_endpoint("tmate_ssh_ro"),
+                    "attach_rw": await get_endpoint("tmate_ssh"),
+                    "web_ro": await get_endpoint("tmate_web_ro"),
+                    "web_rw": await get_endpoint("tmate_web"),
+                    "tmate_session_name": session_name,
+                    "tmate_socket_path": socket_path,
+                }
+            except Exception as e:
+                logger.warning(f"Failed to fetch tmate endpoints: {e}")
+                pass # Proceed even if endpoints fail
+                
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_overrides,
+                cwd=workspace_path,
+            )
 
         record = ManagedRunRecord(
             run_id=run_id,
@@ -103,4 +166,4 @@ class ManagedRuntimeLauncher:
             workspace_path=workspace_path,
         )
         self._store.save(record)
-        return record, process
+        return record, process, endpoints

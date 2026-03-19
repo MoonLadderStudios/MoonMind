@@ -110,6 +110,8 @@ The platform operator can enable or disable the Live Output panel via the `logTa
 - **FR-011**: The feature MUST be gated behind a `logTailingEnabled` feature flag. *(DOC-REQ-010)*
 - **FR-012**: The panel MUST handle all session lifecycle states: DISABLED, STARTING, READY, REVOKED, ENDED, ERROR. *(DOC-REQ-011)*
 - **FR-013**: The rolling buffer MUST display approximately the most recent 200 lines. *(DOC-REQ-001, DOC-REQ-002)*
+- **FR-014**: The `ManagedRuntimeLauncher` MUST wrap managed agent subprocesses in a headless `tmate` session to generate the `web_ro` URL for log tailing. *(DOC-REQ-004)*
+- **FR-015**: The `ManagedRuntimeLauncher` MUST extract the generated `tmate` endpoints and store them in the `TaskRunLiveSession` record associated with the run. *(DOC-REQ-004)*
 
 ### Key Entities
 
