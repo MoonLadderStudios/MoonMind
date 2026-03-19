@@ -285,6 +285,7 @@ class MoonMindAgentRun:
                         else:
                             # Managed agent: poll via adapter directly.
                             status_obj = await adapter.status(self.run_id)
+                            workflow.logger.info(f"STATUS_OBJ for {self.run_id}: {status_obj}")
 
                         self.run_status = status_obj.status
                         if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
@@ -335,6 +336,9 @@ class MoonMindAgentRun:
                 )
 
                 if isinstance(enriched_result, dict):
+                    # Handle duplicate aliases from older history events
+                    if "diagnosticsRef" in enriched_result and "diagnostics_ref" in enriched_result:
+                        del enriched_result["diagnostics_ref"]
                     self.final_result = AgentRunResult(**enriched_result)
                 return self.final_result
 
