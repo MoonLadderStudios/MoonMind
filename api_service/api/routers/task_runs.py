@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.agent_queue import (
@@ -31,6 +31,25 @@ from moonmind.workflows import get_agent_queue_repository
 from moonmind.workflows.agent_queue.service import AgentQueueService
 
 router = APIRouter(prefix="/api/task-runs", tags=["task-runs"])
+
+
+def _parse_task_run_id(task_run_id: str = Path(...)) -> UUID:
+    """Parse task run ID from path, transparently handling 'mm:' prefixes."""
+    if task_run_id.startswith("mm:"):
+        try:
+            return UUID(task_run_id[3:])
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid mm:-prefixed UUID format.",
+            )
+    try:
+        return UUID(task_run_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid UUID format.",
+        )
 
 
 async def _get_service(
@@ -66,7 +85,7 @@ def _require_worker_token_identity(auth: _WorkerRequestAuth, worker_id: str) -> 
 )
 async def create_live_session(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> TaskRunLiveSessionResponse:
@@ -90,7 +109,7 @@ async def create_live_session(
 )
 async def get_live_session(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     service: AgentQueueService = Depends(_get_service),
     _user: User = Depends(get_current_user()),
 ) -> TaskRunLiveSessionResponse:
@@ -123,7 +142,7 @@ async def get_live_session(
 )
 async def get_live_session_for_worker(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     service: AgentQueueService = Depends(_get_service),
     auth: _WorkerRequestAuth = Depends(_require_worker_auth),
 ) -> TaskRunLiveSessionResponse:
@@ -154,7 +173,7 @@ async def get_live_session_for_worker(
 )
 async def grant_live_session_write(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     payload: GrantTaskRunLiveSessionWriteRequest = Body(
         default_factory=GrantTaskRunLiveSessionWriteRequest
     ),
@@ -185,7 +204,7 @@ async def grant_live_session_write(
 )
 async def revoke_live_session(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     payload: RevokeTaskRunLiveSessionRequest = Body(
         default_factory=RevokeTaskRunLiveSessionRequest
     ),
@@ -210,7 +229,7 @@ async def revoke_live_session(
 @router.post("/{task_run_id}/control", response_model=JobModel)
 async def apply_control_action(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     payload: TaskRunControlRequest,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
@@ -235,7 +254,7 @@ async def apply_control_action(
 )
 async def append_operator_message(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     payload: TaskRunOperatorMessageRequest,
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
@@ -259,7 +278,7 @@ async def append_operator_message(
 )
 async def report_live_session(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     payload: WorkerReportTaskRunLiveSessionRequest,
     auth: _WorkerRequestAuth = Depends(_require_worker_auth),
     service: AgentQueueService = Depends(_get_service),
@@ -297,7 +316,7 @@ async def report_live_session(
 )
 async def heartbeat_live_session(
     *,
-    task_run_id: UUID,
+    task_run_id: UUID = Depends(_parse_task_run_id),
     worker_id: str = Body(..., embed=True, alias="workerId"),
     auth: _WorkerRequestAuth = Depends(_require_worker_auth),
     service: AgentQueueService = Depends(_get_service),
