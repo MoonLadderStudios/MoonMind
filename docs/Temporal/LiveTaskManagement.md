@@ -41,7 +41,7 @@ Both capabilities depend on a single `tmate` session per workflow execution.
 
 ### 4.1 Session Lifecycle
 
-Every Temporal Managed Agent run executes inside a dedicated `tmate` session. The sandbox worker owns the session, exposes the RO endpoint immediately, and keeps the RW endpoint encrypted until an operator explicitly requests access.
+Every Temporal Managed Agent run executes inside a dedicated `tmate` session. The `agent_runtime` activity worker owns the session, exposes the RO endpoint immediately, and keeps the RW endpoint encrypted until an operator explicitly requests access.
 
 ```
 DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
@@ -54,34 +54,35 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 - **ENDED**: Workflow completed; worker tore down the session normally.
 - **ERROR**: tmate setup failed; the agent keeps running headless.
 
-### 4.2 Session Bootstrap
+### 4.2 Session Bootstrap (ManagedRuntimeLauncher)
+
+To support this for local subprocesses without Docker, the `ManagedRuntimeLauncher` (in the `agent_runtime` activity worker) will be updated to wrap the agent invocation in `tmate`:
+
+1. **Launcher Update**: Instead of calling `asyncio.create_subprocess_exec(['gemini', ...])` directly, the launcher wraps the command in a headless `tmate` session.
+2. **Metadata Extraction**: The launcher executes `tmate display -p` (or parses socket output) to extract the `ssh_ro`, `ssh_rw`, `web_ro`, and `web_rw` strings once the session is ready.
+3. **Database Hook**: The launcher reports these connection strings back to the Temporal orchestrator or directly to the API, storing them in a `TaskRunLiveSession` record associated with the workflow's `run_id`.
+4. **UI Restoration**: The Unified Dashboard embeds the `web_ro` URL in the Live Output panel, restoring the high-fidelity terminal UI.
 
 ```bash
-WORKFLOW_ID="$TEMPORAL_WORKFLOW_ID"
+# Conceptual wrapper executed by ManagedRuntimeLauncher
+WORKFLOW_ID="mm-run-${RUN_ID}"
 SOCK_DIR="/tmp/moonmind/tmate"
 SOCK="$SOCK_DIR/${WORKFLOW_ID}.sock"
-SESSION="mm-${WORKFLOW_ID}"
 
 mkdir -p "$SOCK_DIR"
 
-tmate -S "$SOCK" new-session -d -s "$SESSION"
+# Start the agent runtime wrapped in tmate
+tmate -S "$SOCK" new-session -d -s "$WORKFLOW_ID" "gemini --yolo --prompt ..."
 tmate -S "$SOCK" set -g remain-on-exit on
 tmate -S "$SOCK" set -g history-limit 200000
 
-tmate -S "$SOCK" split-window -h -t "${SESSION}:0"
-tmate -S "$SOCK" split-window -v -t "${SESSION}:0.0"
-tmate -S "$SOCK" split-window -v -t "${SESSION}:0.1"
-
-# Pane assignments: agent runtime, task log, operator inbox, operator shell.
-
 tmate -S "$SOCK" wait tmate-ready
 
+# Launcher extracts endpoints to save to DB
 SSH_RO=$(tmate -S "$SOCK" display -p '#{tmate_ssh_ro}')
 SSH_RW=$(tmate -S "$SOCK" display -p '#{tmate_ssh}')
 WEB_RO=$(tmate -S "$SOCK" display -p '#{tmate_web_ro}')
 WEB_RW=$(tmate -S "$SOCK" display -p '#{tmate_web}')
-
-# Worker emits an Activity to register this session with the DB.
 ```
 
 ### 4.3 Recommended Pane Layout
