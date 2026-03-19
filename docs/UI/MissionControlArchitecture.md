@@ -553,7 +553,7 @@ The same `POST /api/executions` or `POST /api/queue/jobs` endpoint is used. The 
 }
 ```
 
-See [WorkflowSchedulingGuide.md § 4.4](file:///Users/nsticco/MoonMind/docs/Temporal/WorkflowSchedulingGuide.md) for the full `schedule` object schema and backend behavior.
+See [WorkflowSchedulingGuide.md § 4.4](../Temporal/WorkflowSchedulingGuide.md) for the full `schedule` object schema and backend behavior.
 
 #### Scheduled Execution Detail Banner
 

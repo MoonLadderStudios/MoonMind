@@ -11,10 +11,10 @@ This guide covers how to start Temporal workflows at a specific time and how to 
 
 ## 2. Related Docs
 
-- [TemporalArchitecture.md](file:///Users/nsticco/MoonMind/docs/Temporal/TemporalArchitecture.md) — platform foundation and migration phases
-- [WorkflowTypeCatalogAndLifecycle.md](file:///Users/nsticco/MoonMind/docs/Temporal/WorkflowTypeCatalogAndLifecycle.md) — workflow types, state model, update/signal contracts
-- [MissionControlArchitecture.md](file:///Users/nsticco/MoonMind/docs/UI/MissionControlArchitecture.md) — dashboard source model, route map, schedule source config
-- [ActivityCatalogAndWorkerTopology.md](file:///Users/nsticco/MoonMind/docs/Temporal/ActivityCatalogAndWorkerTopology.md) — activity routing and worker fleet
+- [TemporalArchitecture.md](TemporalArchitecture.md) — platform foundation and migration phases
+- [WorkflowTypeCatalogAndLifecycle.md](WorkflowTypeCatalogAndLifecycle.md) — workflow types, state model, update/signal contracts
+- [MissionControlArchitecture.md](../UI/MissionControlArchitecture.md) — dashboard source model, route map, schedule source config
+- [ActivityCatalogAndWorkerTopology.md](ActivityCatalogAndWorkerTopology.md) — activity routing and worker fleet
 
 ---
 

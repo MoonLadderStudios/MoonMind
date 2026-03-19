@@ -1,6 +1,6 @@
 # Implementation Plan: Step Review Gate
 
-**Branch**: `086-step-review-gate` | **Date**: 2026-03-18 | **Spec**: [spec.md](file:///Users/nsticco/MoonMind/specs/086-step-review-gate/spec.md)
+**Branch**: `086-step-review-gate` | **Date**: 2026-03-18 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `specs/086-step-review-gate/spec.md`
 
 ## Summary

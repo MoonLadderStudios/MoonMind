@@ -1,6 +1,6 @@
 # Implementation Plan: Worker Pause System (Temporal Era)
 
-**Branch**: `038-worker-pause` | **Date**: 2026-03-17 | **Spec**: [spec.md](file:///Users/nsticco/MoonMind/specs/038-worker-pause/spec.md)
+**Branch**: `038-worker-pause` | **Date**: 2026-03-17 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/038-worker-pause/spec.md`
 
 ## Summary
