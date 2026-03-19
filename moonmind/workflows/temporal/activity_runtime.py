@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
+from moonmind.schemas.jules_models import JulesIntegrationMergePRResult
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
@@ -188,6 +189,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_jules_fetch_result",
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
+    "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
@@ -1664,6 +1666,28 @@ class TemporalJulesActivities:
             provider_status=provider_status,
             terminal=normalized.terminal,
         )
+
+    async def integration_jules_merge_pr(
+        self, payload: dict
+    ) -> JulesIntegrationMergePRResult:
+        """Auto-merge a Jules-created PR into its target branch via GitHub API."""
+        client = self._client_factory()
+
+        pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
+        target_branch = payload.get("target_branch") or payload.get("targetBranch")
+
+        if target_branch:
+            success, summary = await client.update_pull_request_base(
+                pr_url=pr_url, new_base=target_branch,
+            )
+            if not success:
+                return JulesIntegrationMergePRResult(
+                    prUrl=pr_url,
+                    merged=False,
+                    summary=f"Base branch update failed: {summary}",
+                )
+
+        return await client.merge_pull_request(pr_url=pr_url)
 
     # ---- Codex Cloud integration handlers ----
 
