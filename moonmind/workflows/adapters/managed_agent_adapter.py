@@ -195,7 +195,15 @@ class ManagedAgentAdapter:
         # Persist only the profile_id reference — never raw credentials
         # (DOC-REQ-008 / constitution security rule).
         self._active_profile_id = profile_id
-        run_id = str(uuid4())
+        
+        try:
+            from temporalio import workflow
+            if workflow.in_workflow():
+                run_id = str(workflow.uuid4())
+            else:
+                run_id = str(uuid4())
+        except ImportError:
+            run_id = str(uuid4())
 
         # Signal AuthProfileManager to acquire a slot lease (DOC-REQ-004).
         await self._request_slot(

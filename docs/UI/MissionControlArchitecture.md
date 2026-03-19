@@ -454,9 +454,115 @@ Initial expected mappings:
 
 ### 10.4 Redirect After Create
 
-- Redirect to `/tasks/{taskId}?source=temporal`.
+- **Immediate execution:** redirect to `/tasks/{taskId}?source=temporal`.
+- **Deferred one-time (`schedule.mode=once`):** redirect to `/tasks/{taskId}?source=temporal`, detail page shows scheduled banner.
+- **Recurring (`schedule.mode=recurring`):** redirect to `/tasks/schedules/{definitionId}`, the schedule detail page.
 - For Temporal-backed records, `taskId` should equal `workflowId`.
 - Internal state may additionally retain `temporalRunId`, but the canonical route should remain task-oriented and stable across reruns.
+
+### 10.5 Inline Scheduling on Submit
+
+The submit form at `/tasks/new` includes a **"When to run"** schedule panel that allows the user to choose between immediate, deferred one-time, and recurring execution — all from the same form.
+
+#### Feature Flag
+
+```json
+{
+  "featureFlags": {
+    "temporalDashboard": {
+      "submitScheduleEnabled": false
+    }
+  }
+}
+```
+
+When `submitScheduleEnabled` is `false`, the schedule panel is hidden and all submissions are immediate (current behavior).
+
+#### Schedule Panel Wireframe
+
+The panel appears below the task fields (instructions, runtime, model, repo) and above the submit button:
+
+```
+┌─────────────────────────────────────────┐
+│  When to run                            │
+│                                         │
+│  ( • ) Run immediately                  │
+│  (   ) Schedule for later               │
+│  (   ) Set up recurring schedule        │
+│                                         │
+│  ─── Shown when "Schedule for later" ── │
+│  Date: [____-__-__]                     │
+│  Time: [__:__]  Timezone: [_________▾]  │
+│                                         │
+│  ── Shown when "Recurring schedule" ──  │
+│  Schedule name: [____________________]  │
+│  Cron: [_______]  Timezone: [________▾] │
+│  Preview: "Every weekday at 9:00 AM"    │
+│                                         │
+└─────────────────────────────────────────┘
+│ [ Submit ]  or  [ Schedule ]            │
+```
+
+#### Mode Behaviors
+
+| Selection | Submit button | API `schedule` field | Redirect |
+| --- | --- | --- | --- |
+| **Run immediately** | "Submit" | Absent | `/tasks/{taskId}?source=temporal` |
+| **Schedule for later** | "Schedule" | `{ mode: "once", scheduledFor: "..." }` | `/tasks/{taskId}?source=temporal` |
+| **Set up recurring schedule** | "Create Schedule" | `{ mode: "recurring", cron: "...", ... }` | `/tasks/schedules/{definitionId}` |
+
+#### Deferred One-Time Fields
+
+- **Date picker** — calendar date selector
+- **Time picker** — hour/minute selector
+- **Timezone** — dropdown, defaults to browser timezone via `Intl.DateTimeFormat().resolvedOptions().timeZone`
+- Combined values produce an ISO 8601 `scheduledFor` timestamp
+
+#### Recurring Schedule Fields
+
+- **Schedule name** — text input, auto-populated from the task title, editable
+- **Cron expression** — text input with inline validation against 5-field POSIX cron
+- **Cron preview** — human-readable label derived from the cron expression (e.g., "Every weekday at 9:00 AM Pacific")
+- **Timezone** — dropdown, defaults to `UTC`
+- **Enabled** — toggle, defaults to on
+- Advanced policy options (overlap, catchup, jitter) are omitted from the submit form to keep it simple. Users can configure these from the schedule detail page after creation.
+
+#### UX Considerations
+
+- The schedule panel defaults to "Run immediately" — the existing behavior.
+- Validation prevents scheduling in the past for deferred one-time mode.
+- For recurring mode, the cron preview should update live as the user types.
+- Error states from the backend (e.g., invalid cron) should render inline under the field.
+- The submit button label changes dynamically based on the selected mode.
+
+#### Backend API Contract
+
+The same `POST /api/executions` or `POST /api/queue/jobs` endpoint is used. The dashboard adds the optional `schedule` object to the existing create payload:
+
+```json
+{
+  "type": "task",
+  "payload": {
+    "task": { "instructions": "...", "runtime": { ... } },
+    "repository": "..."
+  },
+  "schedule": {
+    "mode": "once",
+    "scheduledFor": "2026-03-19T02:00:00Z"
+  }
+}
+```
+
+See [WorkflowSchedulingGuide.md § 4.4](../Temporal/WorkflowSchedulingGuide.md) for the full `schedule` object schema and backend behavior.
+
+#### Scheduled Execution Detail Banner
+
+When a deferred one-time execution (`schedule.mode=once`) is viewed on the detail page before its start time:
+
+- Show a **"Scheduled"** status badge (mapped from `mm_state=scheduled`).
+- Show a banner: "This task is scheduled to run at {scheduledFor} ({timezone}). [Cancel]".
+- The Cancel action cancels the Temporal workflow (which also cancels the deferred start).
+- Once the start time passes, the execution transitions to `initializing` and the detail page renders normally.
 
 ## 11. Artifact Integration
 
@@ -552,6 +658,15 @@ A mixed-source `/tasks/list` page is a product convenience view, not a universal
 - Enable backend-routed Temporal create for run-shaped submits from `/tasks/new`.
 - Enable backend-routed Temporal create for manifest-oriented submits.
 
+### Phase 3.5: Scheduling Integration
+
+- Add `submitScheduleEnabled` feature flag.
+- Implement schedule panel on `/tasks/new` submit form.
+- Add deferred one-time support via Temporal `start_delay` on `POST /api/executions`.
+- Add inline recurring schedule creation via delegation to `RecurringTasksService`.
+- Add `scheduled` state rendering on detail page with countdown banner.
+- Verify redirect flows for both deferred and recurring submit.
+
 ### Phase 4: Compatibility Refinement
 
 - Tighten multi-source route semantics.
@@ -600,6 +715,20 @@ A mixed-source `/tasks/list` page is a product convenience view, not a universal
 - [ ] Add backend-routed Temporal submit flow for run-shaped requests
 - [ ] Add backend-routed Temporal submit flow for manifest-oriented requests
 - [ ] Redirect new Temporal-backed executions to `/tasks/{taskId}?source=temporal`
+
+### Scheduling
+
+- [ ] Add `submitScheduleEnabled` feature flag to `build_runtime_config()`
+- [ ] Add schedule panel UI component to submit form
+- [ ] Implement "Run immediately" / "Schedule for later" / "Recurring" radio toggle
+- [ ] Add date/time/timezone picker for deferred one-time mode
+- [ ] Add cron expression input with live preview for recurring mode
+- [ ] Add `schedule` field to `CreateExecutionRequest` and `CreateJobRequest` models
+- [ ] Implement `schedule.mode=once` via Temporal `start_delay`
+- [ ] Implement `schedule.mode=recurring` via `RecurringTasksService` delegation
+- [ ] Add `scheduled` state to `TemporalExecutionRecord` and dashboard status maps
+- [ ] Add scheduled banner rendering on detail page
+- [ ] Redirect recurring creation to `/tasks/schedules/{definitionId}`
 
 ## 15. Open Questions
 

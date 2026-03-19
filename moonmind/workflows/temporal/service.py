@@ -59,6 +59,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
+    MoonMindWorkflowState.SCHEDULED,
     MoonMindWorkflowState.INITIALIZING,
     MoonMindWorkflowState.PLANNING,
     MoonMindWorkflowState.EXECUTING,
@@ -221,6 +222,8 @@ class TemporalExecutionService:
         repository: str | None = None,
         integration: str | None = None,
         summary: str | None = None,
+        start_delay: timedelta | None = None,
+        scheduled_for: datetime | None = None,
         _skip_pause_guard: bool = False,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
@@ -279,10 +282,16 @@ class TemporalExecutionService:
         if manifest_artifact_ref:
             memo["manifest_ref"] = manifest_artifact_ref
 
+        initial_state = (
+            MoonMindWorkflowState.SCHEDULED
+            if start_delay is not None
+            else MoonMindWorkflowState.INITIALIZING
+        )
+
         search_attributes = {
             "mm_owner_type": owner_type_enum.value,
             "mm_owner_id": owner,
-            "mm_state": MoonMindWorkflowState.INITIALIZING.value,
+            "mm_state": initial_state.value,
             "mm_updated_at": _format_search_attribute_datetime(now),
             "mm_entry": WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
         }
@@ -304,7 +313,7 @@ class TemporalExecutionService:
             workflow_type=workflow_type_enum,
             owner_id=owner,
             owner_type=owner_type_enum,
-            state=MoonMindWorkflowState.INITIALIZING,
+            state=initial_state,
             close_status=None,
             entry=WORKFLOW_ENTRY_BY_TYPE[workflow_type_enum],
             search_attributes=search_attributes,
@@ -374,6 +383,7 @@ class TemporalExecutionService:
                 input_args=input_args,
                 memo=memo,
                 search_attributes=search_attributes,
+                start_delay=start_delay,
             )
             start_run_id = getattr(start_result, "run_id", None)
             if (

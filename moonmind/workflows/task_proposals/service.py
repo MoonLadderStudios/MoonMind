@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from moonmind.config import settings
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.agent_queue.service import (
+    AgentQueueAuthenticationError,
     AgentQueueService,
     AgentQueueValidationError,
     WorkerAuthPolicy,
@@ -139,7 +140,10 @@ class TaskProposalService:
             raise TaskProposalValidationError(
                 "worker token is required for worker-authenticated proposal submission"
             )
-        policy = await self._queue_service.resolve_worker_token(raw_token)
+        try:
+            policy = await self._queue_service.resolve_worker_token(raw_token)
+        except AgentQueueAuthenticationError as exc:
+            raise TaskProposalValidationError(str(exc)) from exc
         capabilities = self._normalize_policy_tokens(policy.capabilities)
         if _PROPOSALS_WRITE_CAPABILITY in capabilities:
             return policy

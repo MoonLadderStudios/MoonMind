@@ -1108,6 +1108,7 @@ class TaskTemplateCatalogService:
         seed_dir: Path,
     ) -> int:
         loaded = load_seed_template_definitions(seed_dir)
+
         created = 0
         for item in loaded:
             scope = str(item.get("scope", "global")).strip() or "global"
@@ -1131,8 +1132,11 @@ class TaskTemplateCatalogService:
                     version=version,
                     release_status=TaskTemplateReleaseStatus.ACTIVE,
                     seed_source=item.get("seedSource"),
+                    auto_commit=False,
                 )
                 created += 1
             except TaskTemplateConflictError:
-                continue
+                pass
+        if created > 0:
+            await self._session.commit()
         return created

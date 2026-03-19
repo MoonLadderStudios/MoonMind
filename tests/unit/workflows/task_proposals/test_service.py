@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from moonmind.utils.logging import SecretRedactor
+from moonmind.workflows.agent_queue.service import AgentQueueAuthenticationError
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
     TaskProposalReviewPriority,
@@ -534,3 +535,24 @@ async def test_resolve_worker_token_rejects_without_required_capability() -> Non
         match="worker token is not authorized for proposal submission",
     ):
         await service.resolve_worker_token("mmwt_restricted")
+
+
+@pytest.mark.asyncio
+async def test_resolve_worker_token_wraps_authentication_error() -> None:
+    """AgentQueueAuthenticationError from the queue service must surface as
+    TaskProposalValidationError so the router returns 403 instead of 500."""
+
+    repo = AsyncMock()
+    queue = SimpleNamespace()
+    queue.resolve_worker_token = AsyncMock(
+        side_effect=AgentQueueAuthenticationError("invalid worker token")
+    )
+    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(
+        TaskProposalValidationError,
+        match="invalid worker token",
+    ):
+        await service.resolve_worker_token("mmwt_bad")
+
+    queue.resolve_worker_token.assert_awaited_once_with("mmwt_bad")

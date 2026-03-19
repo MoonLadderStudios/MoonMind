@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ from moonmind.schemas.temporal_models import (
     ExecutionModel,
     ExecutionRefreshEnvelope,
     PollIntegrationRequest,
+    ScheduleCreatedResponse,
+    ScheduleParameters,
     SignalExecutionRequest,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
@@ -56,6 +58,7 @@ router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"
 _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
+    MoonMindWorkflowState.SCHEDULED: "queued",
     MoonMindWorkflowState.INITIALIZING: "queued",
     MoonMindWorkflowState.PLANNING: "running",
     MoonMindWorkflowState.EXECUTING: "running",
@@ -552,7 +555,8 @@ async def _create_execution_from_task_request(
     request: CreateJobRequest,
     service: TemporalExecutionService,
     user: User,
-) -> ExecutionModel:
+    session: Any = None,
+) -> ExecutionModel | ScheduleCreatedResponse:
     if str(request.type).strip().lower() != "task":
         raise _invalid_task_request(
             "Only task-shaped submit requests can be mapped to Temporal executions."
@@ -564,6 +568,26 @@ async def _create_execution_from_task_request(
         raise _invalid_task_request(
             "Task-shaped Temporal submit requests require payload.task."
         )
+
+    # --- Schedule routing ---
+    schedule: ScheduleParameters | None = None
+    raw_schedule = getattr(request, "schedule", None) or payload.get("schedule")
+    if isinstance(raw_schedule, dict):
+        schedule = ScheduleParameters.model_validate(raw_schedule)
+    elif isinstance(raw_schedule, ScheduleParameters):
+        schedule = raw_schedule
+
+    route = await _resolve_schedule_routing(
+        schedule,
+        request_payload=payload,
+        user=user,
+        session=session,
+    )
+    if route.recurring_response is not None:
+        return route.recurring_response
+
+    start_delay = route.start_delay
+    scheduled_for_dt = route.scheduled_for
 
     required_capabilities = _coerce_string_list(
         payload.get("requiredCapabilities"),
@@ -650,6 +674,8 @@ async def _create_execution_from_task_request(
             repository=repository,
             integration=integration,
             summary=_derive_task_summary(task_payload, input_artifact_ref),
+            start_delay=start_delay,
+            scheduled_for=scheduled_for_dt,
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
@@ -763,12 +789,151 @@ async def _get_owned_execution(
     return record
 
 
-@router.post("", response_model=ExecutionModel, status_code=status.HTTP_201_CREATED)
+def _compute_schedule_delay(
+    scheduled_for: datetime,
+) -> timedelta:
+    """Return a positive timedelta from *now* to *scheduled_for*.
+
+    Raises ``HTTPException`` if the target is in the past or negative.
+    """
+    now = datetime.now(UTC)
+    delay = scheduled_for - now
+    if delay.total_seconds() < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "schedule_in_past",
+                "message": "scheduledFor must be a future datetime.",
+            },
+        )
+    return delay
+
+
+def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
+    """Transform a task request payload into a RecurringTasksService target.
+
+    Constructs the ``kind=queue_task`` envelope expected by
+    ``RecurringTasksService.create_definition()``.
+    """
+    return {
+        "kind": "queue_task",
+        "job": {
+            "type": "task",
+            "payload": request_payload,
+        },
+    }
+
+
+async def _handle_recurring_schedule(
+    *,
+    schedule: ScheduleParameters,
+    request_payload: dict[str, Any],
+    user: User,
+    session: Any,
+) -> ScheduleCreatedResponse:
+    """Delegate recurring schedule creation to RecurringTasksService."""
+    from api_service.services.recurring_tasks_service import RecurringTasksService
+
+    svc = RecurringTasksService(session)
+    target = _build_recurring_target(request_payload)
+    definition = await svc.create_definition(
+        name=schedule.name or "Inline schedule",
+        description=None,
+        enabled=True,
+        schedule_type="cron",
+        cron=schedule.cron,
+        timezone=schedule.timezone or "UTC",
+        scope_type="personal",
+        scope_ref=None,
+        owner_user_id=user.id,
+        target=target,
+        policy=None,
+    )
+    return ScheduleCreatedResponse(
+        definitionId=str(definition.id),
+        cron=definition.cron,
+        nextRunAt=definition.next_run_at,
+        redirectPath=f"/tasks/schedules/{definition.id}",
+    )
+
+
+class _ScheduleRouteResult:
+    """Result of ``_resolve_schedule_routing``."""
+
+    __slots__ = ("start_delay", "scheduled_for", "recurring_response")
+
+    def __init__(
+        self,
+        *,
+        start_delay: timedelta | None = None,
+        scheduled_for: datetime | None = None,
+        recurring_response: ScheduleCreatedResponse | None = None,
+    ) -> None:
+        self.start_delay = start_delay
+        self.scheduled_for = scheduled_for
+        self.recurring_response = recurring_response
+
+
+async def _resolve_schedule_routing(
+    schedule: ScheduleParameters | None,
+    *,
+    request_payload: dict[str, Any],
+    user: User,
+    session: Any | None,
+) -> _ScheduleRouteResult:
+    """Shared schedule routing for both Temporal and task-shaped requests.
+
+    Returns a ``_ScheduleRouteResult`` with either:
+    * ``recurring_response`` populated (caller should return it),
+    * ``start_delay`` / ``scheduled_for`` populated (caller passes to service), or
+    * all ``None`` (immediate execution, no schedule).
+    """
+    if schedule is None:
+        return _ScheduleRouteResult()
+
+    if schedule.mode == "recurring":
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_execution_request",
+                    "message": "Recurring schedules require a database session.",
+                },
+            )
+        response = await _handle_recurring_schedule(
+            schedule=schedule,
+            request_payload=request_payload,
+            user=user,
+            session=session,
+        )
+        return _ScheduleRouteResult(recurring_response=response)
+
+    if schedule.mode == "once":
+        if schedule.scheduledFor is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "invalid_execution_request",
+                    "message": "scheduledFor is required when schedule.mode is 'once'.",
+                },
+            )
+        scheduled_for_dt = schedule.scheduledFor
+        delay = _compute_schedule_delay(scheduled_for_dt)
+        return _ScheduleRouteResult(
+            start_delay=delay,
+            scheduled_for=scheduled_for_dt,
+        )
+
+    return _ScheduleRouteResult()
+
+
+@router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
-) -> ExecutionModel:
+) -> ExecutionModel | ScheduleCreatedResponse:
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)
@@ -776,9 +941,21 @@ async def create_execution(
                 request=request,
                 service=service,
                 user=user,
+                session=session,
             )
 
         request = CreateExecutionRequest.model_validate(payload)
+
+        # --- Schedule routing ---
+        route = await _resolve_schedule_routing(
+            request.schedule,
+            request_payload=payload,
+            user=user,
+            session=session,
+        )
+        if route.recurring_response is not None:
+            return route.recurring_response
+
         record = await service.create_execution(
             workflow_type=request.workflow_type,
             owner_id=user.id,
@@ -790,6 +967,8 @@ async def create_execution(
             failure_policy=request.failure_policy,
             initial_parameters=request.initial_parameters,
             idempotency_key=request.idempotency_key,
+            start_delay=route.start_delay,
+            scheduled_for=route.scheduled_for,
         )
     except ValidationError as exc:
         raise HTTPException(

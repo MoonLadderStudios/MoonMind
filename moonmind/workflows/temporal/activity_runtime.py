@@ -2186,7 +2186,13 @@ class TemporalAgentRuntimeActivities:
             # Enrich result with the diagnostics ref
             if isinstance(result, Mapping):
                 enriched = dict(result)
-                enriched["diagnostics_ref"] = summary_ref.artifact_id
+                if "diagnosticsRef" in enriched:
+                    enriched["diagnosticsRef"] = summary_ref.artifact_id
+                else:
+                    enriched["diagnostics_ref"] = summary_ref.artifact_id
+                # Remove snake_case if alias is present to avoid Pydantic validation errors
+                if "diagnosticsRef" in enriched and "diagnostics_ref" in enriched:
+                    del enriched["diagnostics_ref"]
                 return enriched
             if hasattr(result, "diagnostics_ref"):
                 result.diagnostics_ref = summary_ref.artifact_id

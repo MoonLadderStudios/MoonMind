@@ -254,6 +254,7 @@ services:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
       - ./services:/app/services:ro
+      - agent_workspaces:/work/agent_jobs
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh

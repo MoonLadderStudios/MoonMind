@@ -1,7 +1,7 @@
-# Specification Quality Checklist: Worker Pause System (Temporal Era)
+# Specification Quality Checklist: Step Review Gate
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-03-17
+**Created**: 2026-03-18
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,18 +31,11 @@
 
 ## DOC-REQ Traceability
 
-- [x] All DOC-REQ-* IDs have corresponding functional requirements
-- [x] DOC-REQ-001 → FR-001, FR-004, FR-005
-- [x] DOC-REQ-002 → FR-006
-- [x] DOC-REQ-003 → FR-007, FR-010
-- [x] DOC-REQ-004 → FR-001
-- [x] DOC-REQ-005 → FR-005
-- [x] DOC-REQ-006 → FR-009
-- [x] DOC-REQ-007 → FR-003, FR-004
-- [x] DOC-REQ-008 → FR-007
-- [x] DOC-REQ-009 → FR-008
-- [x] DOC-REQ-010 → FR-002
+- [x] All DOC-REQ-* IDs extracted from source document
+- [x] Every DOC-REQ-* maps to at least one functional requirement
+- [x] No DOC-REQ-* silently dropped
 
 ## Notes
 
-- All checklist items pass. Ready for speckit-plan.
+- All 20 DOC-REQ-* entries mapped; no clarifications needed.
+- Runtime intent verified: spec includes production code changes and validation tests.
