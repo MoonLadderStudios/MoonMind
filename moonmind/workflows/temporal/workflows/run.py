@@ -802,6 +802,104 @@ class MoonMindRunWorkflow:
         self._attention_required = False
         self._update_search_attributes()
 
+        # --- Jules branch-publish auto-merge ---
+        # When publishMode is "branch" and the integration is Jules, the
+        # workflow uses AUTO_CREATE_PR so Jules produces a PR targeting the
+        # starting branch.  After Jules succeeds, we auto-merge that PR so
+        # the changes land directly on the target branch.
+        publish_mode = self._publish_mode(parameters)
+        if (
+            publish_mode == "branch"
+            and self._integration == "jules"
+            and not self._cancel_requested
+            and status == "succeeded"
+        ):
+            workflow.logger.info("Jules branch-publish: fetching result for PR merge")
+            try:
+                fetch_result = await workflow.execute_activity(
+                    self._integration_activity_type("fetch_result"),
+                    {
+                        "principal": self._principal(),
+                        "correlation_id": correlation_id,
+                        "parameters": integration_parameters,
+                    },
+                    start_to_close_timeout=timedelta(minutes=5),
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                )
+                pr_url = (
+                    self._get_from_result(fetch_result, "external_url")
+                    or self._get_from_result(fetch_result, "url")
+                )
+                # If external_url is the session URL, try to extract PR URL
+                # from the summary or output_refs text.
+                if pr_url and not _GITHUB_PR_URL_PATTERN.search(pr_url):
+                    summary_text = self._get_from_result(fetch_result, "summary") or ""
+                    pr_match = _GITHUB_PR_URL_PATTERN.search(summary_text)
+                    if pr_match:
+                        pr_url = pr_match.group(0)
+                    else:
+                        pr_url = None
+
+                if pr_url:
+                    # Determine if the PR's base branch needs updating.
+                    # If targetBranch is specified and differs from
+                    # startingBranch (which Jules used as the PR base),
+                    # the activity will PATCH the PR before merging.
+                    ws = parameters.get("workspaceSpec") or {}
+                    starting_branch = (
+                        ws.get("startingBranch") or ws.get("branch") or "main"
+                    )
+                    target_branch = (
+                        parameters.get("targetBranch")
+                        or ws.get("targetBranch")
+                    )
+                    # Only pass target_branch when it differs from starting
+                    effective_target = (
+                        target_branch
+                        if target_branch and target_branch != starting_branch
+                        else None
+                    )
+
+                    workflow.logger.info(
+                        "Jules branch-publish: merging PR %s (target=%s)",
+                        pr_url,
+                        effective_target or starting_branch,
+                    )
+                    merge_payload = {"pr_url": pr_url}
+                    if effective_target:
+                        merge_payload["target_branch"] = effective_target
+
+                    merge_result = await workflow.execute_activity(
+                        "integration.jules.merge_pr",
+                        merge_payload,
+                        start_to_close_timeout=timedelta(minutes=2),
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    )
+                    merged = self._get_from_result(merge_result, "merged")
+                    merge_summary = (
+                        self._get_from_result(merge_result, "summary") or ""
+                    )
+                    if merged:
+                        workflow.logger.info(
+                            "Jules branch-publish: PR merged: %s", merge_summary
+                        )
+                    else:
+                        workflow.logger.warning(
+                            "Jules branch-publish: merge failed: %s", merge_summary
+                        )
+                else:
+                    workflow.logger.warning(
+                        "Jules branch-publish: no PR URL found in result; "
+                        "skipping auto-merge"
+                    )
+            except Exception as exc:
+                workflow.logger.warning(
+                    "Jules branch-publish auto-merge failed (best-effort): %s",
+                    exc,
+                )
+
     async def _run_proposals_stage(
         self, *, parameters: dict[str, Any]
     ) -> None:

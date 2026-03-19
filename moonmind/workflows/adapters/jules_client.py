@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ from moonmind.schemas.jules_models import (
     JulesGetTaskRequest,
     JulesIntegrationCancelResult,
     JulesIntegrationFetchResult,
+    JulesIntegrationMergePRResult,
     JulesIntegrationStartRequest,
     JulesIntegrationStartResult,
     JulesIntegrationStatusResult,
@@ -276,6 +279,149 @@ class JulesClient:
             normalizedStatus=normalized,
             summary=f"Jules task {external_operation_id} cancellation accepted.",
         )
+
+    async def merge_pull_request(
+        self,
+        *,
+        pr_url: str,
+        merge_method: str = "merge",
+        github_token: str | None = None,
+    ) -> JulesIntegrationMergePRResult:
+        """Merge a GitHub pull request by URL.
+
+        This is used after Jules completes a branch-publish session to
+        auto-merge the PR that Jules created into the target branch.
+        """
+
+        match = re.match(
+            r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", pr_url
+        )
+        if not match:
+            return JulesIntegrationMergePRResult(
+                prUrl=pr_url,
+                merged=False,
+                summary=f"Could not parse PR URL: {pr_url}",
+            )
+
+        owner, repo, pr_number = match.group(1), match.group(2), match.group(3)
+        token = github_token or os.environ.get("GITHUB_TOKEN", "").strip()
+        if not token:
+            return JulesIntegrationMergePRResult(
+                prUrl=pr_url,
+                merged=False,
+                summary="GITHUB_TOKEN is not configured; cannot merge PR.",
+            )
+
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/merge"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        payload = {"merge_method": merge_method}
+
+        async with httpx.AsyncClient(timeout=30.0) as gh_client:
+            try:
+                response = await gh_client.put(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return JulesIntegrationMergePRResult(
+                    prUrl=pr_url,
+                    merged=data.get("merged", True),
+                    mergeSha=data.get("sha"),
+                    summary=(
+                        f"PR {owner}/{repo}#{pr_number} merged successfully."
+                    ),
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                body = exc.response.text[:500] if exc.response else "(no body)"
+                logger.error(
+                    "GitHub merge API returned HTTP %s for %s: %s",
+                    status_code, pr_url, body,
+                )
+                return JulesIntegrationMergePRResult(
+                    prUrl=pr_url,
+                    merged=False,
+                    summary=(
+                        f"GitHub merge failed with HTTP {status_code} "
+                        f"for PR {owner}/{repo}#{pr_number}."
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                logger.error(
+                    "GitHub merge request failed for %s: %s",
+                    pr_url, exc.__class__.__name__,
+                )
+                return JulesIntegrationMergePRResult(
+                    prUrl=pr_url,
+                    merged=False,
+                    summary=(
+                        f"GitHub merge request failed: {exc.__class__.__name__}"
+                    ),
+                )
+
+    async def update_pull_request_base(
+        self,
+        *,
+        pr_url: str,
+        new_base: str,
+        github_token: str | None = None,
+    ) -> tuple[bool, str]:
+        """Update a GitHub PR's base (target) branch.
+
+        Returns ``(success, summary)`` where *success* is ``True`` when the
+        base branch was changed successfully.
+
+        Used before ``merge_pull_request()`` when the user's desired target
+        branch differs from the branch Jules started from.
+        """
+
+        match = re.match(
+            r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", pr_url
+        )
+        if not match:
+            return False, f"Could not parse PR URL: {pr_url}"
+
+        owner, repo, pr_number = match.group(1), match.group(2), match.group(3)
+        token = github_token or os.environ.get("GITHUB_TOKEN", "").strip()
+        if not token:
+            return False, "GITHUB_TOKEN is not configured; cannot update PR base."
+
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        payload = {"base": new_base}
+
+        async with httpx.AsyncClient(timeout=30.0) as gh_client:
+            try:
+                response = await gh_client.patch(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                return True, (
+                    f"PR {owner}/{repo}#{pr_number} base updated to '{new_base}'."
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                body = exc.response.text[:500] if exc.response else "(no body)"
+                logger.error(
+                    "GitHub update-base API returned HTTP %s for %s: %s",
+                    status_code, pr_url, body,
+                )
+                return False, (
+                    f"Failed to update PR base to '{new_base}' "
+                    f"(HTTP {status_code})."
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                logger.error(
+                    "GitHub update-base request failed for %s: %s",
+                    pr_url, exc.__class__.__name__,
+                )
+                return False, (
+                    f"GitHub update-base request failed: {exc.__class__.__name__}"
+                )
 
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         return await self._request_with_retry("POST", path, json=json)

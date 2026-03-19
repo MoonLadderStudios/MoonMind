@@ -250,11 +250,26 @@ class JulesIntegrationCancelResult(BaseModel):
     summary: Optional[str] = Field(None, alias="summary")
 
 
+class JulesIntegrationMergePRResult(BaseModel):
+    """Result returned by `integration.jules.merge_pr`."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    activity_name: Literal["integration.jules.merge_pr"] = Field(
+        "integration.jules.merge_pr", alias="activityName"
+    )
+    pr_url: str = Field(..., alias="prUrl")
+    merged: bool = Field(..., alias="merged")
+    merge_sha: Optional[str] = Field(None, alias="mergeSha")
+    summary: str = Field(..., alias="summary")
+
+
 __all__ = [
     "GitHubRepoContext",
     "JulesCreateTaskRequest",
     "JulesIntegrationCancelResult",
     "JulesIntegrationFetchResult",
+    "JulesIntegrationMergePRResult",
     "JulesIntegrationStartRequest",
     "JulesIntegrationStartResult",
     "JulesIntegrationStatusResult",

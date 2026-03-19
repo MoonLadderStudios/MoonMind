@@ -223,3 +223,23 @@ async def test_start_defaults_automation_mode_for_pr_publish():
     create_req = client.created[0]
     assert create_req.automation_mode == "FULLY_AUTONOMOUS"
 
+
+async def test_start_defaults_automation_mode_for_branch_publish():
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    req = AgentExecutionRequest(
+        agentKind="external",
+        agentId="jules",
+        executionProfileRef="profile:jules-default",
+        correlationId="corr-1",
+        idempotencyKey="idem-branch-pub",
+        parameters={"description": "foo", "publishMode": "branch"},
+    )
+
+    await adapter.start(req)
+
+    assert len(client.created) == 1
+    create_req = client.created[0]
+    assert create_req.automation_mode == "FULLY_AUTONOMOUS"
+

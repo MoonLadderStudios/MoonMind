@@ -493,6 +493,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="integration.jules.merge_pr",
+            family="integration",
+            capability_class="integration:jules",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 300),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
             activity_type="integration.codex_cloud.start",
             family="integration",
             capability_class="integration:codex_cloud",
