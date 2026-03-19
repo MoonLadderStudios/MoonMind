@@ -320,16 +320,8 @@ async def promote_proposal(
             # the override envelope that the service expects.
             stored = await service.get_proposal(proposal_id)
             stored_request = stored.task_create_request or {}
-            stored_payload = (
-                stored_request.get("payload")
-                if isinstance(stored_request, dict)
-                else {}
-            ) or {}
-            repo = (
-                stored_payload.get("repository", "")
-                if isinstance(stored_payload, dict)
-                else ""
-            )
+            stored_payload = stored_request.get("payload") or {}
+            repo = stored_payload.get("repository", "")
             override_payload = {
                 "type": "task",
                 "priority": stored_request.get("priority", 0),
