@@ -1,6 +1,6 @@
 # Feature Specification: Manifest Phase 0 Temporal Alignment
 
-**Feature Branch**: `083-manifest-phase0`  
+**Feature Branch**: `086-manifest-phase0`
 **Created**: 2026-03-17  
 **Status**: Draft  
 **Input**: User description: "Update 032-manifest-phase0 based on docs/Tasks/ManifestTaskSystem.md and fully implement it. Merge in any still relevant functionality from 034 in preparation of deleting the obsolete 034 spec."  

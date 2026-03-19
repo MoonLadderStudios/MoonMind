@@ -1,6 +1,6 @@
 # Specification Analysis Report
 
-**Feature**: 083-manifest-phase0
+**Feature**: 086-manifest-phase0
 **Date**: 2026-03-17
 **Artifacts analyzed**: spec.md, plan.md, tasks.md
 
