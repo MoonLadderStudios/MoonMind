@@ -6975,6 +6975,16 @@
             method: "POST",
             body: JSON.stringify(temporalRequestBody),
           });
+
+          // --- Recurring schedule response ---
+          const definitionId = String(pick(created, "definitionId") || "").trim();
+          if (definitionId) {
+            try { clearWorkerSubmissionDraftAfterCreate(); } catch (_) {}
+            const schedulePath = String(pick(created, "redirectPath") || "").trim();
+            window.location.href = schedulePath || `/tasks/schedules/${definitionId}`;
+            return;
+          }
+
           if (uploadedArtifactId) {
             await linkTemporalArtifactToExecution({
               artifactId: uploadedArtifactId,
