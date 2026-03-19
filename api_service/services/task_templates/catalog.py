@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import logging
 import os
 import re
@@ -1108,8 +1109,8 @@ class TaskTemplateCatalogService:
         seed_dir: Path,
     ) -> int:
         loaded = load_seed_template_definitions(seed_dir)
-        created = 0
-        for item in loaded:
+
+        async def _import_one(item: dict[str, Any]) -> bool:
             scope = str(item.get("scope", "global")).strip() or "global"
             version = str(item.get("version", "1.0.0")).strip() or "1.0.0"
             try:
@@ -1131,8 +1132,14 @@ class TaskTemplateCatalogService:
                     version=version,
                     release_status=TaskTemplateReleaseStatus.ACTIVE,
                     seed_source=item.get("seedSource"),
+                    auto_commit=False,
                 )
-                created += 1
+                return True
             except TaskTemplateConflictError:
-                continue
+                return False
+
+        results = await asyncio.gather(*[_import_one(item) for item in loaded])
+        created = sum(1 for r in results if r)
+        if created > 0:
+            await self._session.commit()
         return created
