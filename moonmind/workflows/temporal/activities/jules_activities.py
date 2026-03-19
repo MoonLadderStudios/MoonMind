@@ -15,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
 )
+from moonmind.schemas.jules_models import JulesIntegrationMergePRResult
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
 
@@ -71,9 +72,53 @@ async def jules_cancel_activity(run_id: str) -> AgentRunStatus:
     return await adapter.cancel(run_id)
 
 
+@activity.defn(name="integration.jules.merge_pr")
+async def jules_merge_pr_activity(payload: dict) -> JulesIntegrationMergePRResult:
+    """Auto-merge a Jules-created PR into its target branch via GitHub API.
+
+    Used when ``publishMode == "branch"`` to merge the PR that Jules
+    created during an ``AUTO_CREATE_PR`` session.
+
+    Accepts a dict with:
+    - ``pr_url`` (str): the GitHub PR URL to merge
+    - ``target_branch`` (str, optional): if set and differs from the PR's
+      current base, the PR base is updated before merging
+    """
+
+    import os
+
+    gate = build_runtime_gate_state()
+    if not gate.enabled:
+        raise RuntimeError(
+            f"{JULES_RUNTIME_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
+        )
+
+    pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
+    target_branch = payload.get("target_branch") or payload.get("targetBranch")
+
+    jules_url = os.environ.get("JULES_API_URL", "").strip() or "https://jules.googleapis.com/v1alpha"
+    jules_key = os.environ.get("JULES_API_KEY", "").strip()
+    client = JulesClient(base_url=jules_url, api_key=jules_key)
+
+    # If a target branch is specified, update the PR's base before merging
+    if target_branch:
+        success, summary = await client.update_pull_request_base(
+            pr_url=pr_url, new_base=target_branch,
+        )
+        if not success:
+            return JulesIntegrationMergePRResult(
+                prUrl=pr_url,
+                merged=False,
+                summary=f"Base branch update failed: {summary}",
+            )
+
+    return await client.merge_pull_request(pr_url=pr_url)
+
+
 __all__ = [
     "jules_cancel_activity",
     "jules_fetch_result_activity",
+    "jules_merge_pr_activity",
     "jules_start_activity",
     "jules_status_activity",
 ]

@@ -1,6 +1,6 @@
 # Implementation Plan: Live Log Tailing
 
-**Branch**: `084-live-log-tailing` | **Date**: 2026-03-17 | **Spec**: [spec.md](file:///Users/nsticco/MoonMind/specs/084-live-log-tailing/spec.md)
+**Branch**: `084-live-log-tailing` | **Date**: 2026-03-17 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `specs/084-live-log-tailing/spec.md`
 
 ## Summary

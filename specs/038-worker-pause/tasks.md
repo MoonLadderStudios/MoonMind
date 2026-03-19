@@ -1,8 +1,8 @@
 # Tasks: Worker Pause System (Temporal Era)
 
 **Feature**: `038-worker-pause` | **Branch**: `038-worker-pause`
-**Spec**: [spec.md](file:///Users/nsticco/MoonMind/specs/038-worker-pause/spec.md)
-**Plan**: [plan.md](file:///Users/nsticco/MoonMind/specs/038-worker-pause/plan.md)
+**Spec**: [spec.md](spec.md)
+**Plan**: [plan.md](plan.md)
 
 ## Phase 1: Setup & Foundation
 

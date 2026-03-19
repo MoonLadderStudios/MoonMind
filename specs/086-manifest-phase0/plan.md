@@ -1,6 +1,6 @@
 # Implementation Plan: Manifest Phase 0 Temporal Alignment
 
-**Branch**: `083-manifest-phase0` | **Date**: 2026-03-17 | **Spec**: `specs/083-manifest-phase0/spec.md`
+**Branch**: `086-manifest-phase0` | **Date**: 2026-03-17 | **Spec**: `specs/086-manifest-phase0/spec.md`
 
 ## Summary
 
@@ -34,7 +34,7 @@ Harden and validate the existing Temporal-based manifest ingest implementation t
 ### Spec artifacts (this feature)
 
 ```text
-specs/083-manifest-phase0/
+specs/086-manifest-phase0/
 ├── spec.md
 ├── plan.md
 ├── research.md
