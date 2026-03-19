@@ -99,3 +99,42 @@ def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_field
 
     assert result["owner_id"] == "owner-from-search"
     assert result["owner_type"] == TemporalExecutionOwnerType.USER
+
+
+def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
+    """Temporal memo typically does not contain targetRuntime/model/effort.
+
+    These fields are stored in the canonical record's parameters column at
+    creation time and must be merged during projection sync (see
+    sync_execution_projection) to be visible in the API response.
+    """
+    start_time = datetime.now(UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:789"
+    desc.run_id = "run-789"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.Run"
+    desc.status = WorkflowExecutionStatus.RUNNING
+    desc.start_time = start_time
+    desc.close_time = None
+    desc.search_attributes = {}
+
+    memo_data: dict[str, object] = {
+        "entry": "run",
+        "title": "Some task",
+        "summary": "Running",
+    }
+
+    async def _memo() -> dict[str, object]:
+        return memo_data
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    # Memo doesn't contain these execution parameters; they live in the
+    # canonical record's parameters column set at create_execution time.
+    params = result["parameters"]
+    assert params.get("targetRuntime") is None
+    assert params.get("model") is None
+    assert params.get("effort") is None

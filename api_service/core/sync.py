@@ -238,6 +238,18 @@ async def sync_execution_projection(
         "close_status"
     )
     canonical = await session.get(TemporalExecutionCanonicalRecord, desc.id)
+
+    # Preserve canonical parameters (targetRuntime, model, effort, etc.) that were
+    # set at execution creation time and are not present in the Temporal memo.
+    # The memo-derived parameters from map_temporal_state_to_projection are typically
+    # empty; the canonical record is the source of truth for creation-time parameters.
+    if canonical is not None:
+        canonical_params = dict(canonical.parameters or {})
+        synced_params = dict(payload.get("parameters") or {})
+        merged_params = {**canonical_params, **synced_params}
+        payload["parameters"] = merged_params
+        projection.parameters = merged_params
+
     if canonical is not None and canonical.state != state_value:
         canonical.state = state_value
         canonical.close_status = close_status_value
