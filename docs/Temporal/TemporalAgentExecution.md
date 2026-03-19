@@ -2,7 +2,7 @@
 
 **Status:** Active design  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-12  
+**Last updated:** 2026-03-19  
 **Audience:** backend, workflow authors, operators
 
 ## 1. Purpose
@@ -120,48 +120,55 @@ provided in the input payload (pre-planned job), this stage is skipped.
 
 ### 2.4 Execution stage (implemented)
 
+The execution stage dispatches plan steps using two paths depending on the
+step's `tool.type`:
+
+- **`tool.type = "agent_runtime"`** — dispatched as a `MoonMind.AgentRun`
+  child workflow via `workflow.execute_child_workflow("MoonMind.AgentRun", ...)`.
+  This is the primary path for all agent execution (both managed and external).
+- **Other tool types** (e.g. `"skill"`) — dispatched as a standard Temporal
+  activity via `workflow.execute_activity()`.
+
 ```
 _run_execution_stage()
   │
   │  1. Read the resolved plan from plan_ref
   │  2. For each node in plan.nodes (a Step ToolInvocation):
-  │     a. Resolve routing via TemporalActivityCatalog.resolve_skill()
-  │     b. Build the invocation payload
-  │     c. Execute activity:
+  │     a. Check tool.type to determine dispatch path
+  │     b. Build the execution payload
+  │     c. Dispatch:
   │
-  ▼
-workflow.execute_activity("mm.skill.execute", {
-    invocation_payload: {
-        id:           "<node-id>",
-        tool:         { type: "skill", name: "pr-resolver", version: "1.0" },
-        inputs:       { repo: "...", pr: "42", branch: "..." },
-        options:      { ... }
-    },
-    registry_snapshot_ref: "<artifact-ref>",
-    principal:            "<owner-id>",
-    context:              { workflow_id, run_id, ... }
-})
+  ├── tool.type == "agent_runtime":
+  │   │
+  │   ▼
+  │ workflow.execute_child_workflow("MoonMind.AgentRun", AgentExecutionRequest {
+  │     agent_kind:    "managed" | "external",
+  │     agent_id:      "gemini_cli" | "codex_cli" | "jules" | ...,
+  │     instruction_ref, input_refs, workspace_spec, parameters, ...
+  │ })
+  │   │
+  │   ▼
+  │ MoonMind.AgentRun child workflow
+  │   → selects AgentAdapter (ManagedAgentAdapter or ExternalAgentAdapter)
+  │   → start → wait → fetch_result → publish outputs
+  │   → returns AgentRunResult { output_refs, summary, diagnostics, ... }
   │
-  ▼
-TemporalSkillActivities.mm_skill_execute()       ← activity_runtime.py
-  │
-  │  1. Resolve registry snapshot (from ref or inline)
-  │  2. Parse invocation_payload as ToolInvocation (skill subtype)
-  │  3. Delegate to execute_skill_activity() → SkillActivityDispatcher
-  │  4. Return ToolResult { status, outputs, output_artifacts }
-  │
-  ▼
-SkillActivityDispatcher.execute()                ← skill_dispatcher.py
-  │
-  │  1. Look up handler by activity_type ("mm.skill.execute")
-  │     or by skill name+version from registry
-  │  2. Execute the handler (the actual tool logic; skill subtype today)
-  │  3. Return ToolResult
+  └── tool.type == "skill" (or other activity-based types):
+      │
+      ▼
+    workflow.execute_activity("mm.skill.execute", ...)
+      → returns ToolResult { status, outputs, output_artifacts }
 ```
 
 For **generic LLM text instructions** (no specific tool), planning produces
-`tool = { type: "skill", name: "auto", version: "1.0" }` and the dispatcher
-routes that tool to the runtime CLI handler in the Temporal worker runtime.
+`tool = { type: "agent_runtime", name: "auto", version: "1.0" }` and the
+workflow dispatches it as a `MoonMind.AgentRun` child workflow. The `runtime.mode`
+field (e.g. `codex`, `gemini_cli`, `jules`) determines which `AgentAdapter`
+implementation handles the run.
+
+For the full agent execution model including managed runtime supervision, external
+agent callbacks, and auth-profile controls, see
+[`ManagedAndExternalAgentExecutionModel.md`](ManagedAndExternalAgentExecutionModel.md).
 
 ---
 
@@ -227,6 +234,8 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 | `plan.generate` | llm | `mm.activity.llm` | LLM-driven plan generation |
 | `plan.validate` | llm | `mm.activity.llm` | Plan validation against registry |
 | `mm.skill.execute` | by_capability | `mm.activity.llm` (default) | Skill dispatch via registry |
+| `agent_runtime.publish_artifacts` | agent_runtime | `mm.activity.agent_runtime` | Publish agent run outputs |
+| `agent_runtime.cancel` | agent_runtime | `mm.activity.agent_runtime` | Cancel managed/external agent run |
 | `sandbox.run_command` | sandbox | `mm.activity.sandbox` | Shell command execution |
 | `sandbox.checkout_repo` | sandbox | `mm.activity.sandbox` | Git repo checkout |
 | `sandbox.apply_patch` | sandbox | `mm.activity.sandbox` | Patch application |
@@ -241,6 +250,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 | `workflow` | `mm.workflow` | workflow orchestration | Lightweight, no side effects |
 | `llm` | `mm.activity.llm` | LLM calls, plan generation | Rate-limited by provider |
 | `sandbox` | `mm.activity.sandbox` | Shell exec, git, builds | CPU/memory heavy |
+| `agent_runtime` | `mm.activity.agent_runtime` | Managed runtime supervision, auth profiles | Provider rate-limited |
 | `artifacts` | `mm.activity.artifacts` | Artifact storage IO | IO-bound |
 | `integrations` | `mm.activity.integrations` | Jules, webhooks | Rate-limited |
 
@@ -254,9 +264,9 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 | **`TemporalExecutionService.create_execution`** | ✅ Implemented | Creates DB record + starts workflow |
 | **`MoonMind.Run` workflow definition** | ✅ Implemented | Full lifecycle with signals/updates |
 | **Planning stage** (`plan.generate`) | ✅ Implemented | Activity + planner callback |
-| **Execution stage** (`_run_execution_stage`) | ✅ Implemented | Reads plan artifact, routes nodes via `mm.skill.execute`, and honors failure policy |
-| **`mm.skill.execute` activity** | ✅ Implemented | `TemporalSkillActivities.mm_skill_execute` is wired up |
-| **`SkillActivityDispatcher`** | ✅ Implemented | Routing by activity type and skill name/version |
+| **Execution stage** (`_run_execution_stage`) | ✅ Implemented | Reads plan artifact, dispatches `agent_runtime` nodes as `MoonMind.AgentRun` child workflows, non-agent nodes as activities |
+| **`MoonMind.AgentRun` child workflow** | ✅ Implemented | Unified agent execution lifecycle for managed and external agents |
+| **`AgentAdapter` protocol** | ✅ Implemented | `ManagedAgentAdapter` + `JulesAgentAdapter` + `CodexCloudAgentAdapter` |
 | **`SkillInvocation` contract** | ✅ Implemented | Validated dataclass in `skill_plan_contracts.py` |
 | **Activity catalog** | ✅ Implemented | 18 activities, 5 fleets, correct routing |
 | **Worker runtime bindings** | ✅ Implemented | `build_activity_bindings` wires handlers to catalog |
@@ -296,20 +306,22 @@ canonical open backlog is maintained in
 ┌─────────────────── Temporal Server ───────────────────────────────────────┐
 │                                                                           │
 │   MoonMind.Run  (task queue: mm.workflow)                                 │
-│   ┌─────────────────────────────────────────────────────────────┐         │
-│   │ initialize ──► plan ──► execute ──► finalize                │         │
-│   │                  │          │                                │         │
-│   │                  │          │                                │         │
-│   │    ┌─────────────┘          └──────────────┐                │         │
-│   │    ▼                                       ▼                │         │
-│   │  plan.generate              mm.skill.execute (per node)     │         │
-│   │  (mm.activity.llm)          (routed by capability)          │         │
-│   │                                       │                     │         │
-│   │                              ┌────────┼────────┐            │         │
-│   │                              ▼        ▼        ▼            │         │
-│   │                           sandbox    llm   integrations     │         │
-│   │                           fleet     fleet     fleet         │         │
-│   └─────────────────────────────────────────────────────────────┘         │
+│   ┌──────────────────────────────────────────────────────────────────┐    │
+│   │ initialize ──► plan ──► execute ──► [proposals] ──► finalize    │    │
+│   │                  │          │                                    │    │
+│   │    ┌─────────────┘          └──────────────────┐                │    │
+│   │    ▼                                          ▼                 │    │
+│   │  plan.generate          per-step dispatch by tool.type          │    │
+│   │  (mm.activity.llm)      ┌──────────────┬──────────────┐         │    │
+│   │                         ▼              ▼              ▼         │    │
+│   │                  agent_runtime     skill/other     sandbox      │    │
+│   │                  (child wf)        (activity)      (activity)   │    │
+│   │                      │                                          │    │
+│   │                      ▼                                          │    │
+│   │               MoonMind.AgentRun                                 │    │
+│   │               ├─ ManagedAgentAdapter → Gemini CLI / Codex CLI   │    │
+│   │               └─ ExternalAgentAdapter → Jules / BYOA            │    │
+│   └──────────────────────────────────────────────────────────────────┘    │
 │                                                                           │
 └───────────────────────────────────────────────────────────────────────────┘
 ```

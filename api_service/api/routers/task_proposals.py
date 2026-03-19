@@ -299,11 +299,49 @@ async def promote_proposal(
     user: User = Depends(get_current_user()),
 ) -> TaskProposalPromoteResponse:
     try:
-        override_payload = (
-            payload.task_create_request_override.model_dump(by_alias=True)
-            if payload.task_create_request_override is not None
-            else None
-        )
+        # Build the override: explicit taskCreateRequestOverride takes
+        # precedence; runtimeMode is a lightweight shortcut that
+        # constructs one on-the-fly when the full override is absent.
+        if payload.task_create_request_override is not None:
+            override_payload = payload.task_create_request_override.model_dump(
+                by_alias=True
+            )
+        elif payload.runtime_mode:
+            runtime_mode = payload.runtime_mode.strip()
+            if not runtime_mode:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "invalid_request",
+                        "message": "runtimeMode must be a non-empty string",
+                    },
+                )
+            # Fetch the stored proposal to extract the repository for
+            # the override envelope that the service expects.
+            stored = await service.get_proposal(proposal_id)
+            stored_request = stored.task_create_request or {}
+            stored_payload = (
+                stored_request.get("payload")
+                if isinstance(stored_request, dict)
+                else {}
+            ) or {}
+            repo = (
+                stored_payload.get("repository", "")
+                if isinstance(stored_payload, dict)
+                else ""
+            )
+            override_payload = {
+                "type": "task",
+                "priority": stored_request.get("priority", 0),
+                "maxAttempts": stored_request.get("maxAttempts", 3),
+                "payload": {
+                    "repository": repo,
+                    "task": {"runtime": {"mode": runtime_mode}},
+                },
+            }
+        else:
+            override_payload = None
+
         proposal, job = await service.promote_proposal(
             proposal_id=proposal_id,
             promoted_by_user_id=getattr(user, "id"),
