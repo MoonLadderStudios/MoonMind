@@ -95,7 +95,10 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
         automation_mode = None
         if request.parameters:
             automation_mode = request.parameters.get("automationMode")
-            if not automation_mode and request.parameters.get("publishMode") == "pr":
+            if not automation_mode and request.parameters.get("publishMode") in (
+                "pr",
+                "branch",
+            ):
                 automation_mode = "FULLY_AUTONOMOUS"
 
         response = await self._client.create_task(
