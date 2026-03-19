@@ -11,7 +11,6 @@ from typing import Any, Mapping
 
 from moonmind.workflows.skills.review_gate import (
     ReviewRequest,
-    build_review_prompt,
     parse_review_verdict,
 )
 
