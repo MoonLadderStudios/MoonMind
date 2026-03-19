@@ -14,6 +14,7 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalReviewPriority,
     TaskProposalStatus,
 )
+from moonmind.workflows.task_proposals.service import TaskProposalValidationError
 
 
 @pytest.fixture
@@ -98,6 +99,32 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
     assert kwargs["review_priority"] == "high"
     payload = response.json()
     assert payload["repository"] == "Moon/Repo"
+
+
+def test_create_proposal_with_invalid_worker_token(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, service = client
+    service.resolve_worker_token.side_effect = TaskProposalValidationError("Invalid token")
+
+    response = test_client.post(
+        "/api/proposals",
+        headers={"X-MoonMind-Worker-Token": "invalid-token"},
+        json={
+            "title": "Add tests",
+            "summary": "Ensure coverage",
+            "origin": {"source": "queue"},
+            "taskCreateRequest": {
+                "type": "task",
+                "priority": 0,
+                "maxAttempts": 3,
+                "payload": {"repository": "Moon/Repo"},
+            },
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "worker_not_authorized"
 
 
 def test_create_proposal_with_worker_token(
