@@ -1,6 +1,6 @@
 # Tasks: Manifest Phase 0 Temporal Alignment
 
-**Input**: Design artifacts in `specs/083-manifest-phase0/`
+**Input**: Design artifacts in `specs/086-manifest-phase0/`
 **Prerequisites**: `plan.md` (required), `spec.md` (required), `research.md`, `data-model.md`, `contracts/`, `quickstart.md`
 **Tests**: Runtime validation is required (`DOC-REQ-012`); run `./tools/test_unit.sh` for final verification.
 
@@ -18,7 +18,7 @@
 
 **Purpose**: Ensure spec artifacts and traceability are in place before runtime work.
 
-- [x] T001 Verify `specs/083-manifest-phase0/contracts/requirements-traceability.md` has entries for DOC-REQ-001 through DOC-REQ-012 with mapped FRs and validation strategies.
+- [x] T001 Verify `specs/086-manifest-phase0/contracts/requirements-traceability.md` has entries for DOC-REQ-001 through DOC-REQ-012 with mapped FRs and validation strategies.
 - [x] T002 [P] Verify all existing manifest test fixtures in `tests/fixtures/manifests/` are compatible with current v0 schema and update if needed.
 
 ---
@@ -119,7 +119,7 @@
 
 - [x] T020 [P] Verify secret leak detection rejects all known raw token patterns and accepts safe references in `tests/unit/workflows/agent_queue/test_manifest_contract.py` (DOC-REQ-004, DOC-REQ-011).
 - [x] T021 [P] Verify API response sanitization hides raw manifest YAML in `tests/unit/api/routers/test_manifests.py` (DOC-REQ-010, DOC-REQ-011).
-- [x] T022 Run `./tools/test_unit.sh` and record full pass evidence in `specs/083-manifest-phase0/quickstart.md` (DOC-REQ-012).
+- [x] T022 Run `./tools/test_unit.sh` and record full pass evidence in `specs/086-manifest-phase0/quickstart.md` (DOC-REQ-012).
 - [x] T023 [P] Run `.specify/scripts/bash/validate-implementation-scope.sh --check tasks --mode runtime` and record result (DOC-REQ-012).
 - [x] T024 [P] Run `.specify/scripts/bash/validate-implementation-scope.sh --check diff --mode runtime --base-ref origin/main` and record result (DOC-REQ-012).
 
