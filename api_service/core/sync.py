@@ -244,11 +244,9 @@ async def sync_execution_projection(
     # The memo-derived parameters from map_temporal_state_to_projection are typically
     # empty; the canonical record is the source of truth for creation-time parameters.
     if canonical is not None:
-        canonical_params = dict(canonical.parameters or {})
-        synced_params = dict(payload.get("parameters") or {})
-        merged_params = {**canonical_params, **synced_params}
-        payload["parameters"] = merged_params
-        projection.parameters = merged_params
+        canonical_params = canonical.parameters or {}
+        synced_params = payload.get("parameters") or {}
+        projection.parameters = {**canonical_params, **synced_params}
 
     if canonical is not None and canonical.state != state_value:
         canonical.state = state_value
