@@ -177,6 +177,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         integration_activities=mock_jules_activities_cls.return_value,
         agent_runtime_activities=mock_agent_runtime_activities_cls.return_value,
         proposal_activities=mock_proposal_activities_cls.return_value,
+        review_activities=ANY,
     )
     mock_proposal_activities_cls.assert_called_once_with(
         artifact_service=mock_service_cls.return_value,
