@@ -52,31 +52,31 @@ When a cancel is requested:
 
 Some of these activities have timeouts up to **5 minutes** (`AGENT_RUNTIME_ACTIVITY_TIMEOUT`, `INTEGRATIONS_ACTIVITY_TIMEOUT`).
 
-> 📍 [agent_run.py:38-42](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/agent_run.py#L38-L42)
+> 📍 [agent_run.py:38-42](../../moonmind/workflows/temporal/workflows/agent_run.py#L38-L42)
 
 ### 2. **Cancel activity dispatch adds queuing latency**
 
 After the `CancelledError` is caught, the workflow dispatches a **new activity** (`agent_runtime.cancel`) to the `mm.activity.agent_runtime` task queue with a 1-minute timeout. If the agent-runtime worker fleet is busy or has only one worker, this activity sits in the queue waiting to be picked up.
 
-> 📍 [agent_run.py:367-373](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/agent_run.py#L367-L373)
+> 📍 [agent_run.py:367-373](../../moonmind/workflows/temporal/workflows/agent_run.py#L367-L373)
 
 ### 3. **Child workflow cancel propagation**
 
 For Temporal-executed tasks, the `MoonMind.Run` workflow runs `MoonMind.AgentRun` as a **child workflow**. Cancel propagation from parent to child adds another round-trip through the Temporal server. If the parent is itself blocked in an activity, the cancel doesn't even reach the child immediately.
 
-> 📍 [run.py:451-456](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/run.py#L451-L456)
+> 📍 [run.py:451-456](../../moonmind/workflows/temporal/workflows/run.py#L451-L456)
 
 ### 4. **Auth slot release before process kill**
 
 In the `CancelledError` handler, the workflow first tries to release the auth slot by signaling the `AuthProfileManager` workflow **before** dispatching the cancel activity. If the AuthProfileManager is slow to respond or not running, this adds delay before the actual process gets killed.
 
-> 📍 [agent_run.py:345-355](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/agent_run.py#L345-L355)
+> 📍 [agent_run.py:345-355](../../moonmind/workflows/temporal/workflows/agent_run.py#L345-L355)
 
 ### 5. **Graceful shutdown wait**
 
 The supervisor's `_terminate_process` sends `SIGTERM` and waits **2 seconds** before sending `SIGKILL`. Gemini CLI may not handle `SIGTERM` quickly (it may be in the middle of an API call or file write), so this adds 2s minimum.
 
-> 📍 [supervisor.py:197-207](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/runtime/supervisor.py#L197-L207)
+> 📍 [supervisor.py:197-207](../../moonmind/workflows/temporal/runtime/supervisor.py#L197-L207)
 
 ---
 
@@ -86,10 +86,10 @@ The supervisor's `_terminate_process` sends `SIGTERM` and waits **2 seconds** be
 
 | # | Change | Impact | File |
 |---|--------|--------|------|
-| 1 | **Enable Temporal activity cancellation** via `cancellation_type=ActivityCancellationType.TRY_CANCEL` on `execute_activity` calls in `agent_run.py`. This lets Temporal deliver cancellation to activities without waiting for them to complete. | High — eliminates the #1 bottleneck | [agent_run.py](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/agent_run.py) |
-| 2 | **Kill the process directly from the workflow** instead of dispatching a separate activity. Use `workflow.execute_local_activity()` or send a direct signal to the supervisor, avoiding the task queue hop entirely. | Medium — eliminates queuing delay | [agent_run.py](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/agent_run.py) |
-| 3 | **Parallelize slot release and process cancel** — run both concurrently in the `CancelledError` handler using `asyncio.gather()` instead of sequentially. | Low-Medium — shaves seconds | [agent_run.py](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/workflows/agent_run.py) |
-| 4 | **Reduce `GRACEFUL_TERMINATE_WAIT_SECONDS`** from 2.0 to 0.5 seconds. Gemini CLI doesn't need graceful shutdown — it's a CLI tool running agent loops. | Low — but consistent 1.5s saved | [supervisor.py](file:///Users/nsticco/MoonMind/moonmind/workflows/temporal/runtime/supervisor.py) |
+| 1 | **Enable Temporal activity cancellation** via `cancellation_type=ActivityCancellationType.TRY_CANCEL` on `execute_activity` calls in `agent_run.py`. This lets Temporal deliver cancellation to activities without waiting for them to complete. | High — eliminates the #1 bottleneck | [agent_run.py](../../moonmind/workflows/temporal/workflows/agent_run.py) |
+| 2 | **Kill the process directly from the workflow** instead of dispatching a separate activity. Use `workflow.execute_local_activity()` or send a direct signal to the supervisor, avoiding the task queue hop entirely. | Medium — eliminates queuing delay | [agent_run.py](../../moonmind/workflows/temporal/workflows/agent_run.py) |
+| 3 | **Parallelize slot release and process cancel** — run both concurrently in the `CancelledError` handler using `asyncio.gather()` instead of sequentially. | Low-Medium — shaves seconds | [agent_run.py](../../moonmind/workflows/temporal/workflows/agent_run.py) |
+| 4 | **Reduce `GRACEFUL_TERMINATE_WAIT_SECONDS`** from 2.0 to 0.5 seconds. Gemini CLI doesn't need graceful shutdown — it's a CLI tool running agent loops. | Low — but consistent 1.5s saved | [supervisor.py](../../moonmind/workflows/temporal/runtime/supervisor.py) |
 
 ### Medium-Term Improvements
 

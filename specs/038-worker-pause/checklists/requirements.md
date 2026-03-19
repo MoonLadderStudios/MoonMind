@@ -2,7 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-03-17
-**Feature**: [spec.md](file:///Users/nsticco/MoonMind/specs/038-worker-pause/spec.md)
+**Feature**: [spec.md](../spec.md)
 
 ## Content Quality
 

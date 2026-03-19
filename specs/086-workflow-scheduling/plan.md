@@ -1,6 +1,6 @@
 # Implementation Plan: Workflow Scheduling
 
-**Branch**: `086-workflow-scheduling` | **Date**: 2026-03-18 | **Spec**: [spec.md](file:///Users/nsticco/MoonMind/specs/086-workflow-scheduling/spec.md)
+**Branch**: `086-workflow-scheduling` | **Date**: 2026-03-18 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/086-workflow-scheduling/spec.md`
 
 ## Summary
