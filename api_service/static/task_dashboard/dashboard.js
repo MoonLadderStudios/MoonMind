@@ -4009,7 +4009,7 @@
       }
 
       return `
-        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; margin-bottom: 1rem; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; background: rgba(0, 0, 0, 0.2);">
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; margin-bottom: 0.75rem;">
           <div style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.7);">
             <strong style="color: rgba(255, 255, 255, 0.95); font-weight: 500;">Page ${escapeHtml(page)}</strong>
             <span style="margin: 0 0.5rem; opacity: 0.3;">|</span>
@@ -4019,10 +4019,10 @@
           <div style="display: flex; gap: 0.4rem;">
             <button type="button" class="secondary" title="Previous page" data-queue-page-prev ${
               paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
-            } style="padding: 0.2rem 0.6rem; min-width: unset; line-height: 1;">&#8592;</button>
+            } style="padding: 0.2rem 0.6rem; min-width: unset; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
             <button type="button" class="secondary" title="Next page" data-queue-page-next ${
               paginationState.hasMore ? "" : "disabled"
-            } style="padding: 0.2rem 0.6rem; min-width: unset; line-height: 1;">&#8594;</button>
+            } style="padding: 0.2rem 0.6rem; min-width: unset; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg></button>
           </div>
         </div>
       `;
