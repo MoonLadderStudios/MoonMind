@@ -500,9 +500,20 @@ class TemporalExecutionService:
             canonical_workflow_id,
         )
         if record is None:
+            if not include_orphaned:
+                raise TemporalExecutionNotFoundError(
+                    f"Workflow execution {canonical_workflow_id} was not found"
+                )
+            projection = await self._load_projection_execution(
+                canonical_workflow_id,
+                include_orphaned=True,
+            )
+            if projection is not None:
+                return projection
             raise TemporalExecutionNotFoundError(
                 f"Workflow execution {canonical_workflow_id} was not found"
             )
+        
         if include_orphaned:
             projection = await self._load_projection_execution(
                 canonical_workflow_id,
