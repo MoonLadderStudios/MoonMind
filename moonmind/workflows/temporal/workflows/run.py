@@ -391,6 +391,13 @@ class MoonMindRunWorkflow:
         pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
 
+        # Track the Jules session ID across plan nodes for multi-step
+        # session reuse.  After the first Jules step completes, its
+        # session_id is extracted from the result metadata.  Subsequent
+        # Jules steps receive this ID so MoonMind.AgentRun calls
+        # sendMessage instead of creating a new session.
+        jules_session_id: str | None = None
+
         if registry_snapshot_ref:
             registry_payload = await workflow.execute_activity(
                 "artifact.read",
@@ -448,6 +455,16 @@ class MoonMindRunWorkflow:
                         node_id=node_id,
                         tool_name=tool_name,
                     )
+                    # --- Multi-step Jules: inject session_id for continuation ---
+                    if jules_session_id and request.agent_id == "jules":
+                        request = request.model_copy(
+                            update={
+                                "parameters": {
+                                    **request.parameters,
+                                    "jules_session_id": jules_session_id,
+                                }
+                            }
+                        )
                     child_result = await workflow.execute_child_workflow(
                         "MoonMind.AgentRun",
                         request,
@@ -458,6 +475,9 @@ class MoonMindRunWorkflow:
                 except Exception:
                     if failure_mode == "FAIL_FAST":
                         raise
+                    # Clear session on failure so later Jules steps start fresh.
+                    if "request" in dir() and getattr(request, "agent_id", None) == "jules":
+                        jules_session_id = None
                     continue
 
             elif tool_type == "skill":
@@ -536,7 +556,16 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         f"plan node execution returned status {result_status}{detail}"
                     )
+                # Clear session on failure so later Jules steps start fresh.
+                if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
+                    jules_session_id = None
                 continue
+
+            # --- Multi-step Jules: extract session_id only on success ---
+            if tool_type == "agent_runtime":
+                extracted_id = self._extract_jules_session_id(child_result)
+                if extracted_id:
+                    jules_session_id = extracted_id
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
                 
@@ -730,6 +759,15 @@ class MoonMindRunWorkflow:
             "status": status,
             "outputs": outputs,
         }
+
+    @staticmethod
+    def _extract_jules_session_id(result: Any) -> str | None:
+        """Extract the Jules session ID from an ``AgentRunResult`` for multi-step reuse."""
+        if isinstance(result, dict):
+            metadata = result.get("metadata") or {}
+        else:
+            metadata = getattr(result, "metadata", {}) or {}
+        return metadata.get("jules_session_id")
 
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:

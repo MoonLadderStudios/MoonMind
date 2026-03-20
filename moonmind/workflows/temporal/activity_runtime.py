@@ -195,6 +195,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
+    "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
@@ -1694,6 +1695,63 @@ class TemporalIntegrationActivities:
                 )
 
         return await client.merge_pull_request(pr_url=pr_url)
+
+    async def integration_jules_send_message(
+        self,
+        *,
+        session_id: str,
+        prompt: str,
+        principal: str | None = None,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> IntegrationStatusResult:
+        """Send a follow-up prompt to an existing Jules session.
+
+        Used for multi-step workflows: resumes the session with new
+        instructions instead of creating a new session.
+        """
+        if not session_id or not session_id.strip():
+            raise TemporalActivityRuntimeError(
+                "integration.jules.send_message requires a non-empty session_id"
+            )
+        if not prompt or not prompt.strip():
+            raise TemporalActivityRuntimeError(
+                "integration.jules.send_message requires a non-empty prompt"
+            )
+
+        result = await self._adapter.send_message(
+            run_id=session_id,
+            prompt=prompt,
+        )
+        status_snapshot = self._status_snapshot(
+            str(result.metadata.get("providerStatus") or "running")
+        )
+
+        tracking_ref = None
+        if self._artifact_service is not None and principal is not None:
+            tracking_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload={
+                    "activity": "integration.jules.send_message",
+                    "sessionId": session_id,
+                    "providerStatus": status_snapshot.provider_status,
+                    "normalizedStatus": status_snapshot.normalized_status,
+                },
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "jules_send_message.json",
+                    "producer": "activity:integration.jules.send_message",
+                    "labels": ["integration", "jules", "send_message"],
+                },
+            )
+
+        return IntegrationStatusResult(
+            external_id=session_id,
+            status=status_snapshot.provider_status,
+            tracking_ref=tracking_ref,
+            normalized_status=status_snapshot.normalized_status,
+            provider_status=status_snapshot.provider_status,
+        )
 
     # ---- Codex Cloud integration handlers ----
 

@@ -293,39 +293,65 @@ class MoonMindAgentRun:
                         adapter = None
                         skip_poll_and_fetch = True
                     else:
-                        # Start via Temporal activity on the integrations fleet
-                        # (determinism-safe: no adapter construction in-workflow).
-                        handle_dict = await workflow.execute_activity(
-                            f"integration.{validated_id}.start",
-                            request,
-                            task_queue=INTEGRATIONS_TASK_QUEUE,
-                            start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        )
-
-                        if isinstance(handle_dict, dict) and "external_id" in handle_dict:
-                            status = handle_dict.get("normalized_status", "unknown")
-                            if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
-                                status = "running"
-                            handle = AgentRunHandle(
-                                runId=handle_dict["external_id"],
-                                agentKind="external",
-                                agentId=validated_id,
-                                status=status,
-                                startedAt=workflow.now(),
-                                metadata={
-                                    "providerStatus": handle_dict.get("provider_status", "unknown"),
-                                    "normalizedStatus": status,
-                                    "externalUrl": handle_dict.get("url"),
-                                    "callbackSupported": handle_dict.get("callback_supported", False),
-                                }
+                        # --- Multi-step Jules support ---
+                        # If a jules_session_id is provided in request.parameters,
+                        # this is a continuation step: send a follow-up message
+                        # to the existing session instead of creating a new one.
+                        jules_session_id = (request.parameters or {}).get("jules_session_id")
+                        if jules_session_id and validated_id == "jules":
+                            prompt = (request.instruction_ref or "").strip()
+                            if not prompt:
+                                raise ApplicationError(
+                                    "Jules continuation step requires a non-empty instruction_ref (prompt)",
+                                    non_retryable=True,
+                                )
+                            await workflow.execute_activity(
+                                "integration.jules.send_message",
+                                {
+                                    "session_id": jules_session_id,
+                                    "prompt": prompt,
+                                },
+                                task_queue=INTEGRATIONS_TASK_QUEUE,
+                                start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
+                            self.run_id = jules_session_id
+                            self.run_status = "running"
+                            poll_interval = 15
                         else:
-                            handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+                            # Start via Temporal activity on the integrations fleet
+                            # (determinism-safe: no adapter construction in-workflow).
+                            handle_dict = await workflow.execute_activity(
+                                f"integration.{validated_id}.start",
+                                request,
+                                task_queue=INTEGRATIONS_TASK_QUEUE,
+                                start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
 
-                        self.run_id = handle.run_id
-                        self.run_status = handle.status
-                        poll_interval = handle.poll_hint_seconds or 10
+                            if isinstance(handle_dict, dict) and "external_id" in handle_dict:
+                                status = handle_dict.get("normalized_status", "unknown")
+                                if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
+                                    status = "running"
+                                handle = AgentRunHandle(
+                                    runId=handle_dict["external_id"],
+                                    agentKind="external",
+                                    agentId=validated_id,
+                                    status=status,
+                                    startedAt=workflow.now(),
+                                    metadata={
+                                        "providerStatus": handle_dict.get("provider_status", "unknown"),
+                                        "normalizedStatus": status,
+                                        "externalUrl": handle_dict.get("url"),
+                                        "callbackSupported": handle_dict.get("callback_supported", False),
+                                    }
+                                )
+                            else:
+                                handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+
+                            self.run_id = handle.run_id
+                            self.run_status = handle.status
+                            poll_interval = handle.poll_hint_seconds or 10
                         adapter = None  # External ops route through activities, not adapter
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
@@ -413,6 +439,17 @@ class MoonMindAgentRun:
                     if "diagnosticsRef" in enriched_result and "diagnostics_ref" in enriched_result:
                         del enriched_result["diagnostics_ref"]
                     self.final_result = AgentRunResult(**enriched_result)
+
+                # Inject run_id into result metadata so the parent
+                # workflow (MoonMind.Run) can track it for multi-step
+                # Jules session reuse across plan nodes.
+                if self.run_id and hasattr(self.final_result, "metadata"):
+                    result_meta = dict(self.final_result.metadata or {})
+                    result_meta["jules_session_id"] = self.run_id
+                    self.final_result = self.final_result.model_copy(
+                        update={"metadata": result_meta}
+                    )
+
                 return self.final_result
 
         except asyncio.TimeoutError:

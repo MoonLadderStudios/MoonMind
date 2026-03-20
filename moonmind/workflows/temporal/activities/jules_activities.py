@@ -72,6 +72,37 @@ async def jules_cancel_activity(run_id: str) -> AgentRunStatus:
     return await adapter.cancel(run_id)
 
 
+@activity.defn(name="integration.jules.send_message")
+async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
+    """Send a follow-up prompt to an existing Jules session.
+
+    Used for multi-step workflows: resumes the session with new
+    instructions instead of creating a new session.
+
+    Accepts a dict with:
+    - ``session_id`` (str): the Jules session ID to send a message to
+    - ``prompt`` (str): the follow-up prompt/instructions to send
+    """
+    from pydantic import BaseModel, Field, ValidationError
+
+    class _SendMessagePayload(BaseModel):
+        session_id: str = Field(min_length=1)
+        prompt: str = Field(min_length=1)
+
+    try:
+        validated = _SendMessagePayload.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid payload for jules_send_message_activity: {exc}"
+        ) from exc
+
+    adapter = _build_adapter()
+    return await adapter.send_message(
+        run_id=validated.session_id,
+        prompt=validated.prompt,
+    )
+
+
 @activity.defn(name="integration.jules.merge_pr")
 async def jules_merge_pr_activity(payload: dict) -> JulesIntegrationMergePRResult:
     """Auto-merge a Jules-created PR into its target branch via GitHub API.
@@ -119,6 +150,7 @@ __all__ = [
     "jules_cancel_activity",
     "jules_fetch_result_activity",
     "jules_merge_pr_activity",
+    "jules_send_message_activity",
     "jules_start_activity",
     "jules_status_activity",
 ]
