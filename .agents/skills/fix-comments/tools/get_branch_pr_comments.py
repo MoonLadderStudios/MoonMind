@@ -75,37 +75,34 @@ def run_json_command(
     output: str | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            output = subprocess.check_output(
+            completed = subprocess.run(
                 command,
-                stderr=subprocess.STDOUT,
                 text=True,
+                capture_output=True,
+                check=False,
             )
+            output = completed.stdout
+            stderr = completed.stderr
+            if completed.returncode != 0:
+                details = "\n".join(
+                    item.strip() for item in (output or "", stderr or "") if item.strip()
+                )
+                retryable = is_retryable_command_error(details)
+                if attempt >= max_attempts or not retryable:
+                    error_text = details or f"Command exited with {completed.returncode}"
+                    raise RuntimeError(f"{failure_hint}\n{error_text}")
+
+                delay = min(
+                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                )
+                eprint(
+                    f"Retryable error on attempt {attempt}/{max_attempts} for command `{sanitized_command(command)}`: "
+                    f"{details}. Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
         except FileNotFoundError as exc:
             raise RuntimeError(f"Required command not found: {command[0]}") from exc
-        except subprocess.TimeoutExpired as exc:
-            if attempt >= max_attempts:
-                raise RuntimeError(f"{failure_hint}\nRequest timed out") from exc
-
-            delay = min(max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1)))
-            eprint(
-                f"Retryable error on attempt {attempt}/{max_attempts} (timeout). "
-                f"Retrying in {delay:.1f}s..."
-            )
-            time.sleep(delay)
-            continue
-        except subprocess.CalledProcessError as exc:
-            output_text = exc.output.strip() if exc.output else ""
-            retryable = is_retryable_command_error(output_text)
-            if attempt >= max_attempts or not retryable:
-                raise RuntimeError(f"{failure_hint}\n{output_text}") from exc
-
-            delay = min(max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1)))
-            eprint(
-                f"Retryable error on attempt {attempt}/{max_attempts} for command `{sanitized_command(command)}`: "
-                f"{output_text}. Retrying in {delay:.1f}s..."
-            )
-            time.sleep(delay)
-            continue
 
     if output is None:
         raise RuntimeError(

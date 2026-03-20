@@ -34,25 +34,38 @@ def run_command(
 ):
     for attempt in range(1, max_attempts + 1):
         try:
-            output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+            completed = subprocess.run(
+                cmd,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            output = completed.stdout
+            stderr = completed.stderr
+            if completed.returncode != 0:
+                details = "\n".join(
+                    item.strip() for item in (output or "", stderr or "") if item.strip()
+                )
+                if attempt < max_attempts:
+                    delay = min(
+                        max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                    )
+                    print(
+                        f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                print(
+                    f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{details}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             if output.strip() == "":
                 return {}
             return json.loads(output)
-        except subprocess.CalledProcessError as e:
-            if attempt < max_attempts:
-                delay = min(
-                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
-                )
-                print(
-                    f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...",
-                    file=sys.stderr,
-                )
-                time.sleep(delay)
-                continue
-            print(
-                f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{e.output}",
-                file=sys.stderr,
-            )
+        except FileNotFoundError:
+            print(f"Command not found: {cmd[0]}", file=sys.stderr)
             sys.exit(1)
         except json.JSONDecodeError:
             print(f"Command returned invalid JSON: {' '.join(cmd)}", file=sys.stderr)
@@ -61,11 +74,17 @@ def run_command(
 
 def run_command_optional(cmd) -> dict | list | None:
     try:
-        output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError:
-        return None
+        completed = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
     except OSError:
         return None
+    if completed.returncode != 0:
+        return None
+    output = completed.stdout
     if output.strip() == "":
         return {}
     try:
