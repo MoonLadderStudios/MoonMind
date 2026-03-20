@@ -16,7 +16,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 ## 2. Goals
 
-1. **Stop new work from starting** across all Managed Agents and Orchestrator processes.
+1. **Stop new work from starting** across all Managed Agents and `agent_runtime` worker fleets.
 2. Keep the queues **undisturbed**: queued Temporal workflows remain queued.
 3. Provide a **clear, auditable operator control** (API + Mission Control Dashboard) with reason + timestamps.
 4. Support an upgrade-friendly workflow:
@@ -29,7 +29,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 ### 3.1 Drain (default / recommended for upgrades)
 
-* **Mechanism**: Scale down or gracefully shut down `temporal-worker-sandbox` and `mm-orchestrator` instances.
+* **Mechanism**: Scale down or gracefully shut down `temporal-worker-sandbox` and `agent_runtime` worker fleets.
 * A graceful shutdown in Temporal (`worker.shutdown()`) blocks new Activity claims immediately but lets currently executing Activities finish or hit their heartbeat timeout.
 * Operator waits until the Temporal UI shows no active workers mapping to the Task Queues → safe to restart/upgrade underlying images.
 
@@ -37,7 +37,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 * **Mechanism**: A broadcast Temporal Signal (or Temporal Batch Operations API) sent to all running Workflows.
 * Workflows check this state between Activities using a signal handler. If paused, the Workflow blocks on a `workflow.wait_condition()` until resumed.
-* Long-running Activities (e.g., LLM loops) yield checkpoint data back to Temporal history via heartbeats, allowing the Workflow to safely suspend when the Activity returns early with a checkpoint.
+* Long-running agent runtimes are detached and their state is preserved via the `ManagedRunStore`, rather than requiring Temporal Activity heartbeats.
 
 ---
 
@@ -93,7 +93,7 @@ In Quiesce mode, the system uses Temporal's Batch Operations API to Signal thous
 * Register a pause signal handler: `def pause_signal_handler(self, paused: bool)`.
 * Maintain an internal `self.is_paused` flag.
 * Before transitioning to the next Activity/Agent Step, the workflow calls `await workflow.wait_condition(lambda: not self.is_paused)`.
-* For long-running LLM activities, inject a Heartbeat interceptor that yields checkpoint data back to Temporal so progress isn't lost if the worker node is killed or the activity is asked to return early.
+* For long-running managed agent runtimes, `MoonMind.AgentRun` and adapters use `status(...)` polling against the `ManagedRunStore`. Suspending the workflow simply pauses the polling loop, leaving the detached runtime unaffected.
 
 **Worker Identity & Identity Reconnection**:
 Resumed workflows seamlessly handoff or continue on newly upgraded workers holding the same Task Queue, thanks to Temporal's execution guarantees.
@@ -106,7 +106,7 @@ Resumed workflows seamlessly handoff or continue on newly upgraded workers holdi
 
 1. **Pause System (Drain)**
    * Post to API or use Dashboard to pause new workflow ingestions.
-   * Send graceful shutdown signals (SIGINT/SIGTERM) to Temporal worker containers.
+   * Send graceful shutdown signals (SIGINT/SIGTERM) to Temporal worker containers. Note that Docker-Out-Of-Docker (DOOD) ephemeral containers might complete or get killed depending on Activity wall-clock timeouts.
 2. **Wait for drain**
    * Temporal UI shows 0 active workers on the queues, and all inflight Activities have completed.
 3. **Perform upgrades**:
@@ -114,7 +114,7 @@ Resumed workflows seamlessly handoff or continue on newly upgraded workers holdi
    * run migrations
    * restart services
 4. **Resume System**
-   * Workers reconnect to Temporal and begin pulling Tasks.
+   * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the durable `ManagedRunStore`.
    * Dashboard allows new workflow submissions.
 
 ---
