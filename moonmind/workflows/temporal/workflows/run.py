@@ -472,14 +472,12 @@ class MoonMindRunWorkflow:
                         task_queue=WORKFLOW_TASK_QUEUE,
                     )
                     execution_result = self._map_agent_run_result(child_result)
-                    # --- Multi-step Jules: extract session_id from result ---
-                    if request.agent_id == "jules":
-                        extracted_id = self._extract_jules_session_id(child_result)
-                        if extracted_id:
-                            jules_session_id = extracted_id
                 except Exception:
                     if failure_mode == "FAIL_FAST":
                         raise
+                    # Clear session on failure so later Jules steps start fresh.
+                    if "request" in dir() and getattr(request, "agent_id", None) == "jules":
+                        jules_session_id = None
                     continue
 
             elif tool_type == "skill":
@@ -558,7 +556,16 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         f"plan node execution returned status {result_status}{detail}"
                     )
+                # Clear session on failure so later Jules steps start fresh.
+                if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
+                    jules_session_id = None
                 continue
+
+            # --- Multi-step Jules: extract session_id only on success ---
+            if tool_type == "agent_runtime":
+                extracted_id = self._extract_jules_session_id(child_result)
+                if extracted_id:
+                    jules_session_id = extracted_id
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
                 

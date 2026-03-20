@@ -299,11 +299,17 @@ class MoonMindAgentRun:
                         # to the existing session instead of creating a new one.
                         jules_session_id = (request.parameters or {}).get("jules_session_id")
                         if jules_session_id and validated_id == "jules":
+                            prompt = (request.instruction_ref or "").strip()
+                            if not prompt:
+                                raise ApplicationError(
+                                    "Jules continuation step requires a non-empty instruction_ref (prompt)",
+                                    non_retryable=True,
+                                )
                             await workflow.execute_activity(
                                 "integration.jules.send_message",
                                 {
                                     "session_id": jules_session_id,
-                                    "prompt": request.instruction_ref or "",
+                                    "prompt": prompt,
                                 },
                                 task_queue=INTEGRATIONS_TASK_QUEUE,
                                 start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,

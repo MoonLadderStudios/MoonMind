@@ -83,11 +83,23 @@ async def jules_send_message_activity(payload: dict) -> AgentRunStatus:
     - ``session_id`` (str): the Jules session ID to send a message to
     - ``prompt`` (str): the follow-up prompt/instructions to send
     """
+    from pydantic import BaseModel, Field, ValidationError
+
+    class _SendMessagePayload(BaseModel):
+        session_id: str = Field(min_length=1)
+        prompt: str = Field(min_length=1)
+
+    try:
+        validated = _SendMessagePayload.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid payload for jules_send_message_activity: {exc}"
+        ) from exc
 
     adapter = _build_adapter()
     return await adapter.send_message(
-        run_id=payload["session_id"],
-        prompt=payload["prompt"],
+        run_id=validated.session_id,
+        prompt=validated.prompt,
     )
 
 
