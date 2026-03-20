@@ -52,7 +52,7 @@
 
 ### Implementation for User Story 1
 
-- [ ] T011 [US1] Create the `MoonMind.ManifestIngest` workflow, lifecycle state machine, and bounded status snapshot logic in `moonmind/workflows/temporal/manifest_ingest.py` and `moonmind/schemas/manifest_ingest_models.py` (DOC-REQ-001, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006)
+- [X] T011 [US1] Create the `MoonMind.ManifestIngest` workflow, lifecycle state machine, and bounded status snapshot logic in `moonmind/workflows/temporal/manifest_ingest.py` and `moonmind/schemas/manifest_ingest_models.py` (DOC-REQ-001, DOC-REQ-004, DOC-REQ-005, DOC-REQ-006)
 - [X] T012 [US1] Implement manifest read, parse, validate, compile, and plan-persist activities in `moonmind/workflows/temporal/activity_runtime.py` and `moonmind/workflows/temporal/artifacts.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-008, DOC-REQ-014)
 - [X] T013 [US1] Implement child `MoonMind.Run` scheduling with immutable ingest lineage and request-cancel parent-close behavior in `moonmind/workflows/temporal/client.py` and `moonmind/workflows/temporal/manifest_ingest.py` (DOC-REQ-002, DOC-REQ-009, DOC-REQ-011)
 - [X] T014 [US1] Expose temporal-backed manifest submission and shared execution detail fields for manifest ingest in `api_service/services/manifests_service.py`, `api_service/api/routers/manifests.py`, `api_service/api/routers/executions.py`, and `api_service/api/schemas.py` (DOC-REQ-001, DOC-REQ-005, DOC-REQ-013, DOC-REQ-015)
@@ -92,15 +92,15 @@
 
 ### Tests for User Story 3
 
-- [ ] T022 [P] [US3] Add workflow and activity tests for concurrency caps, `FAIL_FAST`, `continue_and_report`, and `BEST_EFFORT` behavior, checkpoint artifacts, Continue-As-New, and request-cancel child shutdown in `tests/unit/workflows/temporal/test_manifest_ingest.py` and `tests/unit/workflows/temporal/test_activity_runtime.py` (DOC-REQ-009, DOC-REQ-010, DOC-REQ-011, DOC-REQ-014)
-- [ ] T023 [P] [US3] Add service and router tests for unauthorized artifact access, authorization lineage propagation, and secret-safe manifest responses in `tests/unit/services/test_manifests_service.py` and `tests/unit/api/routers/test_manifests.py` (DOC-REQ-013, DOC-REQ-016)
+- [X] T022 [P] [US3] Add workflow and activity tests for concurrency caps, `FAIL_FAST`, `continue_and_report`, and `BEST_EFFORT` behavior, checkpoint artifacts, Continue-As-New, and request-cancel child shutdown in `tests/unit/workflows/temporal/test_manifest_ingest.py` and `tests/unit/workflows/temporal/test_activity_runtime.py` (DOC-REQ-009, DOC-REQ-010, DOC-REQ-011, DOC-REQ-014)
+- [X] T023 [P] [US3] Add service and router tests for unauthorized artifact access, authorization lineage propagation, and secret-safe manifest responses in `tests/unit/services/test_manifests_service.py` and `tests/unit/api/routers/test_manifests.py` (DOC-REQ-013, DOC-REQ-016)
 - [ ] T024 [P] [US3] Add integration, API, and dashboard coverage for run-index pagination, shared visibility totals, and large-ingest rollover behavior in `tests/integration/temporal/test_manifest_ingest_runtime.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/task_dashboard/test_temporal_run_history.js` (DOC-REQ-010, DOC-REQ-012, DOC-REQ-015, DOC-REQ-016)
 
 ### Implementation for User Story 3
 
-- [ ] T025 [US3] Implement policy-aware scheduling for `FAIL_FAST`, `continue_and_report`, and `BEST_EFFORT`, bounded concurrency, and Continue-As-New checkpoint recovery in `moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/artifacts.py`, and `moonmind/config/settings.py` (DOC-REQ-009, DOC-REQ-010)
-- [ ] T026 [US3] Publish canonical summary and run-index artifacts plus bounded shared visibility metadata in `moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/service.py`, and `api_service/db/models.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-012, DOC-REQ-015)
-- [ ] T027 [US3] Enforce immutable authorization lineage and secrecy guardrails across manifest ingest and child runs in `moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/client.py`, `moonmind/workflows/temporal/artifacts.py`, and `api_service/services/manifests_service.py` (DOC-REQ-013, DOC-REQ-014)
+- [X] T025 [US3] Implement policy-aware scheduling for `FAIL_FAST`, `continue_and_report`, and `BEST_EFFORT`, bounded concurrency, and Continue-As-New checkpoint recovery in `moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/artifacts.py`, and `moonmind/config/settings.py` (DOC-REQ-009, DOC-REQ-010)
+- [X] T026 [US3] Publish canonical summary and run-index artifacts plus bounded shared visibility metadata in `moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/service.py`, and `api_service/db/models.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-012, DOC-REQ-015)
+- [X] T027 [US3] Enforce immutable authorization lineage and secrecy guardrails across manifest ingest and child runs in `moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/client.py`, `moonmind/workflows/temporal/artifacts.py`, and `api_service/services/manifests_service.py` (DOC-REQ-013, DOC-REQ-014)
 - [X] T028 [US3] Align manifest-ingest detail and lineage pagination consumers with run-index-backed totals in `api_service/api/routers/executions.py`, `api_service/api/routers/task_dashboard_view_model.py`, and `api_service/static/task_dashboard/dashboard.js` (DOC-REQ-012, DOC-REQ-015)
 
 **Checkpoint**: User Story 3 hardens the runtime for large, secure manifest execution with authoritative lineage and bounded Temporal state.
