@@ -1,6 +1,7 @@
 """Temporal worker runtime entrypoint."""
 
 import asyncio
+import json
 import logging
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
@@ -91,6 +92,21 @@ def _build_runtime_planner():
         task_payload = _coerce_mapping(input_payload.get("task"))
         if not task_payload:
             task_payload = _coerce_mapping(parameter_payload.get("task"))
+        git_payload = _coerce_mapping(task_payload.get("git"))
+        selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
+            task_payload.get("skill")
+        )
+        selected_skill_name = str(
+            selected_skill_payload.get("name")
+            or selected_skill_payload.get("id")
+            or ""
+        ).strip()
+        selected_skill_inputs = _coerce_mapping(task_payload.get("inputs"))
+        if not selected_skill_inputs:
+            selected_skill_inputs = _coerce_mapping(
+                selected_skill_payload.get("inputs")
+                or selected_skill_payload.get("args")
+            )
 
         # --- Resolve instructions ---
         instructions = (
@@ -98,18 +114,45 @@ def _build_runtime_planner():
             or input_payload.get("instructions")
             or parameter_payload.get("instructions")
         )
-        if instructions and (not isinstance(instructions, str) or not instructions.strip()):
+        has_explicit_instructions = isinstance(instructions, str) and bool(
+            instructions.strip()
+        )
+        if instructions and not has_explicit_instructions:
             instructions = None
 
         if not instructions:
-            skill_info = task_payload.get("skill") or task_payload.get("tool")
-            if skill_info and isinstance(skill_info, dict) and skill_info.get("name"):
-                skill_name = skill_info["name"]
-                instructions = f"Execute skill '{skill_name}'"
+            if selected_skill_name:
+                instructions = f"Execute skill '{selected_skill_name}'"
+                if selected_skill_inputs:
+                    instructions += " with inputs:\n" + json.dumps(
+                        selected_skill_inputs,
+                        indent=2,
+                        sort_keys=True,
+                    )
             else:
                 raise RuntimeError(
                     "agent_runtime plan requires non-empty instructions in "
                     "task.instructions, inputs.instructions, or parameters.instructions"
+                )
+
+        if (
+            not has_explicit_instructions
+            and selected_skill_name.lower() == "pr-resolver"
+        ):
+            pr_selector = str(selected_skill_inputs.get("pr") or "").strip()
+            branch_selector = str(
+                git_payload.get("startingBranch")
+                or task_payload.get("startingBranch")
+                or git_payload.get("branch")
+                or task_payload.get("branch")
+                or selected_skill_inputs.get("startingBranch")
+                or selected_skill_inputs.get("branch")
+                or ""
+            ).strip()
+            if not pr_selector and not branch_selector:
+                raise RuntimeError(
+                    "pr-resolver task requires task.tool.inputs.pr or task.git.startingBranch "
+                    "when task.instructions is not explicitly provided"
                 )
 
         # --- Resolve runtime mode ---
@@ -146,6 +189,8 @@ def _build_runtime_planner():
             or input_payload.get("repository")
             or parameter_payload.get("repository")
             or parameter_payload.get("repo")
+            or selected_skill_inputs.get("repository")
+            or selected_skill_inputs.get("repo")
         )
         if isinstance(repository, str) and repository.strip():
             node_inputs["repository"] = repository.strip()
@@ -153,8 +198,9 @@ def _build_runtime_planner():
 
         for git_key in ("startingBranch", "newBranch", "branch"):
             git_val = (
-                _coerce_mapping(task_payload.get("git")).get(git_key)
+                git_payload.get(git_key)
                 or task_payload.get(git_key)
+                or selected_skill_inputs.get(git_key)
             )
             if isinstance(git_val, str) and git_val.strip():
                 node_inputs[git_key] = git_val.strip()
@@ -374,4 +420,3 @@ async def main_async() -> None:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     asyncio.run(main_async())
-

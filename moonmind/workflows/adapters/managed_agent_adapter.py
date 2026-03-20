@@ -24,10 +24,12 @@ Design constraints (from constitution.md / spec):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -56,6 +58,10 @@ _OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
         "GITHUB_TOKEN",
         "GH_TOKEN",
     }
+)
+_PR_RESOLVER_RESULT_PATH = Path("artifacts/pr_resolver_result.json")
+_PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
+    {"failed", "blocked", "attempts_exhausted"}
 )
 
 # Type aliases for async signal callables injected by the caller/workflow.
@@ -105,6 +111,39 @@ def _shape_environment_for_api_key(
     if account_label:
         env["MANAGED_ACCOUNT_LABEL"] = account_label
     return env
+
+
+def _derive_pr_resolver_failure(
+    workspace_path: str | None,
+) -> tuple[str | None, str | None]:
+    """Return failure metadata from pr-resolver artifacts when present."""
+
+    workspace = str(workspace_path or "").strip()
+    if not workspace:
+        return None, None
+
+    result_path = Path(workspace) / _PR_RESOLVER_RESULT_PATH
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+
+    status = str(
+        payload.get("status") or payload.get("merge_outcome") or ""
+    ).strip().lower()
+    if status not in _PR_RESOLVER_FAILURE_STATUSES:
+        return None, None
+
+    reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
+    next_step = str(payload.get("next_step") or "").strip()
+    summary_parts = [f"pr-resolver reported status '{status}'"]
+    if reason:
+        summary_parts.append(reason)
+    if next_step:
+        summary_parts.append(f"next_step={next_step}")
+    return "execution_error", "; ".join(summary_parts)
 
 
 class ProfileResolutionError(RuntimeError):
@@ -304,10 +343,20 @@ class ManagedAgentAdapter:
                     output_refs.append(record.log_artifact_ref)
                 if record.diagnostics_ref:
                     output_refs.append(record.diagnostics_ref)
+                summary = record.error_message or f"Completed with status {record.status}"
+                failure_class = record.failure_class
+                if failure_class is None and record.status == "completed":
+                    derived_failure_class, derived_summary = _derive_pr_resolver_failure(
+                        record.workspace_path
+                    )
+                    if derived_failure_class is not None:
+                        failure_class = derived_failure_class
+                        if derived_summary:
+                            summary = derived_summary
                 return AgentRunResult(
-                    summary=record.error_message or f"Completed with status {record.status}",
+                    summary=summary,
                     output_refs=output_refs,
-                    failure_class=record.failure_class,
+                    failure_class=failure_class,
                 )
         return AgentRunResult()
 
