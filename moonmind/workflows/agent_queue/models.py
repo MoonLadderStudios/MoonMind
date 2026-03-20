@@ -19,7 +19,7 @@ from sqlalchemy import (
     Text,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy_utils import EncryptedType
 
