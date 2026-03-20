@@ -1322,7 +1322,7 @@ class TemporalSandboxActivities:
         )
 
 
-class TemporalJulesActivities:
+class TemporalIntegrationActivities:
     """Implementation helpers for ``integration.jules.*``."""
 
     def __init__(
@@ -2550,7 +2550,7 @@ __all__ = [
     "TemporalActivityBinding",
     "TemporalActivityRuntimeError",
     "TemporalAgentRuntimeActivities",
-    "TemporalJulesActivities",
+    "TemporalIntegrationActivities",
     "TemporalPlanActivities",
     "TemporalProposalActivities",
     "TemporalSkillActivities",

@@ -108,7 +108,7 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
-@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")

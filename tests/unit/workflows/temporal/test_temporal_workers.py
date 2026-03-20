@@ -19,7 +19,7 @@ from moonmind.workflows.temporal import (
     LLM_FLEET,
     SANDBOX_FLEET,
     WORKFLOW_FLEET,
-    TemporalJulesActivities,
+    TemporalIntegrationActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
@@ -126,7 +126,7 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                     dispatcher=SkillActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
-                integration_activities=TemporalJulesActivities(
+                integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),
@@ -160,7 +160,7 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                     dispatcher=SkillActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
-                integration_activities=TemporalJulesActivities(
+                integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),

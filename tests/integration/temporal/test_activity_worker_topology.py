@@ -24,7 +24,7 @@ from moonmind.workflows.temporal import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
-    TemporalJulesActivities,
+    TemporalIntegrationActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
@@ -151,7 +151,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         workspace_root=tmp_path / "workspaces",
                     ),
-                    integration_activities=TemporalJulesActivities(
+                    integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
@@ -182,7 +182,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         workspace_root=tmp_path / "workspaces",
                     ),
-                    integration_activities=TemporalJulesActivities(
+                    integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
@@ -237,7 +237,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         workspace_root=tmp_path / "workspaces",
                     ),
-                    integration_activities=TemporalJulesActivities(
+                    integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
@@ -274,7 +274,7 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         workspace_root=tmp_path / "workspaces",
                     ),
-                    integration_activities=TemporalJulesActivities(
+                    integration_activities=TemporalIntegrationActivities(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
