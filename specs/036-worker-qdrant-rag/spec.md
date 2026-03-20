@@ -6,6 +6,21 @@
 **Source Document**: `docs/RAG/WorkflowRag.md`  
 **Input**: User description: "Implement the recommended direct worker-to-Qdrant retrieval path for Codex CLI workers while keeping RAG fully non-generative."
 
+## Source Document Requirements
+
+Source: `docs/RAG/WorkflowRag.md`
+
+| ID | Source Section | Requirement Summary | FR Mapping |
+|----|---------------|---------------------|------------|
+| DOC-REQ-001 | Data Flow: Retrieval | Retrieval path is embed query → Qdrant search → ContextPack injection; no LLM/generative calls | FR-001, FR-005 |
+| DOC-REQ-002 | Agent-Facing Flow §1 | Pre-flight validates Qdrant connectivity, collection dimensions, and embedding model alignment | FR-003, FR-008 |
+| DOC-REQ-003 | Lean CLI Tool | `moonmind rag search` supports --query, --filters, --top-k, --overlay, --json flags | FR-001, FR-002 |
+| DOC-REQ-004 | Guardrails | Separate worker/Qdrant credentials; refuse collections with dimension mismatch; namespace payloads by repo/tenant | FR-003, FR-006 |
+| DOC-REQ-005 | Guardrails | Per-query token/latency budgets enforced; runaway agent loops cannot overload Qdrant | FR-001, FR-005 |
+| DOC-REQ-006 | Making the Capability Obvious | Agent system prompt advertises RAG tool availability; Mission Control shows retrieval badges | FR-008 |
+| DOC-REQ-007 | Workspace Overlay | Run-scoped overlay vectors with TTL; deterministic merge by (path, chunk_hash); overlay wins over canonical when not expired | FR-007 |
+| DOC-REQ-008 | Environment Variables | Full env var configuration with smart defaults for embedding provider, Qdrant host/port, overlay mode, budgets | FR-002, FR-006 |
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Worker pulls repo context via CLI (Priority: P1)
