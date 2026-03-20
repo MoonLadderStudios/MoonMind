@@ -32,7 +32,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     SandboxCommandResult,
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
-    TemporalJulesActivities,
+    TemporalIntegrationActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
@@ -648,7 +648,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            activities = TemporalJulesActivities(
+            activities = TemporalIntegrationActivities(
                 artifact_service=service,
                 client_factory=lambda: fake_client,
             )
@@ -699,7 +699,7 @@ async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            activities = TemporalJulesActivities(
+            activities = TemporalIntegrationActivities(
                 artifact_service=service,
                 client_factory=lambda: fake_client,
             )
@@ -729,7 +729,7 @@ async def test_jules_start_requires_description_or_inputs_ref(tmp_path: Path):
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            activities = TemporalJulesActivities(
+            activities = TemporalIntegrationActivities(
                 artifact_service=service,
                 client_factory=lambda: fake_client,
             )
@@ -755,7 +755,7 @@ async def test_jules_start_embeds_correlation_metadata(tmp_path: Path):
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            activities = TemporalJulesActivities(
+            activities = TemporalIntegrationActivities(
                 artifact_service=service,
                 client_factory=lambda: fake_client,
             )
@@ -778,7 +778,7 @@ async def test_jules_fetch_result_writes_failure_summary_artifact(tmp_path: Path
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            activities = TemporalJulesActivities(
+            activities = TemporalIntegrationActivities(
                 artifact_service=service,
                 client_factory=lambda: fake_client,
             )
@@ -814,7 +814,7 @@ async def test_jules_status_unknown_provider_state_is_non_terminal(tmp_path: Pat
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
             )
-            activities = TemporalJulesActivities(
+            activities = TemporalIntegrationActivities(
                 artifact_service=service,
                 client_factory=lambda: fake_client,
             )
@@ -838,7 +838,7 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
 
     # JulesAgentAdapter lazily initializes the client (to prevent worker crash
     # loops), so construction succeeds.  The runtime gate fires on first use.
-    activities = TemporalJulesActivities()
+    activities = TemporalIntegrationActivities()
 
     with pytest.raises(
         TemporalActivityRuntimeError,
@@ -867,7 +867,7 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                     dispatcher=SkillActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
-                integration_activities=TemporalJulesActivities(
+                integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
                     client_factory=_FakeJulesClient,
                 ),

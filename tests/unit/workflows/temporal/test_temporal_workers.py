@@ -19,7 +19,7 @@ from moonmind.workflows.temporal import (
     LLM_FLEET,
     SANDBOX_FLEET,
     WORKFLOW_FLEET,
-    TemporalJulesActivities,
+    TemporalIntegrationActivities,
     TemporalPlanActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
@@ -108,7 +108,7 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     assert topology.fleet == SANDBOX_FLEET
     assert topology.task_queues == (settings.temporal.activity_sandbox_task_queue,)
     assert topology.concurrency_limit == 3
-    assert topology.forbidden_capabilities == ("llm", "integration:jules", "agent_runtime")
+    assert topology.forbidden_capabilities == ("llm", "integration:jules", "integration:openclaw", "agent_runtime")
 
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
@@ -126,7 +126,7 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
                     dispatcher=SkillActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
-                integration_activities=TemporalJulesActivities(
+                integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),
@@ -160,7 +160,7 @@ def test_build_worker_activity_bindings_registers_mm_skill_execute_on_sandbox_fl
                     dispatcher=SkillActivityDispatcher()
                 ),
                 sandbox_activities=TemporalSandboxActivities(artifact_service=service),
-                integration_activities=TemporalJulesActivities(
+                integration_activities=TemporalIntegrationActivities(
                     artifact_service=service,
                     client_factory=lambda: None,
                 ),
