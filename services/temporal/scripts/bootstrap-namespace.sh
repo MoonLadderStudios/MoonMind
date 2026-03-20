@@ -7,8 +7,8 @@ log() {
 
 run_temporal_cli() {
   temporal "$@" \
-    --client-connect-timeout 5s \
-    --command-timeout 5s
+    --client-connect-timeout 15s \
+    --command-timeout 30s
 }
 
 TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-temporal:7233}"
@@ -85,7 +85,7 @@ while :; do
       break
     fi
   else
-    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 cluster health >/dev/null 2>&1; then
+    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 cluster health >/dev/null 2>&1; then
       break
     fi
   fi
@@ -120,19 +120,19 @@ if [ "$CLI_KIND" = "temporal" ]; then
       --retention "${retention_hours}h"
   fi
 else
-  if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace describe --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1 \
-    || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace describe "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
+  if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace describe --namespace "$TEMPORAL_NAMESPACE" >/dev/null 2>&1 \
+    || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace describe "$TEMPORAL_NAMESPACE" >/dev/null 2>&1; then
     log "Namespace exists; updating retention to ${EFFECTIVE_RETENTION_DAYS} days."
-    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace update \
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace update \
       --namespace "$TEMPORAL_NAMESPACE" \
       --rd "${EFFECTIVE_RETENTION_DAYS}" \
       >/dev/null 2>&1 \
-      || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace update \
+      || tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace update \
         --namespace "$TEMPORAL_NAMESPACE" \
         --retention "${EFFECTIVE_RETENTION_DAYS}"
   else
     log "Namespace does not exist; creating with retention ${EFFECTIVE_RETENTION_DAYS} days."
-    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 namespace register \
+    tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 namespace register \
       --rd "${EFFECTIVE_RETENTION_DAYS}" \
       --description "MoonMind runtime workflows" \
       --namespace "$TEMPORAL_NAMESPACE"
@@ -165,7 +165,7 @@ while :; do
       success=1
     fi
   else
-    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 admin cluster add-search-attributes \
+    if tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 admin cluster add-search-attributes \
       --name mm_entry --type Keyword \
       --name mm_owner_id --type Keyword \
       --name mm_owner_type --type Keyword \
@@ -175,7 +175,7 @@ while :; do
       --name mm_integration --type Keyword \
       --name mm_continue_as_new_cause --type Keyword >/dev/null 2>&1; then
       success=1
-    elif tctl --address "$TEMPORAL_ADDRESS" --context_timeout 5 cluster get-search-attributes | grep -q "mm_owner_id"; then
+    elif tctl --address "$TEMPORAL_ADDRESS" --context_timeout 30 cluster get-search-attributes | grep -q "mm_owner_id"; then
       log "Search attributes already exist."
       success=1
     fi
