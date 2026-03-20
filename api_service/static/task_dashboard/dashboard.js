@@ -290,6 +290,7 @@
     return normalized;
   }
 
+  const JULES_RUNTIME = "jules";
   const CLICK_GLOW_CLASS = "is-clicked";
   const CLICK_GLOW_DURATION_MS = 180;
   const CLICK_GLOW_SELECTOR = [
@@ -307,7 +308,7 @@
     codex: "Codex CLI",
     gemini: "Gemini CLI",
     claude: "Claude Code",
-    jules: "Jules",
+    [JULES_RUNTIME]: "Jules",
   };
 
   const buildSubmitRuntimeOptions = (workerRuntimes = []) =>
@@ -5295,14 +5296,23 @@
       setDatalist(effortDatalistNode, [
         ...normalizeRuntimeOptions(runtimeCapabilities.efforts),
       ]);
-      const nextDefaultModel = runtimeModelDefaultsWithFallback;
-      const nextDefaultEffort = runtimeEffortDefaultsWithFallback;
-      if (modelInputElement.value.trim() === activeDefaultModel) {
-        modelInputElement.value = nextDefaultModel;
+      let nextDefaultModel = runtimeModelDefaultsWithFallback;
+      let nextDefaultEffort = runtimeEffortDefaultsWithFallback;
+
+      if (runtimeKey === JULES_RUNTIME) {
+        modelInputElement.value = "";
+        effortInputElement.value = "";
+        nextDefaultModel = "";
+        nextDefaultEffort = "";
+      } else {
+        if (modelInputElement.value.trim() === activeDefaultModel) {
+          modelInputElement.value = nextDefaultModel;
+        }
+        if (effortInputElement.value.trim() === activeDefaultEffort) {
+          effortInputElement.value = nextDefaultEffort;
+        }
       }
-      if (effortInputElement.value.trim() === activeDefaultEffort) {
-        effortInputElement.value = nextDefaultEffort;
-      }
+
       activeDefaultModel = nextDefaultModel;
       activeDefaultEffort = nextDefaultEffort;
     };
