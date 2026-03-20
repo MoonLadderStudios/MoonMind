@@ -91,7 +91,8 @@ def _step1_request() -> AgentExecutionRequest:
             "title": "[Integration Test] Multi-step lifecycle check",
             "description": (
                 "Add a single-line comment '# MoonMind integration test' "
-                "to the very top of README.md. Do not change anything else."
+                "to the very top of README.md. Do not change anything else. "
+                "Do not run any tests."
             ),
             "metadata": {
                 "origin": "multi-step-integration-test",
@@ -196,7 +197,7 @@ class TestJulesAdapterLifecycle:
             step2_prompt = (
                 "Now add a second comment line '# Multi-step test step 2' "
                 "directly below the line you just added. "
-                "Do not change anything else."
+                "Do not change anything else. Do not run any tests."
             )
 
             await adapter.send_message(
