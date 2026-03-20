@@ -2,12 +2,13 @@
 ARG CODEX_CLI_VERSION=0.104.0
 ARG AGENT_KIT_VERSION=0.4.0
 ARG CLAUDE_CLI_VERSION=2.1.50
-# Build the shared runtime image with Codex/Spec Kit/Gemini CLIs by default so
-# the API, orchestrator, and Temporal workers can run from the same image tag.
-# Disable selectively in test-only or constrained builds when needed.
+# Build the shared runtime image with Codex/Spec Kit/Gemini/Claude/Cursor CLIs
+# by default so the API, orchestrator, and Temporal workers can run from the
+# same image tag. Disable selectively in test-only or constrained builds.
 ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_GEMINI_CLI=true
 ARG INSTALL_CLAUDE_CLI=true
+ARG INSTALL_CURSOR_CLI=true
 ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
@@ -175,6 +176,34 @@ elif ! npm install -g @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
     stub_claude
 fi
 
+# Install Cursor CLI — standalone binary downloaded via curl (not npm).
+# Renamed to cursor-agent to avoid namespace conflicts with other `agent` binaries.
+if [ "${INSTALL_CURSOR_CLI}" != "true" ]; then
+    echo "INSTALL_CURSOR_CLI=${INSTALL_CURSOR_CLI}; skipping Cursor CLI install and using stub" >&2
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"cursor-agent stub: package unavailable during image build\" >&2" \
+                   "exit 0" > /usr/local/bin/cursor-agent
+    chmod +x /usr/local/bin/cursor-agent
+elif curl -fsSL https://cursor.com/install | bash; then
+    # Installer puts binary at ~/.local/bin/agent — move and rename it
+    if [ -f "${HOME}/.local/bin/agent" ]; then
+        mv "${HOME}/.local/bin/agent" /usr/local/bin/cursor-agent
+        chmod +x /usr/local/bin/cursor-agent
+    else
+        echo "Warning: Cursor CLI installer succeeded but binary not found at expected path; installing stub" >&2
+        printf '%s\n' "#!/usr/bin/env bash" \
+                       "echo \"cursor-agent stub: binary not found after install\" >&2" \
+                       "exit 0" > /usr/local/bin/cursor-agent
+        chmod +x /usr/local/bin/cursor-agent
+    fi
+else
+    echo "Warning: Failed to install Cursor CLI; installing stub binary" >&2
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"cursor-agent stub: package unavailable during image build\" >&2" \
+                   "exit 0" > /usr/local/bin/cursor-agent
+    chmod +x /usr/local/bin/cursor-agent
+fi
+
 # Ensure LICENSE files exist so COPY instructions in the next stage do not fail.
 # Some npm packages might not include a LICENSE file, or it might be named differently.
 if [ ! -f /usr/local/lib/node_modules/@openai/codex/LICENSE ]; then
@@ -208,7 +237,8 @@ RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
     && codex --version \
     && agentkit --version \
     && gemini --version \
-    && claude --version
+    && claude --version \
+    && cursor-agent --version
 
 FROM python:3.12-slim-bookworm
 
@@ -219,6 +249,7 @@ ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
+ARG INSTALL_CURSOR_CLI
 
 # Use bash with pipefail and strict mode in the runtime image as well so
 # future RUN commands that rely on bash-specific behavior do not regress to
@@ -240,6 +271,7 @@ COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/agentkit /usr/local/bin/agentkit
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
+COPY --from=tooling-builder /usr/local/bin/cursor-agent /usr/local/bin/cursor-agent
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
@@ -288,11 +320,11 @@ RUN apt-get update && \
 # Ensure the non-root ``app`` user exists for Temporal workers and the bundled
 # CLIs remain executable from its PATH.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude /usr/local/bin/cursor-agent
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
 # repository search tooling expected by Codex runtime defaults.
-RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && rg --version'
+RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && cursor-agent --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at

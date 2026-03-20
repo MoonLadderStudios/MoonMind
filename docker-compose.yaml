@@ -394,6 +394,11 @@ services:
       - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
       - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - MOONMIND_CURSOR_CLI_AUTH_MODE=${MOONMIND_CURSOR_CLI_AUTH_MODE:-api_key}
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - CURSOR_HOME=${CURSOR_VOLUME_PATH:-/home/app/.cursor}
+      - MOONMIND_CURSOR_MODEL=${MOONMIND_CURSOR_MODEL:-}
+      - MOONMIND_CURSOR_EFFORT=${MOONMIND_CURSOR_EFFORT:-}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
     env_file:
       - .env
@@ -404,6 +409,7 @@ services:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - cursor_auth_volume:${CURSOR_VOLUME_PATH:-/home/app/.cursor}
       - agent_workspaces:/work/agent_jobs
     entrypoint:
       - /bin/sh
@@ -426,6 +432,8 @@ services:
       claude-auth-init:
         condition: service_completed_successfully
       gemini-auth-init:
+        condition: service_completed_successfully
+      cursor-auth-init:
         condition: service_completed_successfully
     networks:
       - local-network
@@ -463,6 +471,11 @@ services:
       - MOONMIND_CLAUDE_EFFORT=${MOONMIND_CLAUDE_EFFORT:-}
       - GEMINI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
       - GEMINI_CLI_HOME=${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - MOONMIND_CURSOR_CLI_AUTH_MODE=${MOONMIND_CURSOR_CLI_AUTH_MODE:-api_key}
+      - CURSOR_API_KEY=${CURSOR_API_KEY:-}
+      - CURSOR_HOME=${CURSOR_VOLUME_PATH:-/home/app/.cursor}
+      - MOONMIND_CURSOR_MODEL=${MOONMIND_CURSOR_MODEL:-}
+      - MOONMIND_CURSOR_EFFORT=${MOONMIND_CURSOR_EFFORT:-}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
     env_file:
       - .env
@@ -473,6 +486,7 @@ services:
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - gemini_auth_volume:${GEMINI_VOLUME_PATH:-/var/lib/gemini-auth}
+      - cursor_auth_volume:${CURSOR_VOLUME_PATH:-/home/app/.cursor}
       - agent_workspaces:/work/agent_jobs
     entrypoint:
       - /bin/sh
@@ -495,6 +509,8 @@ services:
       claude-auth-init:
         condition: service_completed_successfully
       gemini-auth-init:
+        condition: service_completed_successfully
+      cursor-auth-init:
         condition: service_completed_successfully
     networks:
       - local-network
@@ -616,6 +632,14 @@ services:
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
     restart: "no"
 
+  cursor-auth-init:
+    image: alpine:3.20
+    command: >-
+      sh -lc "mkdir -p ${CURSOR_VOLUME_PATH:-/home/app/.cursor} && chown -R 1000:1000 ${CURSOR_VOLUME_PATH:-/home/app/.cursor} && chmod 0775 ${CURSOR_VOLUME_PATH:-/home/app/.cursor}"
+    volumes:
+      - cursor_auth_volume:${CURSOR_VOLUME_PATH:-/home/app/.cursor}
+    restart: "no"
+
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.1.1
     environment:
@@ -724,6 +748,8 @@ volumes:
     name: ${GEMINI_VOLUME_NAME:-gemini_auth_volume}
   claude_auth_volume:
     name: ${CLAUDE_VOLUME_NAME:-claude_auth_volume}
+  cursor_auth_volume:
+    name: ${CURSOR_VOLUME_NAME:-cursor_auth_volume}
 
 networks:
   local-network:
