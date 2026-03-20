@@ -1,8 +1,8 @@
-# Specification Quality Checklist: Manifest Queue Alignment and Hardening
+# Specification Quality Checklist: Manifest Ingest Runtime
 
-**Purpose**: Validate specification completeness and quality before implementation and remediation  
-**Created**: 2026-03-02  
-**Feature**: specs/028-manifest-queue/spec.md
+**Purpose**: Validate specification completeness and quality before proceeding to planning
+**Created**: 2026-03-06
+**Feature**: [spec.md](../spec.md)
 
 ## Content Quality
 
@@ -31,4 +31,7 @@
 
 ## Notes
 
-Validated against runtime-intent guard requiring production code changes plus validation tests; no clarification markers remain.
+- Validation pass completed without unresolved clarification markers.
+- `DOC-REQ-001` through `DOC-REQ-016` each map to one or more functional requirements.
+- Runtime intent guard is explicit in the input, implementation-intent line, `DOC-REQ-016`, `FR-001`, `FR-017`, and `SC-006`.
+- The spec records the v1 `BEST_EFFORT` terminal-state constraint as an assumption so planning can preserve canonical lifecycle semantics without inventing a new pseudo-state.

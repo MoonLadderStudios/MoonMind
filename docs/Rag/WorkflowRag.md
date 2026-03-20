@@ -1,20 +1,38 @@
-# Managed Agent Retrieval Loop for MoonMind
+# Workflow RAG – Agent Retrieval System
 
 Status: Draft
 Owners: MoonMind Engineering
-Last Updated: 2026-03-14
+Last Updated: 2026-03-20
+
+> **See also:** [ManifestIngestDesign.md](ManifestIngestDesign.md) (Temporal workflow architecture & implementation for ingesting data into Qdrant), [LlamaIndexManifestSystem.md](LlamaIndexManifestSystem.md) (manifest schema, data sources, and indexing pipeline)
 
 This document captures how Temporal Managed Agents perform retrieval-augmented reasoning without any extra generative hops upstream. The loop is strictly **(embed query) → (Qdrant search) → (inject retrieved text into the Agent's context)** and leans on direct or proxied Qdrant access from within the `temporal-worker-sandbox`.
 
+## Data Flow: Ingest → Retrieval
+
+The RAG system has two distinct phases with separate code paths:
+
+1. **Ingest (write path)** — Manifest YAML → LlamaIndex readers fetch documents → chunk/transform → embed via LlamaIndex → upsert vectors into Qdrant. Orchestrated by `MoonMind.ManifestIngest` Temporal workflow. Code: `moonmind/indexers/*`, `moonmind/manifest/*`.
+2. **Retrieval (read path)** — Agent query → embed via `EmbeddingClient` (Google/OpenAI/Ollama) → Qdrant vector search → format `ContextPack` → inject into agent prompt. Code: `moonmind/rag/*`.
+
+The retrieval path does **not** use LlamaIndex — it uses the lean `moonmind/rag/` layer with direct `qdrant-client` access. No LLM/generative calls are made; only embedding API calls (fractions of a cent per query).
+
 ## Status (Current vs Target)
 
-- **Legacy implementation**:
+- **Implemented**:
+  - `moonmind rag search` CLI tool: fully implemented in `moonmind/rag/cli.py` and `moonmind/rag/service.py`.
+  - `ContextRetrievalService`: embed → Qdrant search → `ContextPack` formatting.
+  - `moonmind rag overlay upsert` and `moonmind rag overlay clean`: workspace overlay indexing.
+  - `moonmind rag sync-embedding`: collection dimension validation.
+  - Budgeting: per-query token and latency limits enforced.
+  - Two transport modes: `direct` (worker → Qdrant) and `gateway` (worker → RetrievalGateway HTTP → Qdrant).
+- **Legacy (deprecated)**:
   - Worker CLI entry point: `moonmind-codex-worker`.
   - Retrieval path: `QdrantRAG.retrieve_context()` executed directly inside a polling loop.
-- **Target state described below**:
-  - `RetrieveAgentContextActivity` executes the RAG search within a Temporal Workflow.
-  - Alternately, the agent container exposes `moonmind rag search` and `moonmind rag overlay upsert` commands for the Agent (e.g. OpenHands) to explicitly call during its execution loop when it determines it needs more context.
-  - A serialization adapter ensures agents receive a stable JSON context-pack contract.
+- **Not yet implemented**:
+  - `RetrieveAgentContextActivity`: Temporal Activity wrapper around `ContextRetrievalService.retrieve()` for workflow-initiated pre-fetch.
+  - Shipping `moonmind rag` tools natively inside the `temporal-worker-sandbox` Docker image.
+  - Agent system prompt injection advertising RAG tool availability.
 
 ## Goals
 
@@ -26,7 +44,7 @@ This document captures how Temporal Managed Agents perform retrieval-augmented r
 ## Agent-Facing Flow
 
 1. **Pre-flight (Temporal Activity: `PrepareWorkspaceActivity`)**
-   - Sandbox boots with `GOOGLE_EMBEDDING_MODEL`, `QDRANT_HOST`, and `QDRANT_PORT` exported.
+   - Sandbox boots with `DEFAULT_EMBEDDING_PROVIDER`, `GOOGLE_EMBEDDING_MODEL` (or `OPENAI_EMBEDDING_MODEL`), `QDRANT_HOST`, and `QDRANT_PORT` exported.
    - Validation checks Qdrant connectivity, collection dimensions, and embedding model alignment.
 2. **Embed the query**
    - Use the configured embedding provider directly from the sandbox or via a local embedding proxy.
@@ -104,9 +122,32 @@ Agents often edit files that have not been embedded in the canonical index yet. 
 
 ## Implementation Checklist
 
-1. Ship the `moonmind rag search` and `moonmind rag overlay` bash wrappers natively inside the `temporal-worker-sandbox` image.
-2. Extend `PrepareWorkspaceActivity` to validate Qdrant topology before launching the Agent container.
-3. Update agent system prompts to advertise `RAG tools available`.
-4. Emit observability metrics for every embed/search/upsert from the sandboxed tools.
-5. Document the context pack schema.
-6. Enable optional overlay indexing to keep retrieval fresh for in-flight edits.
+- [x] Implement `moonmind rag search` CLI tool (`moonmind/rag/cli.py`, `moonmind/rag/service.py`).
+- [x] Implement `moonmind rag overlay upsert` and `moonmind rag overlay clean` commands.
+- [x] Implement `moonmind rag sync-embedding` for collection dimension validation.
+- [x] Implement per-query token/latency budgeting in `ContextRetrievalService`.
+- [x] Support `direct` and `gateway` transport modes.
+- [ ] Ship `moonmind rag` tools natively inside the `temporal-worker-sandbox` Docker image.
+- [ ] Implement `RetrieveAgentContextActivity` as a Temporal Activity wrapping `ContextRetrievalService.retrieve()`.
+- [ ] Extend `PrepareWorkspaceActivity` to validate Qdrant topology before launching the Agent container.
+- [ ] Update agent system prompts to advertise `RAG tools available`.
+- [ ] Emit observability metrics for every embed/search/upsert from the sandboxed tools.
+- [ ] Document the context pack schema (`ContextPack` format from `moonmind/rag/context_pack.py`).
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|:--------:|-------------|
+| `DEFAULT_EMBEDDING_PROVIDER` | ✅ | `google`, `openai`, or `ollama` |
+| `GOOGLE_EMBEDDING_MODEL` | If Google | e.g. `models/text-embedding-004` |
+| `OPENAI_EMBEDDING_MODEL` | If OpenAI | e.g. `text-embedding-3-large` |
+| `GOOGLE_API_KEY` | If Google | API key for Google embeddings |
+| `OPENAI_API_KEY` | If OpenAI | API key for OpenAI embeddings |
+| `QDRANT_HOST` | ✅ | Qdrant hostname (default: `qdrant`) |
+| `QDRANT_PORT` | | Qdrant port (default: `6333`) |
+| `QDRANT_API_KEY` | | Qdrant auth key (if using cloud) |
+| `VECTOR_STORE_COLLECTION_NAME` | | Collection name (default from app settings) |
+| `RAG_SIMILARITY_TOP_K` | | Default top-k for search (default: `5`) |
+| `RAG_OVERLAY_MODE` | | `collection` (default) |
+| `MOONMIND_RETRIEVAL_URL` | | RetrievalGateway URL for `gateway` transport |
+| `MOONMIND_RUN_ID` | | Run ID for overlay scoping |

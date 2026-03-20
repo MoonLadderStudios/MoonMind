@@ -3,6 +3,7 @@
 **Feature Branch**: `033-worker-qdrant-rag`  
 **Created**: 2026-02-20  
 **Status**: Draft  
+**Source Document**: `docs/RAG/WorkflowRag.md`  
 **Input**: User description: "Implement the recommended direct worker-to-Qdrant retrieval path for Codex CLI workers while keeping RAG fully non-generative."
 
 ## User Scenarios & Testing *(mandatory)*

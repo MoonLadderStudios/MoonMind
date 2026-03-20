@@ -1,7 +1,8 @@
-# Manifest Ingest Design
+# Manifest Ingest Design & Implementation
 
-**Status:** Draft (2026-03-05)
-**Scope:** How MoonMind ingests a “manifest” artifact and reliably turns it into one or more **Temporal Workflow Executions**, with strong observability, editability, and scalability.
+**Status:** Draft (2026-03-20)
+**Scope:** How MoonMind ingests a “manifest” artifact and reliably turns it into one or more **Temporal Workflow Executions**, with strong observability, editability, and scalability. Includes architecture, design decisions, and implementation-level detail.
+**See also:** [LlamaIndexManifestSystem.md](LlamaIndexManifestSystem.md) (v0 manifest schema & operator guide), [WorkflowRag.md](WorkflowRag.md) (how agents retrieve data from Qdrant at runtime)
 
 ---
 
@@ -541,11 +542,152 @@ This eliminates the class of bugs where “page totals” are computed from one 
 
 ---
 
-## 17. Open questions
+## 17. Implementation details
+
+### 17.1 Module layout
+
+| Module | Responsibility |
+|---|---|
+| `moonmind/workflows/temporal/manifest_ingest.py` | `MoonMind.ManifestIngest` workflow, projection helpers, plan compilation, summary builders, all 6 Updates |
+| `moonmind/workflows/temporal/workflows/manifest_ingest.py` | Lightweight workflow variant for compile-and-summarize flows |
+| `moonmind/workflows/agent_queue/manifest_contract.py` | Manifest YAML validation, normalization, capability derivation, secret leak detection, secret ref collection |
+| `moonmind/schemas/manifest_ingest_models.py` | Pydantic models: `CompiledManifestPlanModel`, `ManifestPlanNodeModel`, `ManifestNodeModel`, `ManifestStatusSnapshotModel`, `ManifestIngestSummaryModel`, `ManifestRunIndexModel`, `ManifestExecutionPolicyModel`, `RequestedByModel` |
+| `moonmind/schemas/manifest_models.py` | Legacy manifest schema models |
+| `moonmind/manifest/*` | Legacy loader, interpolation, runner, sync service |
+
+### 17.2 Workflow input example
+
+```json
+{
+  "manifestArtifactRef": "art_01JABC...",
+  "action": "run",
+  "requestedBy": { "type": "user", "id": "user-123" },
+  "executionPolicy": {
+    "failurePolicy": "fail_fast",
+    "maxConcurrency": 50
+  },
+  "planArtifactRef": null,
+  "manifestNodes": []
+}
+```
+
+Key fields:
+- `manifestArtifactRef` (required): Artifact reference to the manifest YAML stored in MinIO. The workflow reads manifest content via the `manifest_read` Activity — raw YAML is never inlined in workflow history.
+- `action`: `"run"` or `"plan"` (default `"run"`).
+- `requestedBy`: Immutable owner identity, validated against the workflow's `mm_owner_id` Search Attribute.
+- `executionPolicy`: Controls concurrency and failure behavior.
+- `planArtifactRef` + `manifestNodes`: Optional pre-compiled plan for resumption or re-execution.
+
+### 17.3 Pipeline stages
+
+The workflow executes the following stages:
+
+1. **Initialize**: Validate `manifestArtifactRef`, resolve `requestedBy` against workflow owner metadata, normalize execution policy.
+2. **Compile**: If no pre-compiled plan is provided:
+   - `manifest_read` Activity — reads manifest YAML from the artifact store.
+   - `manifest_compile` Activity — validates YAML via `normalize_manifest_job_payload`, derives required capabilities, computes manifest hash, produces a `CompiledManifestPlanModel` with stable node IDs and dependency edges.
+3. **Materialize nodes**: Convert compiled plan nodes to runtime `ManifestNodeModel` entries with initial state `ready`.
+4. **Execute (fan-out)**: For each ready node (respecting dependency ordering and concurrency limits):
+   - Spawn a child `MoonMind.Run` workflow with the node's parameters, linked to the parent via `manifestIngestWorkflowId` and `nodeId`.
+   - Track child state transitions (`running` → `succeeded`/`failed`).
+   - Apply failure policy: `fail_fast` cancels remaining nodes on first failure; `continue` proceeds.
+5. **Finalize**: Execute `manifest_write_summary` Activity to produce summary and run-index artifacts.
+
+### 17.4 Idempotency and stable node IDs
+
+Node IDs are derived deterministically from manifest content:
+
+```python
+node_id = f"node-{sha256(json.dumps(data_source, sort_keys=True))[:12]}"
+```
+
+This ensures that repeated runs against the same manifest produce the same node graph, enabling:
+- Stable child workflow IDs (`{workflow_id}:{run_id}:{node_id}`)
+- Idempotent artifact linkage
+- Meaningful diff detection between manifest versions
+
+### 17.5 Manifest hash and version tracking
+
+The manifest contract computes a content-addressable hash:
+
+```
+manifestHash = sha256:{hex_digest_of_yaml_content}
+```
+
+Combined with `manifestVersion` (currently `v0`), this provides:
+- Change detection for incremental sync decisions
+- Audit trail for which manifest version produced which run
+- Safe retry semantics (same hash = same behavior)
+
+### 17.6 Artifact-backed state
+
+Manifest runs produce three key artifacts:
+
+| Artifact | Description |
+|---|---|
+| Summary (`summaryArtifactRef`) | `ManifestIngestSummaryModel` — workflow state, phase, counts, failed node IDs |
+| Run Index (`runIndexArtifactRef`) | `ManifestRunIndexModel` — per-node state, child workflow/run IDs, result artifact refs |
+| Checkpoint (`checkpointArtifactRef`) | Per-(manifest, dataSource) state for incremental sync resumption |
+
+These are referenced via memo fields and stored in MinIO via the artifact Activities.
+
+### 17.7 UpdateManifest modes
+
+- **`APPEND`**: Add new nodes from the updated manifest without modifying existing nodes. Fails if any new node IDs collide with existing ones.
+- **`REPLACE_FUTURE`**: Replace all `pending`/`ready` nodes with the new manifest's plan. Running, succeeded, and failed nodes are preserved.
+
+---
+
+## 18. Security model
+
+### 18.1 No raw secrets in Temporal History
+
+Temporal inputs and workflow history MUST NOT contain raw keys/tokens.
+Allowed reference patterns:
+* `${ENV_VAR}` references (resolved by worker runtime env)
+* `profile://provider#field` references (resolved by the Activity fetching the integration secret at runtime)
+* `vault://mount/path#field` references (resolved via Vault at runtime)
+
+The manifest contract (`manifest_contract.py`) enforces this at validation time via `detect_manifest_secret_leaks`, which scans all manifest values for:
+- Known sensitive field names (`api_key`, `token`, `password`, etc.)
+- Suspect value prefixes (`sk-`, `ghp_`, `AKIA`, etc.)
+- JWT patterns and base64-encoded secrets
+
+### 18.2 Secret reference collection
+
+`collect_manifest_secret_refs` extracts and deduplicates all `profile://` and `vault://` references from the manifest, producing a `manifestSecretRefs` map that workers use to resolve credentials at Activity execution time.
+
+---
+
+## 19. Delivery plan
+
+### Phase 0: Foundations ✅
+1. ~~Implement `MoonMind.ManifestIngest` workflow skeleton and Temporal test suite.~~
+2. ~~Add minimal `/api/manifests` registry endpoints (GET/PUT) to store text YAML bodies.~~
+3. ~~Implement manifest contract validation and normalization.~~
+4. ~~Implement compiled plan model and node materialization.~~
+5. ~~Implement all 6 Temporal Updates for interactive control.~~
+6. ~~Implement projection and snapshot system for API queries.~~
+
+### Phase 1: Engine Pipeline (in progress)
+1. Implement Activities for GitHub, Drive, Confluence, Local FS data fetchers behind child `MoonMind.Run` workflows.
+2. Implement chunking and deterministic embeddings Activities.
+3. Wire stable IDs + delete-by-filter semantics for Qdrant Activities.
+4. Implement checkpoint read/write for incremental sync.
+
+### Phase 2: User Interface
+1. Add Mission Control manifest workflow list/detail views via Temporal Visibility.
+2. Form view for launching manifest executions.
+3. Node-level status and progress display.
+4. Interactive Update controls (pause/resume, cancel nodes, retry nodes, update manifest).
+
+---
+
+## 20. Open questions
 
 1. **Manifest schema**: How expressive should dependencies be (simple DAG vs conditionals vs dynamic fan-out)?
 2. **Node execution mapping (future extension)**: Do we ever introduce inline activity-only nodes later, or keep the v1 rule that manifest nodes execute as child workflows?
-3. **Delta semantics on UpdateManifest**: Do we allow changing existing node definitions, or only append new nodes?
+3. ~~**Delta semantics on UpdateManifest**: Do we allow changing existing node definitions, or only append new nodes?~~ **Resolved:** Both `APPEND` and `REPLACE_FUTURE` modes are supported (see §17.7).
 4. **Failure semantics**: In `BEST_EFFORT` mode, should the Temporal execution close as `succeeded` with errors recorded in summary artifacts, or close as `failed` once any node failure occurs?
 5. **Visibility lineage**: When do we standardize a bounded manifest-lineage Search Attribute (for example `mm_manifest_ingest_id`) instead of relying on the run index artifact for child-run lookup?
 6. **Sharding strategy**: At what size do we require Continue-As-New vs hierarchical shard ingests?
