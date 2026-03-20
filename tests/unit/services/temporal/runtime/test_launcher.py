@@ -269,8 +269,24 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
             repo_path = Path(str(args[-1]))
             repo_path.mkdir(parents=True, exist_ok=True)
             return _FakeProcess(pid=1001)
-        if args[:2] == ("git", "-C"):
-            return _FakeProcess(pid=1002)
+        if args[:2] == ("git", "-C") and args[3:] == (
+            "checkout",
+            "feature/test",
+        ):
+            return _FakeProcess(
+                pid=1002,
+                returncode=1,
+                stderr_bytes=(
+                    b"error: pathspec 'feature/test' did not match any "
+                    b"file(s) known to git"
+                ),
+            )
+        if args[:2] == ("git", "-C") and args[3:] == (
+            "checkout",
+            "-b",
+            "feature/test",
+        ):
+            return _FakeProcess(pid=1003)
         if args[:2] == ("echo", "hello"):
             return _FakeProcess(pid=2001)
         raise AssertionError(f"Unexpected subprocess call: {args!r}")
@@ -300,11 +316,90 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     assert "--single-branch" in clone_call
     assert "https://github.com/MoonLadderStudios/MoonMind.git" in clone_call
 
-    checkout_call = next(args for args, _ in calls if args[:2] == ("git", "-C"))
+    checkout_call = next(
+        args
+        for args, _ in calls
+        if args[:2] == ("git", "-C")
+        and args[3:] == ("checkout", "-b", "feature/test")
+    )
     assert checkout_call[-2:] == ("-b", "feature/test")
 
     launch_kwargs = next(kwargs for args, kwargs in calls if args[:2] == ("echo", "hello"))
     assert launch_kwargs.get("cwd") == expected_workspace
+
+
+@pytest.mark.asyncio
+async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "startingBranch": "main",
+            "newBranch": "main",
+        }
+    )
+
+    class _FakeProcess:
+        def __init__(
+            self,
+            *,
+            pid: int = 4321,
+            returncode: int = 0,
+            stdout_bytes: bytes = b"",
+            stderr_bytes: bytes = b"",
+        ) -> None:
+            self.pid = pid
+            self.returncode = returncode
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self._stdout_bytes = stdout_bytes
+            self._stderr_bytes = stderr_bytes
+
+        async def wait(self) -> int:
+            return self.returncode
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return self._stdout_bytes, self._stderr_bytes
+
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args[:2] == ("git", "clone"):
+            repo_path = Path(str(args[-1]))
+            repo_path.mkdir(parents=True, exist_ok=True)
+            return _FakeProcess(pid=1001)
+        if args[:2] == ("git", "-C") and args[3:] == (
+            "checkout",
+            "main",
+        ):
+            return _FakeProcess(pid=1003)
+        if args[:2] == ("echo", "hello"):
+            return _FakeProcess(pid=2001)
+        raise AssertionError(f"Unexpected subprocess call: {args!r}")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    _record, process, _endpoints = await launcher.launch(
+        run_id="workspace-run-existing-branch",
+        request=request,
+        profile=profile,
+    )
+    await process.wait()
+
+    checkout_call = next(
+        args
+        for args, _ in calls
+        if args[:2] == ("git", "-C") and args[3:] == ("checkout", "main")
+    )
+    assert checkout_call[-1] == "main"
+    assert "-b" not in checkout_call
 
 
 @pytest.mark.asyncio

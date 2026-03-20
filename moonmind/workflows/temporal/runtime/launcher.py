@@ -46,11 +46,11 @@ class ManagedRuntimeLauncher:
             "Unsupported workspaceSpec.repository format; expected owner/repo, URL, or local path"
         )
 
-    async def _run_checked_command(
+    async def _run_command(
         self,
         *cmd: str,
         cwd: str | None = None,
-    ) -> None:
+    ) -> tuple[int, str, str]:
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -58,14 +58,27 @@ class ManagedRuntimeLauncher:
             cwd=cwd,
         )
         stdout, stderr = await process.communicate()
-        if process.returncode == 0:
+        return (
+            int(process.returncode),
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+        )
+
+    async def _run_checked_command(
+        self,
+        *cmd: str,
+        cwd: str | None = None,
+    ) -> None:
+        returncode, stdout_text, stderr_text = await self._run_command(
+            *cmd,
+            cwd=cwd,
+        )
+        if returncode == 0:
             return
-        stderr_text = stderr.decode("utf-8", errors="replace").strip()
-        stdout_text = stdout.decode("utf-8", errors="replace").strip()
         detail = stderr_text or stdout_text or "no output"
         rendered_cmd = " ".join(shlex.quote(part) for part in cmd)
         raise RuntimeError(
-            f"Command failed with exit code {process.returncode}: {rendered_cmd}; {detail}"
+            f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
         )
 
     async def _prepare_workspace_path(
@@ -115,14 +128,42 @@ class ManagedRuntimeLauncher:
 
         new_branch = str(workspace_spec.get("newBranch") or "").strip()
         if new_branch:
-            await self._run_checked_command(
+            returncode, stdout_text, stderr_text = await self._run_command(
                 "git",
                 "-C",
                 str(repo_path),
                 "checkout",
-                "-b",
                 new_branch,
             )
+            if returncode != 0:
+                failure_detail = (stderr_text or stdout_text).lower()
+                branch_missing = (
+                    "did not match any file(s) known to git" in failure_detail
+                    or "pathspec" in failure_detail
+                )
+                if not branch_missing:
+                    detail = stderr_text or stdout_text or "no output"
+                    rendered_cmd = " ".join(
+                        shlex.quote(part)
+                        for part in [
+                            "git",
+                            "-C",
+                            str(repo_path),
+                            "checkout",
+                            new_branch,
+                        ]
+                    )
+                    raise RuntimeError(
+                        f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
+                    )
+                await self._run_checked_command(
+                    "git",
+                    "-C",
+                    str(repo_path),
+                    "checkout",
+                    "-b",
+                    new_branch,
+                )
 
         return str(repo_path)
 
