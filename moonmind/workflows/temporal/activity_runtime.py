@@ -2211,12 +2211,27 @@ class TemporalAgentRuntimeActivities:
             if isinstance(timeout_policy, dict)
             else getattr(timeout_policy, "timeout_seconds", 3600)
         )
+        exit_code_path = None
+        cleanup_paths: list[str] | None = None
+        if endpoints:
+            exit_code_path = endpoints.get("exit_code_path")
+            cleanup_paths = [
+                path
+                for path in (
+                    endpoints.get("tmate_socket_path"),
+                    endpoints.get("tmate_config_path"),
+                    exit_code_path,
+                )
+                if path
+            ]
 
         task = asyncio.create_task(
             self._run_supervisor.supervise(
                 run_id=run_id,
                 process=process,
                 timeout_seconds=timeout_seconds,
+                exit_code_path=exit_code_path,
+                cleanup_paths=cleanup_paths,
             )
         )
         self._supervision_tasks.add(task)
