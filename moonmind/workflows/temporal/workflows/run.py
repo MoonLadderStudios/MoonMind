@@ -776,8 +776,8 @@ class MoonMindRunWorkflow:
             self._summary_ref = summary_ref
             self._update_memo()
 
-        correlation_id = self._get_from_result(start_result, "correlation_id")
-        self._correlation_id = correlation_id
+        external_id = self._get_from_result(start_result, "external_id")
+        self._correlation_id = external_id
         poll_interval_seconds = 5
         max_poll_interval_seconds = 300
 
@@ -804,7 +804,7 @@ class MoonMindRunWorkflow:
                     self._integration_activity_type("status"),
                     {
                         "principal": self._principal(),
-                        "correlation_id": correlation_id,
+                        "external_id": external_id,
                         "parameters": integration_parameters,
                         "execution_ref": {
                             "namespace": workflow.info().namespace,
@@ -859,7 +859,7 @@ class MoonMindRunWorkflow:
                     self._integration_activity_type("fetch_result"),
                     {
                         "principal": self._principal(),
-                        "correlation_id": correlation_id,
+                        "external_id": external_id,
                         "parameters": integration_parameters,
                     },
                     start_to_close_timeout=timedelta(minutes=5),

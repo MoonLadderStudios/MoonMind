@@ -133,6 +133,30 @@ class JulesGetTaskRequest(BaseModel):
     task_id: str = Field(..., alias="taskId")
 
 
+class PullRequest(BaseModel):
+    """A pull request created by a Jules session.
+
+    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions#PullRequest
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    url: Optional[str] = Field(None, alias="url")
+    title: Optional[str] = Field(None, alias="title")
+    description: Optional[str] = Field(None, alias="description")
+
+
+class SessionOutput(BaseModel):
+    """An output of a Jules session.
+
+    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions#SessionOutput
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    pull_request: Optional[PullRequest] = Field(None, alias="pullRequest")
+
+
 class JulesTaskResponse(BaseModel):
     """Response payload for Jules session operations.
 
@@ -146,6 +170,15 @@ class JulesTaskResponse(BaseModel):
     status: Optional[str] = Field(None, alias="state")
     url: Optional[str] = Field(None, alias="url")
     name: Optional[str] = Field(None, alias="name")
+    outputs: list[SessionOutput] = Field(default_factory=list, alias="outputs")
+
+    @property
+    def pull_request_url(self) -> Optional[str]:
+        """Return the URL of the first pull request output, if any."""
+        for output in self.outputs:
+            if output.pull_request and output.pull_request.url:
+                return output.pull_request.url
+        return None
 
 
 class JulesIntegrationStartRequest(BaseModel):
