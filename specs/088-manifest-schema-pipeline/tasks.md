@@ -7,7 +7,7 @@
 ## Phase 1: Setup
 
 - [X] T001 Create v0 Pydantic models in `moonmind/schemas/manifest_v0_models.py` — `ManifestV0`, `ManifestMetadata`, `EmbeddingsConfig`, `VectorStoreConfig`, `DataSourceConfig`, `IndexConfig`, `RetrieverConfig`, `TransformsConfig`, `EvaluationConfig`, `RunConfig`, `SecurityConfig` (DOC-REQ-001)
-- [ ] T002 Generate JSON Schema file at `docs/schemas/manifest-v0.json` from the Pydantic models via `ManifestV0.model_json_schema()` (DOC-REQ-001)
+- [X] T002 Generate JSON Schema file at `docs/schemas/manifest-v0.json` from the Pydantic models via `ManifestV0.model_json_schema()` (DOC-REQ-001)
 - [X] T003 [P] Create `ReaderAdapter` protocol class in `moonmind/manifest/reader_adapter.py` with `plan()`, `fetch()`, `state()` methods and a type-string registry (DOC-REQ-008)
 
 ## Phase 2: Foundational
@@ -24,7 +24,7 @@
 - [X] T007 [US1] Add `moonmind manifest validate` CLI subcommand in `moonmind/rag/cli.py` that loads, interpolates, and validates a manifest YAML file against the v0 schema + semantic checks (DOC-REQ-004)
 - [X] T008 [US1] Add unit tests for CLI validate command in `tests/unit/manifest/test_cli_manifest.py` — valid input exits 0, invalid input exits non-zero with actionable messages (DOC-REQ-004, DOC-REQ-009)
 - [X] T009 [US1] Create example manifest YAML files under `examples/` — minimal GitHub reader and full kitchen-sink example matching `LlamaIndexManifestSystem.md` examples (DOC-REQ-009)
-- [ ] T010 [US1] [P] Add CI validation step in `./tools/test_unit.sh` or a test file that validates all `examples/*.yaml` during test runs (DOC-REQ-009)
+- [X] T010 [US1] [P] Add CI validation step in `./tools/test_unit.sh` or a test file that validates all `examples/*.yaml` during test runs (DOC-REQ-009)
 
 ## Phase 4: User Story 2 — Run a manifest to index data (P1)
 
@@ -49,7 +49,7 @@
 - [X] T020 [US3] Create `moonmind/manifest/evaluation.py` with `hitRate@k` and `ndcg@k` metric implementations (DOC-REQ-006)
 - [X] T021 [US3] Add `moonmind manifest evaluate` CLI subcommand in `moonmind/rag/cli.py` — loads dataset JSONL, runs queries, reports metrics, exits non-zero if thresholds fail (DOC-REQ-004)
 - [X] T022 [US3] Add unit tests for evaluation metrics in `tests/unit/manifest/test_evaluation.py` (DOC-REQ-006)
-- [ ] T023 [US3] [P] Create sample evaluation dataset `examples/eval/smoke.jsonl` for CI gating (DOC-REQ-009)
+- [X] T023 [US3] [P] Create sample evaluation dataset `examples/eval/smoke.jsonl` for CI gating (DOC-REQ-009)
 
 ## Phase 6: User Story 4 — Extend with new readers (P3)
 
@@ -61,10 +61,10 @@
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T026 Ensure PII redaction enforcement in validator when `security.piiRedaction: true` (DOC-REQ-007)
-- [ ] T027 Ensure metadata allowlist enforcement in validator when `security.allowlistMetadata` is set (DOC-REQ-007)
+- [X] T026 Ensure PII redaction enforcement in validator when `security.piiRedaction: true` (DOC-REQ-007)
+- [X] T027 Ensure metadata allowlist enforcement in validator when `security.allowlistMetadata` is set (DOC-REQ-007)
 - [X] T028 Run full test suite via `./tools/test_unit.sh` and fix any failures
-- [ ] T029 Commit all changes to `088-manifest-schema-pipeline` branch
+- [X] T029 Commit all changes to `088-manifest-schema-pipeline` branch
 
 ## Dependencies
 

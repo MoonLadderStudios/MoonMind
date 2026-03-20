@@ -211,9 +211,46 @@ def _check_security_policy(
     manifest: ManifestV0, issues: List[ValidationIssue]
 ) -> None:
     """Validate security settings when present."""
-    if manifest.security and manifest.security.piiRedaction:
-        # PII redaction is set — this is good, no issue
-        pass
+    if manifest.security is None:
+        return
+
+    # T026: PII redaction enforcement
+    if manifest.security.piiRedaction:
+        # When PII redaction is requested, we need transforms with a splitter
+        # configured so that content passes through chunking where redaction
+        # can be applied. Without transforms, raw text goes directly to
+        # embeddings, bypassing any redaction layer.
+        if manifest.transforms is None or manifest.transforms.splitter is None:
+            issues.append(
+                ValidationIssue(
+                    "WARNING",
+                    "security.piiRedaction",
+                    "PII redaction is enabled but no transforms.splitter is configured. "
+                    "Without a splitter, raw document text may be embedded without "
+                    "redaction. Configure transforms.splitter to enable chunking-time "
+                    "PII filtering.",
+                )
+            )
+
+    # T027: Metadata allowlist enforcement
+    if manifest.security.allowlistMetadata:
+        allowed = set(manifest.security.allowlistMetadata)
+        for ds in manifest.dataSources:
+            # Check if data source params include metadata keys not in allowlist
+            extra_meta = ds.params.get("extraMetadata", {})
+            if isinstance(extra_meta, dict):
+                for key in extra_meta:
+                    if key not in allowed:
+                        issues.append(
+                            ValidationIssue(
+                                "ERROR",
+                                f"dataSources.{ds.id}.params.extraMetadata.{key}",
+                                f"Metadata key '{key}' is not in "
+                                f"security.allowlistMetadata {sorted(allowed)}. "
+                                f"Add it to the allowlist or remove it from the "
+                                f"data source params.",
+                            )
+                        )
 
 
 def _check_data_source_ids_unique(

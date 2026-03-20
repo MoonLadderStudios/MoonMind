@@ -249,3 +249,155 @@ class TestYamlErrors:
         r = _result("- item1\n- item2\n")
         assert not r.valid
         assert any("mapping" in e.message for e in r.errors)
+
+
+# ---------------------------------------------------------------------------
+# T026: PII redaction enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestPiiRedactionEnforcement:
+    def test_pii_enabled_without_splitter_warns(self):
+        """PII redaction enabled but no splitter → WARNING."""
+        yaml_str = MINIMAL_VALID.rstrip() + "\nsecurity:\n  piiRedaction: true\n"
+        r = _result(yaml_str)
+        assert r.valid  # warnings don't fail
+        assert any(
+            "piiRedaction" in w.field and "splitter" in w.message
+            for w in r.warnings
+        )
+
+    def test_pii_enabled_with_splitter_no_warning(self):
+        """PII redaction enabled WITH splitter → no warning."""
+        yaml_str = (
+            MINIMAL_VALID.rstrip()
+            + "\ntransforms:\n  splitter:\n    type: TokenTextSplitter\n    chunkSize: 500\n"
+            + "security:\n  piiRedaction: true\n"
+        )
+        r = _result(yaml_str)
+        assert r.valid
+        assert not any("piiRedaction" in w.field for w in r.warnings)
+
+    def test_pii_disabled_no_warning(self):
+        """PII redaction disabled → no warning regardless of splitter."""
+        yaml_str = MINIMAL_VALID.rstrip() + "\nsecurity:\n  piiRedaction: false\n"
+        r = _result(yaml_str)
+        assert r.valid
+        assert not any("piiRedaction" in w.field for w in r.warnings)
+
+
+# ---------------------------------------------------------------------------
+# T027: Metadata allowlist enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestMetadataAllowlistEnforcement:
+    def test_extra_metadata_not_in_allowlist_errors(self):
+        """Extra metadata key not in allowlist → ERROR."""
+        yaml_str = textwrap.dedent("""\
+            version: "v0"
+            metadata:
+              name: "test-manifest"
+            embeddings:
+              provider: "openai"
+              model: "text-embedding-3-large"
+            vectorStore:
+              type: "qdrant"
+              indexName: "test_idx"
+            dataSources:
+              - id: "src1"
+                type: "SimpleDirectoryReader"
+                params:
+                  inputDir: "./data"
+                  extraMetadata:
+                    forbidden_key: true
+            indices:
+              - id: "idx1"
+                type: "VectorStoreIndex"
+                sources: ["src1"]
+            retrievers:
+              - id: "ret1"
+                type: "Vector"
+                indices: ["idx1"]
+            security:
+              allowlistMetadata:
+                - allowed_key
+        """)
+        r = _result(yaml_str)
+        assert not r.valid
+        assert any("forbidden_key" in e.message for e in r.errors)
+
+    def test_extra_metadata_in_allowlist_passes(self):
+        """Extra metadata key in allowlist → no error."""
+        yaml_str = textwrap.dedent("""\
+            version: "v0"
+            metadata:
+              name: "test-manifest"
+            embeddings:
+              provider: "openai"
+              model: "text-embedding-3-large"
+            vectorStore:
+              type: "qdrant"
+              indexName: "test_idx"
+            dataSources:
+              - id: "src1"
+                type: "SimpleDirectoryReader"
+                params:
+                  inputDir: "./data"
+                  extraMetadata:
+                    allowed_key: true
+            indices:
+              - id: "idx1"
+                type: "VectorStoreIndex"
+                sources: ["src1"]
+            retrievers:
+              - id: "ret1"
+                type: "Vector"
+                indices: ["idx1"]
+            security:
+              allowlistMetadata:
+                - allowed_key
+        """)
+        r = _result(yaml_str)
+        assert r.valid
+
+    def test_no_extra_metadata_with_allowlist_passes(self):
+        """Allowlist set but no extra metadata → no error."""
+        yaml_str = (
+            MINIMAL_VALID.rstrip()
+            + "\nsecurity:\n  allowlistMetadata:\n    - safe_key\n"
+        )
+        r = _result(yaml_str)
+        assert r.valid
+
+
+# ---------------------------------------------------------------------------
+# T010: CI example YAML validation
+# ---------------------------------------------------------------------------
+
+
+class TestCIExampleValidation:
+    """Validate all example manifest YAML files (CI gate)."""
+
+    def test_all_example_yamls_validate(self):
+        """Every YAML in examples/ must pass v0 schema validation."""
+        from pathlib import Path
+
+        examples_dir = Path(__file__).resolve().parents[3] / "examples"
+        yaml_files = list(examples_dir.glob("*.yaml")) + list(
+            examples_dir.glob("*.yml")
+        )
+
+        assert len(yaml_files) > 0, f"No example YAMLs found in {examples_dir}"
+
+        failures = []
+        for f in yaml_files:
+            r = validate_manifest_file(str(f))
+            if not r.valid:
+                failures.append(f"{f.name}: {r.summary()}")
+
+        assert not failures, (
+            f"{len(failures)} example YAML(s) failed validation:\n"
+            + "\n".join(failures)
+        )
+
