@@ -18,8 +18,8 @@
 **Purpose**: Establish shared manifest-ingest runtime primitives, configuration, and worker bootstrap before story work begins.
 
 - [X] T001 Add manifest-ingest runtime schemas for workflow input, status, checkpoint, summary, and run-index payloads in `moonmind/schemas/manifest_ingest_models.py` and `moonmind/schemas/temporal_models.py` (DOC-REQ-003, DOC-REQ-005, DOC-REQ-009, DOC-REQ-012, DOC-REQ-016)
-- [ ] T002 [P] Add Temporal SDK and manifest-ingest worker bootstrap support in `pyproject.toml`, `services/temporal/scripts/start-worker.sh`, and `moonmind/workflows/temporal/workers.py` (DOC-REQ-001, DOC-REQ-007, DOC-REQ-014, DOC-REQ-016)
-- [ ] T003 [P] Add manifest-ingest runtime settings for concurrency caps, scheduling batch size, and checkpoint thresholds in `moonmind/config/settings.py` and `docker-compose.yaml` (DOC-REQ-009, DOC-REQ-010, DOC-REQ-016)
+- [X] T002 [P] Add Temporal SDK and manifest-ingest worker bootstrap support in `pyproject.toml`, `services/temporal/scripts/start-worker.sh`, and `moonmind/workflows/temporal/workers.py` (DOC-REQ-001, DOC-REQ-007, DOC-REQ-014, DOC-REQ-016)
+- [X] T003 [P] Add manifest-ingest runtime settings for concurrency caps, scheduling batch size, and checkpoint thresholds in `moonmind/config/settings.py` and `docker-compose.yaml` (DOC-REQ-009, DOC-REQ-010, DOC-REQ-016)
 
 ---
 
@@ -29,8 +29,8 @@
 
 **CRITICAL**: Complete this phase before starting user story implementation.
 
-- [ ] T004 Implement `MoonMind.ManifestIngest` client start helpers, execution projection metadata, and shared manifest execution persistence in `moonmind/workflows/temporal/client.py`, `moonmind/workflows/temporal/service.py`, and `api_service/db/models.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-012, DOC-REQ-013, DOC-REQ-016)
-- [ ] T005 [P] Implement manifest artifact IO helpers for plan, checkpoint, summary, and run-index references in `moonmind/workflows/temporal/artifacts.py` and `moonmind/workflows/temporal/activity_runtime.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-010, DOC-REQ-014)
+- [X] T004 Implement `MoonMind.ManifestIngest` client start helpers, execution projection metadata, and shared manifest execution persistence in `moonmind/workflows/temporal/client.py`, `moonmind/workflows/temporal/service.py`, and `api_service/db/models.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-012, DOC-REQ-013, DOC-REQ-016)
+- [X] T005 [P] Implement manifest artifact IO helpers for plan, checkpoint, summary, and run-index references in `moonmind/workflows/temporal/artifacts.py` and `moonmind/workflows/temporal/activity_runtime.py` (DOC-REQ-003, DOC-REQ-006, DOC-REQ-010, DOC-REQ-014)
 - [x] T006 [P] Wire temporal-backed manifest submission and execution serialization in `api_service/services/manifests_service.py`, `api_service/api/routers/manifests.py`, and `api_service/api/schemas.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-013, DOC-REQ-015, DOC-REQ-016)
 - [x] T007 Add foundational validation for manifest-ingest submit and execution projection behavior in `tests/unit/services/test_manifests_service.py`, `tests/unit/api/routers/test_manifests.py`, and `tests/unit/workflows/temporal/test_temporal_service.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-013, DOC-REQ-016)
 
@@ -47,7 +47,7 @@
 ### Tests for User Story 1
 
 - [X] T008 [P] [US1] Add workflow unit coverage for artifact-read, parse, validate, compile, plan persistence, and child-run lineage in `tests/unit/workflows/temporal/test_manifest_ingest.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-006, DOC-REQ-008, DOC-REQ-014)
-- [ ] T009 [P] [US1] Add service and router tests for registry-backed and artifact-first manifest-ingest creation in `tests/unit/services/test_manifests_service.py`, `tests/unit/api/routers/test_manifests.py`, and `tests/unit/api/routers/test_executions.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005, DOC-REQ-013)
+- [X] T009 [P] [US1] Add service and router tests for registry-backed and artifact-first manifest-ingest creation in `tests/unit/services/test_manifests_service.py`, `tests/unit/api/routers/test_manifests.py`, and `tests/unit/api/routers/test_executions.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005, DOC-REQ-013)
 - [ ] T010 [P] [US1] Add contract and Temporal integration coverage for `MoonMind.ManifestIngest` startup and child-run orchestration in `tests/contract/test_temporal_execution_api.py` and `tests/integration/temporal/test_manifest_ingest_runtime.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-006, DOC-REQ-016)
 
 ### Implementation for User Story 1
