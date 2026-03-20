@@ -1914,6 +1914,23 @@ class AppSettings(BaseSettings):
         description="Compatibility passthrough for legacy Gemini auth home.",
         exclude=True,
     )
+    moonmind_claude_cli_auth_mode: Optional[str] = Field(
+        None,
+        env="MOONMIND_CLAUDE_CLI_AUTH_MODE",
+        validation_alias=AliasChoices(
+            "moonmind_claude_cli_auth_mode",
+            "MOONMIND_CLAUDE_CLI_AUTH_MODE",
+        ),
+        description="Compatibility passthrough for legacy Claude CLI auth mode.",
+        exclude=True,
+    )
+    claude_home: Optional[str] = Field(
+        None,
+        env="CLAUDE_HOME",
+        validation_alias=AliasChoices("claude_home", "CLAUDE_HOME"),
+        description="Compatibility passthrough for legacy Claude auth home.",
+        exclude=True,
+    )
 
     # Default providers and models
     default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")

@@ -30,6 +30,20 @@ def get_pr_comments_module() -> dict[str, Any]:
 
 
 @pytest.fixture
+def get_branch_pr_comments_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "fix-comments"
+            / "tools"
+            / "get_branch_pr_comments.py"
+        )
+    )
+
+
+@pytest.fixture
 def pr_resolve_snapshot_module() -> dict[str, Any]:
     return _load_module(
         str(
@@ -135,6 +149,48 @@ def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     assert infer_repo("") is None
     assert infer_repo("not a url") is None
     assert infer_repo("https://github.com/org") is None
+
+
+def test_get_branch_pr_comments_run_json_command_ignores_stderr_warnings(
+    get_branch_pr_comments_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_json_command = get_branch_pr_comments_module["run_json_command"]
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true, "count": 2}'
+        stderr = "Warning: transient GraphQL issue ignored"
+
+    monkeypatch.setattr(
+        get_branch_pr_comments_module["subprocess"],
+        "run",
+        lambda *args, **kwargs: _Completed(),
+    )
+
+    payload = run_json_command(["fake", "command"], "failure hint")
+    assert payload == {"ok": True, "count": 2}
+
+
+def test_pr_resolve_snapshot_run_command_ignores_stderr_warnings(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_command = pr_resolve_snapshot_module["run_command"]
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true, "result": "ready"}'
+        stderr = "Warning: retryable network issue recovered"
+
+    monkeypatch.setattr(
+        pr_resolve_snapshot_module["subprocess"],
+        "run",
+        lambda *args, **kwargs: _Completed(),
+    )
+
+    payload = run_command(["fake", "snapshot"], "failure hint")
+    assert payload == {"ok": True, "result": "ready"}
 
 
 def test_review_bot_comments_are_actionable_by_default(
@@ -509,4 +565,3 @@ def test_summarize_ci_head_checks_propagate_failures(
     assert summary["nonSecurityCheckCount"] == 1
     assert len(summary["failedChecks"]) == 1
     assert summary["failedChecks"][0]["name"] == "test"
-

@@ -282,7 +282,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "defaultTaskModelByRuntime": default_task_model_by_runtime,
             "defaultTaskEffortByRuntime": default_task_effort_by_runtime,
             "defaultPublishMode": default_publish_mode,
-            "defaultProposeTasks": bool(settings.workflow.enable_task_proposals),
+            # Keep task proposals opt-in from the submit form so Temporal
+            # remains the default execution substrate for new runs.
+            "defaultProposeTasks": False,
             "queueEnv": "MOONMIND_QUEUE",
             "taskSourceResolver": "/api/tasks/{taskId}/source",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",

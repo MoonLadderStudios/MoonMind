@@ -292,6 +292,7 @@ def test_build_runtime_config_uses_settings_defaults(monkeypatch) -> None:
     assert config["system"]["defaultTaskModelByRuntime"]["gemini_cli"] == "gemini-2.5-pro"
     assert config["system"]["defaultTaskEffortByRuntime"]["codex"] == "medium"
     assert config["system"]["defaultPublishMode"] == "branch"
+    assert config["system"]["defaultProposeTasks"] is False
 
 
 def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
