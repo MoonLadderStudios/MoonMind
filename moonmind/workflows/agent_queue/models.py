@@ -334,6 +334,7 @@ class TaskRunLiveSession(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     task_run_id: Mapped[UUID] = mapped_column(
         Uuid,
+        ForeignKey("agent_jobs.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,
         index=True,

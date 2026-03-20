@@ -1,7 +1,7 @@
 # Requirements traceability — 087-openclaw-adapter
 
-| DOC-REQ | Functional requirement | Implementation surfaces | Validation |
-|---------|------------------------|-------------------------|------------|
+| DOC-REQ | Functional requirement | Implementation surfaces | Validation Strategy |
+|---------|------------------------|-------------------------|---------------------|
 | DOC-REQ-001 | FR-001 | `moonmind/openclaw/settings.py`, `moonmind/workflows/adapters/external_adapter_registry.py` | Unit: gate + registry when disabled |
 | DOC-REQ-002 | FR-002 | `moonmind/openclaw/execute.py` | Unit: gate requires token when enabled |
 | DOC-REQ-003 | FR-003 | `moonmind/workflows/adapters/openclaw_client.py` | Unit: `parse_sse_lines_for_deltas` |

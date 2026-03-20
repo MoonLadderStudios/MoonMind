@@ -108,7 +108,7 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
     assert topology.fleet == SANDBOX_FLEET
     assert topology.task_queues == (settings.temporal.activity_sandbox_task_queue,)
     assert topology.concurrency_limit == 3
-    assert topology.forbidden_capabilities == ("llm", "integration:jules", "agent_runtime")
+    assert topology.forbidden_capabilities == ("llm", "integration:jules", "integration:openclaw", "agent_runtime")
 
 
 def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: Path):
