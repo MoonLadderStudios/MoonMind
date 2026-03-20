@@ -21,9 +21,9 @@
 
 ## Decision: `docker-compose.job.yaml`
 
-**Decision**: Remove the `orchestrator` service that builds `services/orchestrator` image, or delete file section if it becomes empty; align with plan §2.1.
+**Decision**: Remove the file entirely (it only existed to build/run `services/orchestrator`).
 
-**Rationale**: Plan lists main `docker-compose.yaml` and test compose; job overlay still references orchestrator image in repo.
+**Rationale**: With the orchestrator image and service gone, the job overlay is obsolete.
 
 ## Decision: Alembic
 

@@ -2,7 +2,7 @@ import os
 import re
 
 directories = ['moonmind', 'api_service', 'tests', 'services', 'tools']
-files_to_check = ['config.toml', 'docker-compose.yaml', 'docker-compose.job.yaml', 'docker-compose.test.yaml', 'AGENTS.md', '.env-template', '.env.vllm-template']
+files_to_check = ['config.toml', 'docker-compose.yaml', 'docker-compose.test.yaml', 'AGENTS.md', '.env-template', '.env.vllm-template']
 
 extensions = ('.py', '.yaml', '.yml', '.sh', '.toml', '.md', '.jsonl', '.js')
 

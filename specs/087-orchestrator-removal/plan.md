@@ -18,7 +18,7 @@ Remove the legacy `mm-orchestrator` worker stack: Docker services, FastAPI route
 **Project Type**: API service + Python `moonmind` library + static dashboard  
 **Performance Goals**: N/A (deletion)  
 **Constraints**: Constitution II — default `docker compose` path must remain valid without orchestrator; fail-fast if references remain  
-**Scale/Scope**: Full removal including discovered dependents (`workflow_models`, `compatibility.py`, `dashboard.js`, optional `docker-compose.job.yaml`)
+**Scale/Scope**: Full removal including discovered dependents (`workflow_models`, `compatibility.py`, `dashboard.js`); `docker-compose.job.yaml` deleted with the orchestrator stack
 
 ## Constitution Check
 
@@ -47,7 +47,6 @@ specs/087-orchestrator-removal/
 ```text
 docker-compose.yaml
 docker-compose.test.yaml
-docker-compose.job.yaml          # orchestrator image build — remove or adjust
 api_service/
   api/routers/orchestrator.py      # remove
   api/main.py                    # unregister router

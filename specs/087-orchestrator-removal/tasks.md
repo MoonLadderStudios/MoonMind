@@ -22,7 +22,7 @@ description: "Task list — remove mm-orchestrator (087)"
 - [X] T003 [US1] DOC-REQ-001: Remove `orchestrator` service block from `docker-compose.yaml`
 - [X] T004 [US1] DOC-REQ-002: Remove `orchestrator-tests` from `docker-compose.test.yaml`
 - [X] T005 [US1] DOC-REQ-003: Remove orchestrator-only env vars from `docker-compose.yaml` / `docker-compose.test.yaml`
-- [X] T006 [P] [US1] DOC-REQ-007: Remove or repoint `orchestrator` service in `docker-compose.job.yaml` referencing `services/orchestrator`
+- [X] T006 [P] [US1] DOC-REQ-007: Remove `docker-compose.job.yaml` (or ensure no `orchestrator` service if reintroduced)
 - [X] T007 [US1] DOC-REQ-004: Delete `api_service/api/routers/orchestrator.py` and unregister router in `api_service/api/main.py`
 - [X] T101 [US1] Validate DOC-REQ-001: `./tools/test_unit.sh` + `tests/unit/orchestrator_removal/test_doc_req_coverage.py::test_doc_req_001_compose_main_no_orchestrator_service`
 - [X] T102 [US1] Validate DOC-REQ-002: `./tools/test_unit.sh` + `tests/unit/orchestrator_removal/test_doc_req_coverage.py::test_doc_req_002_test_compose_no_orchestrator_tests`
