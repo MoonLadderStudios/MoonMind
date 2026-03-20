@@ -6,19 +6,32 @@ from moonmind.config.settings import settings
 TaskTarget = Literal["temporal", "orchestrator", "queue"]
 
 
+# Accepted truthy string forms: 1, true, yes, on
+# Accepted falsy string forms:  0, false, no, off
+_TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
+_FALSY_STRINGS = frozenset({"0", "false", "no", "off"})
+
+
 def _coerce_bool(value: object, *, default: bool) -> bool:
-    """Normalize bool-like request values with fallback to ``default``."""
+    """Normalize bool-like request values with fallback to ``default``.
+
+    Raises ``ValueError`` for non-None values that cannot be coerced,
+    enforcing fail-fast semantics for unsupported runtime inputs.
+    """
 
     if value is None:
         return default
     if isinstance(value, bool):
         return value
     lowered = str(value).strip().lower()
-    if lowered in {"1", "true", "yes", "on"}:
+    if lowered in _TRUTHY_STRINGS:
         return True
-    if lowered in {"0", "false", "no", "off"}:
+    if lowered in _FALSY_STRINGS:
         return False
-    return default
+    raise ValueError(
+        f"Unsupported boolean value: {value!r}; "
+        f"expected true/false, yes/no, on/off, 1/0, or omit for default"
+    )
 
 
 def _task_requests_proposals(task_payload: Mapping[str, object] | None) -> bool:

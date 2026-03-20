@@ -917,6 +917,7 @@ def test_create_job_with_attachments_rejects_temporal_routing(
 
     test_client, service = client
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
+    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False)
     files = [
         (
             "files",

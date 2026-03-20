@@ -25,6 +25,7 @@ from api_service.db.models import (
     User,
 )
 from moonmind.config.settings import settings
+from moonmind.workflows.tasks.routing import _coerce_bool
 from moonmind.schemas.agent_queue_models import CreateJobRequest
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
@@ -651,7 +652,7 @@ async def _create_execution_from_task_request(
         "model": runtime_payload.get("model"),
         "effort": runtime_payload.get("effort"),
         "publishMode": ((task_payload.get("publish") or {}).get("mode")),
-        "proposeTasks": bool(task_payload.get("proposeTasks")),
+        "proposeTasks": _coerce_bool(task_payload.get("proposeTasks"), default=False),
         "stepCount": step_count,
     }
     if instructions:
