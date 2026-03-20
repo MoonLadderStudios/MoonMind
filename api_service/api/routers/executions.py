@@ -523,6 +523,50 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     return normalized
 
 
+def _validate_task_runtime_requirements(
+    *,
+    task_payload: dict[str, Any],
+    normalized_tool: dict[str, Any] | None,
+    normalized_task_for_planner: dict[str, Any],
+) -> None:
+    instructions = str(task_payload.get("instructions") or "").strip()
+    if instructions:
+        return
+
+    tool_name = str((normalized_tool or {}).get("name") or "").strip().lower()
+    if tool_name != "pr-resolver":
+        return
+
+    task_inputs = (
+        normalized_task_for_planner.get("inputs")
+        if isinstance(normalized_task_for_planner.get("inputs"), dict)
+        else {}
+    )
+    task_git = (
+        normalized_task_for_planner.get("git")
+        if isinstance(normalized_task_for_planner.get("git"), dict)
+        else {}
+    )
+
+    pr_selector = str(task_inputs.get("pr") or "").strip()
+    branch_selector = str(
+        task_git.get("startingBranch")
+        or normalized_task_for_planner.get("startingBranch")
+        or task_git.get("branch")
+        or normalized_task_for_planner.get("branch")
+        or task_inputs.get("startingBranch")
+        or task_inputs.get("branch")
+        or ""
+    ).strip()
+    if pr_selector or branch_selector:
+        return
+
+    raise _invalid_task_request(
+        "pr-resolver task requires payload.task.instructions, payload.task.inputs.pr, "
+        "or payload.task.git.startingBranch."
+    )
+
+
 def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
     if explicit:
@@ -637,10 +681,27 @@ async def _create_execution_from_task_request(
         normalized_task_for_planner["inputs"] = dict(task_payload["inputs"])
     if runtime_payload:
         normalized_task_for_planner["runtime"] = dict(runtime_payload)
-    for key in ("repoRef", "branch"):
+    git_payload = (
+        task_payload.get("git") if isinstance(task_payload.get("git"), dict) else {}
+    )
+    if git_payload:
+        normalized_git_payload: dict[str, str] = {}
+        for git_key in ("startingBranch", "newBranch", "branch"):
+            git_value = git_payload.get(git_key)
+            if isinstance(git_value, str) and git_value.strip():
+                normalized_git_payload[git_key] = git_value.strip()
+        if normalized_git_payload:
+            normalized_task_for_planner["git"] = normalized_git_payload
+    for key in ("repoRef", "startingBranch", "newBranch", "branch"):
         value = task_payload.get(key)
         if isinstance(value, str) and value.strip():
             normalized_task_for_planner[key] = value.strip()
+
+    _validate_task_runtime_requirements(
+        task_payload=task_payload,
+        normalized_tool=normalized_tool,
+        normalized_task_for_planner=normalized_task_for_planner,
+    )
 
     initial_parameters = {
         "requestType": request.type,
