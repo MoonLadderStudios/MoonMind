@@ -56,6 +56,7 @@ _CAPABILITY = ProviderCapabilityDescriptor(
     supportsCancel=True,
     supportsResultFetch=True,
     defaultPollHintSeconds=15,
+    execution_style="polling", # or "streaming_gateway" for long-running stream providers
 )
 
 class ProviderAgentAdapter(BaseExternalAgentAdapter):

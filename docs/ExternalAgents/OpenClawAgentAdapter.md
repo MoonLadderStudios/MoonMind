@@ -104,11 +104,9 @@ The shared runtime contract is `AgentAdapter` (`start`, `status`, `fetch_result`
 
 ### 6.4 Capability descriptor
 
-Today, `ProviderCapabilityDescriptor` describes poll-oriented providers. **Desired extension** (schema + codegen if needed):
+`ProviderCapabilityDescriptor` describes the integration style using the **`execution_style`** field: `polling` | `streaming_gateway`.
 
-- Add something equivalent to **`execution_style`**: `polling` | `streaming_gateway`.
-
-OpenClaw should register as **`streaming_gateway`** with **`supports_callbacks: false`**, and polling-related hints should be ignored by `MoonMind.AgentRun` when this style is active.
+OpenClaw registers as **`streaming_gateway`** with **`supports_callbacks: false`**, and polling-related hints are ignored by `MoonMind.AgentRun` when this style is active.
 
 ---
 
@@ -124,7 +122,7 @@ OpenClaw should register as **`streaming_gateway`** with **`supports_callbacks: 
 
 That pattern matches Jules and Codex Cloud. It does **not** match a single long-lived SSE connection that **is** the run.
 
-### 7.2 Desired behavior
+### 7.2 Implementation behavior
 
 For providers with `execution_style == streaming_gateway` (initially `openclaw` only):
 
