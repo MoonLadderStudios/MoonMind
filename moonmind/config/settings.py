@@ -1305,6 +1305,9 @@ class SecuritySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
+
+
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
@@ -1318,7 +1321,9 @@ class GoogleSettings(BaseSettings):
     google_embedding_model: str = Field(
         "gemini-embedding-2-preview", env="GOOGLE_EMBEDDING_MODEL"
     )
-    google_embedding_dimensions: int = Field(3072, env="GOOGLE_EMBEDDING_DIMENSIONS")
+    google_embedding_dimensions: int = Field(
+        DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS, env="GOOGLE_EMBEDDING_DIMENSIONS"
+    )
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     google_embed_batch_size: int = Field(100, env="GOOGLE_EMBED_BATCH_SIZE")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements

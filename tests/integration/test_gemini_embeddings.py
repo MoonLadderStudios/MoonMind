@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.config.settings import GoogleSettings, settings
+from moonmind.config.settings import (
+    DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS,
+    GoogleSettings,
+    settings,
+)
 
 
 def _resolve_google_api_key() -> str | None:
@@ -55,5 +59,5 @@ def test_default_gemini_embedding_model_live(monkeypatch):
     assert getattr(embed_model, "model_name", None) == default_model
     assert configured_dimensions == default_dims
     assert isinstance(embedding, list)
-    assert len(embedding) > 10
+    assert len(embedding) == configured_dimensions
     assert all(isinstance(value, float) for value in embedding)
