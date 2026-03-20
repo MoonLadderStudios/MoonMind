@@ -303,6 +303,7 @@ async def list_dashboard_skills(
 
     worker_skills = list(list_available_skill_names())
     legacy_sorted = sorted(set(worker_skills), key=str)
+    # Empty orchestrator bucket keeps the response shape stable for older dashboard bundles.
     return DashboardSkillListResponse(
         items={
             "worker": worker_skills,

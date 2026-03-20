@@ -4,6 +4,9 @@ Revision ID: c1d2e3f4a5b6
 Revises: 59830c78b458
 Create Date: 2026-03-20
 
+Constraint and index names must match the current PostgreSQL schema; validate with
+``alembic upgrade head`` on a staging copy before production. Downgrade is not supported.
+
 """
 
 from typing import Sequence, Union

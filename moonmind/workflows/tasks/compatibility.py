@@ -7,6 +7,8 @@ import binascii
 import json
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from typing_extensions import assert_never
 from uuid import UUID
 
 from sqlalchemy import case, func, or_, select
@@ -200,7 +202,7 @@ class TaskCompatibilityService:
             if job is None:
                 raise RuntimeError(f"Queue task {task_id} disappeared.")
             return self._build_queue_detail(job)
-        raise RuntimeError(f"Unsupported task source for detail: {resolved.source}")
+        assert_never(resolved.source)
 
     async def _load_rows(
         self,
