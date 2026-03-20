@@ -30,6 +30,102 @@ class ManagedRuntimeLauncher:
     def __init__(self, store: ManagedRunStore) -> None:
         self._store = store
 
+    @staticmethod
+    def _resolve_repository_source(repository: str) -> str:
+        normalized = str(repository or "").strip()
+        if not normalized:
+            raise RuntimeError("workspaceSpec.repository must be non-empty")
+        if "://" in normalized or normalized.startswith("git@"):
+            return normalized
+        if normalized.startswith("/") or normalized.startswith("./") or normalized.startswith("../"):
+            return normalized
+        if normalized.count("/") == 1:
+            suffix = "" if normalized.endswith(".git") else ".git"
+            return f"https://github.com/{normalized}{suffix}"
+        raise RuntimeError(
+            "Unsupported workspaceSpec.repository format; expected owner/repo, URL, or local path"
+        )
+
+    async def _run_checked_command(
+        self,
+        *cmd: str,
+        cwd: str | None = None,
+    ) -> None:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode == 0:
+            return
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        detail = stderr_text or stdout_text or "no output"
+        rendered_cmd = " ".join(shlex.quote(part) for part in cmd)
+        raise RuntimeError(
+            f"Command failed with exit code {process.returncode}: {rendered_cmd}; {detail}"
+        )
+
+    async def _prepare_workspace_path(
+        self,
+        *,
+        run_id: str,
+        request: AgentExecutionRequest,
+        workspace_path: str | Path | None,
+    ) -> str | None:
+        if workspace_path is not None:
+            resolved = Path(workspace_path).expanduser().resolve()
+            if not resolved.exists():
+                raise RuntimeError(f"workspace_path does not exist: {resolved}")
+            return str(resolved)
+
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, dict)
+            else {}
+        )
+        repository = str(
+            workspace_spec.get("repository")
+            or workspace_spec.get("repo")
+            or ""
+        ).strip()
+        if not repository:
+            return None
+
+        workspace_root = (self._store.store_root.parent / "workspaces" / run_id).resolve()
+        repo_path = (workspace_root / "repo").resolve()
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        if repo_path.exists():
+            return str(repo_path)
+
+        source = self._resolve_repository_source(repository)
+        branch = str(
+            workspace_spec.get("startingBranch")
+            or workspace_spec.get("branch")
+            or ""
+        ).strip()
+
+        clone_cmd = ["git", "clone"]
+        if branch:
+            clone_cmd.extend(["--branch", branch, "--single-branch"])
+        clone_cmd.extend([source, str(repo_path)])
+        await self._run_checked_command(*clone_cmd, cwd=str(workspace_root))
+
+        new_branch = str(workspace_spec.get("newBranch") or "").strip()
+        if new_branch:
+            await self._run_checked_command(
+                "git",
+                "-C",
+                str(repo_path),
+                "checkout",
+                "-b",
+                new_branch,
+            )
+
+        return str(repo_path)
+
     def build_command(
         self,
         profile: ManagedRuntimeProfile,
@@ -64,7 +160,7 @@ class ManagedRuntimeLauncher:
         run_id: str,
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
-        workspace_path: str | None = None,
+        workspace_path: str | Path | None = None,
     ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process, dict[str, str] | None]:
         """Spawn a subprocess for the managed agent run.
 
@@ -83,6 +179,11 @@ class ManagedRuntimeLauncher:
             )
 
         cmd = self.build_command(profile, request)
+        resolved_workspace_path = await self._prepare_workspace_path(
+            run_id=run_id,
+            request=request,
+            workspace_path=workspace_path,
+        )
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(
             os.environ
         )
@@ -146,7 +247,7 @@ class ManagedRuntimeLauncher:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env_overrides,
-                cwd=workspace_path,
+                cwd=resolved_workspace_path,
             )
 
             endpoints = {
@@ -206,7 +307,7 @@ class ManagedRuntimeLauncher:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env_overrides,
-                cwd=workspace_path,
+                cwd=resolved_workspace_path,
             )
 
         record = ManagedRunRecord(
@@ -216,7 +317,7 @@ class ManagedRuntimeLauncher:
             status="launching",
             pid=process.pid,
             started_at=datetime.now(tz=UTC),
-            workspace_path=workspace_path,
+            workspace_path=resolved_workspace_path,
         )
         self._store.save(record)
         return record, process, endpoints
