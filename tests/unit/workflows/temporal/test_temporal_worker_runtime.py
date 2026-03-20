@@ -11,6 +11,9 @@ from moonmind.workflows.temporal.worker_runtime import (
     main_async,
     resolve_external_adapter,
 )
+from moonmind.workflows.temporal.workflows.agent_run import (
+    external_adapter_execution_style,
+)
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
 
 
@@ -47,7 +50,10 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
         MoonMindAuthProfileManagerWorkflow,
         MoonMindAgentRun,
     ]
-    assert kwargs["activities"] == [resolve_external_adapter]
+    assert kwargs["activities"] == [
+        resolve_external_adapter,
+        external_adapter_execution_style,
+    ]
     assert kwargs["max_concurrent_workflow_tasks"] == 7
     assert "max_concurrent_activities" not in kwargs
 
@@ -102,7 +108,7 @@ async def test_main_async_activity_fleet(
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")
-@patch("moonmind.workflows.temporal.worker_runtime.TemporalJulesActivities")
+@patch("moonmind.workflows.temporal.worker_runtime.TemporalIntegrationActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalSandboxActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalSkillActivities")
 @patch("moonmind.workflows.temporal.worker_runtime.SkillActivityDispatcher")
@@ -143,7 +149,11 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     ):
         resources, handlers = await _build_runtime_activities(topology)
 
-    assert handlers == ["artifact_handler", resolve_external_adapter]
+    assert handlers == [
+        "artifact_handler",
+        resolve_external_adapter,
+        external_adapter_execution_style,
+    ]
     mock_repository_cls.assert_called_once_with("session")
     mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
     mock_artifact_activities_cls.assert_called_once_with(mock_service_cls.return_value)

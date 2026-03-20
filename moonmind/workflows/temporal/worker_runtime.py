@@ -15,7 +15,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
-    TemporalJulesActivities,
+    TemporalIntegrationActivities,
     TemporalPlanActivities,
     TemporalProposalActivities,
     TemporalReviewActivities,
@@ -43,6 +43,7 @@ from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as Moo
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_run import (
     MoonMindAgentRun,
+    external_adapter_execution_style,
     resolve_external_adapter,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -276,7 +277,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 artifact_service=artifact_service,
             ),
             sandbox_activities=sandbox_activities,
-            integration_activities=TemporalJulesActivities(
+            integration_activities=TemporalIntegrationActivities(
                 artifact_service=artifact_service
             ),
             agent_runtime_activities=TemporalAgentRuntimeActivities(
@@ -302,7 +303,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             topology.fleet,
             ", ".join(binding_descriptors) if binding_descriptors else "(none)",
         )
-        return resources, [binding.handler for binding in bindings] + [resolve_external_adapter]
+        return resources, [
+            binding.handler for binding in bindings
+        ] + [resolve_external_adapter, external_adapter_execution_style]
     except Exception:
         await resources.aclose()
         raise
@@ -340,7 +343,7 @@ async def main_async() -> None:
 
     if topology.fleet == WORKFLOW_FLEET:
         workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindAuthProfileManager, MoonMindAgentRun]
-        activities = [resolve_external_adapter]
+        activities = [resolve_external_adapter, external_adapter_execution_style]
         logger.info(
             "Temporal workflow fleet registrations: %s",
             ", ".join(list_registered_workflow_types()),

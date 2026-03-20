@@ -61,7 +61,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("queue")
     assert _is_allowed_path("queue/new")
     assert _is_allowed_path("queue/123")
-    assert _is_allowed_path("orchestrator/run-1")
+    assert not _is_allowed_path("orchestrator/run-1")
     assert _is_allowed_path("mm:123")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("mm:123e4567-e89b-12d3-a456-426614174000")
@@ -101,8 +101,6 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/new",
         "/tasks/queue/new",
         "/tasks/create",
-        "/tasks/orchestrator",
-        "/tasks/orchestrator/new",
         "/tasks/manifests",
         "/tasks/manifests/new",
         "/tasks/schedules",
@@ -121,7 +119,6 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
         "/tasks/mm:workflow-123",
         f"/tasks/queue/{uuid4()}",
-        f"/tasks/orchestrator/{uuid4()}",
         f"/tasks/manifests/{uuid4()}",
         f"/tasks/schedules/{uuid4()}",
     ):
@@ -168,7 +165,6 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["message"] == (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
-        "/tasks/orchestrator, /tasks/orchestrator/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
     )
@@ -181,10 +177,6 @@ def test_skills_api_returns_available_skill_ids(
         "api_service.api.routers.task_dashboard.list_available_skill_names",
         lambda: ("speckit", "speckit-orchestrate"),
     )
-    monkeypatch.setattr(
-        "api_service.api.routers.task_dashboard.list_runnable_skill_names",
-        lambda: ("update-moonmind",),
-    )
 
     response = client.get("/api/tasks/skills")
 
@@ -192,12 +184,11 @@ def test_skills_api_returns_available_skill_ids(
     assert response.json() == {
         "items": {
             "worker": ["speckit", "speckit-orchestrate"],
-            "orchestrator": ["update-moonmind"],
+            "orchestrator": [],
         },
         "legacyItems": [
             {"id": "speckit"},
             {"id": "speckit-orchestrate"},
-            {"id": "update-moonmind"},
         ],
     }
 
@@ -318,14 +309,12 @@ def test_task_resolution_returns_temporal_source_for_workflow_id() -> None:
     }
 
 
-def test_task_resolution_uses_source_hint_to_disambiguate_legacy_uuid() -> None:
-    task_id = str(uuid4())
-
+def test_task_resolution_rejects_orchestrator_source_hint() -> None:
     class FakeSession:
         async def get(self, model, key):
-            if model.__name__ in {"AgentJob", "OrchestratorRun"}:
-                return SimpleNamespace(id=key)
             return None
+
+    task_id = str(uuid4())
 
     app = FastAPI()
     app.include_router(router)
@@ -338,15 +327,6 @@ def test_task_resolution_uses_source_hint_to_disambiguate_legacy_uuid() -> None:
     app.dependency_overrides[get_async_session] = lambda: FakeSession()
 
     with TestClient(app) as client:
-        ambiguous = client.get(f"/api/tasks/{task_id}/resolution")
-        hinted = client.get(f"/api/tasks/{task_id}/resolution?source=orchestrator")
+        response = client.get(f"/api/tasks/{task_id}/resolution?source=orchestrator")
 
-    assert ambiguous.status_code == 409
-    assert ambiguous.json()["detail"]["code"] == "ambiguous_task_source"
-    assert hinted.status_code == 200
-    assert hinted.json() == {
-        "taskId": task_id,
-        "source": "orchestrator",
-        "entry": None,
-        "workflowId": None,
-    }
+    assert response.status_code == 422

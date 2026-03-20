@@ -136,4 +136,20 @@ class _MetricsEmitter:
         self._send(payload)
 
 
-__all__ = ["_MetricsEmitter"]
+_metrics_singleton: _MetricsEmitter | None = None
+
+
+def get_metrics_emitter() -> _MetricsEmitter:
+    """Return the process-wide StatsD emitter (lazy singleton).
+
+    Prefer this over constructing `_MetricsEmitter()` so RAG, workers, and workflows
+    share one UDP socket and configuration.
+    """
+
+    global _metrics_singleton
+    if _metrics_singleton is None:
+        _metrics_singleton = _MetricsEmitter()
+    return _metrics_singleton
+
+
+__all__ = ["_MetricsEmitter", "get_metrics_emitter"]

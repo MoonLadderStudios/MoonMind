@@ -41,6 +41,8 @@ AGENT_RUNTIME_CANCEL_TIMEOUT = timedelta(minutes=1)
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 INTEGRATIONS_ACTIVITY_TIMEOUT = timedelta(minutes=5)
 INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
+WORKFLOW_TASK_QUEUE = "mm.workflow"
+STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 
 
 @activity.defn(name="integration.resolve_external_adapter")
@@ -57,6 +59,25 @@ async def resolve_external_adapter(agent_id: str) -> str:
     # Validate the adapter is registered — this forces the gate check.
     registry.create(agent_id)
     return agent_id
+
+
+@activity.defn(name="integration.external_adapter_execution_style")
+async def external_adapter_execution_style(agent_id: str) -> str:
+    """Return ``polling`` or ``streaming_gateway`` for *agent_id*."""
+
+    from moonmind.workflows.adapters.base_external_agent_adapter import (
+        BaseExternalAgentAdapter,
+    )
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        build_default_registry,
+    )
+
+    registry = build_default_registry()
+    adapter = registry.create(agent_id)
+    if isinstance(adapter, BaseExternalAgentAdapter):
+        return adapter.provider_capability.execution_style
+    return "polling"
+
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
@@ -130,6 +151,7 @@ class MoonMindAgentRun:
 
         try:
             while True:
+                skip_poll_and_fetch = False
                 elapsed = (workflow.now() - overall_start).total_seconds()
                 if elapsed >= timeout_seconds:
                     self.run_status = RunStatus.timed_out
@@ -234,82 +256,113 @@ class MoonMindAgentRun:
                     validated_id = await workflow.execute_activity(
                         resolve_external_adapter,
                         request.agent_id,
-                        task_queue="mm.workflow",
+                        task_queue=WORKFLOW_TASK_QUEUE,
                         start_to_close_timeout=timedelta(seconds=30),
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
                     # Store the validated agent_id for activity routing.
                     self._external_agent_id = validated_id
 
-                    # Start via Temporal activity on the integrations fleet
-                    # (determinism-safe: no adapter construction in-workflow).
-                    handle_dict = await workflow.execute_activity(
-                        f"integration.{validated_id}.start",
-                        request,
-                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                        start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                    execution_style = await workflow.execute_activity(
+                        external_adapter_execution_style,
+                        validated_id,
+                        task_queue=WORKFLOW_TASK_QUEUE,
+                        start_to_close_timeout=timedelta(seconds=30),
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
-                    
-                    if isinstance(handle_dict, dict) and "external_id" in handle_dict:
-                        status = handle_dict.get("normalized_status", "unknown")
-                        if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
-                            status = "running"
-                        handle = AgentRunHandle(
-                            runId=handle_dict["external_id"],
-                            agentKind="external",
-                            agentId=validated_id,
-                            status=status,
-                            startedAt=workflow.now(),
-                            metadata={
-                                "providerStatus": handle_dict.get("provider_status", "unknown"),
-                                "normalizedStatus": status,
-                                "externalUrl": handle_dict.get("url"),
-                                "callbackSupported": handle_dict.get("callback_supported", False),
-                            }
+
+                    if execution_style == "streaming_gateway":
+                        stc_seconds = min(
+                            max(int(timeout_seconds), 60),
+                            86400,
                         )
+                        result_payload = await workflow.execute_activity(
+                            "integration.openclaw.execute",
+                            request,
+                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                            start_to_close_timeout=timedelta(seconds=stc_seconds),
+                            heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
+                        self.final_result = (
+                            AgentRunResult(**result_payload)
+                            if isinstance(result_payload, dict)
+                            else result_payload
+                        )
+                        self.run_status = RunStatus.completed
+                        adapter = None
+                        skip_poll_and_fetch = True
                     else:
-                        handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
-                    
-                    self.run_id = handle.run_id
-                    self.run_status = handle.status
-                    poll_interval = handle.poll_hint_seconds or 10
-                    adapter = None  # External ops route through activities, not adapter
+                        # Start via Temporal activity on the integrations fleet
+                        # (determinism-safe: no adapter construction in-workflow).
+                        handle_dict = await workflow.execute_activity(
+                            f"integration.{validated_id}.start",
+                            request,
+                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                            start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
+
+                        if isinstance(handle_dict, dict) and "external_id" in handle_dict:
+                            status = handle_dict.get("normalized_status", "unknown")
+                            if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
+                                status = "running"
+                            handle = AgentRunHandle(
+                                runId=handle_dict["external_id"],
+                                agentKind="external",
+                                agentId=validated_id,
+                                status=status,
+                                startedAt=workflow.now(),
+                                metadata={
+                                    "providerStatus": handle_dict.get("provider_status", "unknown"),
+                                    "normalizedStatus": status,
+                                    "externalUrl": handle_dict.get("url"),
+                                    "callbackSupported": handle_dict.get("callback_supported", False),
+                                }
+                            )
+                        else:
+                            handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+
+                        self.run_id = handle.run_id
+                        self.run_status = handle.status
+                        poll_interval = handle.poll_hint_seconds or 10
+                        adapter = None  # External ops route through activities, not adapter
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
 
                 # Wait for completion checking periodically
-                while True:
-                    remaining_timeout = timeout_seconds - (workflow.now() - overall_start).total_seconds()
-                    if remaining_timeout <= 0:
-                        break
-                    
-                    try:
-                        # Add bounded wait
-                        await workflow.wait_condition(
-                            lambda: self.completion_event.is_set(), 
-                            timeout=timedelta(seconds=min(poll_interval, remaining_timeout))
-                        )
-                        break  # Callback received
-                    except asyncio.TimeoutError:
-                        if request.agent_kind == "external":
-                            # Poll via Temporal activity (determinism-safe).
-                            status_dict = await workflow.execute_activity(
-                                f"integration.{self._external_agent_id}.status",
-                                {"external_id": self.run_id},
-                                task_queue=INTEGRATIONS_TASK_QUEUE,
-                                start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            )
-                            status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
-                        else:
-                            # Managed agent: poll via adapter directly.
-                            status_obj = await adapter.status(self.run_id)
-                            workflow.logger.info(f"STATUS_OBJ for {self.run_id}: {status_obj}")
-
-                        self.run_status = status_obj.status
-                        if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                if not skip_poll_and_fetch:
+                    while True:
+                        remaining_timeout = timeout_seconds - (workflow.now() - overall_start).total_seconds()
+                        if remaining_timeout <= 0:
                             break
+
+                        try:
+                            # Add bounded wait
+                            await workflow.wait_condition(
+                                lambda: self.completion_event.is_set(),
+                                timeout=timedelta(seconds=min(poll_interval, remaining_timeout))
+                            )
+                            break  # Callback received
+                        except asyncio.TimeoutError:
+                            if request.agent_kind == "external":
+                                # Poll via Temporal activity (determinism-safe).
+                                status_dict = await workflow.execute_activity(
+                                    f"integration.{self._external_agent_id}.status",
+                                    {"external_id": self.run_id},
+                                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                                    start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
+                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                )
+                                status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
+                            else:
+                                # Managed agent: poll via adapter directly.
+                                status_obj = await adapter.status(self.run_id)
+                                workflow.logger.info(f"STATUS_OBJ for {self.run_id}: {status_obj}")
+
+                            self.run_status = status_obj.status
+                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                                break
 
                 elapsed = (workflow.now() - overall_start).total_seconds()
 

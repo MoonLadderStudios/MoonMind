@@ -117,6 +117,20 @@ def build_default_registry(
         registry.register("codex_cloud", _codex_cloud_factory)
         logger.info("Registered Codex Cloud external adapter")
 
+    # --- OpenClaw (streaming gateway) ---
+    from moonmind.openclaw.settings import is_openclaw_enabled
+
+    if is_openclaw_enabled(env=env):
+        from moonmind.workflows.adapters.openclaw_agent_adapter import (
+            OpenClawExternalAdapter,
+        )
+
+        def _openclaw_factory() -> AgentAdapter:
+            return OpenClawExternalAdapter()
+
+        registry.register("openclaw", _openclaw_factory)
+        logger.info("Registered OpenClaw external adapter")
+
     return registry
 
 

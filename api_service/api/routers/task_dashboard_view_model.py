@@ -217,14 +217,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                 "taskStepTemplateSave": "/api/task-step-templates/save-from-task",
                 "taskStepTemplateFavorite": "/api/task-step-templates/{slug}:favorite",
             },
-            "orchestrator": {
-                "list": "/orchestrator/tasks",
-                "create": "/orchestrator/tasks",
-                "detail": "/orchestrator/tasks/{id}",
-                "artifacts": "/orchestrator/tasks/{id}/artifacts",
-                "approve": "/orchestrator/tasks/{id}/approvals",
-                "retry": "/orchestrator/tasks/{id}/retry",
-            },
             "proposals": {
                 "list": "/api/proposals",
                 "detail": "/api/proposals/{id}",
