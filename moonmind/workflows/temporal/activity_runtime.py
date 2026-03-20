@@ -30,7 +30,7 @@ from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DI
 from moonmind.workflows.adapters.jules_client import JulesClient
 
 from api_service.db.base import get_async_session_context
-from moonmind.workflows import get_agent_queue_repository
+
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -2166,6 +2166,7 @@ class TemporalAgentRuntimeActivities:
         if endpoints:
             try:
                 async with get_async_session_context() as db_session:
+                    from moonmind.workflows import get_agent_queue_repository
                     service = AgentQueueService(get_agent_queue_repository(db_session))
                     from moonmind.workflows.agent_queue import models
                     from datetime import UTC, datetime, timedelta
