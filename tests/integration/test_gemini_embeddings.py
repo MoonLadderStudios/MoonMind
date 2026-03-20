@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from moonmind.config.settings import (
-    DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS,
     GoogleSettings,
     settings,
 )
+
 
 
 def _resolve_google_api_key() -> str | None:
