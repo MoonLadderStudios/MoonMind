@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import shlex
+import shutil
 from datetime import UTC, datetime
 
 from moonmind.schemas.agent_runtime_models import (
@@ -20,6 +23,25 @@ class ManagedRuntimeLauncher:
 
     def __init__(self, store: ManagedRunStore) -> None:
         self._store = store
+        self._logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _build_tmate_session_command(
+        cmd: list[str],
+        *,
+        socket_path: str,
+        session_name: str,
+    ) -> str:
+        """Wrap agent command so the tmate session is force-closed on completion."""
+        cmd_str = shlex.join(cmd)
+        wrapped_script = (
+            f"{cmd_str}; "
+            "mm_rc=$?; "
+            f"tmate -S {shlex.quote(socket_path)} "
+            f"kill-session -t {shlex.quote(session_name)} >/dev/null 2>&1 || true; "
+            "exit $mm_rc"
+        )
+        return shlex.join(["bash", "-lc", wrapped_script])
 
     def build_command(
         self,
@@ -84,11 +106,6 @@ class ManagedRuntimeLauncher:
         if "HOME" not in env_overrides and "HOME" in os.environ:
             env_overrides["HOME"] = os.environ["HOME"]
 
-        import shutil
-        import shlex
-        import logging
-        logger = logging.getLogger(__name__)
-        
         use_tmate = shutil.which("tmate") is not None
         endpoints = None
 
@@ -100,12 +117,16 @@ class ManagedRuntimeLauncher:
                 os.remove(socket_path)
                 
             session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            cmd_str = " ".join(shlex.quote(c) for c in cmd)
-            
+            session_cmd = self._build_tmate_session_command(
+                cmd,
+                socket_path=socket_path,
+                session_name=session_name,
+            )
+
             # Start tmate server in foreground
             tmate_cmd = [
                 "tmate", "-S", socket_path, "-F",
-                "new-session", "-A", "-s", session_name, cmd_str
+                "new-session", "-A", "-s", session_name, session_cmd
             ]
             
             process = await asyncio.create_subprocess_exec(
@@ -143,7 +164,7 @@ class ManagedRuntimeLauncher:
                     "tmate_socket_path": socket_path,
                 }
             except Exception as e:
-                logger.warning(f"Failed to fetch tmate endpoints: {e}")
+                self._logger.warning("Failed to fetch tmate endpoints: %s", e)
                 pass # Proceed even if endpoints fail
                 
         else:
