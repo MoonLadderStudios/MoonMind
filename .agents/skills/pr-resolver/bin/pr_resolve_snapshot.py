@@ -97,6 +97,32 @@ def normalize_user(login: str | None) -> str:
     return (login or "").lower().strip()
 
 
+def _load_addressed_comment_ids(
+    ledger_path: Path | None = None,
+) -> set[int | str]:
+    """Load comment IDs from the local resolution ledger.
+
+    Returns an empty set when the file is missing, malformed, or empty.
+    """
+    path = ledger_path or Path("artifacts/pr_resolver_addressed_comments.json")
+    if not path.exists():
+        return set()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    entries = payload if isinstance(payload, list) else []
+    ids: set[int | str] = set()
+    for entry in entries:
+        if isinstance(entry, dict):
+            cid = entry.get("id")
+            if cid is not None:
+                ids.add(cid)
+        elif isinstance(entry, (int, str)):
+            ids.add(entry)
+    return ids
+
+
 def is_bot_user(login: str | None) -> bool:
     user = normalize_user(login)
     return user.endswith("[bot]") or user == "github-actions[bot]"
@@ -106,6 +132,7 @@ def _classify_comment_actionability(
     comment: dict,
     *,
     include_bot_review_comments: bool = False,
+    addressed_ids: set[int | str] | None = None,
 ) -> tuple[bool, str]:
     """Determine whether a comment requires action.
 
@@ -119,6 +146,9 @@ def _classify_comment_actionability(
     """
     if not (comment.get("body") or "").strip():
         return False, "empty_body"
+
+    if addressed_ids and comment.get("id") in addressed_ids:
+        return False, "locally_addressed"
 
     comment_type = comment.get("type")
 
@@ -144,10 +174,12 @@ def _is_comment_actionable(
     comment: dict,
     *,
     include_bot_review_comments: bool = False,
+    addressed_ids: set[int | str] | None = None,
 ) -> bool:
     actionable, _ = _classify_comment_actionability(
         comment,
         include_bot_review_comments=include_bot_review_comments,
+        addressed_ids=addressed_ids,
     )
     return actionable
 
@@ -156,6 +188,7 @@ def summarize_comments(
     comments: list[dict],
     *,
     include_bot_review_comments: bool = True,
+    addressed_comment_ids: set[int | str] | None = None,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
@@ -172,6 +205,7 @@ def summarize_comments(
         actionable, reason = _classify_comment_actionability(
             comment,
             include_bot_review_comments=include_bot_review_comments,
+            addressed_ids=addressed_comment_ids,
         )
         if actionable:
             actionable_comments.append(comment)
@@ -556,7 +590,12 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
-    comments_summary = summarize_comments(comments, include_bot_review_comments=True)
+    addressed_ids = _load_addressed_comment_ids()
+    comments_summary = summarize_comments(
+        comments,
+        include_bot_review_comments=True,
+        addressed_comment_ids=addressed_ids,
+    )
 
     # 4. Construct Snapshot
     snapshot = {

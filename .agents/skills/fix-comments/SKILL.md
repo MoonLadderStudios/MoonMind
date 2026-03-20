@@ -63,6 +63,11 @@ If no constraints are provided, default to addressing all applicable feedback.
 - Run a final `git status` review.
 - Commit with a clear message (default: `Address PR feedback for #<number>`).
 - Push the current branch.
+- Write `artifacts/pr_resolver_addressed_comments.json` containing a JSON array of entries from the feedback ledger:
+  ```json
+  [{"id": <comment_id>, "disposition": "addressed|not-applicable|deferred", "rationale": "..."}]
+  ```
+  This file signals to `pr-resolver` which comments have been handled locally, preventing re-classification as actionable.
 
 ## Output
 

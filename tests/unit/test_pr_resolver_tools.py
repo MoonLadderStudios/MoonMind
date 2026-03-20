@@ -510,3 +510,98 @@ def test_summarize_ci_head_checks_propagate_failures(
     assert len(summary["failedChecks"]) == 1
     assert summary["failedChecks"][0]["name"] == "test"
 
+
+def test_addressed_comments_are_excluded_from_actionable_count(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Comments whose IDs appear in the addressed set should be locally_addressed."""
+
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+    classify = pr_resolve_snapshot_module["_classify_comment_actionability"]
+
+    comments = [
+        {
+            "id": 100,
+            "type": "review_comment",
+            "user": "qodo-code-review[bot]",
+            "body": "Please fix this.",
+        },
+        {
+            "id": 200,
+            "type": "review_comment",
+            "user": "gemini-code-assist[bot]",
+            "body": "Consider adding a comment.",
+        },
+        {
+            "id": 300,
+            "type": "review_comment",
+            "user": "human-reviewer",
+            "body": "Needs refactoring.",
+        },
+    ]
+
+    # Without ledger: all three are actionable (bot review comments enabled)
+    summary_all = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary_all["actionableCommentCount"] == 3
+
+    # With ledger: IDs 100 and 200 are addressed, only 300 remains
+    addressed = {100, 200}
+    summary_partial = summarize_comments(
+        comments,
+        include_bot_review_comments=True,
+        addressed_comment_ids=addressed,
+    )
+    assert summary_partial["actionableCommentCount"] == 1
+    assert summary_partial["hasActionableComments"] is True
+
+    # Verify the individual classification reason
+    actionable, reason = classify(
+        comments[0],
+        include_bot_review_comments=True,
+        addressed_ids=addressed,
+    )
+    assert actionable is False
+    assert reason == "locally_addressed"
+
+    # With all addressed
+    all_addressed = {100, 200, 300}
+    summary_none = summarize_comments(
+        comments,
+        include_bot_review_comments=True,
+        addressed_comment_ids=all_addressed,
+    )
+    assert summary_none["actionableCommentCount"] == 0
+    assert summary_none["hasActionableComments"] is False
+
+
+def test_addressed_comments_ledger_missing_returns_empty_set(
+    pr_resolve_snapshot_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """_load_addressed_comment_ids should return an empty set when the file is missing."""
+
+    load_ids = pr_resolve_snapshot_module["_load_addressed_comment_ids"]
+
+    # Missing file
+    missing = tmp_path / "does_not_exist.json"
+    assert load_ids(missing) == set()
+
+    # Malformed JSON
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+    assert load_ids(bad) == set()
+
+    # Valid ledger with dict entries
+    good = tmp_path / "good.json"
+    good.write_text(
+        '[{"id": 42, "disposition": "addressed"}, {"id": "abc"}]',
+        encoding="utf-8",
+    )
+    assert load_ids(good) == {42, "abc"}
+
+    # Valid ledger with bare IDs
+    bare = tmp_path / "bare.json"
+    bare.write_text("[1, 2, 3]", encoding="utf-8")
+    assert load_ids(bare) == {1, 2, 3}
+
+
