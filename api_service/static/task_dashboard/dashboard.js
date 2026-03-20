@@ -295,6 +295,7 @@
   }
 
   const ORCHESTRATOR_RUNTIME = "orchestrator";
+  const JULES_RUNTIME = "jules";
   const CLICK_GLOW_CLASS = "is-clicked";
   const CLICK_GLOW_DURATION_MS = 180;
   const CLICK_GLOW_SELECTOR = [
@@ -313,7 +314,7 @@
     codex: "Codex CLI",
     gemini: "Gemini CLI",
     claude: "Claude Code",
-    jules: "Jules",
+    [JULES_RUNTIME]: "Jules",
     [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 
@@ -5518,7 +5519,7 @@
       let nextDefaultModel = runtimeModelDefaultsWithFallback;
       let nextDefaultEffort = runtimeEffortDefaultsWithFallback;
 
-      if (runtimeKey === "jules") {
+      if (runtimeKey === JULES_RUNTIME) {
         modelInputElement.value = "";
         effortInputElement.value = "";
         nextDefaultModel = "";
