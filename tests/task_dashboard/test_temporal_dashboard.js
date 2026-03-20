@@ -229,7 +229,7 @@ const helpers = loadTemporalHelpers();
   );
   assert.strictEqual(
     helpers.normalizeDashboardRoutePath("/tasks/new"),
-    "/tasks/queue/new",
+    "/tasks/new",
   );
   assert.strictEqual(
     helpers.normalizeDashboardRoutePath("/tasks/temporal"),
@@ -299,4 +299,3 @@ const helpers = loadTemporalHelpers();
   const activeSlice = html.slice(Math.max(0, activeIdx - 100), activeIdx + 100);
   assert(activeSlice.includes('display:none'), "Active container should be hidden by default");
 })();
-

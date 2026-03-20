@@ -44,8 +44,6 @@ _SAFE_TASK_ID_SEGMENT = re.compile(
 )
 _STATIC_PATHS = {
     "list",
-    "queue",
-    "queue/new",
     "new",
     "create",
     "proposals",
@@ -57,10 +55,9 @@ _STATIC_PATHS = {
 }
 
 _PATH_ALIASES = {
-    "new": "queue/new",
-    "create": "queue/new",
+    "create": "new",
 }
-_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = set()
+_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "orchestrator", "temporal"}
 
 
 class DashboardSkillOption(BaseModel):
@@ -91,7 +88,7 @@ class TaskSourceResolutionResponse(BaseModel):
     """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
 
     task_id: str = Field(..., alias="taskId")
-    source: Literal["queue", "temporal"] = Field(..., alias="source")
+    source: Literal["temporal"] = Field(..., alias="source")
     entry: str | None = Field(None, alias="entry")
     workflow_id: str | None = Field(None, alias="workflowId")
 
@@ -146,7 +143,6 @@ def _is_allowed_path(path: str) -> bool:
     return any(
         _is_dynamic_detail(path, source)
         for source in (
-            "queue",
             "proposals",
             "manifests",
             "schedules",
@@ -216,21 +212,9 @@ def _build_task_source_response(
 async def _resolve_dashboard_task_source(
     *,
     task_id: str,
-    queue_service: AgentQueueService,
     temporal_service: TemporalExecutionService,
     user: User,
 ) -> DashboardTaskSourceResponse | None:
-    task_uuid: UUID | None = None
-    try:
-        task_uuid = UUID(task_id)
-    except ValueError:
-        task_uuid = None
-
-    if task_uuid is not None:
-        queue_job = await queue_service.get_job(task_uuid)
-        if queue_job is not None:
-            return _build_task_source_response(task_id=task_id, source="queue")
-
     try:
         execution = await temporal_service.describe_execution(task_id)
     except TemporalExecutionNotFoundError:
@@ -285,7 +269,7 @@ async def task_dashboard_route(
                 "code": "dashboard_route_not_found",
                 "message": (
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-                    "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
+                    "/tasks/create, /tasks/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
                     "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
                 ),
@@ -320,7 +304,7 @@ async def list_dashboard_skills(
 async def resolve_dashboard_task_resolution(
     task_id: str,
     *,
-    source_hint: Literal["queue", "temporal"] | None = Query(None, alias="source"),
+    source_hint: Literal["temporal"] | None = Query(None, alias="source"),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> TaskSourceResolutionResponse:
@@ -350,6 +334,15 @@ async def resolve_dashboard_task_resolution(
                 "sources": sorted(exc.sources),
             },
         ) from exc
+
+    if resolved.source != "temporal":
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "task_not_found",
+                "message": f"Task {task_id} was not found in active dashboard sources.",
+            },
+        )
 
     return TaskSourceResolutionResponse(
         taskId=task_id,
@@ -395,7 +388,6 @@ async def list_dashboard_tasks(
 )
 async def get_dashboard_task_source(
     task_id: str,
-    queue_service: AgentQueueService = Depends(_get_service),
     temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
     _user: User = Depends(get_current_user()),
 ) -> DashboardTaskSourceResponse:
@@ -403,7 +395,6 @@ async def get_dashboard_task_source(
 
     resolved = await _resolve_dashboard_task_source(
         task_id=task_id,
-        queue_service=queue_service,
         temporal_service=temporal_service,
         user=_user,
     )

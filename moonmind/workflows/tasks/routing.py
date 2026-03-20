@@ -37,7 +37,9 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
 def _task_requests_proposals(task_payload: Mapping[str, object] | None) -> bool:
     """Return whether a task submission requests post-run proposal generation."""
 
-    default_enabled = bool(settings.workflow.enable_task_proposals)
+    # Proposal generation support can be globally enabled while remaining
+    # opt-in per task submission.
+    default_enabled = False
     if not isinstance(task_payload, Mapping):
         return default_enabled
     task_node = task_payload.get("task")

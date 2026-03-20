@@ -77,7 +77,7 @@ def test_run_routing_uses_default_proposal_flag_when_missing(
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
     monkeypatch.setattr(settings.workflow, "enable_task_proposals", True, raising=False)
-    assert get_routing_target_for_task(is_run=True, task_payload={"task": {}}) == "queue"
+    assert get_routing_target_for_task(is_run=True, task_payload={"task": {}}) == "temporal"
 
     monkeypatch.setattr(settings.workflow, "enable_task_proposals", False, raising=False)
     assert (

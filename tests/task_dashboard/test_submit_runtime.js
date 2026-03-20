@@ -464,32 +464,32 @@ const helpers = loadSubmitRuntimeHelpers();
   const valid = helpers.resolvePromotedQueueRoute({
     job: { id: "123e4567-e89b-12d3-a456-426614174000" },
   });
-  assert.strictEqual(valid, "/tasks/123e4567-e89b-12d3-a456-426614174000?source=queue");
+  assert.strictEqual(valid, "/tasks/123e4567-e89b-12d3-a456-426614174000");
 
   const fromJobIdAlias = helpers.resolvePromotedQueueRoute({
     job: { jobId: "ABCDEF01-2345-6789-ABCD-EF0123456789" },
   });
-  assert.strictEqual(fromJobIdAlias, "/tasks/ABCDEF01-2345-6789-ABCD-EF0123456789?source=queue");
+  assert.strictEqual(fromJobIdAlias, "/tasks/ABCDEF01-2345-6789-ABCD-EF0123456789");
 
   const invalidEncoded = helpers.resolvePromotedQueueRoute({
     job: { id: "%2Ftmp%2Fqueue" },
   });
-  assert.strictEqual(invalidEncoded, "/tasks/list?source=queue");
+  assert.strictEqual(invalidEncoded, "/tasks/list?source=temporal");
 
   const reservedCreateRoute = helpers.resolvePromotedQueueRoute({
     job: { id: "new" },
   });
-  assert.strictEqual(reservedCreateRoute, "/tasks/list?source=queue");
+  assert.strictEqual(reservedCreateRoute, "/tasks/list?source=temporal");
 
   const missing = helpers.resolvePromotedQueueRoute({ proposal: { id: "ignored" } });
-  assert.strictEqual(missing, "/tasks/list?source=queue");
+  assert.strictEqual(missing, "/tasks/list?source=temporal");
 })();
 
 (function testNormalizeDashboardRoutePathKeepsCanonicalListRoute() {
   assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list"), "/tasks/list");
   assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/list/"), "/tasks/list");
-  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/create"), "/tasks/queue/new");
-  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/new"), "/tasks/queue/new");
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/create"), "/tasks/new");
+  assert.strictEqual(helpers.normalizeDashboardRoutePath("/tasks/new"), "/tasks/new");
 })();
 
 (function testNormalizeDashboardDetailSegmentAcceptsTemporalWorkflowIds() {
