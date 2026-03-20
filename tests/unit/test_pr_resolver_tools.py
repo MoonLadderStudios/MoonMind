@@ -99,6 +99,20 @@ def pr_resolve_orchestrate_module() -> dict[str, Any]:
     )
 
 
+@pytest.fixture
+def pr_resolve_contract_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "pr-resolver"
+            / "bin"
+            / "pr_resolve_contract.py"
+        )
+    )
+
+
 def test_parse_remote_url_accepts_https_and_ssh_urls(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -506,6 +520,69 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert result["status"] == "merged"
     assert full_invocations == 0
     assert sleeps == [15]
+
+
+def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    classify_retry_action = pr_resolve_contract_module["classify_retry_action"]
+
+    action = classify_retry_action(
+        "snapshot_refresh_failed",
+        merge_not_ready_grace_remaining=1,
+    )
+    assert action == "finalize_only_retry"
+
+
+def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    main = pr_resolve_finalize_module["main"]
+    exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
+
+    def _boom(_snapshot_script: Path, _pr: str | None) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["python3", "pr_resolve_snapshot.py"],
+            output="transient failure",
+        )
+
+    monkeypatch.setitem(pr_resolve_finalize_module, "_run_snapshot", _boom)
+
+    result_path = tmp_path / "pr_resolver_result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+    assert int(raised.value.code) == 0
+
+    payload = result_path.read_text(encoding="utf-8")
+    assert '"status": "blocked"' in payload
+    assert '"reason": "snapshot_refresh_failed"' in payload
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--strict-exit-codes",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as raised_strict:
+        main()
+    assert int(raised_strict.value.code) == int(exit_code_blocked)
 
 
 def test_summarize_ci_treats_stale_rollup_as_running(

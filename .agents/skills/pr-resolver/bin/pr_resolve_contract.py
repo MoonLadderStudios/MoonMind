@@ -18,6 +18,7 @@ FINALIZE_ONLY_RETRY_REASONS = {
     "ci_running",
     "comments_unavailable",
     "ci_signal_degraded",
+    "snapshot_refresh_failed",
 }
 
 NON_RETRYABLE_REASONS = {
@@ -86,6 +87,8 @@ def remediation_next_step(reason: str) -> str:
         return "run_fix_ci_skill"
     if normalized in {"ci_signal_degraded", "comments_unavailable"}:
         return "inspect_ci_and_comment_signal"
+    if normalized == "snapshot_refresh_failed":
+        return "retry_finalize_after_backoff"
     if normalized == "ci_running":
         return "wait_for_ci_and_retry_finalize"
     if normalized == "comment_policy_not_enforced":
