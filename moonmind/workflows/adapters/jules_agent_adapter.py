@@ -16,6 +16,7 @@ from moonmind.schemas.jules_models import (
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
     JulesResolveTaskRequest,
+    JulesSendMessageRequest,
     JulesTaskResponse,
     SourceContext,
     normalize_jules_status,
@@ -127,6 +128,24 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             provider_status=provider_status,
             normalized_status=normalized_status,
             external_url=str(response.url or "").strip() or None,
+        )
+
+    async def send_message(self, *, run_id: str, prompt: str) -> AgentRunStatus:
+        """Send a follow-up prompt to an existing Jules session.
+
+        Used for multi-step workflows: resumes the session with new
+        instructions instead of creating a new session.  Returns a
+        running status since the session is now actively processing.
+        """
+        await self._client.send_message(
+            JulesSendMessageRequest(sessionId=run_id, prompt=prompt)
+        )
+        return self.build_status(
+            run_id=run_id,
+            agent_id="jules",
+            status="running",
+            provider_status="IN_PROGRESS",
+            normalized_status="running",
         )
 
     async def do_status(self, run_id: str) -> AgentRunStatus:

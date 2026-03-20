@@ -21,6 +21,7 @@ from moonmind.schemas.jules_models import (
     JulesIntegrationStartResult,
     JulesIntegrationStatusResult,
     JulesResolveTaskRequest,
+    JulesSendMessageRequest,
     JulesTaskResponse,
     normalize_jules_status,
 )
@@ -98,6 +99,19 @@ class JulesClient:
             json=request.model_dump(by_alias=True, mode="json", exclude_none=True),
         )
         return JulesTaskResponse.model_validate(data)
+
+    async def send_message(self, request: JulesSendMessageRequest) -> None:
+        """Send a follow-up prompt to an existing Jules session.
+
+        Used for multi-step workflows: after a session reaches COMPLETED,
+        this resumes it with new instructions.  The Jules API returns an
+        empty body on success; callers must resume polling ``get_task()``
+        to track the session through its next execution cycle.
+
+        See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions/sendMessage
+        """
+        path = f"/sessions/{request.session_id}:sendMessage"
+        await self._post_json_empty(path, json={"prompt": request.prompt})
 
     async def resolve_task(self, request: JulesResolveTaskRequest) -> JulesTaskResponse:
         data = await self._post_json(
@@ -456,6 +470,12 @@ class JulesClient:
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         return await self._request_with_retry("POST", path, json=json)
 
+    async def _post_json_empty(self, path: str, *, json: dict[str, Any]) -> None:
+        """POST expecting an empty (or ignored) response body."""
+        await self._request_with_retry(
+            "POST", path, json=json, allow_empty_response=True
+        )
+
     async def _get_json(self, path: str) -> dict[str, Any]:
         return await self._request_with_retry("GET", path)
 
@@ -465,12 +485,15 @@ class JulesClient:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        allow_empty_response: bool = False,
     ) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(1, self._retry_attempts + 1):
             try:
                 response = await self._client.request(method, path, json=json)
                 response.raise_for_status()
+                if allow_empty_response and not response.content.strip():
+                    return {}
                 payload = response.json()
                 if isinstance(payload, dict):
                     return payload

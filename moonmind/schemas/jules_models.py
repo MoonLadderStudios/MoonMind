@@ -133,6 +133,18 @@ class JulesGetTaskRequest(BaseModel):
     task_id: str = Field(..., alias="taskId")
 
 
+class JulesSendMessageRequest(BaseModel):
+    """Request payload for sending a follow-up message to an existing Jules session.
+
+    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions/sendMessage
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    prompt: str = Field(..., alias="prompt", min_length=1)
+
+
 class PullRequest(BaseModel):
     """A pull request created by a Jules session.
 
@@ -309,6 +321,7 @@ __all__ = [
     "JulesIntegrationStatusResult",
     "JulesResolveTaskRequest",
     "JulesGetTaskRequest",
+    "JulesSendMessageRequest",
     "JulesTaskResponse",
     "JulesNormalizedStatus",
     "SourceContext",

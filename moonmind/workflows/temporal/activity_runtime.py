@@ -195,6 +195,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
+    "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),

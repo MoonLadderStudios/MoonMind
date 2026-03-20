@@ -26,6 +26,7 @@ class _FakeJulesAdapterClient:
         self.created: list[object] = []
         self.lookups: list[object] = []
         self.resolved: list[object] = []
+        self.sent_messages: list[object] = []
         self.closed_count = 0
 
     async def create_task(self, request):
@@ -56,6 +57,10 @@ class _FakeJulesAdapterClient:
 
     async def aclose(self):
         self.closed_count += 1
+
+    async def send_message(self, request):
+        self.sent_messages.append(request)
+        return None
 
 
 def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
@@ -242,4 +247,20 @@ async def test_start_defaults_automation_mode_for_branch_publish():
     assert len(client.created) == 1
     create_req = client.created[0]
     assert create_req.automation_mode == "AUTO_CREATE_PR"
+
+
+async def test_send_message_returns_running_status():
+    """send_message() should call the client and return a running status."""
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    status = await adapter.send_message(run_id="session-42", prompt="Continue with step 2.")
+
+    assert status.run_id == "session-42"
+    assert status.status == "running"
+    assert status.metadata["normalizedStatus"] == "running"
+    assert len(client.sent_messages) == 1
+    sent_req = client.sent_messages[0]
+    assert sent_req.session_id == "session-42"
+    assert sent_req.prompt == "Continue with step 2."
 

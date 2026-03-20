@@ -392,3 +392,46 @@ async def test_aclose_skips_injected_client():
     # injected client should still be usable
     assert not injected.is_closed
     await injected.aclose()
+
+
+@pytest.mark.asyncio
+async def test_send_message_success():
+    """send_message() should POST to /sessions/{id}:sendMessage."""
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        assert request.method == "POST"
+        assert "/sessions/session-42:sendMessage" in request.url.path
+        body = json.loads(request.content)
+        assert body == {"prompt": "Continue with step 2."}
+        return httpx.Response(200, content=b"")
+
+    client = _make_client(handler)
+    from moonmind.schemas.jules_models import JulesSendMessageRequest
+
+    await client.send_message(
+        JulesSendMessageRequest(sessionId="session-42", prompt="Continue with step 2.")
+    )
+    assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_message_retries_on_503():
+    """send_message() should retry on 503."""
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return httpx.Response(503)
+        return httpx.Response(200, content=b"")
+
+    client = _make_client(handler, retry_attempts=3, retry_delay_seconds=0.0)
+    from moonmind.schemas.jules_models import JulesSendMessageRequest
+
+    await client.send_message(
+        JulesSendMessageRequest(sessionId="session-42", prompt="retry prompt")
+    )
+    assert call_count == 3
