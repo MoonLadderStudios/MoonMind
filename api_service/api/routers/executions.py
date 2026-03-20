@@ -777,7 +777,39 @@ async def _get_owned_execution(
     record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
     if not record_owner_id:
         record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
+
     if record_owner_type != "user" or record_owner_id != _owner_id(user):
+        # Fallback to parent workflow ownership for child workflows missing search_attributes
+        if not record_owner_id:
+            parent_id = None
+            if ":agent:" in workflow_id:
+                parent_id = workflow_id.split(":agent:")[0]
+            else:
+                parts = workflow_id.split(":")
+                if workflow_id.startswith("mm:") and len(parts) >= 2:
+                    parent_id = f"{parts[0]}:{parts[1]}"
+                elif len(parts) >= 1:
+                    parent_id = parts[0]
+            
+            if parent_id and parent_id != workflow_id:
+                try:
+                    parent_record = await service.describe_execution(
+                        parent_id,
+                        include_orphaned=include_orphaned_projection,
+                    )
+                    parent_attrs = dict(getattr(parent_record, "search_attributes", None) or {})
+                    p_type = _enum_value(getattr(parent_record, "owner_type", None))
+                    if p_type is None:
+                        p_type = _normalize_owner_type(parent_record, parent_attrs)
+                    p_id = str(getattr(parent_record, "owner_id", "") or "").strip()
+                    if not p_id:
+                        p_id = _coerce_temporal_scalar(parent_attrs.get("mm_owner_id"))
+                    
+                    if p_type == "user" and p_id == _owner_id(user):
+                        return record
+                except Exception:
+                    pass
+
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={

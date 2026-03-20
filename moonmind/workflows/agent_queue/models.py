@@ -179,6 +179,7 @@ class AgentJob(Base):
         back_populates="job",
         cascade="all, delete-orphan",
         uselist=False,
+        primaryjoin="AgentJob.id == foreign(TaskRunLiveSession.task_run_id)",
     )
     control_events: Mapped[list["TaskRunControlEvent"]] = relationship(
         "TaskRunControlEvent",
@@ -400,7 +401,11 @@ class TaskRunLiveSession(Base):
         onupdate=func.now(),
     )
 
-    job: Mapped[AgentJob] = relationship("AgentJob", back_populates="live_session")
+    job: Mapped[AgentJob] = relationship(
+        "AgentJob",
+        back_populates="live_session",
+        primaryjoin="foreign(TaskRunLiveSession.task_run_id) == AgentJob.id",
+    )
 
 
 class TaskRunControlEvent(Base):
