@@ -108,11 +108,11 @@ function loadSubmitRuntimeHelpers() {
 
 const helpers = loadSubmitRuntimeHelpers();
 
-(function testDraftControllerMaintainsSeparateDrafts() {
-  const controller = helpers.createSubmitDraftController(
-    { instruction: "", steps: helpers.cloneStepStateEntries([{ instructions: "" }]) },
-    { instruction: "", targetService: "orchestrator", priority: "normal" },
-  );
+(function testDraftControllerMaintainsWorkerDraftIsolation() {
+  const controller = helpers.createSubmitDraftController({
+    instruction: "",
+    steps: helpers.cloneStepStateEntries([{ instructions: "" }]),
+  });
   controller.saveWorker({
     instruction: "Queue landing",
     repository: "moon/demo",
@@ -123,11 +123,6 @@ const helpers = loadSubmitRuntimeHelpers();
     maxAttempts: "3",
     proposeTasks: false,
   });
-  controller.saveOrchestrator({
-    instruction: "Ship release",
-    targetService: "deploy",
-    priority: "high",
-  });
   const workerSnapshot = controller.loadWorker();
   assert.strictEqual(workerSnapshot.instruction, "Queue landing");
   assert.strictEqual(workerSnapshot.repository, "moon/demo");
@@ -135,9 +130,6 @@ const helpers = loadSubmitRuntimeHelpers();
   workerSnapshot.steps[0].instructions = "mutated";
   const workerReload = controller.loadWorker();
   assert.strictEqual(workerReload.steps[0].instructions, "Plan");
-  const orchestratorSnapshot = controller.loadOrchestrator();
-  assert.strictEqual(orchestratorSnapshot.instruction, "Ship release");
-  assert.strictEqual(orchestratorSnapshot.priority, "high");
 })();
 
 (function testResetWorkerSubmissionFieldsClearsStepInputs() {
@@ -167,9 +159,9 @@ const helpers = loadSubmitRuntimeHelpers();
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
   assert.strictEqual(workerTarget.mode, "worker");
   assert.strictEqual(workerTarget.endpoint, "/api/queue/jobs");
-  const orchestratorTarget = helpers.determineSubmitDestination("orchestrator", endpoints);
-  assert.strictEqual(orchestratorTarget.mode, "orchestrator");
-  assert.strictEqual(orchestratorTarget.endpoint, "/orchestrator/tasks");
+  const legacyOrchestratorTarget = helpers.determineSubmitDestination("orchestrator", endpoints);
+  assert.strictEqual(legacyOrchestratorTarget.mode, "worker");
+  assert.strictEqual(legacyOrchestratorTarget.endpoint, "/api/queue/jobs");
   const temporalTarget = helpers.determineSubmitDestination(
     "codex",
     endpoints,
@@ -199,49 +191,17 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(helpers.validateSubmitRuntime("temporal"), null);
 })();
 
-(function testValidateOrchestratorSubmissionEnforcesFields() {
+(function testValidateOrchestratorSubmissionAlwaysRejects() {
   const empty = helpers.validateOrchestratorSubmission({});
   assert.strictEqual(empty.ok, false);
-  assert.ok(/Instruction/i.test(empty.error));
-  const missingService = helpers.validateOrchestratorSubmission({ instruction: "Ship" });
-  assert.strictEqual(missingService.ok, false);
-  assert.ok(/Target service/i.test(missingService.error));
-  const valid = helpers.validateOrchestratorSubmission({
+  assert.ok(/no longer supported/i.test(empty.error));
+  const shaped = helpers.validateOrchestratorSubmission({
     instruction: "Ship",
     targetService: "orchestrator",
     priority: "HIGH",
-    skillId: "speckit-orchestrate",
-    skillArgs: '{"feature":"drafts"}',
-    approvalToken: " token-value ",
   });
-  assert.strictEqual(valid.ok, true);
-  assert.strictEqual(valid.value.priority, "high");
-  assert.strictEqual(valid.value.skillId, "speckit-orchestrate");
-  assert.strictEqual(JSON.stringify(valid.value.skillArgs), JSON.stringify({ feature: "drafts" }));
-  assert.strictEqual(valid.value.approvalToken, "token-value");
-
-  const invalidSkillArgs = helpers.validateOrchestratorSubmission({
-    instruction: "Ship",
-    targetService: "deploy",
-    skillArgs: "[]",
-  });
-  assert.strictEqual(invalidSkillArgs.ok, false);
-  assert.ok(/Skill Args/i.test(invalidSkillArgs.error));
-
-  const noInstructionWithWrongService = helpers.validateOrchestratorSubmission({
-    targetService: "deploy",
-    skillId: "speckit-orchestrate",
-  });
-  assert.strictEqual(noInstructionWithWrongService.ok, false);
-  assert.ok(/Target service/i.test(noInstructionWithWrongService.error));
-
-  const noInstructionWithSkill = helpers.validateOrchestratorSubmission({
-    targetService: "orchestrator",
-    skillId: "speckit-orchestrate",
-  });
-  assert.strictEqual(noInstructionWithSkill.ok, true);
-  assert.strictEqual(noInstructionWithSkill.value.skillId, "speckit-orchestrate");
-  assert.strictEqual(noInstructionWithSkill.value.instruction, "");
+  assert.strictEqual(shaped.ok, false);
+  assert.ok(/no longer supported/i.test(shaped.error));
 })();
 
 (function testValidatePrimaryStepSubmissionAllowsInstructionsOrExplicitSkill() {
@@ -315,10 +275,10 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(workerState.showOrchestratorFields, false);
   assert.strictEqual(workerState.showWorkerPriorityFields, true);
 
-  const orchestratorState = helpers.resolveQueueSubmitRuntimeUiState("orchestrator");
-  assert.strictEqual(orchestratorState.isOrchestratorRuntime, true);
-  assert.strictEqual(orchestratorState.showOrchestratorFields, true);
-  assert.strictEqual(orchestratorState.showWorkerPriorityFields, false);
+  const legacyOrchestratorState = helpers.resolveQueueSubmitRuntimeUiState("orchestrator");
+  assert.strictEqual(legacyOrchestratorState.isOrchestratorRuntime, false);
+  assert.strictEqual(legacyOrchestratorState.showOrchestratorFields, false);
+  assert.strictEqual(legacyOrchestratorState.showWorkerPriorityFields, true);
 })();
 
 (function testExtractRuntimeModelAndEffortFromCanonicalTaskRuntime() {
@@ -474,14 +434,11 @@ const helpers = loadSubmitRuntimeHelpers();
   });
   assert.strictEqual(workerPriority, 7);
 
-  const orchestratorPriority = helpers.resolveQueueSubmitPriorityForRuntime(
-    "orchestrator",
-    {
-      priority: "12",
-      orchestratorPriority: "HIGH",
-    },
-  );
-  assert.strictEqual(orchestratorPriority, "high");
+  const legacyOrchestratorNumeric = helpers.resolveQueueSubmitPriorityForRuntime("orchestrator", {
+    priority: "12",
+    orchestratorPriority: "HIGH",
+  });
+  assert.strictEqual(legacyOrchestratorNumeric, 12);
 
   const fallbackPriority = helpers.resolveQueueSubmitPriorityForRuntime("codex", {
     priority: "not-a-number",

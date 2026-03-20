@@ -166,7 +166,6 @@ async def test_list_tasks_limits_source_fetches_to_cursor_window() -> None:
         )
     )
     service._load_queue_rows = AsyncMock(return_value=([older], 7))
-    service._load_orchestrator_rows = AsyncMock(return_value=([], 3))
     service._load_temporal_rows = AsyncMock(return_value=([newer], 5))
     cursor = service._encode_cursor(
         _ListCursor(
@@ -194,17 +193,12 @@ async def test_list_tasks_limits_source_fetches_to_cursor_window() -> None:
     )
 
     assert [item.task_id for item in response.items] == ["mm:older"]
-    assert response.count == 15
+    assert response.count == 12
     assert response.next_cursor
     service._load_queue_rows.assert_awaited_once_with(
         entry=None,
         status_filter=None,
         owner_id=None,
-        limit=2,
-    )
-    service._load_orchestrator_rows.assert_awaited_once_with(
-        entry=None,
-        status_filter=None,
         limit=2,
     )
     service._load_temporal_rows.assert_awaited_once_with(

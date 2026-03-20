@@ -136,10 +136,6 @@
   const sourceConfig = config.sources || {};
   const queueSourceConfig =
     sourceConfig.queue && typeof sourceConfig.queue === "object" ? sourceConfig.queue : {};
-  const orchestratorSourceConfig =
-    sourceConfig.orchestrator && typeof sourceConfig.orchestrator === "object"
-      ? sourceConfig.orchestrator
-      : {};
   const proposalsSourceConfig =
     sourceConfig.proposals && typeof sourceConfig.proposals === "object"
       ? sourceConfig.proposals
@@ -294,7 +290,6 @@
     return normalized;
   }
 
-  const ORCHESTRATOR_RUNTIME = "orchestrator";
   const JULES_RUNTIME = "jules";
   const CLICK_GLOW_CLASS = "is-clicked";
   const CLICK_GLOW_DURATION_MS = 180;
@@ -307,24 +302,17 @@
   ].join(", ");
   const clickGlowTimers = new WeakMap();
 
-  const listSubmitRuntimes = () =>
-    Array.from(new Set([...supportedTaskRuntimes, ORCHESTRATOR_RUNTIME]));
+  const listSubmitRuntimes = () => Array.from(new Set([...supportedTaskRuntimes]));
 
   const TASK_RUNTIME_LABELS = {
     codex: "Codex CLI",
     gemini: "Gemini CLI",
     claude: "Claude Code",
     [JULES_RUNTIME]: "Jules",
-    [ORCHESTRATOR_RUNTIME]: "Orchestrator",
   };
 
-  const buildSubmitRuntimeOptions = (workerRuntimes = []) => {
-    const normalized = normalizeRuntimeOptions(workerRuntimes);
-    if (!normalized.includes(ORCHESTRATOR_RUNTIME)) {
-      normalized.push(ORCHESTRATOR_RUNTIME);
-    }
-    return normalized;
-  };
+  const buildSubmitRuntimeOptions = (workerRuntimes = []) =>
+    normalizeRuntimeOptions(workerRuntimes);
 
   const submitRuntimeOptions = buildSubmitRuntimeOptions(supportedTaskRuntimes);
 
@@ -590,7 +578,6 @@
 
   const TASK_LIST_TITLE_MAX_CHARS = 400;
   const ACTIVE_QUEUE_FETCH_LIMIT = 50;
-  const ACTIVE_ORCHESTRATOR_FETCH_LIMIT = 50;
   const ACTIVE_TEMPORAL_FETCH_LIMIT = 50;
   const QUEUE_PAGE_SIZE_OPTIONS = [20, 25, 50, 100];
   const DEFAULT_QUEUE_PAGE_SIZE = 50;
@@ -1047,8 +1034,7 @@
   function activateNav(pathname) {
     const activePath =
       pathname === "/tasks/queue/new" ||
-        pathname === "/tasks/create" ||
-        pathname === "/tasks/orchestrator/new"
+        pathname === "/tasks/create"
         ? "/tasks/create"
         : pathname === "/tasks/queue" || pathname === "/tasks/list"
           ? "/tasks/list"
@@ -1750,9 +1736,6 @@
       const workerDiscovered = Array.isArray(grouped.worker)
         ? grouped.worker
         : legacyItems;
-      const orchestratorDiscovered = Array.isArray(grouped.orchestrator)
-        ? grouped.orchestrator
-        : [];
       const normalizeIds = (items, withAuto = false) => {
         const discovered = items
           .map((item) => {
@@ -1769,21 +1752,17 @@
       };
       cachedAvailableSkillIds = {
         worker: normalizeIds(workerDiscovered, true),
-        orchestrator: normalizeIds(orchestratorDiscovered, false),
       };
     } catch (error) {
       console.error("skills list load failed", error);
-      return runtimeKey === "orchestrator" ? [] : ["auto"];
+      return ["auto"];
     }
 
     const resolved = cachedAvailableSkillIds?.[runtimeKey];
     if (Array.isArray(resolved) && resolved.length > 0) {
       return resolved;
     }
-    if (runtimeKey === "orchestrator") {
-      return [];
-    }
-    return ["auto"];
+    return runtimeKey === "worker" ? ["auto"] : [];
   }
 
   function populateSkillDatalist(datalistId, skillIds) {
@@ -2618,14 +2597,12 @@
     return normalized;
   };
 
-  const createSubmitDraftController = (queueDraft = {}, orchestratorDraft = {}) => {
+  const createSubmitDraftController = (queueDraft = {}) => {
     let workerDraft = normalizeSubmissionDraftForTest(queueDraft);
     if (!Array.isArray(workerDraft.steps)) {
       workerDraft.steps = [];
     }
     workerDraft.steps = cloneStepStateEntries(workerDraft.steps);
-
-    let orchestratorDraftState = normalizeSubmissionDraftForTest(orchestratorDraft);
 
     return {
       saveWorker: (draft) => {
@@ -2636,10 +2613,6 @@
         workerDraft.steps = cloneStepStateEntries(workerDraft.steps);
       },
       loadWorker: () => normalizeSubmissionDraftForTest(workerDraft),
-      saveOrchestrator: (draft) => {
-        orchestratorDraftState = normalizeSubmissionDraftForTest(draft);
-      },
-      loadOrchestrator: () => normalizeSubmissionDraftForTest(orchestratorDraftState),
     };
   };
 
@@ -2650,7 +2623,7 @@
     if (!temporalSubmitEnabled) {
       return false;
     }
-    if (normalizedMode === ORCHESTRATOR_RUNTIME) {
+    if (normalizedMode === "orchestrator") {
       return false;
     }
     if (isEditMode) {
@@ -2662,12 +2635,6 @@
   const determineSubmitDestination = (runtimeMode, endpoints = {}, options = {}) => {
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     const queueEndpoint = String(endpoints.queue || "/api/queue/jobs").trim();
-    const orchestratorEndpoint = String(
-      endpoints.orchestrator || endpoints.orchestratorSubmit || "/orchestrator/tasks",
-    ).trim();
-    if (normalizedMode === "orchestrator") {
-      return { mode: "orchestrator", endpoint: orchestratorEndpoint };
-    }
     if (shouldUseTemporalSubmit(normalizedMode, options)) {
       return {
         mode: "temporal",
@@ -2677,83 +2644,10 @@
     return { mode: "worker", endpoint: queueEndpoint };
   };
 
-  const validateOrchestratorSubmission = (draft = {}) => {
-    if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
-      return {
-        ok: false,
-        error: "Instruction is required.",
-      };
-    }
-    const instruction = String(draft.instruction || "").trim();
-    const rawSkillId = String(draft.skillId || "").trim();
-    const hasExplicitSkill = Boolean(rawSkillId) && rawSkillId !== "auto";
-    const targetService = String(draft.targetService || "").trim();
-    if (hasExplicitSkill && targetService && targetService !== "orchestrator") {
-      return {
-        ok: false,
-        error: "Target service must be orchestrator for explicit skill runs.",
-      };
-    }
-    if (!hasExplicitSkill && !instruction) {
-      return {
-        ok: false,
-        error: "Instruction is required.",
-      };
-    }
-    if (!targetService) {
-      return {
-        ok: false,
-        error: "Target service is required.",
-      };
-    }
-    if (hasExplicitSkill && targetService !== "orchestrator") {
-      return {
-        ok: false,
-        error: "Target service must be orchestrator when Skill ID is set.",
-      };
-    }
-    const normalizedPriority = String(draft.priority || "normal").trim().toLowerCase();
-    const value = normalizeSubmissionDraftForTest(draft);
-    value.instruction = instruction;
-    value.targetService = targetService;
-    value.priority = ["normal", "high"].includes(normalizedPriority)
-      ? normalizedPriority
-      : "normal";
-    const skillArgsRaw = String(draft.skillArgs || "").trim();
-    if (rawSkillId) {
-      value.skillId = rawSkillId;
-    } else {
-      delete value.skillId;
-    }
-    if (skillArgsRaw) {
-      try {
-        const parsed = JSON.parse(skillArgsRaw);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          return {
-            ok: false,
-            error: "Skill Args must be valid JSON object text.",
-          };
-        }
-        value.skillArgs = parsed;
-      } catch (_error) {
-        return {
-          ok: false,
-          error: "Skill Args must be valid JSON object text.",
-        };
-      }
-    } else {
-      delete value.skillArgs;
-    }
-    if (Object.prototype.hasOwnProperty.call(draft, "approvalToken")) {
-      const token = String(draft.approvalToken || "").trim();
-      if (token) {
-        value.approvalToken = token;
-      } else {
-        delete value.approvalToken;
-      }
-    }
-    return { ok: true, value };
-  };
+  const validateOrchestratorSubmission = (_draft = {}) => ({
+    ok: false,
+    error: "Orchestrator tasks are no longer supported.",
+  });
 
   const hasExplicitSkillSelection = (skillId) => {
     const normalized = String(skillId || "").trim().toLowerCase();
@@ -2919,17 +2813,11 @@
     return normalized === "high" ? "high" : "normal";
   };
 
-  const resolveQueueSubmitRuntimeUiState = (runtimeValue) => {
-    const normalizedRuntime = String(runtimeValue || "")
-      .trim()
-      .toLowerCase();
-    const isOrchestratorRuntime = normalizedRuntime === ORCHESTRATOR_RUNTIME;
-    return {
-      isOrchestratorRuntime,
-      showOrchestratorFields: isOrchestratorRuntime,
-      showWorkerPriorityFields: !isOrchestratorRuntime,
-    };
-  };
+  const resolveQueueSubmitRuntimeUiState = (_runtimeValue) => ({
+    isOrchestratorRuntime: false,
+    showOrchestratorFields: false,
+    showWorkerPriorityFields: true,
+  });
 
   const applyElementVisibility = (node, isVisible) => {
     if (!node) {
@@ -2961,11 +2849,7 @@
     }
   };
 
-  const resolveQueueSubmitPriorityForRuntime = (runtimeMode, priorityValues = {}) => {
-    const uiState = resolveQueueSubmitRuntimeUiState(runtimeMode);
-    if (uiState.isOrchestratorRuntime) {
-      return normalizeOrchestratorPriority(priorityValues.orchestratorPriority || "normal");
-    }
+  const resolveQueueSubmitPriorityForRuntime = (_runtimeMode, priorityValues = {}) => {
     const priorityValue = Number(priorityValues.priority || 0);
     return Number.isFinite(priorityValue) ? priorityValue : 0;
   };
@@ -2975,8 +2859,8 @@
     if (!normalized) {
       return fallback;
     }
-    if (normalized === ORCHESTRATOR_RUNTIME) {
-      return ORCHESTRATOR_RUNTIME;
+    if (normalized === "orchestrator") {
+      return fallback;
     }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
@@ -2989,8 +2873,8 @@
     if (!normalized) {
       return null;
     }
-    if (normalized === ORCHESTRATOR_RUNTIME) {
-      return ORCHESTRATOR_RUNTIME;
+    if (normalized === "orchestrator") {
+      return null;
     }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
@@ -3145,34 +3029,26 @@
 
   const isWorkerSubmitRuntime = (runtimeValue) => {
     const normalized = String(runtimeValue || "").trim().toLowerCase();
-    return normalized !== ORCHESTRATOR_RUNTIME && supportedTaskRuntimes.includes(normalized);
+    return supportedTaskRuntimes.includes(normalized);
   };
 
   const submitDraftSeeds = (() => {
     const stored = readSubmitDraftStorage();
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
-      return { worker: {}, orchestrator: {} };
+      return { worker: {} };
     }
     return {
       worker:
         typeof stored.worker === "object" && !Array.isArray(stored.worker)
           ? stored.worker
           : {},
-      orchestrator:
-        typeof stored.orchestrator === "object" && !Array.isArray(stored.orchestrator)
-          ? stored.orchestrator
-          : {},
     };
   })();
 
-  const submitDraftController = createSubmitDraftController(
-    submitDraftSeeds.worker || {},
-    submitDraftSeeds.orchestrator || {},
-  );
+  const submitDraftController = createSubmitDraftController(submitDraftSeeds.worker || {});
   const persistSubmitDraftsToStorage = () => {
     writeSubmitDraftStorage({
       worker: submitDraftController.loadWorker(),
-      orchestrator: submitDraftController.loadOrchestrator(),
     });
   };
 
@@ -3396,35 +3272,6 @@
       maxAttempts: baseRequest.maxAttempts,
       taskCreateRequestOverride: baseRequest,
     };
-  }
-
-  function toOrchestratorRows(runs) {
-    return runs.map((run) => ({
-      source: "orchestrator",
-      sourceLabel: "Orchestrator",
-      id: pick(run, "taskId") || pick(run, "runId") || "",
-      queueName: pick(run, "queueName") || "-",
-      runtimeMode: null,
-      skillId: null,
-      rawStatus: pick(run, "status") || "pending",
-      title:
-        pick(run, "targetService") ||
-        pick(run, "instruction") ||
-        "Orchestrator Task",
-      createdAt: pick(run, "queuedAt"),
-      startedAt: pick(run, "startedAt"),
-      finishedAt: pick(run, "completedAt"),
-      updatedAt: pick(run, "updatedAt") || pick(run, "completedAt") || pick(run, "startedAt"),
-      sortTimestamp:
-        pick(run, "updatedAt") ||
-        pick(run, "completedAt") ||
-        pick(run, "startedAt") ||
-        pick(run, "queuedAt"),
-      link: buildUnifiedTaskDetailRoute(
-        pick(run, "taskId") || pick(run, "runId"),
-        "orchestrator",
-      ),
-    }));
   }
 
   function toTemporalRows(items) {
@@ -3679,8 +3526,8 @@
     const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "").trim().toLowerCase();
     const initialTemporalToken = String(initialQuery.get("nextPageToken") || "").trim() || null;
     const allowedSources = temporalListEnabled
-      ? ["", "queue", "orchestrator", "temporal"]
-      : ["", "queue", "orchestrator"];
+      ? ["", "queue", "temporal"]
+      : ["", "queue"];
     setView(
       "Tasks List",
       "Unified tasks across available execution sources.",
@@ -3693,11 +3540,7 @@
       skill: String(initialQuery.get("skill") || "").trim().toLowerCase(),
       stageStatus: String(initialQuery.get("stageStatus") || "").trim().toLowerCase(),
       publishMode: String(initialQuery.get("publishMode") || "").trim().toLowerCase(),
-      source: initialFilterRuntime === ORCHESTRATOR_RUNTIME
-        ? "orchestrator"
-        : allowedSources.includes(initialSource)
-          ? initialSource
-          : "",
+      source: allowedSources.includes(initialSource) ? initialSource : "",
       workflowType: String(initialQuery.get("workflowType") || "").trim(),
       temporalState: String(initialQuery.get("state") || "").trim().toLowerCase(),
       entry: String(initialQuery.get("entry") || "").trim().toLowerCase(),
@@ -3847,7 +3690,6 @@
       const sourceOptions = [
         ["", "All sources"],
         ["queue", "Queue"],
-        ["orchestrator", "Orchestrator"],
         ...(temporalListEnabled ? [["temporal", "Temporal"]] : []),
       ]
         .map(
@@ -4067,8 +3909,8 @@
         filterState.source === "temporal"
           ? "Temporal-backed tasks with exact Temporal pagination."
           : temporalListEnabled
-            ? `Unified queue, orchestrator, and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`
-            : `Unified queue and orchestrator tasks ordered by creation time. Queue: ${defaultQueueName}.`;
+            ? `Unified queue and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`
+            : `Unified queue tasks ordered by creation time. Queue: ${defaultQueueName}.`;
       setView(
         "Tasks List",
         subtitle,
@@ -4971,30 +4813,6 @@
     startPolling(() => load(), pollIntervals.list);
   }
 
-  async function renderOrchestratorListPage() {
-    setView(
-      "Orchestrator Tasks",
-      "Recent orchestrator tasks.",
-      "<p class='loading'>Loading orchestrator tasks...</p>",
-      { showAutoRefreshControls: true },
-    );
-
-    const load = async () => {
-      const payload = await fetchJson(
-        `${orchestratorSourceConfig.list || "/orchestrator/tasks"}?limit=100`,
-      );
-      const rows = sortRows(toOrchestratorRows(payload?.runs || []));
-      setView(
-        "Orchestrator Tasks",
-        "Recent orchestrator tasks.",
-        `<div class="actions"><a href="/tasks/new?runtime=orchestrator"><button type="button" class="queue-submit-primary">New Orchestrator Task</button></a></div>${renderRowsTable(rows)}`,
-        { showAutoRefreshControls: true },
-      );
-    };
-
-    startPolling(load, pollIntervals.list);
-  }
-
   function renderQueueSubmitPage(presetRuntime, editContext = null) {
     const isEditMode =
       Boolean(editContext) &&
@@ -5059,18 +4877,6 @@
     const queueDraftSteps = Array.isArray(sanitizedWorkerDraft.steps)
       ? sanitizedWorkerDraft.steps
       : [];
-    const fallbackOrchestratorDraft = submitDraftController.loadOrchestrator();
-    const queueDraftTargetService = String(
-      sanitizedWorkerDraft.targetService ||
-      fallbackOrchestratorDraft.targetService ||
-      "orchestrator",
-    ).trim();
-    const queueDraftOrchestratorPriority = normalizeOrchestratorPriority(
-      sanitizedWorkerDraft.orchestratorPriority || fallbackOrchestratorDraft.priority || "normal",
-    );
-    const queueDraftApprovalToken = String(
-      sanitizedWorkerDraft.approvalToken || "",
-    ).trim();
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
     const attachmentAcceptedTypes = attachmentPolicy.allowedContentTypes.join(",");
     const attachmentSectionHtml =
@@ -5147,24 +4953,6 @@
         <label>Runtime
           <select name="runtime">
             ${runtimeOptions}
-          </select>
-        </label>
-        <div class="grid-2" data-runtime-visibility="orchestrator">
-          <label>Target Service (Orchestrator)
-            <input name="targetService" value="${escapeHtml(
-        queueDraftTargetService || "orchestrator",
-      )}" placeholder="orchestrator" />
-          </label>
-          <label>Approval Token (Orchestrator, optional)
-            <input name="approvalToken" value="${escapeHtml(
-        queueDraftApprovalToken,
-      )}" placeholder="optional" />
-          </label>
-        </div>
-        <label data-runtime-visibility="orchestrator">Orchestrator Priority
-          <select name="orchestratorPriority">
-            <option value="normal" ${queueDraftOrchestratorPriority === "normal" ? "selected" : ""}>normal</option>
-            <option value="high" ${queueDraftOrchestratorPriority === "high" ? "selected" : ""}>high</option>
           </select>
         </label>
         <datalist id="queue-model-options">
@@ -5392,10 +5180,7 @@
       const runtimeRaw = String(formData.get("runtime") || defaultTaskRuntime)
         .trim()
         .toLowerCase();
-      const runtime =
-        runtimeRaw === ORCHESTRATOR_RUNTIME
-          ? ORCHESTRATOR_RUNTIME
-          : normalizeTaskRuntimeInput(runtimeRaw);
+      const runtime = normalizeTaskRuntimeInput(runtimeRaw);
       const priority = Number(formData.get("priority") || 0);
       const maxAttempts = Number(formData.get("maxAttempts") || 3);
       return {
@@ -5419,11 +5204,6 @@
         priority: Number.isFinite(priority) ? priority : 0,
         maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 3,
         proposeTasks: formData.get("proposeTasks") !== null,
-        targetService: String(formData.get("targetService") || "orchestrator").trim(),
-        approvalToken: String(formData.get("approvalToken") || "").trim(),
-        orchestratorPriority: normalizeOrchestratorPriority(
-          formData.get("orchestratorPriority") || "normal",
-        ),
         steps: cloneStepStateEntries(stepState),
         templateFeatureRequest: readQueueTemplateFeatureRequest(),
       };
@@ -5560,23 +5340,16 @@
       runtimeSelect.addEventListener("change", (event) => {
         const selectedRuntime =
           String(event.target.value || "").trim().toLowerCase();
-        if (isEditMode && selectedRuntime === ORCHESTRATOR_RUNTIME) {
+        const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
+        if (!nextRuntime) {
           message.className = "notice error queue-submit-message";
-          message.textContent = "Queued task edits must target a worker runtime.";
+          message.textContent = "Select a supported worker runtime.";
           runtimeSelect.value = activeWorkerRuntime;
           return;
         }
-        if (selectedRuntime === ORCHESTRATOR_RUNTIME) {
-          activeWorkerRuntime = selectedRuntime;
-          applyQueueSubmitRuntimeUiState(selectedRuntime);
-          applyRuntimeDefaults(defaultTaskRuntime);
-          refreshSkillDatalist();
-          return;
-        }
-        const nextRuntime = normalizeTaskRuntimeInput(selectedRuntime);
-        activeWorkerRuntime = nextRuntime || activeWorkerRuntime;
+        activeWorkerRuntime = nextRuntime;
         applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
-        loadRuntimeCapabilities(nextRuntime || defaultTaskRuntime);
+        loadRuntimeCapabilities(nextRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
       });
@@ -5860,11 +5633,7 @@
     renderStepEditor();
     persistWorkerDraft();
     const refreshSkillDatalist = () => {
-      const runtimeForSkills =
-        runtimeSelect && String(runtimeSelect.value || "").trim().toLowerCase() === ORCHESTRATOR_RUNTIME
-          ? "orchestrator"
-          : "worker";
-      loadAvailableSkillIds(runtimeForSkills).then((skillIds) => {
+      loadAvailableSkillIds("worker").then((skillIds) => {
         populateSkillDatalist("queue-skill-options", skillIds);
       });
     };
@@ -6486,19 +6255,11 @@
       const normalizedRuntimeCandidate = String(runtimeCandidate || "")
         .trim()
         .toLowerCase();
-      const runtimeMode =
-        normalizedRuntimeCandidate === ORCHESTRATOR_RUNTIME
-          ? ORCHESTRATOR_RUNTIME
-          : normalizeTaskRuntimeInput(normalizedRuntimeCandidate);
+      const runtimeMode = normalizeTaskRuntimeInput(normalizedRuntimeCandidate);
       if (!runtimeMode) {
         message.className = "notice error queue-submit-message";
         message.textContent =
           "Runtime must be one of: " + listSubmitRuntimes().join(", ") + ".";
-        return;
-      }
-      if (isEditMode && runtimeMode === ORCHESTRATOR_RUNTIME) {
-        message.className = "notice error queue-submit-message";
-        message.textContent = "Queued task edits must target a worker runtime.";
         return;
       }
 
@@ -6515,10 +6276,7 @@
       const priority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
         priority: formData.get("priority"),
       });
-      if (
-        runtimeMode !== ORCHESTRATOR_RUNTIME &&
-        !Number.isInteger(priority)
-      ) {
+      if (!Number.isInteger(priority)) {
         message.className = "notice error queue-submit-message";
         message.textContent = "Priority must be an integer.";
         return;
@@ -6624,125 +6382,6 @@
         message.textContent = additionalStepValidation.error;
         return;
       }
-      if (runtimeMode === ORCHESTRATOR_RUNTIME) {
-        const targetService = String(
-          formData.get("targetService") || "orchestrator",
-        ).trim();
-        if (!targetService) {
-          message.className = "notice error queue-submit-message";
-          message.textContent = "Target service is required for orchestrator tasks.";
-          return;
-        }
-        const orchestratorPriority = resolveQueueSubmitPriorityForRuntime(runtimeMode, {
-          orchestratorPriority: formData.get("orchestratorPriority"),
-        });
-        const approvalToken = String(formData.get("approvalToken") || "").trim();
-        const orchestratorSteps = [];
-        for (let index = 0; index < stepState.length; index += 1) {
-          const rawStep = stepState[index] || {};
-          const stepInstructions = String(rawStep.instructions || "").trim();
-          const stepSkillId = String(rawStep.skillId || "").trim();
-          const stepSkillArgsRaw = shouldShowSkillArgs(rawStep)
-            ? String(rawStep.skillArgs || "").trim()
-            : "";
-          const hasStepContent =
-            Boolean(stepInstructions) || Boolean(stepSkillId) || Boolean(stepSkillArgsRaw);
-          if (!hasStepContent) {
-            continue;
-          }
-          if (!stepInstructions) {
-            message.className = "notice error queue-submit-message";
-            message.textContent = `Step ${index + 1} instructions are required for orchestrator tasks.`;
-            return;
-          }
-          if (!stepSkillId || stepSkillId.toLowerCase() === "auto") {
-            message.className = "notice error queue-submit-message";
-            message.textContent = `Step ${index + 1} requires an explicit skill id (not auto).`;
-            return;
-          }
-          let stepSkillArgs = {};
-          if (stepSkillArgsRaw) {
-            try {
-              const parsed = JSON.parse(stepSkillArgsRaw);
-              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                throw new Error("Skill args must be a JSON object.");
-              }
-              stepSkillArgs = parsed;
-            } catch (_error) {
-              message.className = "notice error queue-submit-message";
-              message.textContent = `Step ${index + 1} Skill Args must be valid JSON object text.`;
-              return;
-            }
-          }
-          const candidateId = normalizeDashboardDetailSegment(rawStep.id);
-          const stepNumber = orchestratorSteps.length + 1;
-          orchestratorSteps.push({
-            id: candidateId || `step-${stepNumber}`,
-            title: `Step ${stepNumber}`,
-            instructions: stepInstructions,
-            skill: {
-              id: stepSkillId,
-              args: stepSkillArgs,
-            },
-          });
-        }
-        if (orchestratorSteps.length === 0) {
-          message.className = "notice error queue-submit-message";
-          message.textContent = "Add at least one orchestrator step with instructions and skill.";
-          return;
-        }
-
-        const orchestratorRequestBody = {
-          instruction: objectiveInstructions,
-          targetService,
-          priority: orchestratorPriority,
-          steps: orchestratorSteps,
-          ...(approvalToken ? { approvalToken } : {}),
-        };
-
-        if (submitButton instanceof HTMLButtonElement) {
-          submitButton.disabled = true;
-        }
-
-        try {
-          const created = await fetchJson(
-            orchestratorSourceConfig.create || "/orchestrator/tasks",
-            {
-              method: "POST",
-              body: JSON.stringify(orchestratorRequestBody),
-            },
-          );
-          const createdTaskId = String(
-            pick(created, "taskId") || pick(created, "runId") || "",
-          ).trim();
-          if (!createdTaskId) {
-            throw new Error("orchestrator task create response missing task id");
-          }
-          try {
-            clearWorkerSubmissionDraftAfterCreate();
-          } catch (cleanupError) {
-            console.warn(
-              "worker draft cleanup failed after orchestrator creation",
-              cleanupError,
-            );
-          }
-          window.location.href = buildUnifiedTaskDetailRoute(
-            createdTaskId,
-            "orchestrator",
-          );
-          return;
-        } catch (error) {
-          if (submitButton instanceof HTMLButtonElement) {
-            submitButton.disabled = false;
-          }
-          console.error("orchestrator submit failed", error);
-          message.className = "notice error queue-submit-message";
-          message.textContent =
-            "Unable to create orchestrator task. Please try again or contact an administrator.";
-          return;
-        }
-      }
-
       const includePrimaryStepForObjectiveOverride =
         Boolean(instructions) && objectiveInstructions !== instructions;
       const hasTemplateBoundStep = stepState.some((step) => Boolean(String(step?.id || "").trim()));
@@ -6932,7 +6571,6 @@
         runtimeMode,
         {
           queue: queueSourceConfig.create || "/api/queue/jobs",
-          orchestrator: orchestratorSourceConfig.create || "/orchestrator/tasks",
           temporal: temporalSourceConfig.create || "/api/executions",
         },
         {
@@ -7197,169 +6835,6 @@
     // Use the unified queue submit form for every supported runtime so runtime
     // visibility toggles are consistently applied from one code path.
     renderQueueSubmitPage(normalizedRuntime);
-  }
-
-  function renderOrchestratorSubmitPage() {
-    const sanitizedOrchestratorDraft = submitDraftController.loadOrchestrator();
-    const defaultOrchestratorDraftPriority = normalizeOrchestratorPriority(
-      sanitizedOrchestratorDraft.priority || "normal",
-    );
-    const selectedOrchestratorRuntime = ORCHESTRATOR_RUNTIME;
-    const runtimeOptions = renderRuntimeOptions(
-      listSubmitRuntimes(),
-      selectedOrchestratorRuntime,
-    );
-
-    setView(
-      "Submit Orchestrator Run",
-      "Queue an orchestrator action plan.",
-      `
-      <form id="orchestrator-submit-form">
-        <label>Runtime
-          <select name="runtime">
-            ${runtimeOptions}
-          </select>
-        </label>
-        <label>Instruction
-          <textarea name="instruction" placeholder="Describe what should be changed and verified.">${escapeHtml(
-        String(sanitizedOrchestratorDraft.instruction || "").trim(),
-      )}</textarea>
-        </label>
-        <label>Target Service
-          <input name="targetService" required value="${escapeHtml(
-        String(sanitizedOrchestratorDraft.targetService || "orchestrator").trim(),
-      )}" placeholder="orchestrator" />
-        </label>
-        <div class="grid-2">
-          <label>Priority
-            <select name="priority">
-              <option value="normal" ${defaultOrchestratorDraftPriority === "normal" ? "selected" : ""}>normal</option>
-              <option value="high" ${defaultOrchestratorDraftPriority === "high" ? "selected" : ""}>high</option>
-            </select>
-          </label>
-          <label>Approval Token
-            <input
-              name="approvalToken"
-              value=""
-              placeholder="optional"
-            />
-          </label>
-        </div>
-        <label>Skill (optional)
-          <input
-            name="skillId"
-            value="${escapeHtml(String(sanitizedOrchestratorDraft.skillId || "").trim())}"
-            placeholder="auto"
-          />
-        </label>
-        <label>Skill Args (optional JSON object)
-          <textarea name="skillArgs" placeholder='{"notes":"optional context"}'>${escapeHtml(
-        String(sanitizedOrchestratorDraft.skillArgs || "").trim(),
-      )}</textarea>
-        </label>
-        <div class="actions">
-          <button type="submit" class="queue-submit-primary">Create Orchestrator Task</button>
-          <a href="/tasks/list?filterRuntime=orchestrator"><button class="secondary" type="button">Cancel</button></a>
-        </div>
-        <p class="small" id="orchestrator-submit-message"></p>
-      </form>
-      `,
-    );
-
-    const form = document.getElementById("orchestrator-submit-form");
-    const message = document.getElementById("orchestrator-submit-message");
-    if (!form || !message) {
-      return;
-    }
-    const collectOrchestratorDraftFromForm = () => {
-      const formData = new FormData(form);
-      return {
-        instruction: String(formData.get("instruction") || "").trim(),
-        targetService: String(formData.get("targetService") || "orchestrator").trim(),
-        priority: normalizeOrchestratorPriority(formData.get("priority") || "normal"),
-        skillId: String(formData.get("skillId") || "").trim(),
-        skillArgs: String(formData.get("skillArgs") || "").trim(),
-      };
-    };
-    const collectOrchestratorSubmissionFromForm = () => {
-      const draft = collectOrchestratorDraftFromForm();
-      const approvalToken = String(new FormData(form).get("approvalToken") || "").trim();
-      return {
-        ...draft,
-        ...(approvalToken ? { approvalToken } : {}),
-      };
-    };
-    const persistOrchestratorDraft = () => {
-      submitDraftController.saveOrchestrator(collectOrchestratorDraftFromForm());
-      persistSubmitDraftsToStorage();
-    };
-    const scheduleOrchestratorDraftPersist = createDraftPersistenceScheduler(
-      persistOrchestratorDraft,
-    );
-    form.addEventListener("input", scheduleOrchestratorDraftPersist);
-    form.addEventListener("change", scheduleOrchestratorDraftPersist);
-    const runtimeSelect = form.querySelector('select[name="runtime"]');
-    if (runtimeSelect) {
-      runtimeSelect.addEventListener("change", (event) => {
-        const selectedRuntime = String(event.target.value || "").trim();
-        const normalizedRuntime = validateSubmitRuntime(selectedRuntime);
-        if (!normalizedRuntime) {
-          message.className = "notice error";
-          message.textContent = `Unsupported runtime selected: ${selectedRuntime || "(empty)"
-            }.`;
-          runtimeSelect.value = ORCHESTRATOR_RUNTIME;
-          return;
-        }
-        if (normalizedRuntime === ORCHESTRATOR_RUNTIME) {
-          return;
-        }
-        if (!isWorkerSubmitRuntime(normalizedRuntime)) {
-          message.className = "notice error";
-          message.textContent = `Unsupported worker runtime selected: ${normalizedRuntime}.`;
-          runtimeSelect.value = ORCHESTRATOR_RUNTIME;
-          return;
-        }
-        persistOrchestratorDraft();
-        window.location.href = `/tasks/queue/new?runtime=${encodeURIComponent(
-          normalizedRuntime,
-        )}`;
-      });
-    }
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      message.className = "small";
-      message.textContent = "Submitting...";
-
-      const draft = collectOrchestratorSubmissionFromForm();
-      const validation = validateOrchestratorSubmission(draft);
-      if (!validation.ok) {
-        message.className = "notice error";
-        message.textContent = validation.error;
-        return;
-      }
-      const body = validation.value;
-      submitDraftController.saveOrchestrator(collectOrchestratorDraftFromForm());
-      persistSubmitDraftsToStorage();
-
-      try {
-        const created = await fetchJson(
-          orchestratorSourceConfig.create || "/orchestrator/tasks",
-          {
-            method: "POST",
-            body: JSON.stringify(body),
-          },
-        );
-        window.location.href = buildUnifiedTaskDetailRoute(
-          pick(created, "taskId") || pick(created, "runId"),
-          "orchestrator",
-        );
-      } catch (error) {
-        console.error("orchestrator submit failed", error);
-        message.className = "notice error";
-        message.textContent = "Failed to create orchestrator task.";
-      }
-    });
   }
 
   async function renderQueueDetailPage(jobId) {
@@ -10320,7 +9795,7 @@
         resolvedId = payloadTaskId;
       }
 
-      return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
+      return ["queue", "temporal"].includes(resolvedSource)
         ? { source: resolvedSource, resolvedId }
         : { source: "", resolvedId: "" };
     }
@@ -10330,107 +9805,13 @@
           endpoint(taskSourceResolverEndpoint, { taskId: safeTaskId }),
         );
         const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
-        return ["queue", "orchestrator", "temporal"].includes(resolvedSource)
+        return ["queue", "temporal"].includes(resolvedSource)
           ? { source: resolvedSource, resolvedId: safeTaskId }
           : { source: "", resolvedId: "" };
       } catch (_fallbackError) {
         return { source: "", resolvedId: "" };
       }
     }
-  }
-
-  async function renderOrchestratorDetailPage(runId) {
-    setView(
-      "Orchestrator Task Detail",
-      `Task ${runId}`,
-      "<p class='loading'>Loading orchestrator task...</p>",
-      { showAutoRefreshControls: true },
-    );
-
-    const load = async () => {
-      try {
-        const detailEndpoint = orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}";
-        const artifactsEndpoint =
-          orchestratorSourceConfig.artifacts || "/orchestrator/tasks/{id}/artifacts";
-        const replacements = { id: runId, taskId: runId, runId };
-        const [run, artifactsPayload] = await Promise.all([
-          fetchJson(endpoint(detailEndpoint, replacements)),
-          fetchJson(endpoint(artifactsEndpoint, replacements)),
-        ]);
-
-        const taskSteps = pick(run, "taskSteps");
-        const legacySteps = pick(run, "steps");
-        const steps =
-          Array.isArray(taskSteps) && taskSteps.length > 0
-            ? taskSteps
-            : Array.isArray(legacySteps)
-              ? legacySteps
-              : [];
-        const stepRows = steps
-          .map(
-            (step) => `
-              <tr>
-                <td>${escapeHtml(pick(step, "title") || pick(step, "stepId") || pick(step, "name") || "")}</td>
-                <td>${escapeHtml(pick(step, "status") || pick(step, "celeryState") || "-")}</td>
-                <td>${formatTimestamp(pick(step, "startedAt"))}</td>
-                <td>${formatTimestamp(pick(step, "finishedAt") || pick(step, "completedAt"))}</td>
-              </tr>
-            `,
-          )
-          .join("");
-
-        setView(
-          "Orchestrator Task Detail",
-          `Task ${runId}`,
-          `
-            <div class="grid-2">
-              <div class="card"><strong>Status:</strong> ${statusBadge(
-            "orchestrator",
-            pick(run, "status"),
-          )}</div>
-              <div class="card"><strong>Service:</strong> ${escapeHtml(
-            pick(run, "targetService") || "-",
-          )}</div>
-              <div class="card"><strong>Priority:</strong> ${escapeHtml(
-            pick(run, "priority") || "-",
-          )}</div>
-              <div class="card"><strong>Started:</strong> ${formatTimestamp(
-            pick(run, "startedAt"),
-          )}</div>
-            </div>
-            <div class="stack">
-              <section>
-                <h3>Plan Steps</h3>
-                <table>
-                  <thead><tr><th>Step</th><th>Status</th><th>Started</th><th>Completed</th></tr></thead>
-                  <tbody>${stepRows || "<tr><td colspan='4' class='small'>No steps yet.</td></tr>"}</tbody>
-                </table>
-              </section>
-              <section>
-                <h3>Artifacts</h3>
-                <table>
-                  <thead><tr><th>Name/Path</th><th>Size</th><th>Type</th><th>Reference</th></tr></thead>
-                  <tbody>${renderArtifactsRows(artifactsPayload?.artifacts || []) ||
-          "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
-          }</tbody>
-                </table>
-              </section>
-            </div>
-          `,
-          { showAutoRefreshControls: true },
-        );
-      } catch (error) {
-        console.error("orchestrator detail load failed", error);
-        setView(
-          "Orchestrator Task Detail",
-          `Task ${runId}`,
-          "<div class='notice error'>Failed to load task detail.</div>",
-          { showAutoRefreshControls: true },
-        );
-      }
-    };
-
-    startPolling(load, pollIntervals.detail);
   }
 
   async function renderProposalsListPage() {
@@ -11646,7 +11027,8 @@
       return;
     }
     if (normalizedRoute === "/tasks/orchestrator/new") {
-      await renderSubmitWorkPage("orchestrator");
+      window.history.replaceState({}, "", "/tasks/queue/new");
+      await renderSubmitWorkPage(undefined);
       return;
     }
 
@@ -11656,7 +11038,7 @@
     }
     if (orchestratorDetailMatch) {
       window.location.replace(
-        `/tasks/${encodeURIComponent(orchestratorDetailMatch[1])}?source=orchestrator`,
+        `/tasks/${encodeURIComponent(orchestratorDetailMatch[1])}`,
       );
       return;
     }
@@ -11683,7 +11065,7 @@
         return;
       }
       if (explicitSource === "orchestrator") {
-        await renderOrchestratorDetailPage(resolvedId || candidateTaskId);
+        renderNotFound();
         return;
       }
       if (explicitSource === "temporal" && temporalDetailEnabled) {
@@ -11696,7 +11078,7 @@
         return;
       }
       if (resolvedSource === "orchestrator") {
-        await renderOrchestratorDetailPage(resolvedId);
+        renderNotFound();
         return;
       }
       if (resolvedSource === "temporal" && temporalDetailEnabled) {
@@ -11712,19 +11094,6 @@
           }),
         );
         await renderQueueDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        // fall through and probe orchestrator
-      }
-      try {
-        await fetchJson(
-          endpoint(orchestratorSourceConfig.detail || "/orchestrator/tasks/{id}", {
-            id: candidateTaskId,
-            runId: candidateTaskId,
-            taskId: candidateTaskId,
-          }),
-        );
-        await renderOrchestratorDetailPage(candidateTaskId);
         return;
       } catch (_error) {
         // fall through and probe temporal

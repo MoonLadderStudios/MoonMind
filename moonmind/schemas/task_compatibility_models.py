@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TaskSource = Literal["queue", "orchestrator", "temporal"]
+TaskSource = Literal["queue", "temporal"]
 TaskStatus = Literal[
     "queued",
     "running",

@@ -173,9 +173,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         == "/api/artifacts/{artifactId}/download"
     )
     assert "speckit" not in config["sources"]
-    assert config["sources"]["orchestrator"]["list"] == "/orchestrator/tasks"
-    assert config["sources"]["orchestrator"]["create"] == "/orchestrator/tasks"
-    assert config["sources"]["orchestrator"]["detail"] == "/orchestrator/tasks/{id}"
+    assert "orchestrator" not in config["sources"]
     temporal_dashboard = config["features"]["temporalDashboard"]
     assert temporal_dashboard["enabled"] is True
     assert temporal_dashboard["listEnabled"] is True

@@ -13,7 +13,7 @@ from api_service.db import models as db_models
 from moonmind.workflows.agent_queue import models as queue_models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 
-TaskSource = Literal["queue", "orchestrator", "temporal"]
+TaskSource = Literal["queue", "temporal"]
 
 
 class TaskResolutionNotFoundError(RuntimeError):
@@ -115,21 +115,6 @@ class TaskSourceMappingService:
         )
         return self._serialize_mapping(mapping)
 
-    async def upsert_orchestrator_run(
-        self,
-        run: db_models.OrchestratorRun,
-    ) -> ResolvedTaskSource:
-        mapping = await self.upsert_mapping(
-            task_id=str(run.id),
-            source="orchestrator",
-            entry=None,
-            source_record_id=str(run.id),
-            workflow_id=None,
-            owner_type=None,
-            owner_id=None,
-        )
-        return self._serialize_mapping(mapping)
-
     async def upsert_temporal_execution(
         self,
         record: db_models.TemporalExecutionRecord,
@@ -221,13 +206,6 @@ class TaskSourceMappingService:
         if queue_job is not None:
             matches["queue"] = await self.upsert_queue_job(queue_job)
 
-        orchestrator_run = await self._session.get(
-            db_models.OrchestratorRun, parsed_uuid
-        )
-        if orchestrator_run is not None:
-            matches["orchestrator"] = await self.upsert_orchestrator_run(
-                orchestrator_run
-            )
         return matches
 
     def _serialize_mapping(

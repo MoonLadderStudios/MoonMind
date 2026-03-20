@@ -31,6 +31,7 @@ from moonmind.workflows.adapters.jules_client import JulesClient
 
 from api_service.db.base import get_async_session_context
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -202,6 +203,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_codex_cloud_fetch_result",
     ),
     "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
+    "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -1321,7 +1323,7 @@ class TemporalSandboxActivities:
         )
 
 
-class TemporalJulesActivities:
+class TemporalIntegrationActivities:
     """Implementation helpers for ``integration.jules.*``."""
 
     def __init__(
@@ -1940,6 +1942,26 @@ class TemporalJulesActivities:
             terminal=result.terminal,
         )
 
+    async def integration_openclaw_execute(
+        self,
+        request: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        """Run one OpenClaw streaming execution; heartbeats carry stream progress."""
+
+        from moonmind.openclaw.execute import run_openclaw_execution
+
+        body = _coerce_activity_request(
+            request, activity_type="integration.openclaw.execute"
+        )
+        if not body:
+            raise TemporalActivityRuntimeError(
+                "integration.openclaw.execute requires AgentExecutionRequest payload"
+            )
+        req = AgentExecutionRequest.model_validate(body)
+        result = await run_openclaw_execution(req)
+        return result.model_dump(mode="json", by_alias=True)
+
 
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""
@@ -2529,7 +2551,7 @@ __all__ = [
     "TemporalActivityBinding",
     "TemporalActivityRuntimeError",
     "TemporalAgentRuntimeActivities",
-    "TemporalJulesActivities",
+    "TemporalIntegrationActivities",
     "TemporalPlanActivities",
     "TemporalProposalActivities",
     "TemporalSkillActivities",
