@@ -349,7 +349,7 @@ class MoonMindAgentRun:
                                 # Poll via Temporal activity (determinism-safe).
                                 status_dict = await workflow.execute_activity(
                                     f"integration.{self._external_agent_id}.status",
-                                    self.run_id,
+                                    {"external_id": self.run_id},
                                     task_queue=INTEGRATIONS_TASK_QUEUE,
                                     start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
@@ -377,7 +377,7 @@ class MoonMindAgentRun:
                         # Fetch result via Temporal activity.
                         result_dict = await workflow.execute_activity(
                             f"integration.{self._external_agent_id}.fetch_result",
-                            self.run_id,
+                            {"external_id": self.run_id},
                             task_queue=INTEGRATIONS_TASK_QUEUE,
                             start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
@@ -446,7 +446,7 @@ class MoonMindAgentRun:
                         # Route external cancel through integration activity.
                         await workflow.execute_activity(
                             f"integration.{self._external_agent_id}.cancel",
-                            self.run_id,
+                            {"external_id": self.run_id},
                             task_queue=INTEGRATIONS_TASK_QUEUE,
                             start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
                         )
