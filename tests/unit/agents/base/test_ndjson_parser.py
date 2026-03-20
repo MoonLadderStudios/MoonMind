@@ -4,6 +4,7 @@ import json
 
 from moonmind.agents.base.ndjson_parser import (
     CursorStreamEvent,
+    detect_rate_limit,
     parse_ndjson_line,
     parse_ndjson_stream,
 )
@@ -135,3 +136,60 @@ def test_parse_ndjson_stream_skips_malformed():
     assert len(events) == 2
     assert events[0].event_type == "system"
     assert events[1].event_type == "result"
+
+
+# --- Rate-limit detection tests ---
+
+
+def test_detect_rate_limit_429_status():
+    """Detect rate limit from status=429."""
+    event = CursorStreamEvent(
+        event_type="error",
+        data={"status": 429, "error": "Too many requests"},
+    )
+    result = detect_rate_limit(event)
+    assert result["detected"] is True
+    assert result["retry_after_seconds"] is None
+
+
+def test_detect_rate_limit_429_status_code():
+    """Detect rate limit from statusCode=429."""
+    event = CursorStreamEvent(
+        event_type="error",
+        data={"statusCode": 429, "retry_after": 60},
+    )
+    result = detect_rate_limit(event)
+    assert result["detected"] is True
+    assert result["retry_after_seconds"] == 60
+
+
+def test_detect_rate_limit_error_text():
+    """Detect rate limit from error message text."""
+    event = CursorStreamEvent(
+        event_type="error",
+        data={"error": "You have been rate limited, please wait"},
+    )
+    result = detect_rate_limit(event)
+    assert result["detected"] is True
+
+
+def test_detect_rate_limit_message_text():
+    """Detect rate limit from message field containing 'too many requests'."""
+    event = CursorStreamEvent(
+        event_type="error",
+        data={"message": "Too many requests, slow down"},
+    )
+    result = detect_rate_limit(event)
+    assert result["detected"] is True
+
+
+def test_detect_rate_limit_not_detected():
+    """No rate-limit indicators returns detected=False."""
+    event = CursorStreamEvent(
+        event_type="assistant",
+        data={"text": "Here is the solution"},
+    )
+    result = detect_rate_limit(event)
+    assert result["detected"] is False
+    assert result["retry_after_seconds"] is None
+

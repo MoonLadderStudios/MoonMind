@@ -73,3 +73,57 @@ def parse_ndjson_stream(lines: Iterable[str]) -> Iterator[CursorStreamEvent]:
         event = parse_ndjson_line(line)
         if event is not None:
             yield event
+
+
+_RATE_LIMIT_PHRASES: tuple[str, ...] = (
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "too many requests",
+)
+
+
+def detect_rate_limit(event: CursorStreamEvent) -> dict[str, Any]:
+    """Scan a :class:`CursorStreamEvent` for rate-limit / 429 indicators.
+
+    Returns a dict with:
+    - ``detected`` (bool): whether rate-limiting was detected.
+    - ``retry_after_seconds`` (int | None): suggested wait time if available.
+
+    Detection checks:
+    1. ``event.data.status`` or ``event.data.statusCode`` equal to 429.
+    2. ``event.data.error`` or ``event.data.message`` containing rate-limit
+       phrases (case-insensitive).
+    """
+    data = event.data or {}
+
+    # Check HTTP status codes.
+    status = data.get("status") or data.get("statusCode")
+    if status is not None:
+        try:
+            if int(status) == 429:
+                retry_after = _extract_retry_after(data)
+                return {"detected": True, "retry_after_seconds": retry_after}
+        except (ValueError, TypeError):
+            pass
+
+    # Check error / message text for rate-limit phrases.
+    for key in ("error", "message"):
+        text = str(data.get(key, "")).lower()
+        if any(phrase in text for phrase in _RATE_LIMIT_PHRASES):
+            retry_after = _extract_retry_after(data)
+            return {"detected": True, "retry_after_seconds": retry_after}
+
+    return {"detected": False, "retry_after_seconds": None}
+
+
+def _extract_retry_after(data: dict[str, Any]) -> int | None:
+    """Try to extract a ``retry_after`` / ``retryAfter`` value from *data*."""
+    for key in ("retry_after", "retryAfter", "Retry-After", "retry-after"):
+        raw = data.get(key)
+        if raw is not None:
+            try:
+                return int(raw)
+            except (ValueError, TypeError):
+                pass
+    return None
