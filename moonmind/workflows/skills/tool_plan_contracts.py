@@ -15,7 +15,8 @@ ARTIFACT_REF_PREFIX = "art:sha256:"
 REGISTRY_DIGEST_PREFIX = "reg:sha256:"
 SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
 SUPPORTED_FAILURE_MODES = frozenset({"FAIL_FAST", "CONTINUE"})
-SKILL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+TOOL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+SKILL_RESULT_STATUSES = TOOL_RESULT_STATUSES  # backward-compat alias
 REVIEW_VERDICTS = frozenset({"PASS", "FAIL", "INCONCLUSIVE"})
 DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
 EXPLICIT_BINDING_REASONS = frozenset(
@@ -24,7 +25,7 @@ EXPLICIT_BINDING_REASONS = frozenset(
 _DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
 _LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
 OBSERVABILITY_OUTCOMES = frozenset({"succeeded", "failed", "cancelled", "partial"})
-SKILL_FAILURE_CODES = frozenset(
+TOOL_FAILURE_CODES = frozenset(
     {
         "INVALID_INPUT",
         "PERMISSION_DENIED",
@@ -38,6 +39,7 @@ SKILL_FAILURE_CODES = frozenset(
         "INTERNAL",
     }
 )
+SKILL_FAILURE_CODES = TOOL_FAILURE_CODES  # backward-compat alias
 TEMPORAL_ARTIFACT_ID_PATTERN = re.compile(r"^art_[0-9A-HJKMNP-TV-Z]{26}$")
 
 
@@ -124,8 +126,8 @@ class ArtifactRef:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillPolicyTimeouts:
-    """Activity timeout policy defaults for one skill definition."""
+class ToolPolicyTimeouts:
+    """Activity timeout policy defaults for one tool definition."""
 
     start_to_close_seconds: int
     schedule_to_close_seconds: int
@@ -153,8 +155,8 @@ class SkillPolicyTimeouts:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillPolicyRetries:
-    """Retry policy defaults for one skill definition."""
+class ToolPolicyRetries:
+    """Retry policy defaults for one tool definition."""
 
     max_attempts: int
     backoff: str = "exponential"
@@ -177,11 +179,11 @@ class SkillPolicyRetries:
 
 
 @dataclass(frozen=True, slots=True)
-class SkillPolicies:
-    """Default execution policies for a skill definition."""
+class ToolPolicies:
+    """Default execution policies for a tool definition."""
 
-    timeouts: SkillPolicyTimeouts
-    retries: SkillPolicyRetries
+    timeouts: ToolPolicyTimeouts
+    retries: ToolPolicyRetries
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -240,7 +242,7 @@ class ToolDefinition:
     output_schema: Mapping[str, Any]
     executor: ToolExecutorBinding
     required_capabilities: tuple[str, ...]
-    policies: SkillPolicies
+    policies: ToolPolicies
     allowed_roles: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -373,10 +375,10 @@ class ToolResult:
     progress: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.status not in SKILL_RESULT_STATUSES:
+        if self.status not in TOOL_RESULT_STATUSES:
             raise ContractValidationError(
                 "invalid_result",
-                f"status must be one of {sorted(SKILL_RESULT_STATUSES)}",
+                f"status must be one of {sorted(TOOL_RESULT_STATUSES)}",
             )
         if not isinstance(self.outputs, Mapping):
             raise ContractValidationError("invalid_result", "outputs must be an object")
@@ -941,8 +943,8 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
             for capability in caps_raw
             if str(capability).strip()
         ),
-        policies=SkillPolicies(
-            timeouts=SkillPolicyTimeouts(
+        policies=ToolPolicies(
+            timeouts=ToolPolicyTimeouts(
                 start_to_close_seconds=int(
                     timeout_payload.get("start_to_close_seconds") or 0
                 ),
@@ -950,7 +952,7 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
                     timeout_payload.get("schedule_to_close_seconds") or 0
                 ),
             ),
-            retries=SkillPolicyRetries(
+            retries=ToolPolicyRetries(
                 max_attempts=int(retry_payload.get("max_attempts") or 0),
                 backoff=str(retry_payload.get("backoff") or "exponential").strip(),
                 non_retryable_error_codes=tuple(
@@ -962,6 +964,11 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
     )
 
 
+# Backward-compatible aliases — existing consumers can keep importing Skill*
+SkillPolicyTimeouts = ToolPolicyTimeouts
+SkillPolicyRetries = ToolPolicyRetries
+SkillPolicies = ToolPolicies
+
 __all__ = [
     "ARTIFACT_REF_PREFIX",
     "REGISTRY_DIGEST_PREFIX",
@@ -969,7 +976,10 @@ __all__ = [
     "REVIEW_VERDICTS",
     "SUPPORTED_PLAN_VERSIONS",
     "SUPPORTED_FAILURE_MODES",
+    "TOOL_FAILURE_CODES",
+    "TOOL_RESULT_STATUSES",
     "SKILL_FAILURE_CODES",
+    "SKILL_RESULT_STATUSES",
     "ArtifactRef",
     "ActivityExecutionContext",
     "ActivityInvocationEnvelope",
@@ -988,6 +998,9 @@ __all__ = [
     "ToolExecutorBinding",
     "ToolFailure",
     "Step",
+    "ToolPolicies",
+    "ToolPolicyRetries",
+    "ToolPolicyTimeouts",
     "SkillPolicies",
     "SkillPolicyRetries",
     "SkillPolicyTimeouts",
