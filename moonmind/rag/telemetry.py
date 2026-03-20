@@ -7,7 +7,9 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
-from moonmind.workflows.orchestrator.metrics import get_metrics_client
+from moonmind.utils.metrics import _MetricsEmitter
+
+_metrics = _MetricsEmitter()
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +18,7 @@ class VectorTelemetry:
     """Best-effort telemetry tracker that emits StatsD metrics and structured logs."""
 
     def __init__(self, *, run_id: Optional[str], job_id: Optional[str]) -> None:
-        self._metrics = get_metrics_client()
+        self._metrics = _metrics
         self._run_id = run_id
         self._job_id = job_id
 
@@ -29,7 +31,7 @@ class VectorTelemetry:
 
     def timing(self, event: str, *, milliseconds: float, **extra: Any) -> None:
         metric = f"rag.{event}.latency_ms"
-        self._metrics.timing(metric, milliseconds)
+        self._metrics.observe(metric, value=milliseconds / 1000.0)
         self.record(event, duration_ms=milliseconds, **extra)
 
     @contextmanager

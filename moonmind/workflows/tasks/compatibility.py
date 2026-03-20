@@ -24,7 +24,7 @@ from moonmind.workflows.agent_queue import models as queue_models
 from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.tasks.source_mapping import TaskSourceMappingService
 
-TaskSourceFilter = Literal["queue", "orchestrator", "temporal", "all"] | None
+TaskSourceFilter = Literal["queue", "temporal", "all"] | None
 TaskStatusFilter = (
     Literal[
         "queued",
@@ -46,14 +46,6 @@ _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.SUCCEEDED: "succeeded",
     db_models.MoonMindWorkflowState.FAILED: "failed",
     db_models.MoonMindWorkflowState.CANCELED: "cancelled",
-}
-_ORCHESTRATOR_STATUS_MAP: dict[db_models.OrchestratorRunStatus, str] = {
-    db_models.OrchestratorRunStatus.PENDING: "queued",
-    db_models.OrchestratorRunStatus.RUNNING: "running",
-    db_models.OrchestratorRunStatus.AWAITING_APPROVAL: "awaiting_action",
-    db_models.OrchestratorRunStatus.SUCCEEDED: "succeeded",
-    db_models.OrchestratorRunStatus.ROLLED_BACK: "succeeded",
-    db_models.OrchestratorRunStatus.FAILED: "failed",
 }
 _QUEUE_STATUS_MAP: dict[queue_models.AgentJobStatus, str] = {
     queue_models.AgentJobStatus.QUEUED: "queued",
@@ -168,7 +160,7 @@ class TaskCompatibilityService:
         self,
         *,
         task_id: str,
-        source_hint: Literal["queue", "orchestrator", "temporal"] | None,
+        source_hint: Literal["queue", "temporal"] | None,
         user: db_models.User,
     ) -> TaskCompatibilityDetail:
         resolved = await self._source_mappings.resolve_task(
@@ -208,18 +200,13 @@ class TaskCompatibilityService:
             if job is None:
                 raise RuntimeError(f"Queue task {task_id} disappeared.")
             return self._build_queue_detail(job)
-        run = await self._session.get(
-            db_models.OrchestratorRun, UUID(resolved.source_record_id)
-        )
-        if run is None:
-            raise RuntimeError(f"Orchestrator task {task_id} disappeared.")
-        return self._build_orchestrator_detail(run)
+        raise RuntimeError(f"Unsupported task source for detail: {resolved.source}")
 
     async def _load_rows(
         self,
         *,
         user: db_models.User,
-        source: Literal["queue", "orchestrator", "temporal", "all"],
+        source: Literal["queue", "temporal", "all"],
         entry: Literal["run", "manifest"] | None,
         workflow_type: str | None,
         status_filter: TaskStatusFilter,
@@ -240,14 +227,6 @@ class TaskCompatibilityService:
             )
             rows.extend(queue_rows)
             total_count += queue_count
-        if source in {"all", "orchestrator"}:
-            orchestrator_rows, orchestrator_count = await self._load_orchestrator_rows(
-                entry=entry,
-                status_filter=status_filter,
-                limit=window_end,
-            )
-            rows.extend(orchestrator_rows)
-            total_count += orchestrator_count
         if source in {"all", "temporal"}:
             temporal_rows, temporal_count = await self._load_temporal_rows(
                 user=user,
@@ -305,38 +284,6 @@ class TaskCompatibilityService:
         for job in jobs:
             row = self._build_queue_row(job)
             await self._source_mappings.upsert_queue_job(job)
-            normalized.append(row)
-        return normalized, total_count
-
-    async def _load_orchestrator_rows(
-        self,
-        *,
-        entry: Literal["run", "manifest"] | None,
-        status_filter: TaskStatusFilter,
-        limit: int,
-    ) -> tuple[list[TaskCompatibilityRow], int]:
-        if entry == "manifest":
-            return [], 0
-        stmt = select(db_models.OrchestratorRun)
-        orchestrator_statuses = self._orchestrator_statuses_for_filter(status_filter)
-        if orchestrator_statuses == ():
-            return [], 0
-        if orchestrator_statuses is not None:
-            stmt = stmt.where(
-                db_models.OrchestratorRun.status.in_(orchestrator_statuses)
-            )
-        count_stmt = select(func.count()).select_from(stmt.subquery())
-        stmt = stmt.order_by(
-            db_models.OrchestratorRun.queued_at.desc(),
-            db_models.OrchestratorRun.updated_at.desc(),
-            db_models.OrchestratorRun.id.desc(),
-        ).limit(limit)
-        runs = list((await self._session.execute(stmt)).scalars().all())
-        total_count = int((await self._session.execute(count_stmt)).scalar_one())
-        normalized: list[TaskCompatibilityRow] = []
-        for run in runs:
-            row = self._build_orchestrator_row(run)
-            await self._source_mappings.upsert_orchestrator_run(run)
             normalized.append(row)
         return normalized, total_count
 
@@ -449,34 +396,6 @@ class TaskCompatibilityService:
             publishMode=self._extract_publish_mode(payload),
         )
 
-    def _build_orchestrator_row(
-        self,
-        run: db_models.OrchestratorRun,
-    ) -> TaskCompatibilityRow:
-        return TaskCompatibilityRow(
-            taskId=str(run.id),
-            source="orchestrator",
-            entry="run",
-            title=str(run.target_service or "").strip() or "Orchestrator Task",
-            summary=str(run.instruction or "").strip() or None,
-            status=_ORCHESTRATOR_STATUS_MAP.get(run.status, "queued"),
-            rawState=run.status.value,
-            workflowId=None,
-            workflowType=None,
-            ownerType=None,
-            ownerId=None,
-            createdAt=run.queued_at,
-            startedAt=run.started_at or run.queued_at,
-            updatedAt=run.updated_at,
-            closedAt=run.completed_at,
-            artifactsCount=len(run.artifacts or []),
-            detailHref=f"/tasks/{run.id}?source=orchestrator",
-            queueName="-",
-            runtimeMode="orchestrator",
-            skillId=None,
-            publishMode=None,
-        )
-
     def _build_temporal_row(
         self,
         record: db_models.TemporalExecutionRecord,
@@ -545,20 +464,6 @@ class TaskCompatibilityService:
             debug=TaskDebugContext(),
         )
 
-    def _build_orchestrator_detail(
-        self,
-        run: db_models.OrchestratorRun,
-    ) -> TaskCompatibilityDetail:
-        row = self._build_orchestrator_row(run)
-        return TaskCompatibilityDetail(
-            **row.model_dump(),
-            artifactRefs=[str(artifact.id) for artifact in (run.artifacts or [])],
-            actions=TaskActionAvailability(
-                approve=run.status is db_models.OrchestratorRunStatus.AWAITING_APPROVAL
-            ),
-            debug=TaskDebugContext(),
-        )
-
     def _build_temporal_detail(
         self,
         record: db_models.TemporalExecutionRecord,
@@ -617,9 +522,9 @@ class TaskCompatibilityService:
     def _normalize_source(
         self,
         source: TaskSourceFilter,
-    ) -> Literal["queue", "orchestrator", "temporal", "all"]:
+    ) -> Literal["queue", "temporal", "all"]:
         normalized = str(source or "all").strip().lower()
-        if normalized not in {"queue", "orchestrator", "temporal", "all"}:
+        if normalized not in {"queue", "temporal", "all"}:
             raise ValueError(f"Unsupported source filter: {source}")
         return normalized  # type: ignore[return-value]
 
@@ -790,25 +695,6 @@ class TaskCompatibilityService:
                 queue_models.AgentJobStatus.DEAD_LETTER,
             ),
             "cancelled": (queue_models.AgentJobStatus.CANCELLED,),
-        }
-        return mapping[status_filter]
-
-    def _orchestrator_statuses_for_filter(
-        self,
-        status_filter: TaskStatusFilter,
-    ) -> tuple[db_models.OrchestratorRunStatus, ...] | None:
-        if status_filter is None:
-            return None
-        mapping = {
-            "queued": (db_models.OrchestratorRunStatus.PENDING,),
-            "running": (db_models.OrchestratorRunStatus.RUNNING,),
-            "awaiting_action": (db_models.OrchestratorRunStatus.AWAITING_APPROVAL,),
-            "succeeded": (
-                db_models.OrchestratorRunStatus.SUCCEEDED,
-                db_models.OrchestratorRunStatus.ROLLED_BACK,
-            ),
-            "failed": (db_models.OrchestratorRunStatus.FAILED,),
-            "cancelled": (),
         }
         return mapping[status_filter]
 

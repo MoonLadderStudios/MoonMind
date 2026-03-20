@@ -12,7 +12,7 @@ This document defines MoonMind's **Temporal migration architecture**:
 - what MoonMind runs **today**
 - what MoonMind is moving **toward**
 - which design decisions are already **locked**
-- how current task/orchestrator flows map into Temporal-native workflow execution
+- how current task and queue flows map into Temporal-native workflow execution
 
 This is intentionally a **bridge document**. It does not pretend the current runtime is already fully Temporal-backed, and it does not duplicate every low-level decision from the more specific Temporal docs.
 
@@ -23,8 +23,6 @@ This is intentionally a **bridge document**. It does not pretend the current run
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/MoonMindArchitecture.md`
-- `docs/OrchestratorArchitecture.md`
-- `docs/OrchestratorTaskRuntime.md`
 
 ## 3. Current state and target state
 
@@ -36,8 +34,7 @@ MoonMind currently operates with:
 - Postgres-backed task/run state
 - runtime-specific workers for Codex, Gemini, and Claude
 - an agent/task queue model
-- Celery + RabbitMQ automation for spec workflow and orchestrator paths
-- `mm-orchestrator` for repo mutation, compose build/restart, verification, and rollback
+- Celery + RabbitMQ automation for spec workflow paths
 
 This is the current documented and implemented direction in the repository, not legacy trivia.
 
@@ -58,7 +55,7 @@ In the target state:
 
 ### 3.3 Non-goals
 
-- Claiming Celery, the agent queue, or orchestrator task records are already gone
+- Claiming Celery or the agent queue are already gone
 - Rewriting all public APIs around Temporal terms in one step
 - Exposing Temporal task queues as a user-visible queue product with ordering guarantees
 
@@ -104,14 +101,13 @@ During migration, the system may expose more than one identifier:
 | Identifier | Meaning | Status |
 | --- | --- | --- |
 | `taskId` | Current MoonMind task handle used by UI and compatibility APIs | Required during migration |
-| `runId` | Legacy orchestrator compatibility identifier | Transitional only |
+| `runId` | Historical identifier in some compatibility payloads | Transitional only |
 | `workflowId` | Temporal Workflow ID | Canonical for Temporal-managed executions |
 | `temporalRunId` | Temporal run instance identifier | Detail/debug use only |
 
 Rules:
 
 - Public task APIs may return both `taskId` and `workflowId` during migration
-- Legacy orchestrator APIs may still require `runId` compatibility for a period
 - `workflowId` is the durable Temporal identity
 - `temporalRunId` is not the primary product handle
 
@@ -126,7 +122,6 @@ MoonMind currently contains:
 - Qdrant
 - runtime workers
 - Celery + RabbitMQ stack
-- `mm-orchestrator`
 - Temporal foundation services in Compose
 
 ### 6.2 Target Temporal shape
@@ -155,7 +150,7 @@ For Temporal-managed flows, the architecture becomes:
    - activity workers execute side-effecting work under capability and secret boundaries
 
 5. **Compatibility adapters**
-   - bridge current task/orchestrator APIs and UI surfaces onto Temporal-backed workflows where needed
+   - bridge current task APIs and UI surfaces onto Temporal-backed workflows where needed
 
 ### 6.3 Container reference
 
@@ -343,7 +338,7 @@ No Temporal ports are published to the host by default. The `temporal-ui` contai
 
 ### Phase 0: Current production path
 
-- Queue tasks, Celery automation, and orchestrator task records remain canonical for current runtime features
+- Queue tasks and Celery automation remain canonical for current runtime features not yet on Temporal
 - Temporal foundation may be present but is not yet the primary execution substrate
 
 ### Phase 1: Temporal foundation
@@ -363,7 +358,7 @@ No Temporal ports are published to the host by default. The `temporal-ui` contai
 
 - new durable orchestration flows start on Temporal by default
 - Temporal Visibility becomes the source of truth for Temporal-managed list/detail surfaces
-- compatibility adapters remain for legacy queue/orchestrator records still in flight
+- compatibility adapters remain for legacy queue records still in flight
 
 ### Phase 4: Legacy decommission
 
@@ -377,7 +372,7 @@ Only after parity is proven:
 
 | Current concept | Temporal-aligned concept | Notes |
 | --- | --- | --- |
-| Queue task / orchestrator task | Workflow Execution plus MoonMind compatibility row | User may still see `task` while runtime is a workflow |
+| Queue task | Workflow Execution plus MoonMind compatibility row | User may still see `task` while runtime is a workflow |
 | `ActionPlan` | `Plan` artifact plus workflow orchestration logic | Plan stays a MoonMind domain concept |
 | Step | Plan node, activity call, or child workflow | Depends on isolation and retry boundary |
 | `prepare -> execute -> publish` | workflow phases reflected in `mm_state` and artifacts | Keep phase meaning, change substrate |
@@ -415,7 +410,7 @@ Initial catalog:
 Do not create separate workflow type families just for:
 
 - Codex vs Gemini vs Claude
-- queue task vs orchestrator task
+- queue task vs Temporal workflow execution
 - worker brand or provider choice
 
 Those are routing and execution concerns, not root orchestration categories.
@@ -502,7 +497,6 @@ That keeps workflow state small and makes retries safer.
 MoonMind's product surface is still task-oriented. Near-term list/detail experiences may need to unify:
 
 - queue-backed tasks
-- orchestrator-backed tasks
 - Temporal-backed workflow executions
 
 ### 12.2 Target Temporal model
@@ -536,13 +530,11 @@ Canonical search attributes and memo fields should align with the newer workflow
 
 ### 13.1 During migration
 
-Public APIs should remain compatible with current task/orchestrator contracts where active product specs require that compatibility.
+Public APIs should remain compatible with current task contracts where active product specs require that compatibility.
 
 That includes:
 
 - `/tasks/*` list/detail flows
-- `/orchestrator/tasks*` compatibility routes
-- `/orchestrator/runs*` transitional support where still required
 
 ### 13.2 Temporal-backed operations
 
@@ -621,7 +613,7 @@ The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules 
 
 ## 17. Decommission criteria for legacy systems
 
-Do not remove Celery, the agent queue, or orchestrator persistence just because a Temporal design exists on paper.
+Do not remove Celery or the agent queue just because a Temporal design exists on paper.
 
 Retirement should require all of the following for a given flow:
 
@@ -643,7 +635,7 @@ Retirement should require all of the following for a given flow:
 
 MoonMind is not yet a purely Temporal product, but it is intentionally moving in that direction. The correct architecture stance is:
 
-- acknowledge the current task/orchestrator runtime honestly
+- acknowledge the current task and queue runtime honestly
 - adopt Temporal-native workflow, activity, visibility, and schedule concepts where they are now the target
 - keep public compatibility layers explicit during migration
 - avoid reintroducing MoonMind-specific abstractions where Temporal already provides the right primitive

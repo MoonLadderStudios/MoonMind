@@ -66,14 +66,13 @@ The table below focuses on **what each container does** in the running system.
 | `api-db`                | Postgres                                                                          | Durable application state                                                          | Stores job/run state (queue jobs, workflow runs), user/auth state, etc. The “durable execution state” part of the system. ([GitHub][1])                                                 |
 | `qdrant`                | `qdrant/qdrant`                                                                   | Vector store for embeddings / retrieval                                            | Primary vector DB backing LlamaIndex retrieval for chat and `/context`. ([GitHub][1])                                                                                                   |
 | `init-db`               | MoonMind image                                                                    | One-shot initializer                                                               | Bootstraps/initializes the DB + Qdrant index (ingestion bootstrap) then exits. Useful for first-run setup and repeatable environment bring-up. ([GitHub][3])                            |
-| `agent-workspaces-init` | Alpine                                                                            | One-shot volume prep                                                               | Creates/fixes permissions for the `agent_workspaces` volume used by workers/orchestrator. Prevents “root-owned volume” pain and makes worker runs more deterministic. ([GitHub][3])     |
+| `agent-workspaces-init` | Alpine                                                                            | One-shot volume prep                                                               | Creates/fixes permissions for the `agent_workspaces` volume used by workers. Prevents “root-owned volume” pain and makes worker runs more deterministic. ([GitHub][3])     |
 | `codex-auth-init`       | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the persistent volume used to store Codex/CLI auth material so worker containers can reuse tokens across restarts. ([GitHub][3])                                            |
 | `gemini-auth-init`      | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the Gemini CLI auth volume (OAuth/token material) for the Gemini runtime worker(s). ([GitHub][3])                                                                           |
 | `claude-auth-init`      | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the Claude auth volume for Claude runtime worker(s). ([GitHub][3])                                                                                                          |
 | `codex-worker`          | MoonMind image                                                                    | Runtime worker (Codex)                                                             | Runs Temporal activities using the Codex runtime & tooling installed in the image. ([GitHub][2])                                                                                        |
 | `gemini-worker`         | MoonMind image                                                                    | Runtime worker (Gemini)                                                            | Same worker pattern, configured for Gemini runtime; uses a persistent Gemini auth volume and Temporal task queue routing/capabilities for Gemini execution. ([GitHub][2])               |
 | `claude-worker`         | MoonMind image                                                                    | Runtime worker (Claude)                                                            | Optional Temporal activity worker for Claude; typically enabled via a compose profile. ([GitHub][2])                                                                                    |
-| `orchestrator`          | MoonMind image                                                                    | “Orchestrator worker”                                                              | Runs a Temporal worker intended for orchestration sequences involving codebase patching, compose restarts, and verifications. ([GitHub][3])                                               |
 | `temporal-db`           | Postgres                                                                          | Temporal persistence + SQL visibility backend                                      | Stores Temporal workflow state/history metadata and advanced visibility data for all managed flows. ([GitHub][3])                                                                       |
 | `temporal`              | `temporalio/auto-setup`                                                           | Temporal server                                                                    | Provides workflow orchestration, timers, retries, schedules, and visibility for Temporal-managed executions. ([GitHub][3])                                                              |
 | `temporal-namespace-init` | MoonMind/bootstrap helper                                                       | Namespace bootstrap                                                                | Applies MoonMind namespace and retention defaults idempotently during environment bring-up. ([GitHub][3])                                                                               |
@@ -102,7 +101,6 @@ MoonMind explicitly separates **persistent volume/bootstrap concerns** (permissi
 | Service              | Purpose                                                                                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pytest`             | Runs unit tests inside the project image with test dependencies enabled. ([GitHub][6])                                                         |
-| `orchestrator-tests` | Runs integration tests focused on orchestrator workflows. ([GitHub][6])                                                                        |
 | `cli-tooling-smoke`  | Verifies CLI tooling is present (`codex --version`, `agentkit --version`), which is important because workers rely on these CLIs. ([GitHub][6]) |
 
 ---
@@ -171,23 +169,6 @@ Why this matters:
 
 * It gives agent runtimes (OpenHands or others) a standardized interface to MoonMind’s routing, RAG, and policy layers.
 * It decouples agent UX/runtime from specific model vendors, since routing happens inside MoonMind. ([GitHub][7])
-
----
-
-## Orchestrator architecture (mm-orchestrator)
-
-MoonMind’s orchestrator architecture doc describes an “operator agent” container that can:
-
-* Interpret high-level instructions
-* Safely modify code/Dockerfiles
-* Rebuild and relaunch services in a compose stack
-* Verify health and rollback if necessary ([GitHub][9])
-
-It explicitly chooses **Docker-outside-of-Docker (DooD)** (mount the host Docker socket) as the control mechanism, using `docker compose` as the control plane. ([GitHub][9])
-
-Operational implication:
-
-* This enables powerful self-healing/automation on a single host (no Kubernetes required), but it also requires careful security controls because Docker socket access is effectively host-root access. ([GitHub][9])
 
 ---
 
@@ -267,5 +248,5 @@ Why this matters:
 ### Security posture highlights
 
 * Task queue design includes explicit rules to prevent leaking secrets into payloads and to avoid confusing user inputs with worker outputs. ([GitHub][2])
-* Orchestrator/docker-outside-of-docker is powerful but sensitive; MoonMind recognizes this explicitly and recommends policy/safety measures around Docker socket access. ([GitHub][9])
+* Workers that need Docker use a restricted `docker-socket-proxy`; direct host-socket exposure should be avoided. ([GitHub][3])
 * Optional OIDC via Keycloak exists for stronger identity management. ([GitHub][3])

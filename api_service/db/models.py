@@ -35,7 +35,6 @@ from sqlalchemy.orm import (
     Mapped,
     mapped_column,
     relationship,
-    validates,
 )
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy_utils import EncryptedType
@@ -363,20 +362,6 @@ __all__ = [
     "RecurringTaskRunTrigger",
     "RecurringTaskScheduleType",
     "RecurringTaskScopeType",
-    "ApprovalGate",
-    "OrchestratorActionPlan",
-    "OrchestratorRun",
-    "OrchestratorRunArtifact",
-    "OrchestratorTaskStep",
-    "OrchestratorRunStatus",
-    "OrchestratorRunPriority",
-    "OrchestratorPlanStep",
-    "OrchestratorPlanStepStatus",
-    "OrchestratorPlanOrigin",
-    "OrchestratorApprovalRequirement",
-    "OrchestratorRunArtifactType",
-    "OrchestratorTaskState",
-    "OrchestratorTaskStepStatus",
     "TemporalWorkflowType",
     "MoonMindWorkflowState",
     "TemporalExecutionCloseStatus",
@@ -427,24 +412,6 @@ class ApproverRoleListType(TypeDecorator):
         if value is None:
             return []
         return list(value)
-
-
-class OrchestratorRunStatus(str, enum.Enum):
-    """Lifecycle states tracked for orchestrator runs."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    AWAITING_APPROVAL = "awaiting_approval"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    ROLLED_BACK = "rolled_back"
-
-
-class OrchestratorRunPriority(str, enum.Enum):
-    """Execution priority for orchestrator runs."""
-
-    NORMAL = "normal"
-    HIGH = "high"
 
 
 class TaskTemplateScopeType(str, enum.Enum):
@@ -660,27 +627,6 @@ class TaskStepTemplateRecent(Base):
     )
 
 
-class OrchestratorPlanStep(str, enum.Enum):
-    """Supported steps inside an orchestrator ActionPlan."""
-
-    ANALYZE = "analyze"
-    PATCH = "patch"
-    BUILD = "build"
-    RESTART = "restart"
-    VERIFY = "verify"
-    ROLLBACK = "rollback"
-
-
-class OrchestratorPlanStepStatus(str, enum.Enum):
-    """Statuses describing plan step execution progress."""
-
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-
 class WorkflowRunStatus(str, enum.Enum):
     """Lifecycle states tracked for Spec workflow runs."""
 
@@ -808,53 +754,6 @@ class TemporalArtifactUploadMode(str, enum.Enum):
 
     SINGLE_PUT = "single_put"
     MULTIPART = "multipart"
-
-
-class OrchestratorPlanOrigin(str, enum.Enum):
-    """Source responsible for generating an ActionPlan."""
-
-    OPERATOR = "operator"
-    LLM = "llm"
-    SYSTEM = "system"
-
-
-class OrchestratorApprovalRequirement(str, enum.Enum):
-    """Approval enforcement options for protected services."""
-
-    NONE = "none"
-    PRE_RUN = "pre-run"
-    PRE_VERIFY = "pre-verify"
-
-
-class OrchestratorRunArtifactType(str, enum.Enum):
-    """Classifications for artifacts stored per orchestrator run."""
-
-    PATCH_DIFF = "patch_diff"
-    BUILD_LOG = "build_log"
-    VERIFY_LOG = "verify_log"
-    ROLLBACK_LOG = "rollback_log"
-    METRICS = "metrics"
-    PLAN_SNAPSHOT = "plan_snapshot"
-
-
-class OrchestratorTaskState(str, enum.Enum):
-    """State transitions recorded for orchestrator steps."""
-
-    PENDING = "PENDING"
-    STARTED = "STARTED"
-    RETRY = "RETRY"
-    SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
-
-
-class OrchestratorTaskStepStatus(str, enum.Enum):
-    """Status values persisted for orchestrator task runtime steps."""
-
-    QUEUED = "queued"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    SKIPPED = "skipped"
 
 
 class TemporalWorkflowType(str, enum.Enum):
@@ -1314,331 +1213,6 @@ class TaskSourceMapping(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
-    )
-
-
-class ApprovalGate(Base):
-    """Approval policies applied to orchestrator runs."""
-
-    __tablename__ = "approval_gates"
-    __table_args__ = (
-        UniqueConstraint("service_name", name="uq_approval_gates_service_name"),
-        CheckConstraint(
-            "valid_for_minutes >= 5", name="ck_approval_gates_min_duration"
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    service_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    requirement: Mapped[OrchestratorApprovalRequirement] = mapped_column(
-        Enum(
-            OrchestratorApprovalRequirement,
-            name="orchestratorapprovalrequirement",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=OrchestratorApprovalRequirement.NONE,
-        server_default=OrchestratorApprovalRequirement.NONE.value,
-    )
-    approver_roles: Mapped[list[str]] = mapped_column(
-        MutableList.as_mutable(ApproverRoleListType()),
-        nullable=False,
-        default=list,
-    )
-    valid_for_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    runs: Mapped[list["OrchestratorRun"]] = relationship(
-        "OrchestratorRun",
-        back_populates="approval_gate",
-    )
-
-    @validates("approver_roles", "requirement")
-    def _validate_roles(
-        self,
-        key: str,
-        value: Any,
-    ) -> Any:
-        roles: list[str]
-        requirement = self.requirement
-        if key == "approver_roles":
-            roles = list(value or [])
-        else:
-            roles = list(self.approver_roles or [])
-        if key == "requirement":
-            requirement = value
-
-        if (
-            requirement is not None
-            and requirement != OrchestratorApprovalRequirement.NONE
-            and len(roles) == 0
-        ):
-            raise ValueError(
-                "approver_roles must be provided when approvals are required"
-            )
-        return value
-
-
-class OrchestratorActionPlan(Base):
-    """Serialized representation of an orchestrator ActionPlan."""
-
-    __tablename__ = "orchestrator_action_plans"
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    steps: Mapped[list[dict[str, Any]]] = mapped_column(
-        mutable_json_list(), nullable=False
-    )
-    service_context: Mapped[dict[str, Any]] = mapped_column(
-        mutable_json_dict(), nullable=False
-    )
-    generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    generated_by: Mapped[OrchestratorPlanOrigin] = mapped_column(
-        Enum(
-            OrchestratorPlanOrigin,
-            name="orchestratorplanorigin",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=OrchestratorPlanOrigin.SYSTEM,
-        server_default=OrchestratorPlanOrigin.SYSTEM.value,
-    )
-
-    runs: Mapped[list["OrchestratorRun"]] = relationship(
-        "OrchestratorRun",
-        back_populates="action_plan",
-    )
-
-
-class OrchestratorRun(Base):
-    """Top-level record describing a single orchestrator execution."""
-
-    __tablename__ = "orchestrator_runs"
-    __table_args__ = (
-        CheckConstraint(
-            "completed_at IS NULL OR (started_at IS NOT NULL AND completed_at >= started_at)",
-            name="ck_orchestrator_runs_timestamps",
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    instruction: Mapped[str] = mapped_column(Text, nullable=False)
-    target_service: Mapped[str] = mapped_column(String(255), nullable=False)
-    priority: Mapped[OrchestratorRunPriority] = mapped_column(
-        Enum(
-            OrchestratorRunPriority,
-            name="orchestratorrunpriority",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=OrchestratorRunPriority.NORMAL,
-        server_default=OrchestratorRunPriority.NORMAL.value,
-    )
-    status: Mapped[OrchestratorRunStatus] = mapped_column(
-        Enum(
-            OrchestratorRunStatus,
-            name="orchestratorrunstatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=OrchestratorRunStatus.PENDING,
-        server_default=OrchestratorRunStatus.PENDING.value,
-    )
-    queued_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    approval_token: Mapped[Optional[str]] = mapped_column(
-        EncryptedType(Text, get_encryption_key), nullable=True
-    )
-    metrics_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        mutable_json_dict(), nullable=True
-    )
-    artifact_root: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
-    action_plan_id: Mapped[UUID] = mapped_column(
-        Uuid,
-        ForeignKey("orchestrator_action_plans.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    approval_gate_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey("approval_gates.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    action_plan: Mapped[OrchestratorActionPlan] = relationship(
-        "OrchestratorActionPlan",
-        back_populates="runs",
-    )
-    approval_gate: Mapped[Optional[ApprovalGate]] = relationship(
-        "ApprovalGate",
-        back_populates="runs",
-    )
-    artifacts: Mapped[list["OrchestratorRunArtifact"]] = relationship(
-        "OrchestratorRunArtifact",
-        back_populates="run",
-        cascade="all, delete-orphan",
-        order_by="OrchestratorRunArtifact.created_at",
-    )
-    task_states: Mapped[list["WorkflowTaskState"]] = relationship(
-        "WorkflowTaskState",
-        back_populates="orchestrator_run",
-        cascade="all, delete-orphan",
-        order_by="WorkflowTaskState.created_at",
-    )
-    task_steps: Mapped[list["OrchestratorTaskStep"]] = relationship(
-        "OrchestratorTaskStep",
-        back_populates="run",
-        cascade="all, delete-orphan",
-        order_by="OrchestratorTaskStep.step_index",
-    )
-
-
-class OrchestratorRunArtifact(Base):
-    """Metadata describing files captured during orchestrator runs."""
-
-    __tablename__ = "orchestrator_run_artifacts"
-    __table_args__ = (
-        UniqueConstraint(
-            "run_id", "artifact_type", "path", name="uq_orchestrator_artifact_path"
-        ),
-        CheckConstraint(
-            "size_bytes IS NULL OR size_bytes >= 0",
-            name="ck_orchestrator_artifacts_size_non_negative",
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("orchestrator_runs.id", ondelete="CASCADE"), nullable=False
-    )
-    artifact_type: Mapped[OrchestratorRunArtifactType] = mapped_column(
-        Enum(
-            OrchestratorRunArtifactType,
-            name="orchestratorrunartifacttype",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-    )
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    checksum: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-
-    run: Mapped[OrchestratorRun] = relationship(
-        "OrchestratorRun",
-        back_populates="artifacts",
-    )
-
-
-class OrchestratorTaskStep(Base):
-    """Arbitrary orchestrator task steps persisted outside the fixed enum flow."""
-
-    __tablename__ = "orchestrator_task_steps"
-    __table_args__ = (
-        UniqueConstraint("task_id", "step_id", name="uq_orchestrator_task_step_id"),
-        CheckConstraint("step_index >= 0", name="ck_orchestrator_task_step_index"),
-        CheckConstraint(
-            "attempt >= 1", name="ck_orchestrator_task_step_attempt_positive"
-        ),
-        Index("ix_orchestrator_task_steps_task_id", "task_id", "step_index"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    task_id: Mapped[UUID] = mapped_column(
-        Uuid,
-        ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    step_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    instructions: Mapped[str] = mapped_column(Text, nullable=False)
-    skill_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    skill_args: Mapped[dict[str, Any]] = mapped_column(
-        mutable_json_dict(), nullable=False, default=dict
-    )
-    status: Mapped[OrchestratorTaskStepStatus] = mapped_column(
-        Enum(
-            OrchestratorTaskStepStatus,
-            name="orchestratortaskstepstatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=False,
-        default=OrchestratorTaskStepStatus.QUEUED,
-        server_default=OrchestratorTaskStepStatus.QUEUED.value,
-    )
-    attempt: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default=text("1")
-    )
-    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    artifact_refs: Mapped[list[str]] = mapped_column(
-        mutable_json_list(), nullable=False, default=list
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    run: Mapped[OrchestratorRun] = relationship(
-        "OrchestratorRun",
-        back_populates="task_steps",
     )
 
 
@@ -2108,9 +1682,8 @@ class WorkflowTaskState(Base):
     __tablename__ = "workflow_task_states"
     __table_args__ = (
         CheckConstraint(
-            "(workflow_run_id IS NOT NULL AND orchestrator_run_id IS NULL) OR "
-            "(workflow_run_id IS NULL AND orchestrator_run_id IS NOT NULL)",
-            name="ck_workflow_task_state_run_id_exclusive",
+            "workflow_run_id IS NOT NULL",
+            name="ck_workflow_task_state_workflow_run_required",
         ),
         UniqueConstraint(
             "workflow_run_id",
@@ -2118,44 +1691,25 @@ class WorkflowTaskState(Base):
             "attempt",
             name="uq_workflow_task_state_attempt",
         ),
-        UniqueConstraint(
-            "orchestrator_run_id",
-            "plan_step",
-            "attempt",
-            name="uq_orchestrator_task_state_attempt",
-        ),
         Index("ix_workflow_task_states_run_id", "workflow_run_id"),
         Index(
             "ix_workflow_task_states_failed",
             "workflow_run_id",
             postgresql_where=text("status = 'failed'"),
         ),
-        Index(
-            "ix_workflow_task_states_orchestrator_run_id",
-            "orchestrator_run_id",
-        ),
         CheckConstraint(
-            "(orchestrator_run_id IS NULL) OR (plan_step IS NOT NULL)",
-            name="ck_workflow_task_state_orchestrator_plan_step",
-        ),
-        CheckConstraint(
-            "(workflow_run_id IS NULL) OR (task_name IS NOT NULL)",
+            "task_name IS NOT NULL",
             name="ck_workflow_task_state_task_name_required",
         ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    workflow_run_id: Mapped[Optional[UUID]] = mapped_column(
+    workflow_run_id: Mapped[UUID] = mapped_column(
         Uuid,
         ForeignKey("workflow_runs.id", ondelete="CASCADE"),
-        nullable=True,
+        nullable=False,
     )
-    orchestrator_run_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey("orchestrator_runs.id", ondelete="CASCADE"),
-        nullable=True,
-    )
-    task_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    task_name: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[WorkflowTaskStatus] = mapped_column(
         Enum(
             WorkflowTaskStatus,
@@ -2169,36 +1723,6 @@ class WorkflowTaskState(Base):
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
-    )
-    plan_step: Mapped[Optional[OrchestratorPlanStep]] = mapped_column(
-        Enum(
-            OrchestratorPlanStep,
-            name="orchestratorplanstep",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=True,
-    )
-    plan_step_status: Mapped[Optional[OrchestratorPlanStepStatus]] = mapped_column(
-        Enum(
-            OrchestratorPlanStepStatus,
-            name="orchestratorplanstepstatus",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=True,
-    )
-    worker_state: Mapped[Optional[OrchestratorTaskState]] = mapped_column(
-        Enum(
-            OrchestratorTaskState,
-            name="orchestratortaskstate",
-            native_enum=True,
-            validate_strings=True,
-            values_callable=_enum_values,
-        ),
-        nullable=True,
     )
     worker_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -2219,19 +1743,10 @@ class WorkflowTaskState(Base):
         onupdate=func.now(),
     )
 
-    workflow_run: Mapped[Optional[WorkflowRun]] = relationship(
+    workflow_run: Mapped[WorkflowRun] = relationship(
         "WorkflowRun",
         back_populates="task_states",
     )
-    orchestrator_run: Mapped[Optional[OrchestratorRun]] = relationship(
-        "OrchestratorRun",
-        back_populates="task_states",
-    )
-
-
-Index("ix_orchestrator_runs_status", OrchestratorRun.status)
-Index("ix_orchestrator_runs_target_service", OrchestratorRun.target_service)
-Index("ix_orchestrator_run_artifacts_run_id", OrchestratorRunArtifact.run_id)
 
 
 class ManagedAgentAuthMode(str, enum.Enum):

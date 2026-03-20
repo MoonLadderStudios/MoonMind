@@ -22,8 +22,6 @@ from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_queue_models import JobListResponse
 from moonmind.workflows.agent_queue.service import AgentQueueService
-from moonmind.workflows.orchestrator.repositories import OrchestratorRepository
-from moonmind.workflows.orchestrator.skill_executor import list_runnable_skill_names
 from moonmind.workflows.skills.resolver import list_available_skill_names
 from moonmind.workflows.tasks.source_mapping import (
     TaskResolutionAmbiguousError,
@@ -50,8 +48,6 @@ _STATIC_PATHS = {
     "queue/new",
     "new",
     "create",
-    "orchestrator",
-    "orchestrator/new",
     "proposals",
     "manifests",
     "manifests/new",
@@ -95,7 +91,7 @@ class TaskSourceResolutionResponse(BaseModel):
     """Canonical source lookup for unified `/tasks/{taskId}` resolution."""
 
     task_id: str = Field(..., alias="taskId")
-    source: Literal["queue", "orchestrator", "temporal"] = Field(..., alias="source")
+    source: Literal["queue", "temporal"] = Field(..., alias="source")
     entry: str | None = Field(None, alias="entry")
     workflow_id: str | None = Field(None, alias="workflowId")
 
@@ -151,7 +147,6 @@ def _is_allowed_path(path: str) -> bool:
         _is_dynamic_detail(path, source)
         for source in (
             "queue",
-            "orchestrator",
             "proposals",
             "manifests",
             "schedules",
@@ -208,7 +203,6 @@ def _build_task_source_response(
 ) -> DashboardTaskSourceResponse:
     source_label = {
         "queue": "Queue",
-        "orchestrator": "Orchestrator",
         "temporal": "Temporal",
     }.get(source, source.title())
     return DashboardTaskSourceResponse(
@@ -223,7 +217,6 @@ async def _resolve_dashboard_task_source(
     *,
     task_id: str,
     queue_service: AgentQueueService,
-    session: AsyncSession,
     temporal_service: TemporalExecutionService,
     user: User,
 ) -> DashboardTaskSourceResponse | None:
@@ -237,10 +230,6 @@ async def _resolve_dashboard_task_source(
         queue_job = await queue_service.get_job(task_uuid)
         if queue_job is not None:
             return _build_task_source_response(task_id=task_id, source="queue")
-
-        orchestrator_run = await OrchestratorRepository(session).get_run(task_uuid)
-        if orchestrator_run is not None:
-            return _build_task_source_response(task_id=task_id, source="orchestrator")
 
     try:
         execution = await temporal_service.describe_execution(task_id)
@@ -297,7 +286,6 @@ async def task_dashboard_route(
                 "message": (
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
                     "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
-                    "/tasks/orchestrator, /tasks/orchestrator/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
                     "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
                 ),
@@ -314,15 +302,11 @@ async def list_dashboard_skills(
     """List currently available skills for task dashboard submission forms."""
 
     worker_skills = list(list_available_skill_names())
-    orchestrator_skills = list(list_runnable_skill_names())
-    legacy_sorted = sorted(
-        set(worker_skills).union(orchestrator_skills),
-        key=str,
-    )
+    legacy_sorted = sorted(set(worker_skills), key=str)
     return DashboardSkillListResponse(
         items={
             "worker": worker_skills,
-            "orchestrator": orchestrator_skills,
+            "orchestrator": [],
         },
         legacyItems=[DashboardSkillOption(id=skill_id) for skill_id in legacy_sorted],
     )
@@ -335,9 +319,7 @@ async def list_dashboard_skills(
 async def resolve_dashboard_task_resolution(
     task_id: str,
     *,
-    source_hint: Literal["queue", "orchestrator", "temporal"] | None = Query(
-        None, alias="source"
-    ),
+    source_hint: Literal["queue", "temporal"] | None = Query(None, alias="source"),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ) -> TaskSourceResolutionResponse:
@@ -413,7 +395,6 @@ async def list_dashboard_tasks(
 async def get_dashboard_task_source(
     task_id: str,
     queue_service: AgentQueueService = Depends(_get_service),
-    session: AsyncSession = Depends(get_async_session),
     temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
     _user: User = Depends(get_current_user()),
 ) -> DashboardTaskSourceResponse:
@@ -422,7 +403,6 @@ async def get_dashboard_task_source(
     resolved = await _resolve_dashboard_task_source(
         task_id=task_id,
         queue_service=queue_service,
-        session=session,
         temporal_service=temporal_service,
         user=_user,
     )

@@ -98,7 +98,7 @@ def test_get_compatibility_task_detail_maps_ambiguity_to_conflict() -> None:
     service = AsyncMock()
     service.get_task_detail.side_effect = TaskResolutionAmbiguousError(
         "legacy-task-id",
-        {"queue", "orchestrator"},
+        {"queue", "temporal"},
     )
 
     with _build_test_app(service) as client:
@@ -109,9 +109,9 @@ def test_get_compatibility_task_detail_maps_ambiguity_to_conflict() -> None:
         "code": "ambiguous_task_source",
         "message": (
             "Task legacy-task-id matches multiple execution sources: "
-            "orchestrator, queue. Retry with an explicit source hint."
+            "queue, temporal. Retry with an explicit source hint."
         ),
-        "sources": ["orchestrator", "queue"],
+        "sources": ["queue", "temporal"],
     }
 
 

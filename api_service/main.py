@@ -39,7 +39,6 @@ from api_service.api.routers.executions import router as executions_router
 from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.models import router as models_router
-from api_service.api.routers.orchestrator import router as orchestrator_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
@@ -316,7 +315,6 @@ app.include_router(auth_profiles_router, prefix="/api/v1")
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
-app.include_router(orchestrator_router)
 app.include_router(agent_queue_router)
 app.include_router(system_worker_pause_router)
 app.include_router(task_runs_router)

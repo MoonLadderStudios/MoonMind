@@ -21,7 +21,7 @@ When creating a new spec folder/feature ID:
 ## Testing Instructions
 - **Unit Tests**: Always use `./tools/test_unit.sh` to run unit tests. This script is the single source of truth for CI and local development, ensuring consistent execution and proper exit codes. It automatically uses `python` and falls back to `python3` when `python` is unavailable. Do not run `pytest` directly or pipe to `tail` as this may mask failures.
 - **WSL Unit Test Mode**: In WSL, `./tools/test_unit.sh` automatically delegates to `./tools/test_unit_docker.sh` (unless `MOONMIND_FORCE_LOCAL_TESTS=1` is set) so tests run in the Docker test environment by default. Use this path when working in WSL.
-- **Integration Tests**: Orchestrator integration tests run via GitHub Actions on main branch pushes or manually. Locally, use `docker compose -f docker-compose.test.yaml run --rm orchestrator-tests`.
+- **Integration Tests**: Run Python integration tests in the test compose image, for example `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -q --tb=short"`, or use `tools/test-integration.ps1` (no args) for the same default.
 
 ## Agent Job Storage Locations
 - Agent jobs are executed in a per-run workspace directory named with the job UUID.
