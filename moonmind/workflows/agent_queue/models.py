@@ -19,7 +19,7 @@ from sqlalchemy import (
     Text,
     Uuid,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy_utils import EncryptedType
 
@@ -179,9 +179,8 @@ class AgentJob(Base):
         back_populates="job",
         cascade="all, delete-orphan",
         uselist=False,
-        # DB migration 59830c78b458 dropped the FK; ORM still needs an explicit join.
-        primaryjoin="AgentJob.id == TaskRunLiveSession.task_run_id",
-        foreign_keys="TaskRunLiveSession.task_run_id",
+        # DB migration 59830c78b458 dropped the FK; ORM needs an explicit join.
+        primaryjoin="AgentJob.id == foreign(TaskRunLiveSession.task_run_id)",
     )
     control_events: Mapped[list["TaskRunControlEvent"]] = relationship(
         "TaskRunControlEvent",
@@ -406,8 +405,7 @@ class TaskRunLiveSession(Base):
     job: Mapped[AgentJob] = relationship(
         "AgentJob",
         back_populates="live_session",
-        primaryjoin="TaskRunLiveSession.task_run_id == AgentJob.id",
-        foreign_keys="TaskRunLiveSession.task_run_id",
+        primaryjoin="foreign(TaskRunLiveSession.task_run_id) == AgentJob.id",
     )
 
 
