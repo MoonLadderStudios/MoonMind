@@ -317,6 +317,87 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     service.create_job.assert_awaited_once()
 
 
+def test_create_job_routes_proposal_requested_tasks_to_queue(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task submissions with proposeTasks=true should stay on queue workers."""
+
+    test_client, service = client
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
+    temporal_submit = AsyncMock()
+    monkeypatch.setattr(
+        "api_service.api.routers.agent_queue._create_execution_from_task_request",
+        temporal_submit,
+    )
+
+    job = _build_job()
+    job.type = "task"
+    service.create_job.return_value = job
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "task",
+            "priority": 5,
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {
+                    "instructions": "Add proposal handling coverage",
+                    "proposeTasks": True,
+                },
+            },
+            "maxAttempts": 3,
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_job.assert_awaited_once()
+    temporal_submit.assert_not_awaited()
+
+
+def test_create_job_routes_non_proposal_tasks_to_temporal_when_enabled(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task submissions with proposeTasks=false should keep Temporal routing."""
+
+    test_client, service = client
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
+    execution = SimpleNamespace(
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        started_at=None,
+    )
+    temporal_submit = AsyncMock(return_value=execution)
+    monkeypatch.setattr(
+        "api_service.api.routers.agent_queue._create_execution_from_task_request",
+        temporal_submit,
+    )
+
+    response = test_client.post(
+        "/api/queue/jobs",
+        json={
+            "type": "task",
+            "priority": 3,
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {
+                    "instructions": "Run without follow-up proposals",
+                    "proposeTasks": False,
+                },
+            },
+            "maxAttempts": 2,
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_job.assert_not_awaited()
+    temporal_submit.assert_awaited_once()
+    assert response.json()["status"] == "queued"
+    assert response.json()["type"] == "task"
+
+
 def test_update_queued_job_success(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,

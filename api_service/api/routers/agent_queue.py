@@ -781,6 +781,7 @@ async def create_job(
     target = get_routing_target_for_task(
         is_manifest=(payload.type == MANIFEST_JOB_TYPE),
         is_run=(payload.type == CANONICAL_TASK_JOB_TYPE),
+        task_payload=(payload.payload if isinstance(payload.payload, dict) else None),
     )
 
     if target == "temporal":
@@ -941,6 +942,11 @@ async def create_job_with_attachments(
         target = get_routing_target_for_task(
             is_manifest=(parsed_payload.type == MANIFEST_JOB_TYPE),
             is_run=(parsed_payload.type == CANONICAL_TASK_JOB_TYPE),
+            task_payload=(
+                parsed_payload.payload
+                if isinstance(parsed_payload.payload, dict)
+                else None
+            ),
         )
     except ValidationError:
         target = "queue"

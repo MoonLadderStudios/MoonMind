@@ -175,6 +175,13 @@ const helpers = loadSubmitRuntimeHelpers();
     { temporalSubmitEnabled: true, isEditMode: true },
   );
   assert.strictEqual(editTarget.mode, "worker");
+  const proposalsTarget = helpers.determineSubmitDestination(
+    "codex",
+    endpoints,
+    { temporalSubmitEnabled: true, isEditMode: false, proposeTasks: true },
+  );
+  assert.strictEqual(proposalsTarget.mode, "worker");
+  assert.strictEqual(proposalsTarget.endpoint, "/api/queue/jobs");
   const attachmentTarget = helpers.determineSubmitDestination(
     "codex",
     endpoints,
@@ -186,6 +193,13 @@ const helpers = loadSubmitRuntimeHelpers();
 
 (function testTemporalSubmitHelpersKeepPickerWorkerOnly() {
   assert.strictEqual(helpers.shouldUseTemporalSubmit("codex", { temporalSubmitEnabled: true }), true);
+  assert.strictEqual(
+    helpers.shouldUseTemporalSubmit(
+      "codex",
+      { temporalSubmitEnabled: true, proposeTasks: true },
+    ),
+    false,
+  );
   assert.strictEqual(helpers.shouldUseTemporalSubmit("orchestrator", { temporalSubmitEnabled: true }), false);
   assert.strictEqual(helpers.isWorkerSubmitRuntime("temporal"), false);
   assert.strictEqual(helpers.validateSubmitRuntime("temporal"), null);
