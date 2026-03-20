@@ -93,7 +93,7 @@ async def test_launch_spawns_process(tmp_path):
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process = await launcher.launch(
+    record, process, endpoints = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
@@ -115,7 +115,7 @@ async def test_idempotent_launch_rejects_active(tmp_path):
     request = _make_request()
 
     # First launch
-    record, process = await launcher.launch(
+    record, process, endpoints = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
