@@ -1316,7 +1316,7 @@ class GoogleSettings(BaseSettings):
     )
     google_chat_model: str = Field("gemini-3.1-pro", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
-        "gemini-embedding-001", env="GOOGLE_EMBEDDING_MODEL"
+        "gemini-embedding-2-preview", env="GOOGLE_EMBEDDING_MODEL"
     )
     google_embedding_dimensions: int = Field(3072, env="GOOGLE_EMBEDDING_DIMENSIONS")
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")

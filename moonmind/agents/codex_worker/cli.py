@@ -237,7 +237,7 @@ def _validate_embedding_profile(env: Mapping[str, str]) -> None:
     if google_key or gemini_key:
         return
 
-    model = str(env.get("GOOGLE_EMBEDDING_MODEL", "gemini-embedding-001")).strip()
+    model = str(env.get("GOOGLE_EMBEDDING_MODEL", "gemini-embedding-2-preview")).strip()
     raise RuntimeError(
         "Google embedding profile is configured "
         f"(provider=google, model={model or 'unknown'}) but GOOGLE_API_KEY "

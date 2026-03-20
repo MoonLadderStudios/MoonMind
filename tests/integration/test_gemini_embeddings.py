@@ -32,14 +32,14 @@ def test_gemini_embeddings_generation(monkeypatch):
     monkeypatch.setattr(
         settings.google,
         "google_embedding_model",
-        "gemini-embedding-001",
+        "gemini-embedding-2-preview",
         raising=False,
     )
 
     embed_model, configured_dimensions = build_embed_model(settings)
     embedding = embed_model.get_text_embedding("MoonMind Gemini embedding test prompt.")
 
-    assert getattr(embed_model, "model_name", None) == "gemini-embedding-001"
+    assert getattr(embed_model, "model_name", None) == "gemini-embedding-2-preview"
     assert configured_dimensions == settings.google.google_embedding_dimensions
     assert isinstance(embedding, list)
     assert len(embedding) > 10
