@@ -5523,6 +5523,12 @@
       if (effortInputElement.value.trim() === activeDefaultEffort) {
         effortInputElement.value = nextDefaultEffort;
       }
+
+      if (runtimeKey === "jules") {
+        modelInputElement.value = "";
+        effortInputElement.value = "";
+      }
+
       activeDefaultModel = nextDefaultModel;
       activeDefaultEffort = nextDefaultEffort;
     };
