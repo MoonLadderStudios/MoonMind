@@ -483,7 +483,7 @@
     "defaultProposeTasks",
   )
     ? Boolean(systemConfig.defaultProposeTasks)
-    : true;
+    : false;
   const attachmentPolicyConfig =
     systemConfig.attachmentPolicy &&
       typeof systemConfig.attachmentPolicy === "object" &&
@@ -1098,15 +1098,18 @@
         : pick(response, "jobId");
     const safeJobId = normalizeDashboardDetailSegment(rawJobId);
     if (!safeJobId) {
-      return "/tasks/list?source=queue";
+      return "/tasks/list?source=temporal";
     }
-    return `/tasks/${safeJobId}?source=queue`;
+    return `/tasks/${safeJobId}`;
   }
 
   function buildUnifiedTaskDetailRoute(rawId, source) {
     const safeId = normalizeDashboardDetailSegment(rawId);
     const normalizedSource = String(source || "").trim().toLowerCase();
-    const sourceParam = normalizedSource ? `?source=${encodeURIComponent(normalizedSource)}` : "";
+    const sourceParam =
+      normalizedSource === "temporal"
+        ? `?source=${encodeURIComponent(normalizedSource)}`
+        : "";
     if (!safeId) {
       return "/tasks/list";
     }
@@ -2620,6 +2623,7 @@
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     const temporalSubmitEnabled = Boolean(options.temporalSubmitEnabled);
     const isEditMode = Boolean(options.isEditMode);
+    const proposeTasksRequested = Boolean(options.proposeTasks);
     if (!temporalSubmitEnabled) {
       return false;
     }
@@ -2627,6 +2631,9 @@
       return false;
     }
     if (isEditMode) {
+      return false;
+    }
+    if (proposeTasksRequested) {
       return false;
     }
     return true;
@@ -4865,12 +4872,17 @@
     )
       ? Math.max(1, Number(sanitizedWorkerDraft.maxAttempts))
       : 3;
-    const queueDraftProposeTasks = Object.prototype.hasOwnProperty.call(
+    const queueDraftHasExplicitProposeTasks = Object.prototype.hasOwnProperty.call(
       sanitizedWorkerDraft,
-      "proposeTasks",
+      "proposeTasksUserSet",
     )
-      ? Boolean(sanitizedWorkerDraft.proposeTasks)
-      : defaultProposeTasks;
+      ? Boolean(sanitizedWorkerDraft.proposeTasksUserSet)
+      : false;
+    const queueDraftProposeTasks =
+      queueDraftHasExplicitProposeTasks &&
+        Object.prototype.hasOwnProperty.call(sanitizedWorkerDraft, "proposeTasks")
+        ? Boolean(sanitizedWorkerDraft.proposeTasks)
+        : defaultProposeTasks;
     const queueDraftTemplateFeatureRequest = String(
       sanitizedWorkerDraft.templateFeatureRequest || "",
     ).trim();
@@ -5204,6 +5216,7 @@
         priority: Number.isFinite(priority) ? priority : 0,
         maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 3,
         proposeTasks: formData.get("proposeTasks") !== null,
+        proposeTasksUserSet: true,
         steps: cloneStepStateEntries(stepState),
         templateFeatureRequest: readQueueTemplateFeatureRequest(),
       };
@@ -6576,6 +6589,7 @@
         {
           temporalSubmitEnabled,
           isEditMode,
+          proposeTasks,
         },
       );
       if (submitDestination.mode === "temporal" && hasAttachments) {
@@ -10940,7 +10954,7 @@
   function normalizeDashboardRoutePath(pathname) {
     const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
     if (normalizedPath === "/tasks/new" || normalizedPath === "/tasks/create") {
-      return "/tasks/queue/new";
+      return "/tasks/new";
     }
     return normalizedPath;
   }
@@ -10950,7 +10964,6 @@
     stopPolling();
     activateNav(normalizedRoute);
 
-    const queueDetailMatch = normalizedRoute.match(/^\/tasks\/queue\/([^/]+)$/);
     const orchestratorDetailMatch = normalizedRoute.match(
       /^\/tasks\/orchestrator\/([^/]+)$/,
     );
@@ -10966,7 +10979,7 @@
     }
     if (normalizedRoute === "/tasks/list") {
       const qs = new URLSearchParams(window.location.search || "");
-      if (!qs.has("source")) {
+      if (String(qs.get("source") || "").trim().toLowerCase() !== "temporal") {
         window.history.replaceState({}, "", "/tasks/list?source=temporal");
       }
       await renderQueueListPage();
@@ -11012,7 +11025,7 @@
       return;
     }
 
-    if (normalizedRoute === "/tasks/queue/new") {
+    if (normalizedRoute === "/tasks/new" || normalizedRoute === "/tasks/create") {
       const runtimeParam = parseRuntimeSearchParam(searchParams);
       const editParam = parseEditJobSearchParam(searchParams);
       if (editParam.provided) {
@@ -11026,16 +11039,12 @@
       await renderSubmitWorkPage(runtimeParam.runtime);
       return;
     }
-    if (normalizedRoute === "/tasks/orchestrator/new") {
-      window.history.replaceState({}, "", "/tasks/queue/new");
+    if (normalizedRoute === "/tasks/queue/new" || normalizedRoute === "/tasks/orchestrator/new") {
+      window.history.replaceState({}, "", "/tasks/new");
       await renderSubmitWorkPage(undefined);
       return;
     }
 
-    if (queueDetailMatch) {
-      window.location.replace(`/tasks/${encodeURIComponent(queueDetailMatch[1])}?source=queue`);
-      return;
-    }
     if (orchestratorDetailMatch) {
       window.location.replace(
         `/tasks/${encodeURIComponent(orchestratorDetailMatch[1])}`,
@@ -11061,7 +11070,7 @@
       const { source: resolvedSource, resolvedId } = await resolveUnifiedTaskSource(candidateTaskId);
       
       if (explicitSource === "queue") {
-        await renderQueueDetailPage(resolvedId || candidateTaskId);
+        renderNotFound();
         return;
       }
       if (explicitSource === "orchestrator") {
@@ -11074,7 +11083,7 @@
       }
       
       if (resolvedSource === "queue") {
-        await renderQueueDetailPage(resolvedId);
+        renderNotFound();
         return;
       }
       if (resolvedSource === "orchestrator") {
@@ -11084,19 +11093,6 @@
       if (resolvedSource === "temporal" && temporalDetailEnabled) {
         await renderTemporalDetailPage(resolvedId);
         return;
-      }
-      try {
-        await fetchJson(
-          endpoint(queueSourceConfig.detail || "/api/queue/jobs/{id}", {
-            id: candidateTaskId,
-            jobId: candidateTaskId,
-            taskId: candidateTaskId,
-          }),
-        );
-        await renderQueueDetailPage(candidateTaskId);
-        return;
-      } catch (_error) {
-        // fall through and probe temporal
       }
       if (temporalDetailEnabled) {
         try {

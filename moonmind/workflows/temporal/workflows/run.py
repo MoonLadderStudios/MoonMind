@@ -12,6 +12,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from moonmind.workflows.tasks.routing import _coerce_bool
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.skill_registry import parse_skill_registry
@@ -987,7 +988,7 @@ class MoonMindRunWorkflow:
         Failures are logged but do not fail the workflow.
         """
         propose_tasks = parameters.get("proposeTasks")
-        if not propose_tasks:
+        if not _coerce_bool(propose_tasks, default=False):
             return
 
         self._set_state(STATE_PROPOSALS, summary="Generating task proposals.")
