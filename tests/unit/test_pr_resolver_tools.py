@@ -30,6 +30,20 @@ def get_pr_comments_module() -> dict[str, Any]:
 
 
 @pytest.fixture
+def get_branch_pr_comments_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "fix-comments"
+            / "tools"
+            / "get_branch_pr_comments.py"
+        )
+    )
+
+
+@pytest.fixture
 def pr_resolve_snapshot_module() -> dict[str, Any]:
     return _load_module(
         str(
@@ -149,6 +163,150 @@ def test_infer_repo_from_pr_url_returns_none_for_invalid_url(
     assert infer_repo("") is None
     assert infer_repo("not a url") is None
     assert infer_repo("https://github.com/org") is None
+
+
+def test_get_branch_pr_comments_run_json_command_ignores_stderr_warnings(
+    get_branch_pr_comments_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_json_command = get_branch_pr_comments_module["run_json_command"]
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true, "count": 2}'
+        stderr = "Warning: transient GraphQL issue ignored"
+
+    monkeypatch.setattr(
+        get_branch_pr_comments_module["subprocess"],
+        "run",
+        lambda *args, **kwargs: _Completed(),
+    )
+
+    payload = run_json_command(["fake", "command"], "failure hint")
+    assert payload == {"ok": True, "count": 2}
+
+
+def test_pr_resolve_snapshot_run_command_ignores_stderr_warnings(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_command = pr_resolve_snapshot_module["run_command"]
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true, "result": "ready"}'
+        stderr = "Warning: retryable network issue recovered"
+
+    monkeypatch.setattr(
+        pr_resolve_snapshot_module["subprocess"],
+        "run",
+        lambda *args, **kwargs: _Completed(),
+    )
+
+    payload = run_command(["fake", "snapshot"], "failure hint")
+    assert payload == {"ok": True, "result": "ready"}
+
+
+def test_pr_resolve_snapshot_run_command_resolves_executable_with_fallback_path(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_command = pr_resolve_snapshot_module["run_command"]
+    captured_cmd: list[str] = []
+    captured_path = ""
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true}'
+        stderr = ""
+
+    def _fake_run(cmd: list[str], **kwargs: Any) -> _Completed:
+        nonlocal captured_cmd, captured_path
+        captured_cmd = cmd
+        captured_path = str((kwargs.get("env") or {}).get("PATH", ""))
+        return _Completed()
+
+    monkeypatch.setenv("PATH", "/tmp/custom-bin")
+
+    def _fake_which(executable: str, path: str | None = None) -> str | None:
+        if executable == "gh" and isinstance(path, str) and "/usr/bin" in path:
+            return "/usr/bin/gh"
+        return None
+
+    monkeypatch.setattr(pr_resolve_snapshot_module["shutil"], "which", _fake_which)
+    monkeypatch.setattr(pr_resolve_snapshot_module["subprocess"], "run", _fake_run)
+
+    payload = run_command(["gh", "api", "rate_limit"], "failure hint")
+    assert payload == {"ok": True}
+    assert captured_cmd[0] == "/usr/bin/gh"
+    assert "/usr/bin" in captured_path
+
+
+def test_fetch_pr_data_falls_back_to_current_branch_selector(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch_pr_data = pr_resolve_snapshot_module["fetch_pr_data"]
+    globals_dict = fetch_pr_data.__globals__
+
+    monkeypatch.setitem(
+        globals_dict,
+        "_current_branch_name",
+        lambda: "feature/test-branch",
+    )
+    monkeypatch.setitem(
+        globals_dict,
+        "_discover_pr_number_from_head_branch",
+        lambda _branch: None,
+    )
+
+    def _fake_fetch(selector: str | None) -> tuple[dict[str, Any] | None, str | None]:
+        if selector is None:
+            return None, "default failed"
+        if selector == "feature/test-branch":
+            return {"number": 780, "url": "https://github.com/org/repo/pull/780"}, None
+        return None, "unexpected selector"
+
+    monkeypatch.setitem(globals_dict, "_fetch_pr_data_from_selector", _fake_fetch)
+
+    pr_data, selector, errors = fetch_pr_data(None)
+    assert isinstance(pr_data, dict)
+    assert pr_data["number"] == 780
+    assert selector == "feature/test-branch"
+    assert len(errors) == 1
+    assert errors[0].startswith("<default>:")
+
+
+def test_fetch_pr_data_can_fallback_to_discovered_pr_number(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch_pr_data = pr_resolve_snapshot_module["fetch_pr_data"]
+    globals_dict = fetch_pr_data.__globals__
+
+    monkeypatch.setitem(
+        globals_dict,
+        "_current_branch_name",
+        lambda: "feature/test-branch",
+    )
+    monkeypatch.setitem(
+        globals_dict,
+        "_discover_pr_number_from_head_branch",
+        lambda _branch: "780",
+    )
+
+    def _fake_fetch(selector: str | None) -> tuple[dict[str, Any] | None, str | None]:
+        if selector == "780":
+            return {"number": 780, "url": "https://github.com/org/repo/pull/780"}, None
+        return None, "selector miss"
+
+    monkeypatch.setitem(globals_dict, "_fetch_pr_data_from_selector", _fake_fetch)
+
+    pr_data, selector, errors = fetch_pr_data(None)
+    assert isinstance(pr_data, dict)
+    assert pr_data["number"] == 780
+    assert selector == "780"
+    assert len(errors) >= 1
 
 
 def test_review_bot_comments_are_actionable_by_default(
@@ -586,4 +744,3 @@ def test_summarize_ci_head_checks_propagate_failures(
     assert summary["nonSecurityCheckCount"] == 1
     assert len(summary["failedChecks"]) == 1
     assert summary["failedChecks"][0]["name"] == "test"
-
