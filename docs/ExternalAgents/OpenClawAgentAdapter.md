@@ -7,17 +7,20 @@ To solve this, this design leverages OpenClaw's OpenAI-compatible streaming endp
 ---
 
 ### 1. Architectural Overview
-MoonMind orchestrates external agents using the adapter pattern (located in `moonmind/workflows/adapters/`). We will create an `OpenClawAgentAdapter` that implements the base adapter interface.
 
-Instead of an asynchronous polling model (Submit -> Poll -> Retrieve), the Temporal Worker will open a long-lived HTTP Server-Sent Events (SSE) stream to the OpenClaw Gateway. As OpenClaw processes the task, it streams data back incrementally. The Temporal activity uses these chunks to issue `activity.heartbeat()` calls, keeping the workflow alive and routing real-time logs to the UI.
+MoonMind orchestrates external agents using the universal external adapter pattern (located in `moonmind/workflows/adapters/`). We will create an `OpenClawAgentAdapter` that extends `BaseExternalAgentAdapter`.
+
+OpenClaw requires a long-lived HTTP Server-Sent Events (SSE) stream to the OpenClaw Gateway. As OpenClaw processes the task, it streams data back incrementally. The Temporal activity uses these chunks to issue `activity.heartbeat()` calls, keeping the workflow alive and routing real-time logs to the UI. Since the universal adapter pattern splits execution into `start`, `status`, `fetch_result`, and `cancel`, the long-lived streaming connection will be managed by the `status` activity or a specialized async supervisor, while `start` merely initiates the job.
 
 ---
 
 ### 2. Configuration & Security Management
+
 OpenClaw requires a Gateway URL and an authentication token. Because OpenClaw executes code, securing the token is paramount.
 
-**Target:** `moonmind/config/settings.py`
-Add an `OpenClawSettings` object to manage non-sensitive configuration.
+**Target:** `moonmind/openclaw/settings.py`
+Add an `OpenClawSettings` object to manage non-sensitive configuration, following the runtime gate pattern.
+
 ```python
 from pydantic import BaseModel, Field
 
@@ -26,14 +29,18 @@ class OpenClawSettings(BaseModel):
     default_model: str = Field(default="openclaw-default")
     # 1 hour timeout for long tasks, bypassing standard short HTTP timeouts
     timeout_seconds: int = Field(default=3600)
+
+def is_openclaw_enabled(env: dict | None = None) -> bool:
+    # Check env vars: OPENCLAW_ENABLED, etc.
+    ...
 ```
 
-**Target:** `moonmind/auth/providers.py`
 The Gateway token must *not* be hardcoded. It should be managed via MoonMind's `SecretStore` and retrieved dynamically at runtime (e.g., `await get_secret("OPENCLAW_GATEWAY_TOKEN")`).
 
 ---
 
 ### 3. OpenClaw Async HTTP Client
+
 **Target:** `moonmind/workflows/adapters/openclaw_client.py`
 
 A dedicated asynchronous HTTP client will manage the connection to the Gateway using `httpx`. We will implement an async generator to consume the SSE stream.
@@ -54,138 +61,180 @@ class OpenClawHttpClient:
         # Disable read timeouts for long-running autonomous loops; rely on total timeout
         self.timeout = httpx.Timeout(timeout, read=None)
 
-    async def stream_execution(self, messages: list[dict], model: str) -> AsyncGenerator[str, None]:
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True
-        }
+    async def start_execution(self, messages: list[dict], model: str) -> str:
+        # Implementation to initiate the job and return a run_id
+        ...
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/v1/chat/completions",
-                headers=self.headers,
-                json=payload
-            ) as response:
-                response.raise_for_status()
+    async def stream_status(self, run_id: str) -> AsyncGenerator[str, None]:
+        # Implementation to stream SSE status updates for a given run_id
+        ...
 
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data_str = line[6:].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            # Extract standard OpenAI-compatible delta content
-                            if delta := data_json.get("choices", [{}])[0].get("delta", {}).get("content"):
-                                yield delta
-                        except json.JSONDecodeError:
-                            continue
+    async def cancel_execution(self, run_id: str) -> None:
+        # Implementation to cancel an execution
+        ...
 ```
 
 ---
 
 ### 4. Agent Adapter Implementation
+
 **Target:** `moonmind/workflows/adapters/openclaw_agent_adapter.py`
 
-The adapter implements the `BaseExternalAgentAdapter` contract, translating MoonMind payloads into OpenAI-compatible messages and parsing the final aggregated response.
+The adapter implements the `BaseExternalAgentAdapter` contract, translating MoonMind `AgentExecutionRequest` payloads into OpenAI-compatible messages and returning canonical `AgentRunHandle`, `AgentRunStatus`, and `AgentRunResult` objects.
 
 ```python
 from moonmind.workflows.adapters.base_external_agent_adapter import BaseExternalAgentAdapter
-from moonmind.schemas.agent_runtime_models import ExecutionResult, ExecutionStatus
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult,
+    ProviderCapabilityDescriptor
+)
+
+_CAPABILITY = ProviderCapabilityDescriptor(
+    providerName="openclaw",
+    supportsCallbacks=False,
+    supportsCancel=True,
+    supportsResultFetch=True,
+    defaultPollHintSeconds=15,
+)
 
 class OpenClawAgentAdapter(BaseExternalAgentAdapter):
-    def __init__(self, client: OpenClawHttpClient, model: str):
-        self.client = client
-        self.model = model
+    def __init__(self, *, client_factory):
+        super().__init__(accepted_agent_ids=frozenset({"openclaw"}))
+        self._client_factory = client_factory
 
-    def translate_request(self, task_payload: dict, context_files: str) -> list[dict]:
-        """Maps MoonMind Task and Context to OpenClaw messages."""
-        system_prompt = "You are an autonomous OpenClaw agent executing a task for the MoonMind orchestrator."
-        user_prompt = f"Workspace Context:\n{context_files}\n\nTask Instructions:\n{task_payload.get('instructions')}"
+    @property
+    def provider_capability(self) -> ProviderCapabilityDescriptor:
+        return _CAPABILITY
 
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+    async def do_start(
+        self,
+        request: AgentExecutionRequest,
+        title: str,
+        description: str,
+        metadata: dict
+    ) -> AgentRunHandle:
+        client = self._client_factory()
+        # Translate request into messages
+        messages = [
+            {"role": "system", "content": "You are an autonomous OpenClaw agent..."},
+            {"role": "user", "content": f"Task Instructions:\n{description}"}
         ]
 
-    def parse_response(self, final_text: str) -> ExecutionResult:
-        """Parses the raw OpenClaw output into a MoonMind ExecutionResult format."""
-        return ExecutionResult(
-            status=ExecutionStatus.COMPLETED,
-            output=final_text,
-            artifacts=[] # Add logic to extract file diffs/artifacts if OpenClaw outputs them in specific tags
+        run_id = await client.start_execution(messages, "openclaw-default")
+
+        return self.build_handle(
+            run_id=run_id,
+            agent_id="openclaw",
+            status="queued",
+            provider_status="submitted",
+            normalized_status="queued"
+        )
+
+    async def do_status(self, run_id: str) -> AgentRunStatus:
+        # For OpenClaw, status might wrap the stream check or simply poll a summary endpoint
+        ...
+        return self.build_status(
+            run_id=run_id,
+            agent_id="openclaw",
+            status="running",
+            provider_status="streaming",
+            normalized_status="running"
+        )
+
+    async def do_fetch_result(self, run_id: str) -> AgentRunResult:
+        # Fetch terminal result
+        ...
+        return self.build_result(
+            run_id=run_id,
+            provider_status="completed",
+            normalized_status="completed",
+            provider_name="openclaw"
+        )
+
+    async def do_cancel(self, run_id: str) -> AgentRunStatus:
+        client = self._client_factory()
+        await client.cancel_execution(run_id)
+        return self.build_status(
+            run_id=run_id,
+            agent_id="openclaw",
+            status="canceled",
+            provider_status="canceled",
+            normalized_status="canceled"
         )
 ```
 
 ---
 
 ### 5. Temporal Activity Integration (The Heartbeat Pattern)
+
 **Target:** `moonmind/workflows/temporal/activities/openclaw_activities.py`
 
-Temporal activities must handle long execution times without timing out. By coupling the HTTP stream chunks with `activity.heartbeat()`, we keep the Temporal workflow alive and provide real-time logs.
+Temporal activities map directly to the 4 operations: `start`, `status`, `fetch_result`, and `cancel`.
+
+To leverage the OpenClaw streaming capability (SSE chunks + heartbeats), the long-running stream can be processed either by an enhanced `integration.openclaw.status` activity that loops and heartbeats, or by a specialized activity.
 
 ```python
 from temporalio import activity
-import asyncio
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunHandle, AgentRunStatus, AgentRunResult
 
-@activity.defn
-async def execute_openclaw_activity(task_payload: dict, context_files: str) -> dict:
-    # 1. Fetch credentials securely
-    token = await get_secret_store().get_secret("OPENCLAW_GATEWAY_TOKEN")
-    settings = get_settings().openclaw
+@activity.defn(name="integration.openclaw.start")
+async def openclaw_start_activity(request: AgentExecutionRequest) -> AgentRunHandle:
+    adapter = _build_adapter()
+    return await adapter.start(request)
 
-    client = OpenClawHttpClient(settings.gateway_url, token, settings.timeout_seconds)
-    adapter = OpenClawAgentAdapter(client, settings.model)
+@activity.defn(name="integration.openclaw.status")
+async def openclaw_status_activity(run_id: str) -> AgentRunStatus:
+    adapter = _build_adapter()
+    # If the provider exposes a long-lived stream for status tracking,
+    # the activity can iterate over stream_status() and emit heartbeats:
+    #
+    # async for chunk in client.stream_status(run_id):
+    #     activity.heartbeat(chunk)
+    #
+    return await adapter.status(run_id)
 
-    # 2. Translate Request
-    messages = adapter.translate_request(task_payload, context_files)
-    full_response_chunks = []
+@activity.defn(name="integration.openclaw.fetch_result")
+async def openclaw_fetch_result_activity(run_id: str) -> AgentRunResult:
+    adapter = _build_adapter()
+    return await adapter.fetch_result(run_id)
 
-    try:
-        # 3. Consume the SSE stream
-        async for chunk in client.stream_execution(messages, settings.model):
-            full_response_chunks.append(chunk)
-
-            # CRITICAL: Ping Temporal to reset the timeout timer.
-            # The chunk acts as a live log for the UI (docs/specs/084-live-log-tailing).
-            activity.heartbeat(chunk)
-
-    except asyncio.CancelledError:
-        # 4. Handle Workflow Cancellation
-        # Triggered if a user cancels the workflow in the MoonMind Dashboard.
-        # The CancelledError bubbles up, causing the async httpx stream to close.
-        # The OpenClaw Gateway detects the broken TCP pipe and stops execution naturally.
-        activity.logger.info("OpenClaw task cancelled by Orchestrator. Severing connection.")
-        raise
-
-    # 5. Parse and Return
-    final_text = "".join(full_response_chunks)
-    result = adapter.parse_response(final_text)
-    return result.model_dump()
+@activity.defn(name="integration.openclaw.cancel")
+async def openclaw_cancel_activity(run_id: str) -> AgentRunStatus:
+    adapter = _build_adapter()
+    return await adapter.cancel(run_id)
 ```
 
 ---
 
 ### 6. Adapter Registry Wiring
+
 **Target:** `moonmind/workflows/adapters/external_adapter_registry.py`
 
-Finally, register the `OpenClawAgentAdapter` alongside existing adapters like `JulesAgentAdapter` and `CodexCloudAgentAdapter` so the orchestrator routes requests where `agent_type == "openclaw"` correctly.
+Register the `OpenClawAgentAdapter` alongside existing adapters like `JulesAgentAdapter` and `CodexCloudAgentAdapter` in `build_default_registry()` so the orchestrator routes requests correctly.
 
 ```python
-from .openclaw_agent_adapter import OpenClawAgentAdapter
+from moonmind.workflows.adapters.openclaw_agent_adapter import OpenClawAgentAdapter
+from moonmind.workflows.adapters.openclaw_client import OpenClawHttpClient
+from moonmind.openclaw.settings import is_openclaw_enabled
 
-def register_adapters(registry):
-    # Existing adapters
-    registry.register("jules", JulesAgentAdapter)
-    registry.register("codex_cloud", CodexCloudAgentAdapter)
+def build_default_registry(*, env=None):
+    registry = ExternalAdapterRegistry()
+    # ... existing Jules and Codex Cloud registrations ...
 
-    # Add OpenClaw
-    registry.register("openclaw", OpenClawAgentAdapter)
+    if is_openclaw_enabled(env=env):
+        def _openclaw_factory():
+            # Retrieve token securely here or within the client
+            client = OpenClawHttpClient(base_url="...", token="...", timeout=3600)
+            return OpenClawAgentAdapter(client_factory=lambda: client)
+
+        registry.register("openclaw", _openclaw_factory)
+
+    return registry
 ```
 
 ### Summary of Architectural Benefits
-1. **Stateless Workflows:** Streaming eliminates the need to build a complex state-machine polling loop that constantly queries a database for task status. The Temporal worker simply holds the connection open.
-2. **Fault Tolerant:** Temporal heartbeats ensure the Orchestrator knows the agent is healthy during long operations. If the worker node crashes, Temporal knows exactly when it failed and can restart the activity.
-3. **Implicit Cancellation:** Terminating the Temporal Activity drops the HTTP connection, natively signaling the OpenClaw Gateway to halt execution without requiring a dedicated `/cancel` webhook.
+
+1. **Standardized External Adapter Pattern:** OpenClaw integrates natively into MoonMind using `BaseExternalAgentAdapter`, ensuring consistent lifecycle management (`start`, `status`, `fetch_result`, `cancel`).
+2. **Stateless Workflows via Streaming:** Using Temporal heartbeats on the streaming connection allows Temporal to supervise the long-running operation natively without a complex custom state machine.
+3. **Fault Tolerant:** Temporal heartbeats ensure the Orchestrator knows the agent is healthy during long operations. If the worker node crashes, Temporal knows exactly when it failed and can restart the activity.
+4. **Implicit Cancellation Compatibility:** If an SSE stream disconnect natively halts OpenClaw execution, cancelling the `status` activity severs the connection cleanly, while the `cancel` activity provides an explicit cancellation signal.
