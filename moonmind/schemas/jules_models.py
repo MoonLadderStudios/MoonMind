@@ -175,10 +175,11 @@ class JulesTaskResponse(BaseModel):
     @property
     def pull_request_url(self) -> Optional[str]:
         """Return the URL of the first pull request output, if any."""
-        for output in self.outputs:
-            if output.pull_request and output.pull_request.url:
-                return output.pull_request.url
-        return None
+        return next((
+            output.pull_request.url
+            for output in self.outputs
+            if output.pull_request and output.pull_request.url
+        ), None)
 
 
 class JulesIntegrationStartRequest(BaseModel):
