@@ -4,11 +4,21 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.config.settings import settings
+from moonmind.config.settings import GoogleSettings, settings
 
 
 def _resolve_google_api_key() -> str | None:
     return os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+
+def _schema_default_google_embedding() -> tuple[str, int]:
+    """Canonical defaults from GoogleSettings (not process env overrides)."""
+    g = GoogleSettings.model_fields
+    model = g["google_embedding_model"].default
+    dims = g["google_embedding_dimensions"].default
+    assert isinstance(model, str) and model
+    assert isinstance(dims, int) and dims > 0
+    return model, dims
 
 
 def _avoid_local_workflows_package_shadowing() -> None:
@@ -18,11 +28,14 @@ def _avoid_local_workflows_package_shadowing() -> None:
         sys.path.remove(moonmind_src_path)
 
 
-def test_gemini_embeddings_generation(monkeypatch):
-    """Run a live Gemini embedding call when an API key is available."""
+@pytest.mark.integration
+def test_default_gemini_embedding_model_live(monkeypatch):
+    """Live Gemini call using the schema default embedding model when a key is set."""
     api_key = _resolve_google_api_key()
     if not api_key:
         pytest.skip("GOOGLE_API_KEY or GEMINI_API_KEY is not set.")
+
+    default_model, default_dims = _schema_default_google_embedding()
 
     _avoid_local_workflows_package_shadowing()
     from moonmind.factories.embed_model_factory import build_embed_model
@@ -30,17 +43,17 @@ def test_gemini_embeddings_generation(monkeypatch):
     monkeypatch.setattr(settings, "default_embedding_provider", "google", raising=False)
     monkeypatch.setattr(settings.google, "google_api_key", api_key, raising=False)
     monkeypatch.setattr(
-        settings.google,
-        "google_embedding_model",
-        "gemini-embedding-2-preview",
-        raising=False,
+        settings.google, "google_embedding_model", default_model, raising=False
+    )
+    monkeypatch.setattr(
+        settings.google, "google_embedding_dimensions", default_dims, raising=False
     )
 
     embed_model, configured_dimensions = build_embed_model(settings)
     embedding = embed_model.get_text_embedding("MoonMind Gemini embedding test prompt.")
 
-    assert getattr(embed_model, "model_name", None) == "gemini-embedding-2-preview"
-    assert configured_dimensions == settings.google.google_embedding_dimensions
+    assert getattr(embed_model, "model_name", None) == default_model
+    assert configured_dimensions == default_dims
     assert isinstance(embedding, list)
     assert len(embedding) > 10
     assert all(isinstance(value, float) for value in embedding)
