@@ -5515,14 +5515,23 @@
       setDatalist(effortDatalistNode, [
         ...normalizeRuntimeOptions(runtimeCapabilities.efforts),
       ]);
-      const nextDefaultModel = runtimeModelDefaultsWithFallback;
-      const nextDefaultEffort = runtimeEffortDefaultsWithFallback;
-      if (modelInputElement.value.trim() === activeDefaultModel) {
-        modelInputElement.value = nextDefaultModel;
+      let nextDefaultModel = runtimeModelDefaultsWithFallback;
+      let nextDefaultEffort = runtimeEffortDefaultsWithFallback;
+
+      if (runtimeKey === "jules") {
+        modelInputElement.value = "";
+        effortInputElement.value = "";
+        nextDefaultModel = "";
+        nextDefaultEffort = "";
+      } else {
+        if (modelInputElement.value.trim() === activeDefaultModel) {
+          modelInputElement.value = nextDefaultModel;
+        }
+        if (effortInputElement.value.trim() === activeDefaultEffort) {
+          effortInputElement.value = nextDefaultEffort;
+        }
       }
-      if (effortInputElement.value.trim() === activeDefaultEffort) {
-        effortInputElement.value = nextDefaultEffort;
-      }
+
       activeDefaultModel = nextDefaultModel;
       activeDefaultEffort = nextDefaultEffort;
     };
