@@ -225,6 +225,22 @@ def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     return normalized
 
 
+def _derive_integration_title(
+    description: str, fallback_title: str | None = None
+) -> str:
+    """Derive a human-readable task title from the description if missing or default."""
+    original_title = str(fallback_title or "").strip()
+    if original_title == "MoonMind Integration Task" or not original_title:
+        if description:
+            lines = [line.strip() for line in description.splitlines() if line.strip()]
+            if lines:
+                first_line = lines[0]
+                if len(first_line) > 100:
+                    return first_line[:97] + "..."
+                return first_line
+    return original_title or "MoonMind Integration Task"
+
+
 def _artifact_locator(value: ArtifactRef | str | None) -> str | None:
     if value is None:
         return None
@@ -1433,7 +1449,7 @@ class TemporalIntegrationActivities:
                 idempotency_key = request_payload.get("idempotency_key")
 
         parameters = dict(parameters or {})
-        title = str(parameters.get("title") or "MoonMind Integration Task").strip()
+        title_param = str(parameters.get("title") or "").strip()
         description = str(parameters.get("description") or "").strip()
 
         # Fallback: when dispatched from AgentRun, the task description lives
@@ -1463,6 +1479,11 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 "integration.jules.start requires parameters.description or inputs_ref"
             )
+
+        title = _derive_integration_title(
+            description=description,
+            fallback_title=title_param or "MoonMind Integration Task",
+        )
 
         metadata = parameters.get("metadata")
         if metadata is not None and not isinstance(metadata, Mapping):
@@ -1799,7 +1820,7 @@ class TemporalIntegrationActivities:
                 idempotency_key = request_payload.get("idempotency_key")
 
         parameters = dict(parameters or {})
-        title = str(parameters.get("title") or "MoonMind Integration Task").strip()
+        title_param = str(parameters.get("title") or "").strip()
         description = str(parameters.get("description") or "").strip()
 
         if not description and inputs_ref is not None:
@@ -1817,6 +1838,11 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 "integration.codex_cloud.start requires parameters.description or inputs_ref"
             )
+
+        title = _derive_integration_title(
+            description=description,
+            fallback_title=title_param or "MoonMind Integration Task",
+        )
 
         resolved_correlation_id = str(
             correlation_id or f"integration:codex_cloud:{title}"
