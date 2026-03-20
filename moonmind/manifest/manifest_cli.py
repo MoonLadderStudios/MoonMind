@@ -42,26 +42,11 @@ def run_plan(*, manifest_path: str) -> dict:
     manifest = result.manifest
     assert manifest is not None
 
-    # Estimate scope
-    plan_summary = {
-        "manifest": manifest.metadata.name,
-        "dataSources": len(manifest.dataSources),
-        "indices": len(manifest.indices),
-        "retrievers": len(manifest.retrievers),
-        "dryRun": True,
-        "sources": [],
-    }
+    from moonmind.manifest.pipeline import ManifestPipeline
 
-    for ds in manifest.dataSources:
-        plan_summary["sources"].append(  # type: ignore[union-attr]
-            {
-                "id": ds.id,
-                "type": ds.type,
-                "status": "planned",
-            }
-        )
-
-    return plan_summary
+    pipeline = ManifestPipeline(manifest)
+    plan_result = pipeline.plan()
+    return plan_result.to_dict()
 
 
 def run_manifest(*, manifest_path: str) -> dict:
@@ -78,12 +63,11 @@ def run_manifest(*, manifest_path: str) -> dict:
     manifest = result.manifest
     assert manifest is not None
 
-    # Placeholder: actual pipeline execution will be wired in Phase 4
-    return {
-        "manifest": manifest.metadata.name,
-        "status": "not_implemented",
-        "message": "Full pipeline execution requires Phase 4 implementation (ReaderAdapter wiring).",
-    }
+    from moonmind.manifest.pipeline import ManifestPipeline
+
+    pipeline = ManifestPipeline(manifest)
+    run_result = pipeline.run()
+    return run_result.to_dict()
 
 
 def run_evaluate(
