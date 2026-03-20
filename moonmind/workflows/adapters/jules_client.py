@@ -187,6 +187,9 @@ class JulesClient:
         task = await self.get_task(JulesGetTaskRequest(task_id=external_operation_id))
         provider_status = str(task.status or "").strip() or "unknown"
         normalized = normalize_jules_status(provider_status)
+        if normalized == "running" and task.pull_request_url:
+            normalized = "succeeded"
+
         return JulesIntegrationStatusResult(
             taskQueue=task_queue,
             externalOperationId=external_operation_id,
@@ -210,6 +213,9 @@ class JulesClient:
         task = await self.get_task(JulesGetTaskRequest(task_id=external_operation_id))
         provider_status = str(task.status or "").strip() or "unknown"
         normalized = normalize_jules_status(provider_status)
+        if normalized == "running" and task.pull_request_url:
+            normalized = "succeeded"
+
         summary = (
             f"Jules task {external_operation_id} completed with status "
             f"'{provider_status}'."

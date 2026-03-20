@@ -42,6 +42,14 @@ def _to_agent_status(raw_status: str | None) -> str:
     return _JULES_TO_AGENT_RUN_STATUS[normalized]
 
 
+def _normalize_jules_task(response: JulesTaskResponse) -> str:
+    """Determine normalized status, treating PR creation as success."""
+    normalized = normalize_jules_status(response.status)
+    if normalized == "running" and response.pull_request_url:
+        return "succeeded"
+    return normalized
+
+
 _JULES_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="jules",
     supportsCallbacks=False,
@@ -111,23 +119,24 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             )
         )
         provider_status = str(response.status or "").strip() or "unknown"
+        normalized_status = _normalize_jules_task(response)
         return self.build_handle(
             run_id=response.task_id,
             agent_id="jules",
-            status=_to_agent_status(response.status),
+            status=_JULES_TO_AGENT_RUN_STATUS[normalized_status],
             provider_status=provider_status,
-            normalized_status=normalize_jules_status(response.status),
+            normalized_status=normalized_status,
             external_url=str(response.url or "").strip() or None,
         )
 
     async def do_status(self, run_id: str) -> AgentRunStatus:
         response = await self._get_task(run_id)
         provider_status = str(response.status or "").strip() or "unknown"
-        normalized_status = normalize_jules_status(provider_status)
+        normalized_status = _normalize_jules_task(response)
         return self.build_status(
             run_id=response.task_id,
             agent_id="jules",
-            status=_to_agent_status(provider_status),
+            status=_JULES_TO_AGENT_RUN_STATUS[normalized_status],
             provider_status=provider_status,
             normalized_status=normalized_status,
             external_url=str(response.url or "").strip() or None,
@@ -136,7 +145,7 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
     async def do_fetch_result(self, run_id: str) -> AgentRunResult:
         response = await self._get_task(run_id)
         provider_status = str(response.status or "").strip() or "unknown"
-        normalized_status = normalize_jules_status(provider_status)
+        normalized_status = _normalize_jules_task(response)
         return self.build_result(
             run_id=run_id,
             provider_status=provider_status,
@@ -162,14 +171,14 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
                 status="intervention_requested",
                 metadata={"cancelAccepted": False},
             )
-
-        provider_status = str(response.status or "").strip() or "canceled"
+        provider_status = str(response.status or "").strip() or "unknown"
+        normalized_status = _normalize_jules_task(response)
         return self.build_status(
             run_id=response.task_id,
             agent_id="jules",
-            status=_to_agent_status(provider_status),
+            status=_JULES_TO_AGENT_RUN_STATUS[normalized_status],
             provider_status=provider_status,
-            normalized_status=normalize_jules_status(provider_status),
+            normalized_status=normalized_status,
             external_url=str(response.url or "").strip() or None,
             extra_metadata={"cancelAccepted": True},
         )
