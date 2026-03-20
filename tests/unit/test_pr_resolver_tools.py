@@ -644,6 +644,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     import subprocess
 
     main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
     exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
 
     def _boom(_snapshot_script: Path, _pr: str | None) -> None:
@@ -653,7 +654,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
             output="transient failure",
         )
 
-    monkeypatch.setitem(pr_resolve_finalize_module, "_run_snapshot", _boom)
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _boom)
 
     result_path = tmp_path / "pr_resolver_result.json"
     monkeypatch.setattr(
