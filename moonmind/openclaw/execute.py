@@ -50,7 +50,7 @@ async def run_openclaw_execution(request: AgentExecutionRequest) -> AgentRunResu
         try:
             timeout_sec = max(60.0, float(request.timeout_policy["timeout_seconds"]))
         except (TypeError, ValueError):
-            pass
+            pass  # Ignore invalid timeout value; keep default resolved timeout.
 
     client = OpenClawHttpClient(
         base_url=base_url,
