@@ -14,7 +14,7 @@
 - [ ] T004 Implement `RagRuntimeSettings` + filter metadata helpers in `moonmind/rag/settings.py` to normalize env vars, transport selection, overlay policy, and budget inputs for every retrieval call.
 - [ ] T005 Build `ContextPack` and `ContextItem` dataclasses plus markdown + JSON serialization helpers in `moonmind/rag/context_pack.py` following `contracts/context-pack.md`.
 - [ ] T006 Create `ContextRetrievalService` scaffolding in `moonmind/rag/service.py` that wires settings, embedding adapters, overlay merge hooks, and telemetry placeholders for later story work.
-- [ ] T007 Add `moonmind/rag/telemetry.py` helpers that wrap `moonmind/workflows/orchestrator/metrics.py` and queue events so later stages can emit `embedding_*` and `rag.search.*` counters deterministically.
+- [ ] T007 Add `moonmind/rag/telemetry.py` helpers that wrap `moonmind.utils.metrics.get_metrics_emitter()` and queue events so later stages can emit `embedding_*` and `rag.search.*` counters deterministically.
 
 ## Phase 3: User Story 1 – Worker pulls repo context via CLI (Priority: P1) 🎯 MVP
 

@@ -179,6 +179,7 @@ class AgentJob(Base):
         back_populates="job",
         cascade="all, delete-orphan",
         uselist=False,
+        # DB migration 59830c78b458 dropped the FK; ORM needs an explicit join.
         primaryjoin="AgentJob.id == foreign(TaskRunLiveSession.task_run_id)",
     )
     control_events: Mapped[list["TaskRunControlEvent"]] = relationship(

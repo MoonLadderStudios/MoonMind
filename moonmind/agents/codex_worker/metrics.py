@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping
 
-from moonmind.utils.metrics import _MetricsEmitter
+from moonmind.utils.metrics import _MetricsEmitter, get_metrics_emitter
 
 
 class WorkerMetrics:
     """Thin wrapper around the shared Spec workflow StatsD emitter."""
 
     def __init__(self, emitter: _MetricsEmitter | None = None) -> None:
-        self._emitter = emitter or _MetricsEmitter()
+        self._emitter = emitter or get_metrics_emitter()
 
     @property
     def enabled(self) -> bool:

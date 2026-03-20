@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
@@ -87,7 +89,9 @@ def test_build_command_per_runtime():
 
 
 @pytest.mark.asyncio
-async def test_launch_spawns_process(tmp_path):
+async def test_launch_spawns_process(tmp_path, monkeypatch):
+    # Avoid tmate wrapper when tmate is installed in CI/Docker (would hang on wait-ready).
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
@@ -108,7 +112,8 @@ async def test_launch_spawns_process(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_idempotent_launch_rejects_active(tmp_path):
+async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["echo", "hello"])
