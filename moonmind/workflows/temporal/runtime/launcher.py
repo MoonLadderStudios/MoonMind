@@ -328,6 +328,16 @@ class ManagedRuntimeLauncher:
         """Construct the CLI command from a runtime profile and request params."""
         cmd = list(profile.command_template)
 
+        # --- Strategy delegation (Phase 1) ---
+        # Check the strategy registry before falling through to the
+        # legacy if/elif block.  Registered runtimes are handled by
+        # their strategy; unregistered runtimes use the existing code.
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+        strategy = get_strategy(profile.runtime_id)
+        if strategy is not None:
+            return strategy.build_command(profile, request)
+
         model = (
             request.parameters.get("model") if request.parameters else None
         ) or profile.default_model
