@@ -461,11 +461,20 @@ class MoonMindAgentRun:
                         },
                     )
 
-                    # Wait for assigned slot
+                    # Wait for assigned slot, but never beyond the run's
+                    # remaining timeout budget.
+                    slot_wait_elapsed = (
+                        workflow.now() - overall_start
+                    ).total_seconds()
+                    slot_wait_seconds = timeout_seconds - slot_wait_elapsed
+                    if slot_wait_seconds <= 0:
+                        self.run_status = RunStatus.timed_out
+                        return AgentRunResult(failure_class="execution_error")
+
                     try:
                         await workflow.wait_condition(
                             lambda: self.slot_assigned_event.is_set(),
-                            timeout=timedelta(minutes=5)
+                            timeout=timedelta(seconds=slot_wait_seconds),
                         )
                     except asyncio.TimeoutError:
                         workflow.logger.error("Timed out waiting for auth profile slot.")
