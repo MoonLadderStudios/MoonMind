@@ -1,0 +1,103 @@
+{
+  "branch": "chore/update-pause-system-docs-16784273446666462405",
+  "pr": {
+    "number": 780,
+    "title": "docs: align Worker Pause System documentation with new Managed Agents architecture",
+    "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780",
+    "head_ref": "chore/update-pause-system-docs-16784273446666462405",
+    "base_ref": "main"
+  },
+  "repository": "MoonLadderStudios/MoonMind",
+  "comment_count": 9,
+  "comments": [
+    {
+      "type": "issue_comment",
+      "id": 4095873380,
+      "user": "google-labs-jules[bot]",
+      "body": "\ud83d\udc4b Jules, reporting for duty! I'm here to lend a hand with this pull request.\n\nWhen you start a review, I'll add a \ud83d\udc40 emoji to each comment to let you know I've read it. I'll focus on feedback directed at me and will do my best to stay out of conversations between you and other bots or reviewers to keep the noise down.\n\nI'll push a commit with your requested changes shortly after. Please note there might be a delay between these steps, but rest assured I'm on the job!\n\nFor more direct control, you can switch me to **Reactive Mode**. When this mode is on, I will only act on comments where you specifically mention me with `@jules`. You can find this option in the **Pull Request** section of your [global Jules UI settings](https://jules.google.com/settings). You can always switch back!\n\nNew to Jules? Learn more at [jules.google/docs](https://jules.google/docs).\n\n---\n*_For security, I will only act on instructions from the user who triggered this task._*",
+      "created_at": "2026-03-20T06:13:07Z",
+      "updated_at": "2026-03-20T06:13:07Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095873380"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4095873613,
+      "user": "chatgpt-codex-connector[bot]",
+      "body": "You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/settings/usage).",
+      "created_at": "2026-03-20T06:13:12Z",
+      "updated_at": "2026-03-20T06:13:12Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095873613"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4095874363,
+      "user": "gemini-code-assist[bot]",
+      "body": "## Summary of Changes\n\nHello, I'm Gemini Code Assist[^1]! I'm currently reviewing this pull request and will post my feedback shortly. In the meantime, here's a summary to help you and other reviewers quickly get up to speed!\n\nThis pull request updates the `WorkerPauseSystem.md` documentation to align with the recently introduced Managed Agents execution architecture. The changes clarify how the system handles pausing and draining in the context of the new `agent_runtime` worker fleets and the detached nature of managed runtimes, providing a more accurate and up-to-date operational guide.\n\n### Highlights\n\n* **Architecture Alignment**: Updated references from the obsolete `mm-orchestrator` process to the current `agent_runtime` worker fleets, ensuring the documentation accurately reflects the new Temporal Managed Agents execution architecture.\n* **Long-Running Activity Explanation**: Revised the explanation for long-running activities, clarifying that managed runtimes are detached and `MoonMind.AgentRun` uses `status(...)` polling against the `ManagedRunStore` for pausing, rather than relying on Temporal activity heartbeats for checkpoints.\n* **Operational Playbook Clarity**: Added crucial context to the operational playbook regarding the graceful shutdown behavior of ephemeral Docker-Out-Of-Docker (DOOD) containers during system pauses.\n\n\ud83e\udde0 **New Feature in Public Preview:** You can now enable **Memory** to help **Gemini Code Assist** learn from your team's feedback. This makes future code reviews more consistent and personalized to your project's style. **Click [here](https://codeassist.google/code-review/login) to enable Memory in your admin console.**\n\n<details>\n<summary><b>Using Gemini Code Assist</b></summary>\n<br>\n\nThe full guide for Gemini Code Assist can be found on our [documentation page](https://developers.google.com/gemini-code-assist/docs/review-github-code), here are some quick tips.\n\n<b>Invoking Gemini</b>\n\nYou can request assistance from Gemini at any point by creating a comment using either `/gemini <command>` or `@gemini-code-assist <command>`. Below is a summary of the supported commands on the current page.\n\nFeature | Command | Description\n--- | --- | ---\nCode Review | `/gemini review` | Performs a code review for the current pull request in its current state.\nPull Request Summary | `/gemini summary` | Provides a summary of the current pull request in its current state.\nComment | @gemini-code-assist | Responds in comments when explicitly tagged, both in pull request comments and review comments.\nHelp | `/gemini help` | Displays a list of available commands.\n\n<b>Customization</b>\n\nTo customize Gemini Code Assist for GitHub experience, repository maintainers can create a configuration file and/or provide a custom code review style guide (such as PEP-8 for Python) by creating and adding files to a `.gemini/` folder in the base of the repository. Detailed instructions can be found [here](https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github).\n\n<b>Limitations & Feedback</b>\n\nGemini Code Assist may make mistakes. Please leave feedback on any instances where its feedback is incorrect or counter productive. You can react with :thumbsup: and :thumbsdown: on @gemini-code-assist comments. If you're interested in giving your feedback about your experience with Gemini Code Assist for GitHub and other Google products, sign up [here](https://google.qualtrics.com/jfe/form/SV_2cyuGuTWsEw84yG).\n</details>\n\n\n[^1]: Review the [Privacy Notices](https://policies.google.com/privacy), [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy), [Terms of Service](https://policies.google.com/terms), and learn how to configure Gemini Code Assist in GitHub [here](https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github). Gemini can make mistakes, so double check it and [use code with caution](https://support.google.com/legal/answer/13505487).\n",
+      "created_at": "2026-03-20T06:13:22Z",
+      "updated_at": "2026-03-20T06:13:22Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095874363"
+    },
+    {
+      "type": "review",
+      "id": 3979674065,
+      "user": "gemini-code-assist[bot]",
+      "state": "COMMENTED",
+      "body": "## Code Review\n\nThe pull request updates the `WorkerPauseSystem.md` documentation to reflect changes in how long-running agent runtimes are handled within the Temporal pause system. Key updates include replacing references to 'Orchestrator processes' with 'agent_runtime worker fleets', clarifying that long-running agent runtimes are now detached and their state is preserved via a `ManagedRunStore` instead of Temporal Activity heartbeats, and detailing the use of `status(...)` polling against the `ManagedRunStore` for `MoonMind.AgentRun` and adapters. Additionally, the documentation now includes a note about Docker-Out-Of-Docker ephemeral containers during graceful shutdown and explains how `agent_runtime` workers resume tracking detached runtimes using the `ManagedRunStore`.",
+      "created_at": "2026-03-20T06:15:39Z",
+      "updated_at": "2026-03-20T06:15:39Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#pullrequestreview-3979674065"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4095927931,
+      "user": "google-labs-jules[bot]",
+      "body": "> @qodo review\n\nAcknowledged.",
+      "created_at": "2026-03-20T06:27:09Z",
+      "updated_at": "2026-03-20T06:27:09Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095927931"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4095989097,
+      "user": "nsticco",
+      "body": "/review",
+      "created_at": "2026-03-20T06:42:45Z",
+      "updated_at": "2026-03-20T06:42:45Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095989097"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4095989517,
+      "user": "qodo-code-review[bot]",
+      "body": "<h3>Code Review by Qodo</h3>\n\n<code>\ud83d\udc1e Bugs (2)</code>  <code>\ud83d\udcd8 Rule violations (0)</code>  <code>\ud83d\udcce Requirement gaps (0)</code>  <code>\ud83d\udcd0 Spec deviations (0)</code>\n\n<img src=\"https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.svg\" height=\"10%\" alt=\"Grey Divider\">\n\n<br/>\n\n<img src=\"https://www.qodo.ai/wp-content/uploads/2026/01/action-required.png\" height=\"20\" alt=\"Action required\">\n\n<details>\n<summary>  1.  Quiesce state contradiction <code>\ud83d\udc1e Bug</code> <code>\u2713 Correctness</code></summary>\n\n<br/>\n\n> <details open>\n><summary>Description</summary>\n><br/>\n>\n><pre>\n><b><i>WorkerPauseSystem.md</i></b> still claims Quiesce retains state in Temporal history, but the updated\n>Quiesce description now says managed runtime state is preserved via <b><i>ManagedRunStore</i></b> instead. This\n>inconsistency can mislead operators about what must be preserved during maintenance and what\n>survives replay/restart.\n></pre>\n></details>\n\n> <details open>\n><summary>Code</summary>\n><br/>\n>\n><code>[docs/Temporal/WorkerPauseSystem.md[R36-41]](https://github.com/MoonLadderStudios/MoonMind/pull/780/files#diff-7cb19ba8e131951e0b768758a0dd37558477a85111510241476e8083b2ecf929R36-R41)</code>\n>\n>```diff\n> ### 3.2 Quiesce (System-Wide Suspend)\n> \n> * **Mechanism**: A broadcast Temporal Signal (or Temporal Batch Operations API) sent to all running Workflows.\n> * Workflows check this state between Activities using a signal handler. If paused, the Workflow blocks on a `workflow.wait_condition()` until resumed.\n>-* Long-running Activities (e.g., LLM loops) yield checkpoint data back to Temporal history via heartbeats, allowing the Workflow to safely suspend when the Activity returns early with a checkpoint.\n>+* Long-running agent runtimes are detached and their state is preserved via the `ManagedRunStore`, rather than requiring Temporal Activity heartbeats.\n> \n>```\n></details>\n\n> <details>\n><summary>Evidence</summary>\n><br/>\n>\n><pre>\n>The Goals section states Quiesce retains state in Temporal history, while the updated Quiesce\n>section explicitly shifts persistence for long-running managed runtimes to <b><i>ManagedRunStore</i></b> (i.e.,\n>outside Temporal history). These two statements describe different persistence models and cannot\n>both be true as written.\n></pre>\n>\n> <code>[docs/Temporal/WorkerPauseSystem.md[17-25]](https://github.com/MoonLadderStudios/MoonMind/blob/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62/docs/Temporal/WorkerPauseSystem.md/#L17-L25)</code>\n> <code>[docs/Temporal/WorkerPauseSystem.md[36-41]](https://github.com/MoonLadderStudios/MoonMind/blob/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62/docs/Temporal/WorkerPauseSystem.md/#L36-L41)</code>\n></details>\n\n> <details>\n><summary>Agent prompt</summary>\n><br/>\n>\n>```\n>The issue below was found during a code review. Follow the provided context and guidance below and implement a solution\n>\n>## Issue description\n>`docs/Temporal/WorkerPauseSystem.md` contradicts itself about where Quiesce-mode state is preserved: Goals say \u201cTemporal history\u201d, but Quiesce now describes detached managed runtimes whose state is preserved via `ManagedRunStore`.\n>\n>## Issue Context\n>The PR updated Quiesce behavior to reflect managed runtimes being detached and tracked via `status(...)`/`ManagedRunStore`, which changes the persistence story vs the older \u201cheartbeat checkpoints into history\u201d model.\n>\n>## Fix Focus Areas\n>- docs/Temporal/WorkerPauseSystem.md[17-41]\n>\n>## Expected change\n>Update Goal #5 (and any nearby text) so it matches the detached-runtime model, e.g.:\n>- Replace \u201cretaining their state in Temporal history\u201d with language like \u201cretaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes)\u201d or equivalent, depending on intended truth.\n>```\n> <code>\u24d8 Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n></details>\n\n<hr/>\n</details>\n\n\n<br/>\n\n<img src=\"https://www.qodo.ai/wp-content/uploads/2026/01/review-recommended.png\" height=\"20\" alt=\"Remediation recommended\">\n\n<details>\n<summary>  2.  ManagedRunStore durability implied <code>\ud83d\udc1e Bug</code> <code>\u26ef Reliability</code></summary>\n\n<br/>\n\n> <details open>\n><summary>Description</summary>\n><br/>\n>\n><pre>\n>The playbook says <b><i>agent_runtime</i></b> workers resume tracking detached runtimes via a \u201cdurable\n><b><i>ManagedRunStore</i></b>\u201d, but the implementation is a JSON file-backed store under a local filesystem path\n>(<b><i>/work/agent_jobs/...</i></b>) and only becomes durable/portable if that path is backed by a persistent\n>(and, for handoff, shared) volume. Without stating this prerequisite, the docs over-imply seamless\n>handoff after upgrades or worker replacement.\n></pre>\n></details>\n\n> <details open>\n><summary>Code</summary>\n><br/>\n>\n><code>[docs/Temporal/WorkerPauseSystem.md[117]](https://github.com/MoonLadderStudios/MoonMind/pull/780/files#diff-7cb19ba8e131951e0b768758a0dd37558477a85111510241476e8083b2ecf929R117-R117)</code>\n>\n>```diff\n>+   * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the durable `ManagedRunStore`.\n>```\n></details>\n\n> <details>\n><summary>Evidence</summary>\n><br/>\n>\n><pre>\n><b><i>ManagedRunStore</i></b> is explicitly \u201cJSON file-backed\u201d and is instantiated under\n><b><i>MOONMIND_AGENT_RUNTIME_STORE</i></b> defaulting to <b><i>/work/agent_jobs/...</i></b>, meaning durability depends on\n>the runtime filesystem/volume. <b><i>docker-compose.yaml</i></b> mounts a named volume at <b><i>/work/agent_jobs</i></b>,\n>which supports durability across container restarts on the same host, but the docs do not state this\n>requirement (nor the limitation for cross-node handoff).\n></pre>\n>\n> <code>[docs/Temporal/WorkerPauseSystem.md[115-118]](https://github.com/MoonLadderStudios/MoonMind/blob/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62/docs/Temporal/WorkerPauseSystem.md/#L115-L118)</code>\n> <code>[moonmind/workflows/temporal/runtime/store.py[1-23]](https://github.com/MoonLadderStudios/MoonMind/blob/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62/moonmind/workflows/temporal/runtime/store.py/#L1-L23)</code>\n> <code>[moonmind/workflows/temporal/worker_runtime.py[226-246]](https://github.com/MoonLadderStudios/MoonMind/blob/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62/moonmind/workflows/temporal/worker_runtime.py/#L226-L246)</code>\n> <code>[docker-compose.yaml[434-477]](https://github.com/MoonLadderStudios/MoonMind/blob/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62/docker-compose.yaml/#L434-L477)</code>\n></details>\n\n> <details>\n><summary>Agent prompt</summary>\n><br/>\n>\n>```\n>The issue below was found during a code review. Follow the provided context and guidance below and implement a solution\n>\n>## Issue description\n>The operational playbook claims `agent_runtime` workers can \u201cresume tracking detached runtimes via the durable `ManagedRunStore`\u201d, but `ManagedRunStore` is a JSON file-backed store rooted under `/work/agent_jobs` by default. This is only durable if `/work/agent_jobs` is backed by a persistent volume, and handoff to a different worker/node only works if the replacement worker can see the same store root.\n>\n>## Issue Context\n>- `ManagedRunStore` persists JSON files on disk.\n>- Worker runtime builds the store under `MOONMIND_AGENT_RUNTIME_STORE` (default `/work/agent_jobs`).\n>- In docker-compose, `/work/agent_jobs` is a named volume (`agent_workspaces`), but this is an environmental prerequisite that should be stated in the runbook.\n>\n>## Fix Focus Areas\n>- docs/Temporal/WorkerPauseSystem.md[105-118]\n>\n>## Expected change\n>Adjust the sentence to be precise, e.g.:\n>- \u201c...resume tracking detached runtimes via the `ManagedRunStore` (backed by the persistent `agent_workspaces`/`/work/agent_jobs` volume).\u201d\n>Optionally add a short note that cross-node upgrades require the replacement workers to mount the same persistent/shared store path.\n>```\n> <code>\u24d8 Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n></details>\n\n<hr/>\n</details>\n\n\n<img src=\"https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.svg\" height=\"10%\" alt=\"Grey Divider\">\n<pre>\u24d8 The new review experience is currently in Beta. <a href=\"https://docs.qodo.ai/qodo-documentation/code-review\">Learn more</a></pre>\n<img src=\"https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.svg\" height=\"10%\" alt=\"Grey Divider\">\n\n\n<!-- https://github.com/MoonLadderStudios/MoonMind/commit/135090bf2e1ebd21e31cce112f7f7e3d5f5f5a62 -->\n\n<a href=\"https://www.qodo.ai\"><img src=\"https://www.qodo.ai/wp-content/uploads/2025/03/qodo-logo.svg\" width=\"80\" alt=\"Qodo Logo\"></a>",
+      "created_at": "2026-03-20T06:42:51Z",
+      "updated_at": "2026-03-20T06:45:58Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095989517"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4095992533,
+      "user": "google-labs-jules[bot]",
+      "body": "> /review\n\nAcknowledged.",
+      "created_at": "2026-03-20T06:43:44Z",
+      "updated_at": "2026-03-20T06:43:44Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#issuecomment-4095992533"
+    },
+    {
+      "type": "review_comment",
+      "id": 2964238890,
+      "user": "qodo-code-review[bot]",
+      "body": "<img src=\"https://www.qodo.ai/wp-content/uploads/2026/01/action-required.png\" height=\"20\" alt=\"Action required\">\n\n1\\. Quiesce state contradiction <code>\ud83d\udc1e Bug</code> <code>\u2713 Correctness</code>\n\n<pre>\n<b><i>WorkerPauseSystem.md</i></b> still claims Quiesce retains state in Temporal history, but the updated\nQuiesce description now says managed runtime state is preserved via <b><i>ManagedRunStore</i></b> instead. This\ninconsistency can mislead operators about what must be preserved during maintenance and what\nsurvives replay/restart.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`docs/Temporal/WorkerPauseSystem.md` contradicts itself about where Quiesce-mode state is preserved: Goals say \u201cTemporal history\u201d, but Quiesce now describes detached managed runtimes whose state is preserved via `ManagedRunStore`.\n\n## Issue Context\nThe PR updated Quiesce behavior to reflect managed runtimes being detached and tracked via `status(...)`/`ManagedRunStore`, which changes the persistence story vs the older \u201cheartbeat checkpoints into history\u201d model.\n\n## Fix Focus Areas\n- docs/Temporal/WorkerPauseSystem.md[17-41]\n\n## Expected change\nUpdate Goal #5 (and any nearby text) so it matches the detached-runtime model, e.g.:\n- Replace \u201cretaining their state in Temporal history\u201d with language like \u201cretaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes)\u201d or equivalent, depending on intended truth.\n```\n\n<code>\u24d8 Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>",
+      "created_at": "2026-03-20T06:45:59Z",
+      "updated_at": "2026-03-20T06:45:59Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/780#discussion_r2964238890",
+      "path": "docs/Temporal/WorkerPauseSystem.md",
+      "commit_id": "3a00fc2b1f705390570270c42e4570966cbd9712",
+      "in_reply_to_id": null,
+      "line": 41,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    }
+  ]
+}

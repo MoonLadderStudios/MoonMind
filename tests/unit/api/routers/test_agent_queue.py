@@ -317,15 +317,20 @@ def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
     service.create_job.assert_awaited_once()
 
 
-def test_create_job_routes_proposal_requested_tasks_to_queue(
+def test_create_job_routes_proposal_requested_tasks_to_temporal_when_enabled(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Task submissions with proposeTasks=true should stay on queue workers."""
+    """Task submissions with proposeTasks=true use Temporal like other runs."""
 
     test_client, service = client
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
-    temporal_submit = AsyncMock()
+    execution = SimpleNamespace(
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        started_at=None,
+    )
+    temporal_submit = AsyncMock(return_value=execution)
     monkeypatch.setattr(
         "api_service.api.routers.agent_queue._create_execution_from_task_request",
         temporal_submit,
@@ -352,8 +357,8 @@ def test_create_job_routes_proposal_requested_tasks_to_queue(
     )
 
     assert response.status_code == 201
-    service.create_job.assert_awaited_once()
-    temporal_submit.assert_not_awaited()
+    service.create_job.assert_not_awaited()
+    temporal_submit.assert_awaited_once()
 
 
 def test_create_job_routes_non_proposal_tasks_to_temporal_when_enabled(

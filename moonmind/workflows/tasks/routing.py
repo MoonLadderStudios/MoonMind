@@ -1,10 +1,8 @@
-from collections.abc import Mapping
 from typing import Literal
 
 from moonmind.config.settings import settings
 
 TaskTarget = Literal["temporal", "orchestrator", "queue"]
-
 
 # Accepted truthy string forms: 1, true, yes, on
 # Accepted falsy string forms:  0, false, no, off
@@ -34,36 +32,23 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
     )
 
 
-def _task_requests_proposals(task_payload: Mapping[str, object] | None) -> bool:
-    """Return whether a task submission requests post-run proposal generation."""
-
-    # Proposal generation support can be globally enabled while remaining
-    # opt-in per task submission.
-    default_enabled = False
-    if not isinstance(task_payload, Mapping):
-        return default_enabled
-    task_node = task_payload.get("task")
-    task = task_node if isinstance(task_node, Mapping) else {}
-    return _coerce_bool(task.get("proposeTasks"), default=default_enabled)
-
-
 def get_routing_target_for_task(
     *,
     is_manifest: bool = False,
     is_run: bool = False,
-    task_payload: Mapping[str, object] | None = None,
+    task_payload: object | None = None,
 ) -> TaskTarget:
-    """Determine the deterministic backend execution target for a task."""
+    """Determine the deterministic backend execution target for a task.
+
+    ``task_payload`` is accepted for API stability; run routing does not branch on it.
+    Proposal generation (``task.proposeTasks``) is handled inside Temporal workflows.
+    """
     if not settings.temporal_dashboard.submit_enabled:
         return "queue"
 
     if is_manifest:
         return "temporal"
     if is_run:
-        # Temporal proposal generation is still stubbed. Route proposal-requested
-        # runs to the queue worker path so Mission Control proposals are emitted.
-        if _task_requests_proposals(task_payload):
-            return "queue"
         return "temporal"
 
     return "queue"

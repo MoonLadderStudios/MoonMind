@@ -4725,8 +4725,9 @@ async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
                 tmp_path
                 / str(job_id)
                 / "repo"
-                / "artifacts"
-                / "pr_resolver_snapshot.json"
+                / "var"
+                / "pr_resolver"
+                / "snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(
@@ -4834,8 +4835,9 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
                 tmp_path
                 / str(job_id)
                 / "repo"
-                / "artifacts"
-                / "pr_resolver_snapshot.json"
+                / "var"
+                / "pr_resolver"
+                / "snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(
@@ -4937,8 +4939,9 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
                 tmp_path
                 / str(job_id)
                 / "repo"
-                / "artifacts"
-                / "pr_resolver_snapshot.json"
+                / "var"
+                / "pr_resolver"
+                / "snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(
@@ -5912,6 +5915,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     monkeypatch.setenv("MOONMIND_SKILL_POLICY_MODE", "allowlist")
     monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "Nate Sticco")
     monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "nsticco@gmail.com")
+    monkeypatch.setenv("MOONMIND_CLAUDE_CLI_AUTH_MODE", "oauth")
 
     config = CodexWorkerConfig.from_env()
 
@@ -5923,6 +5927,7 @@ async def test_config_from_env_defaults_and_overrides(monkeypatch) -> None:
     assert str(config.workdir) == "/tmp/moonmind-worker"
     assert config.default_codex_model == "gpt-5-codex"
     assert config.default_codex_effort == "high"
+    assert config.claude_cli_auth_mode == "oauth"
     assert config.skill_policy_mode == "allowlist"
     assert config.worker_capabilities == ("codex", "git")
     assert config.docker_binary == "docker"
@@ -6048,6 +6053,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("MOONMIND_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("WORKFLOW_SKILL_POLICY_MODE", raising=False)
     monkeypatch.delenv("SKILL_POLICY_MODE", raising=False)
+    monkeypatch.delenv("MOONMIND_CLAUDE_CLI_AUTH_MODE", raising=False)
 
     config = CodexWorkerConfig.from_env()
 
@@ -6060,6 +6066,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.allowed_skills == ("auto",)
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
+    assert config.claude_cli_auth_mode == "api_key"
     assert config.legacy_job_types_enabled is True
     assert config.worker_runtime == "codex"
     assert config.allowed_types == ("task", "codex_exec", "codex_skill")

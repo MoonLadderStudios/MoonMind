@@ -55,10 +55,20 @@ _OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "CODEX_API_KEY",
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
     }
 )
+_BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
+    "password",
+    "token",
+    "secret",
+    "credential",
+    "api_key",
+    "private_key",
+)
+# GitHub CLI authentication is required for skill workflows like pr-resolver.
+# Keep these pass-through tokens available to managed runtimes.
+_BASE_ENV_TOKEN_ALLOWLIST: frozenset[str] = frozenset({"GITHUB_TOKEN", "GH_TOKEN"})
+
 _PR_RESOLVER_RESULT_PATH = Path("artifacts/pr_resolver_result.json")
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
     {"failed", "blocked", "attempts_exhausted"}
@@ -70,6 +80,16 @@ SlotRequestFunc = Callable[..., Awaitable[Any]]
 SlotReleaseFunc = Callable[..., Awaitable[Any]]
 CooldownReportFunc = Callable[..., Awaitable[Any]]
 RunLauncherFunc = Callable[..., Awaitable[Any]]
+
+
+def _should_filter_base_env_var(key: str) -> bool:
+    normalized_key = str(key or "").strip()
+    if not normalized_key:
+        return False
+    if normalized_key.upper() in _BASE_ENV_TOKEN_ALLOWLIST:
+        return False
+    lowered = normalized_key.lower()
+    return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
 
 
 def _shape_environment_for_oauth(
@@ -214,10 +234,9 @@ class ManagedAgentAdapter:
         auth_mode: str = profile.get("auth_mode", "api_key")
 
         # Shape environment according to auth mode (DOC-REQ-005, DOC-REQ-006).
-        _bad_frags = ["password", "token", "secret", "credential", "api_key", "private_key"]
         base_env = {
             k: v for k, v in os.environ.items()
-            if not any(frag in k.lower() for frag in _bad_frags)
+            if not _should_filter_base_env_var(k)
         }
         if auth_mode == "oauth":
             shaped_env = _shape_environment_for_oauth(
@@ -259,7 +278,7 @@ class ManagedAgentAdapter:
                 elif runtime_id_for_profile == "claude_code":
                     cmd_template = ["claude"]
                 elif runtime_id_for_profile == "codex_cli":
-                    cmd_template = ["codex"]
+                    cmd_template = ["codex", "exec", "--full-auto"]
                 else:
                     cmd_template = [runtime_id_for_profile]
 

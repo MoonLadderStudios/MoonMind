@@ -116,6 +116,32 @@ async def test_cancel_action_routes_to_temporal(
     )
 
     mock_client_adapter.cancel_workflow.assert_called_once_with("mm:123")
+    mock_client_adapter.terminate_workflow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_force_terminate_routes_to_temporal_terminate(
+    service, mock_session, mock_client_adapter
+):
+    record = TemporalExecutionCanonicalRecord(
+        workflow_id="mm:123",
+        run_id="run-1",
+        workflow_type=TemporalWorkflowType.RUN,
+        owner_type=TemporalExecutionOwnerType.USER,
+        state=MoonMindWorkflowState.EXECUTING,
+        entry="run",
+    )
+    service._require_source_execution = AsyncMock(return_value=record)
+    service._sync_projection_best_effort = AsyncMock(return_value=record)
+
+    await service.cancel_execution(
+        workflow_id="mm:123", reason="force stop", graceful=False
+    )
+
+    mock_client_adapter.terminate_workflow.assert_called_once_with(
+        "mm:123", reason="force stop"
+    )
+    mock_client_adapter.cancel_workflow.assert_not_called()
 
 
 @pytest.mark.asyncio

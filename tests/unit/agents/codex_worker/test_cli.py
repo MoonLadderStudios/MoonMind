@@ -463,7 +463,7 @@ def test_run_preflight_google_embedding_requires_credential(monkeypatch) -> None
         cli.run_preflight(
             env={
                 "DEFAULT_EMBEDDING_PROVIDER": "google",
-                "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-001",
+                "GOOGLE_EMBEDDING_MODEL": "gemini-embedding-2-preview",
             }
         )
 

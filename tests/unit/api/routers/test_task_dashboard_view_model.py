@@ -381,3 +381,54 @@ def test_build_runtime_config_temporal_live_session_endpoint() -> None:
         config["sources"]["temporal"]["liveSession"]
         == "/api/task-runs/{id}/live-session"
     )
+
+
+# ---------------------------------------------------------------------------
+# T024: Run-index pagination and shared visibility totals
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_config_exposes_manifest_status_endpoint() -> None:
+    """Manifest-status endpoint must be present for run-index visibility."""
+    config = build_runtime_config("/tasks")
+    assert (
+        config["sources"]["temporal"]["manifestStatus"]
+        == "/api/executions/{workflowId}/manifest-status"
+    )
+
+
+def test_runtime_config_exposes_manifest_nodes_endpoint() -> None:
+    """Manifest-nodes endpoint must be present for run-index pagination."""
+    config = build_runtime_config("/tasks")
+    assert (
+        config["sources"]["temporal"]["manifestNodes"]
+        == "/api/executions/{workflowId}/manifest-nodes"
+    )
+
+
+def test_runtime_config_manifest_source_endpoints_present() -> None:
+    """Manifest source config must include registry and run endpoints."""
+    config = build_runtime_config("/tasks")
+    manifests = config["sources"]["manifests"]
+    assert manifests["registry"] == "/api/manifests"
+    assert manifests["registryRun"] == "/api/manifests/{name}/runs"
+    assert manifests["create"] == "/api/queue/jobs"
+    assert manifests["list"].startswith("/api/queue/jobs?type=manifest")
+
+
+def test_normalize_status_maps_manifest_ingest_states() -> None:
+    """Manifest-ingest-specific temporal states should map correctly."""
+    assert normalize_status("temporal", "executing") == "running"
+    assert normalize_status("temporal", "planning") == "running"
+    assert normalize_status("temporal", "canceled") == "cancelled"
+    assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
+
+
+def test_runtime_config_temporal_update_endpoint_for_manifest_updates() -> None:
+    """The update endpoint used for manifest SetConcurrency/Pause/Resume must exist."""
+    config = build_runtime_config("/tasks")
+    assert (
+        config["sources"]["temporal"]["update"]
+        == "/api/executions/{workflowId}/update"
+    )
+

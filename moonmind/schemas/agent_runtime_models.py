@@ -40,6 +40,9 @@ _SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "api_key",
     "private_key",
 )
+_ALLOWED_SENSITIVE_ENV_OVERRIDE_KEYS: frozenset[str] = frozenset(
+    {"GITHUB_TOKEN", "GH_TOKEN"}
+)
 _MAX_SUMMARY_CHARS = 4096
 
 
@@ -49,18 +52,38 @@ def is_terminal_agent_run_state(status: AgentRunState) -> bool:
     return status in TERMINAL_AGENT_RUN_STATES
 
 
-def _contains_sensitive_key(value: Any) -> bool:
+def _contains_sensitive_key(
+    value: Any,
+    *,
+    allowed_sensitive_keys: frozenset[str] | None = None,
+) -> bool:
+    normalized_allowlist = (
+        frozenset(item.upper() for item in allowed_sensitive_keys)
+        if allowed_sensitive_keys
+        else frozenset()
+    )
     if isinstance(value, dict):
         for key, nested in value.items():
             normalized = str(key).strip().lower()
             if any(fragment in normalized for fragment in _SENSITIVE_KEY_FRAGMENTS):
-                if not normalized.endswith("_ref"):
+                if (
+                    not normalized.endswith("_ref")
+                    and str(key).strip().upper() not in normalized_allowlist
+                ):
                     return True
-            if _contains_sensitive_key(nested):
+            if _contains_sensitive_key(
+                nested,
+                allowed_sensitive_keys=allowed_sensitive_keys,
+            ):
                 return True
         return False
     if isinstance(value, list):
-        return any(_contains_sensitive_key(item) for item in value)
+        return any(
+            _contains_sensitive_key(
+                item, allowed_sensitive_keys=allowed_sensitive_keys
+            )
+            for item in value
+        )
     return False
 
 
@@ -266,7 +289,10 @@ class ManagedRuntimeProfile(BaseModel):
         )
         if not self.command_template:
             raise ValueError("commandTemplate must not be empty")
-        if _contains_sensitive_key(self.env_overrides):
+        if _contains_sensitive_key(
+            self.env_overrides,
+            allowed_sensitive_keys=_ALLOWED_SENSITIVE_ENV_OVERRIDE_KEYS,
+        ):
             raise ValueError("envOverrides must not contain raw credential keys")
         return self
 

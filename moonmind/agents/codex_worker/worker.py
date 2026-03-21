@@ -400,6 +400,7 @@ class CodexWorkerConfig:
     gemini_cli_auth_mode: str = "api_key"
     gemini_allowed_tools: tuple[str, ...] = _DEFAULT_GEMINI_ALLOWED_TOOLS
     claude_binary: str = "claude"
+    claude_cli_auth_mode: str = "api_key"
     jules_enabled: bool = False
     jules_api_url: str | None = None
     jules_api_key: str | None = None
@@ -685,6 +686,14 @@ class CodexWorkerConfig:
         else:
             gemini_allowed_tools = tuple(
                 cls._normalize_runtime_option_values(str(gemini_allowed_tools_raw))
+            )
+        claude_cli_auth_mode = (
+            str(source.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "api_key")).strip().lower()
+            or "api_key"
+        )
+        if claude_cli_auth_mode not in {"api_key", "oauth"}:
+            raise ValueError(
+                "MOONMIND_CLAUDE_CLI_AUTH_MODE must be one of: api_key, oauth"
             )
         claude_binary = (
             str(source.get("MOONMIND_CLAUDE_BINARY", "claude")).strip() or "claude"
@@ -1058,6 +1067,7 @@ class CodexWorkerConfig:
             gemini_cli_auth_mode=gemini_cli_auth_mode,
             gemini_allowed_tools=gemini_allowed_tools,
             claude_binary=claude_binary,
+            claude_cli_auth_mode=claude_cli_auth_mode,
             jules_enabled=jules_gate.enabled,
             jules_api_url=jules_api_url,
             jules_api_key=jules_api_key,
@@ -6779,8 +6789,22 @@ class CodexWorker:
         if not is_pr_resolution_task:
             return StepGateResult(passed=True)
 
-        snapshot_path = prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json"
-        result_path = prepared.repo_dir / "artifacts" / "pr_resolver_result.json"
+        snapshot_candidates = (
+            prepared.repo_dir / "var" / "pr_resolver" / "snapshot.json",
+            prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json",
+        )
+        result_candidates = (
+            prepared.repo_dir / "var" / "pr_resolver" / "result.json",
+            prepared.repo_dir / "artifacts" / "pr_resolver_result.json",
+        )
+        snapshot_path = next(
+            (path for path in snapshot_candidates if path.exists()),
+            snapshot_candidates[0],
+        )
+        result_path = next(
+            (path for path in result_candidates if path.exists()),
+            result_candidates[0],
+        )
         report_path = (
             prepared.artifacts_dir / "reports" / "pr_resolution_validation.json"
         )
@@ -6791,17 +6815,18 @@ class CodexWorker:
         snapshot_payload: dict[str, Any] = {}
         snapshot_error: str | None = None
         if not snapshot_path.exists():
-            snapshot_error = "missing artifacts/pr_resolver_snapshot.json"
+            snapshot_error = (
+                "missing pr-resolver snapshot artifact "
+                "(expected var/pr_resolver/snapshot.json)"
+            )
         else:
             try:
                 parsed_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                snapshot_error = "artifacts/pr_resolver_snapshot.json is not valid JSON"
+                snapshot_error = f"{snapshot_path.relative_to(prepared.repo_dir)} is not valid JSON"
             else:
                 if not isinstance(parsed_snapshot, Mapping):
-                    snapshot_error = (
-                        "artifacts/pr_resolver_snapshot.json must be a JSON object"
-                    )
+                    snapshot_error = f"{snapshot_path.relative_to(prepared.repo_dir)} must be a JSON object"
                 else:
                     snapshot_payload = dict(parsed_snapshot)
 
@@ -6880,8 +6905,8 @@ class CodexWorker:
             "reason": failure_reason or "pr-resolution final state is resolved",
             "objective": objective,
             "sources": {
-                "snapshotPath": "artifacts/pr_resolver_snapshot.json",
-                "resultPath": "artifacts/pr_resolver_result.json",
+                "snapshotPath": str(snapshot_path.relative_to(prepared.repo_dir)),
+                "resultPath": str(result_path.relative_to(prepared.repo_dir)),
             },
             "snapshot": {
                 "available": bool(snapshot_payload),
@@ -10124,34 +10149,64 @@ class CodexWorker:
         *,
         runtime_mode: str,
     ) -> Mapping[str, str] | None:
-        if runtime_mode != "gemini_cli":
+        if runtime_mode not in {"gemini_cli", "claude"}:
             return None
-        if self._config.gemini_cli_auth_mode != "oauth":
-            return None
-        gemini_home = str(
-            environ.get("GEMINI_CLI_HOME") or environ.get("GEMINI_HOME") or ""
-        ).strip()
-        if not gemini_home:
-            logger.warning(
-                "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth is set but GEMINI_CLI_HOME/GEMINI_HOME "
-                "is missing; retaining API key variables for Gemini runtime command auth.",
-                extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
-            )
-            return None
-        if not Path(gemini_home).is_dir() or not os.access(
-            gemini_home, os.W_OK | os.X_OK
-        ):
-            logger.warning(
-                "Gemini auth home is not a writable directory; retaining API key variables "
-                "for Gemini runtime command auth.",
-                gemini_home,
-                extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
-            )
-            return None
-        env = dict(environ)
-        env.pop("GEMINI_API_KEY", None)
-        env.pop("GOOGLE_API_KEY", None)
-        return env
+
+        if runtime_mode == "gemini_cli":
+            if self._config.gemini_cli_auth_mode != "oauth":
+                return None
+            gemini_home = str(
+                environ.get("GEMINI_CLI_HOME") or environ.get("GEMINI_HOME") or ""
+            ).strip()
+            if not gemini_home:
+                logger.warning(
+                    "MOONMIND_GEMINI_CLI_AUTH_MODE=oauth is set but GEMINI_CLI_HOME/GEMINI_HOME "
+                    "is missing; retaining API key variables for Gemini runtime command auth.",
+                    extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
+                )
+                return None
+            if not Path(gemini_home).is_dir() or not os.access(
+                gemini_home, os.W_OK | os.X_OK
+            ):
+                logger.warning(
+                    "Gemini auth home is not a writable directory; retaining API key variables "
+                    "for Gemini runtime command auth.",
+                    gemini_home,
+                    extra={"gemini_cli_auth_mode": self._config.gemini_cli_auth_mode},
+                )
+                return None
+            env = dict(environ)
+            env.pop("GEMINI_API_KEY", None)
+            env.pop("GOOGLE_API_KEY", None)
+            return env
+
+        if runtime_mode == "claude":
+            if self._config.claude_cli_auth_mode != "oauth":
+                return None
+            claude_home = str(
+                environ.get("CLAUDE_HOME") or ""
+            ).strip()
+            if not claude_home:
+                logger.warning(
+                    "MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth is set but CLAUDE_HOME "
+                    "is missing; retaining API key variables for Claude runtime command auth.",
+                    extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
+                )
+                return None
+            if not Path(claude_home).is_dir() or not os.access(
+                claude_home, os.W_OK | os.X_OK
+            ):
+                logger.warning(
+                    "Claude auth home is not a writable directory; retaining API key variables "
+                    "for Claude runtime command auth.",
+                    claude_home,
+                    extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
+                )
+                return None
+            env = dict(environ)
+            env.pop("ANTHROPIC_API_KEY", None)
+            env.pop("CLAUDE_API_KEY", None)
+            return env
 
     def _ensure_jules_runtime_enabled(self) -> None:
         """Validate Jules runtime settings before executing delegated steps."""

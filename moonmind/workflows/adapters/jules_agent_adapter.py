@@ -51,6 +51,14 @@ def _normalize_jules_task(response: JulesTaskResponse) -> str:
     return normalized
 
 
+def _preferred_external_url(response: JulesTaskResponse) -> str | None:
+    """Prefer the PR URL once available; otherwise fall back to session URL."""
+    pull_request_url = str(response.pull_request_url or "").strip() or None
+    if pull_request_url:
+        return pull_request_url
+    return str(response.url or "").strip() or None
+
+
 _JULES_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="jules",
     supportsCallbacks=False,
@@ -121,14 +129,19 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
         )
         provider_status = str(response.status or "").strip() or "unknown"
         normalized_status = _normalize_jules_task(response)
-        return self.build_handle(
+        handle = self.build_handle(
             run_id=response.task_id,
             agent_id="jules",
             status=_JULES_TO_AGENT_RUN_STATUS[normalized_status],
             provider_status=provider_status,
             normalized_status=normalized_status,
-            external_url=str(response.url or "").strip() or None,
+            external_url=_preferred_external_url(response),
         )
+        if response.pull_request_url:
+            metadata = dict(handle.metadata)
+            metadata["pullRequestUrl"] = response.pull_request_url
+            handle = handle.model_copy(update={"metadata": metadata})
+        return handle
 
     async def send_message(self, *, run_id: str, prompt: str) -> AgentRunStatus:
         """Send a follow-up prompt to an existing Jules session.
@@ -158,20 +171,30 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             status=_JULES_TO_AGENT_RUN_STATUS[normalized_status],
             provider_status=provider_status,
             normalized_status=normalized_status,
-            external_url=str(response.url or "").strip() or None,
+            external_url=_preferred_external_url(response),
+            extra_metadata=(
+                {"pullRequestUrl": response.pull_request_url}
+                if response.pull_request_url
+                else None
+            ),
         )
 
     async def do_fetch_result(self, run_id: str) -> AgentRunResult:
         response = await self._get_task(run_id)
         provider_status = str(response.status or "").strip() or "unknown"
         normalized_status = _normalize_jules_task(response)
-        return self.build_result(
+        result = self.build_result(
             run_id=run_id,
             provider_status=provider_status,
             normalized_status=normalized_status,
             provider_name="Jules",
-            external_url=str(response.url or "").strip() or None,
+            external_url=_preferred_external_url(response),
         )
+        if response.pull_request_url:
+            metadata = dict(result.metadata)
+            metadata["pullRequestUrl"] = response.pull_request_url
+            result = result.model_copy(update={"metadata": metadata})
+        return result
 
     async def do_cancel(self, run_id: str) -> AgentRunStatus:
         try:
@@ -198,8 +221,15 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             status=_JULES_TO_AGENT_RUN_STATUS[normalized_status],
             provider_status=provider_status,
             normalized_status=normalized_status,
-            external_url=str(response.url or "").strip() or None,
-            extra_metadata={"cancelAccepted": True},
+            external_url=_preferred_external_url(response),
+            extra_metadata={
+                "cancelAccepted": True,
+                **(
+                    {"pullRequestUrl": response.pull_request_url}
+                    if response.pull_request_url
+                    else {}
+                ),
+            },
         )
 
     async def _get_task(self, run_id: str) -> JulesTaskResponse:

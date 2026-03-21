@@ -158,6 +158,11 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(workflow_id)
         await handle.cancel()
 
+    async def terminate_workflow(self, workflow_id: str, *, reason: str) -> None:
+        """Force terminate an existing workflow execution."""
+        handle = await self.get_workflow_handle(workflow_id)
+        await handle.terminate(reason=reason)
+
     async def signal_workflow(
         self, workflow_id: str, signal_name: str, arg: Any = None
     ) -> None:

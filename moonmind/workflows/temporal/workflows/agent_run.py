@@ -32,17 +32,52 @@ class RunStatus:
     cancelled = "cancelled"
     timed_out = "timed_out"
 
+
+_TERMINAL_RUN_STATUSES = frozenset(
+    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out}
+)
+
+_EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
+    "queued": RunStatus.queued,
+    "launching": RunStatus.launching,
+    "running": RunStatus.running,
+    "in_progress": RunStatus.running,
+    "in-progress": RunStatus.running,
+    "processing": RunStatus.running,
+    "awaiting_callback": RunStatus.awaiting_callback,
+    "awaiting_approval": "awaiting_approval",
+    "intervention_requested": "intervention_requested",
+    "collecting_results": "collecting_results",
+    "completed": RunStatus.completed,
+    "succeeded": RunStatus.completed,
+    "success": RunStatus.completed,
+    "done": RunStatus.completed,
+    "resolved": RunStatus.completed,
+    "finished": RunStatus.completed,
+    "failed": RunStatus.failed,
+    "error": RunStatus.failed,
+    "errored": RunStatus.failed,
+    "cancelled": RunStatus.cancelled,
+    "canceled": RunStatus.cancelled,
+    "timed_out": RunStatus.timed_out,
+    "timeout": RunStatus.timed_out,
+    "timed-out": RunStatus.timed_out,
+    "unknown": RunStatus.awaiting_callback,
+}
+
 PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
 # Activity catalog constants for agent_runtime fleet routing.
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=5)
 AGENT_RUNTIME_CANCEL_TIMEOUT = timedelta(minutes=1)
+AGENT_RUNTIME_STATUS_TIMEOUT = timedelta(seconds=60)
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 INTEGRATIONS_ACTIVITY_TIMEOUT = timedelta(minutes=5)
 INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
+MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 
 
 @activity.defn(name="integration.resolve_external_adapter")
@@ -138,6 +173,164 @@ class MoonMindAgentRun:
         self._assigned_profile_id = payload.get("profile_id")
         self.slot_assigned_event.set()
 
+    @staticmethod
+    def _normalize_external_status(
+        *,
+        normalized_status: str | None,
+        raw_status: object,
+        provider_status: str | None,
+    ) -> str:
+        for candidate in (normalized_status, raw_status, provider_status):
+            token = str(candidate or "").strip().lower()
+            if not token:
+                continue
+            mapped = _EXTERNAL_STATUS_TO_RUN_STATUS.get(token)
+            if mapped is not None:
+                return mapped
+        return RunStatus.awaiting_callback
+
+    def _coerce_external_status_payload(
+        self,
+        *,
+        status_payload: object,
+        fallback_agent_id: str,
+    ) -> AgentRunStatusModel:
+        if isinstance(status_payload, AgentRunStatusModel):
+            return status_payload
+
+        payload: dict
+        if isinstance(status_payload, dict):
+            payload = status_payload
+        else:
+            payload = {
+                "external_id": getattr(status_payload, "external_id", None),
+                "externalId": getattr(status_payload, "externalId", None),
+                "run_id": getattr(status_payload, "run_id", None),
+                "runId": getattr(status_payload, "runId", None),
+                "status": getattr(status_payload, "status", None),
+                "normalized_status": getattr(status_payload, "normalized_status", None),
+                "normalizedStatus": getattr(status_payload, "normalizedStatus", None),
+                "provider_status": getattr(status_payload, "provider_status", None),
+                "providerStatus": getattr(status_payload, "providerStatus", None),
+                "url": getattr(status_payload, "url", None),
+                "external_url": getattr(status_payload, "external_url", None),
+                "externalUrl": getattr(status_payload, "externalUrl", None),
+                "tracking_ref": getattr(status_payload, "tracking_ref", None),
+                "trackingRef": getattr(status_payload, "trackingRef", None),
+                "terminal": getattr(status_payload, "terminal", None),
+                "agent_id": getattr(status_payload, "agent_id", None),
+                "agentId": getattr(status_payload, "agentId", None),
+                "metadata": getattr(status_payload, "metadata", None),
+            }
+
+        # Preferred path: canonical AgentRunStatus contract.
+        try:
+            return AgentRunStatusModel(**payload)
+        except Exception:
+            pass
+
+        metadata = payload.get("metadata")
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+
+        external_id = str(
+            payload.get("external_id")
+            or payload.get("externalId")
+            or payload.get("run_id")
+            or payload.get("runId")
+            or self.run_id
+            or ""
+        ).strip()
+        if not external_id:
+            raise ValueError("External status payload is missing external_id/run_id")
+
+        normalized_status = str(
+            payload.get("normalized_status")
+            or payload.get("normalizedStatus")
+            or metadata_dict.get("normalizedStatus")
+            or metadata_dict.get("normalized_status")
+            or ""
+        ).strip().lower() or None
+        provider_status = str(
+            payload.get("provider_status")
+            or payload.get("providerStatus")
+            or metadata_dict.get("providerStatus")
+            or metadata_dict.get("provider_status")
+            or payload.get("status")
+            or "unknown"
+        ).strip()
+
+        run_status = self._normalize_external_status(
+            normalized_status=normalized_status,
+            raw_status=payload.get("status"),
+            provider_status=provider_status,
+        )
+
+        external_url = (
+            payload.get("url")
+            or payload.get("external_url")
+            or payload.get("externalUrl")
+            or metadata_dict.get("externalUrl")
+            or metadata_dict.get("external_url")
+        )
+        tracking_ref = (
+            payload.get("tracking_ref")
+            or payload.get("trackingRef")
+            or metadata_dict.get("trackingRef")
+            or metadata_dict.get("tracking_ref")
+        )
+        terminal = bool(payload.get("terminal", run_status in _TERMINAL_RUN_STATUSES))
+
+        agent_id = str(
+            payload.get("agent_id")
+            or payload.get("agentId")
+            or self._external_agent_id
+            or fallback_agent_id
+        ).strip() or fallback_agent_id
+
+        normalized_for_metadata = normalized_status or "unknown"
+        result_metadata = {
+            "providerStatus": provider_status,
+            "normalizedStatus": normalized_for_metadata,
+            "terminal": terminal,
+        }
+        if external_url is not None:
+            result_metadata["externalUrl"] = external_url
+        if tracking_ref is not None:
+            result_metadata["trackingRef"] = tracking_ref
+
+        return AgentRunStatusModel(
+            runId=external_id,
+            agentKind="external",
+            agentId=agent_id,
+            status=run_status,
+            metadata=result_metadata,
+        )
+
+    @staticmethod
+    def _coerce_managed_status_payload(
+        *,
+        status_payload: object,
+        run_id: str,
+        fallback_agent_id: str,
+    ) -> AgentRunStatusModel:
+        if isinstance(status_payload, AgentRunStatusModel):
+            return status_payload
+        if isinstance(status_payload, dict):
+            return AgentRunStatusModel(**status_payload)
+
+        payload = {
+            "runId": getattr(status_payload, "run_id", None)
+            or getattr(status_payload, "runId", None)
+            or run_id,
+            "agentKind": "managed",
+            "agentId": getattr(status_payload, "agent_id", None)
+            or getattr(status_payload, "agentId", None)
+            or fallback_agent_id,
+            "status": getattr(status_payload, "status", None) or "running",
+            "metadata": getattr(status_payload, "metadata", None) or {},
+        }
+        return AgentRunStatusModel(**payload)
+
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
@@ -148,6 +341,9 @@ class MoonMindAgentRun:
 
         # Loop for handling 429 cooldown & profile swaps safely within the timeout boundary
         overall_start = workflow.now()
+        use_managed_status_activity = workflow.patched(
+            MANAGED_STATUS_ACTIVITY_PATCH_ID
+        )
 
         try:
             while True:
@@ -380,14 +576,41 @@ class MoonMindAgentRun:
                                     start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 )
-                                status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
+                                status_obj = self._coerce_external_status_payload(
+                                    status_payload=status_dict,
+                                    fallback_agent_id=request.agent_id,
+                                )
                             else:
-                                # Managed agent: poll via adapter directly.
-                                status_obj = await adapter.status(self.run_id)
-                                workflow.logger.info(f"STATUS_OBJ for {self.run_id}: {status_obj}")
+                                if use_managed_status_activity:
+                                    status_payload = await workflow.execute_activity(
+                                        "agent_runtime.status",
+                                        {
+                                            "run_id": self.run_id,
+                                            "agent_id": request.agent_id,
+                                        },
+                                        task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                                        start_to_close_timeout=AGENT_RUNTIME_STATUS_TIMEOUT,
+                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                    )
+                                    status_obj = self._coerce_managed_status_payload(
+                                        status_payload=status_payload,
+                                        run_id=str(self.run_id or ""),
+                                        fallback_agent_id=request.agent_id,
+                                    )
+                                else:
+                                    # Legacy replay-compatibility path: older histories
+                                    # recorded timer-only polling for managed runs.
+                                    # Avoid consulting mutable run-store state during
+                                    # replay to keep command sequencing stable.
+                                    status_obj = AgentRunStatusModel(
+                                        runId=str(self.run_id or ""),
+                                        agentKind="managed",
+                                        agentId=request.agent_id,
+                                        status=RunStatus.running,
+                                    )
 
                             self.run_status = status_obj.status
-                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                            if status_obj.status in _TERMINAL_RUN_STATUSES:
                                 break
 
                 elapsed = (workflow.now() - overall_start).total_seconds()
@@ -410,8 +633,25 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
-                        # Managed agent: fetch via adapter.
-                        self.final_result = await adapter.fetch_result(self.run_id)
+                        if use_managed_status_activity:
+                            result_payload = await workflow.execute_activity(
+                                "agent_runtime.fetch_result",
+                                {
+                                    "run_id": self.run_id,
+                                    "agent_id": request.agent_id,
+                                },
+                                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                                start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+                            self.final_result = (
+                                AgentRunResult(**result_payload)
+                                if isinstance(result_payload, dict)
+                                else result_payload
+                            )
+                        else:
+                            # Managed agent legacy path.
+                            self.final_result = await adapter.fetch_result(self.run_id)
 
                 # Check for 429
                 if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:

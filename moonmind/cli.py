@@ -7,6 +7,7 @@ from typing import List, Optional
 
 import typer
 
+from moonmind.manifest import manifest_cli
 from moonmind.rag import cli as rag_cli
 from moonmind.rag.guardrails import GuardrailError, ensure_rag_ready
 from moonmind.rag.settings import RagRuntimeSettings
@@ -14,8 +15,10 @@ from moonmind.rag.settings import RagRuntimeSettings
 app = typer.Typer(help="MoonMind developer utilities.")
 rag_app = typer.Typer(help="Retrieval helpers for Codex workers.")
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
+manifest_app = typer.Typer(help="Manifest schema validation and pipeline commands.")
 app.add_typer(rag_app, name="rag")
 app.add_typer(worker_app, name="worker")
+app.add_typer(manifest_app, name="manifest")
 
 
 @rag_app.command(
@@ -116,9 +119,72 @@ def worker_doctor() -> None:
     typer.secho("Worker retrieval prerequisites satisfied.", fg=typer.colors.GREEN)
 
 
+# ----- manifest commands -----
+
+
+@manifest_app.command("validate", help="Validate a manifest YAML against the v0 schema.")
+def manifest_validate(
+    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
+) -> None:
+    result = manifest_cli.run_validate(manifest_path=str(file))
+    for issue in result.issues:
+        color = typer.colors.RED if issue.severity == "ERROR" else typer.colors.YELLOW
+        typer.secho(f"[{issue.severity}] {issue.field}: {issue.message}", fg=color)
+    typer.secho(result.summary(), fg=typer.colors.GREEN if result.valid else typer.colors.RED)
+    if not result.valid:
+        raise typer.Exit(code=1)
+
+
+@manifest_app.command("plan", help="Dry-run: estimate scope without writing to vector store.")
+def manifest_plan(
+    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
+) -> None:
+    import json as _json
+
+    try:
+        summary = manifest_cli.run_plan(manifest_path=str(file))
+    except manifest_cli.ManifestCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.echo(_json.dumps(summary, indent=2))
+
+
+@manifest_app.command("run", help="Execute full manifest pipeline: fetch → chunk → embed → upsert.")
+def manifest_run(
+    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
+) -> None:
+    import json as _json
+
+    try:
+        result = manifest_cli.run_manifest(manifest_path=str(file))
+    except manifest_cli.ManifestCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.echo(_json.dumps(result, indent=2))
+
+
+@manifest_app.command("evaluate", help="Evaluate retrieval quality against golden datasets.")
+def manifest_evaluate(
+    file: Path = typer.Option(..., "-f", "--file", help="Path to manifest YAML."),
+    dataset: Optional[str] = typer.Option(None, "--dataset", help="Filter to specific dataset name."),
+) -> None:
+    import json as _json
+
+    try:
+        result = manifest_cli.run_evaluate(manifest_path=str(file), dataset=dataset)
+    except manifest_cli.ManifestCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    passed = result.get("passed", False)
+    typer.echo(_json.dumps(result, indent=2))
+    if not passed:
+        raise typer.Exit(code=1)
+
+
 def main() -> None:
     app()
 
 
 if __name__ == "__main__":  # pragma: no cover
     main()
+

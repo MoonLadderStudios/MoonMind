@@ -389,6 +389,96 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
+async def _auto_seed_auth_profiles() -> list[str]:
+    """Auto-seed default auth profiles when the table is empty.
+
+    Returns the list of runtime_ids that were seeded, or an empty list if
+    seeding was skipped or the table already has data.
+    """
+    from api_service.db.base import get_async_session_context
+    from sqlalchemy import select, func
+    from api_service.db.models import (
+        ManagedAgentAuthProfile,
+        ManagedAgentAuthMode,
+        ManagedAgentRateLimitPolicy,
+    )
+
+    if os.environ.get("MOONMIND_SKIP_AUTH_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
+        logger.info("Auth profile auto-seeding disabled via MOONMIND_SKIP_AUTH_PROFILE_SEED.")
+        return []
+
+    # Well-known runtime defaults matching docker-compose.yaml conventions.
+    _DEFAULT_PROFILES = [
+        {
+            "profile_id": "gemini_default",
+            "runtime_id": "gemini_cli",
+            "auth_mode": ManagedAgentAuthMode.OAUTH,
+            "volume_ref": os.environ.get("GEMINI_VOLUME_NAME", "gemini_auth_volume"),
+            "volume_mount_path": os.environ.get("GEMINI_VOLUME_PATH", "/var/lib/gemini-auth"),
+            "account_label": "Gemini CLI (auto-seeded)",
+        },
+        {
+            "profile_id": "codex_default",
+            "runtime_id": "codex_cli",
+            "auth_mode": ManagedAgentAuthMode.OAUTH,
+            "volume_ref": os.environ.get("CODEX_VOLUME_NAME", "codex_auth_volume"),
+            "volume_mount_path": os.environ.get("CODEX_VOLUME_PATH", "/home/app/.codex"),
+            "account_label": "Codex CLI (auto-seeded)",
+        },
+        {
+            "profile_id": "claude_default",
+            "runtime_id": "claude_code",
+            "auth_mode": ManagedAgentAuthMode.API_KEY,
+            "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
+            "volume_mount_path": os.environ.get("CLAUDE_VOLUME_PATH", "/home/app/.claude"),
+            "account_label": "Claude Code (auto-seeded)",
+        },
+    ]
+
+    seeded: list[str] = []
+    try:
+        async with get_async_session_context() as session:
+            count_result = await session.execute(
+                select(func.count()).select_from(ManagedAgentAuthProfile)
+            )
+            profile_count = count_result.scalar() or 0
+
+            if profile_count > 0:
+                return []
+
+            logger.info(
+                "No auth profiles found in DB. Auto-seeding %d default profile(s)...",
+                len(_DEFAULT_PROFILES),
+            )
+
+            for profile_def in _DEFAULT_PROFILES:
+                profile = ManagedAgentAuthProfile(
+                    profile_id=profile_def["profile_id"],
+                    runtime_id=profile_def["runtime_id"],
+                    auth_mode=profile_def["auth_mode"],
+                    volume_ref=profile_def["volume_ref"],
+                    volume_mount_path=profile_def["volume_mount_path"],
+                    account_label=profile_def["account_label"],
+                    max_parallel_runs=1,
+                    cooldown_after_429_seconds=300,
+                    rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                    enabled=True,
+                )
+                session.add(profile)
+                seeded.append(profile_def["runtime_id"])
+                logger.info(
+                    "Auto-seeded auth profile '%s' for runtime '%s'",
+                    profile_def["profile_id"],
+                    profile_def["runtime_id"],
+                )
+
+            await session.commit()
+    except Exception as e:
+        logger.error("Failed to auto-seed auth profiles: %s", e, exc_info=True)
+
+    return seeded
+
+
 async def ensure_auth_profile_managers_started():
     """Ensure AuthProfileManager workflows are running for all distinct runtime families."""
     from api_service.db.base import get_async_session_context
@@ -397,7 +487,10 @@ async def ensure_auth_profile_managers_started():
     from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.workflows.auth_profile_manager import WORKFLOW_NAME, AuthProfileManagerInput
     from temporalio.exceptions import WorkflowAlreadyStartedError
-    
+
+    # Auto-seed default profiles if table is empty.
+    await _auto_seed_auth_profiles()
+
     logger.info("Ensuring AuthProfileManager workflows are started...")
     try:
         async with get_async_session_context() as session:

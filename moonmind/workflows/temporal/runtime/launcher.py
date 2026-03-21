@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shlex
 import shutil
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ from moonmind.schemas.agent_runtime_models import (
 
 from .store import ManagedRunStore
 
+_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
 logger = logging.getLogger(__name__)
 
 TMATE_SOCKET_DIR = Path("/tmp/moonmind/tmate")
@@ -29,6 +32,156 @@ class ManagedRuntimeLauncher:
 
     def __init__(self, store: ManagedRunStore) -> None:
         self._store = store
+        self._logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
+        if not isinstance(workspace_spec, dict):
+            return None
+        for key in ("newBranch", "startingBranch", "branch"):
+            value = workspace_spec.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _normalize_clone_source(repo_ref: str) -> str | None:
+        normalized = str(repo_ref or "").strip()
+        if not normalized:
+            return None
+        if normalized.startswith(("http://", "https://", "git@", "file://")):
+            return normalized
+        if _OWNER_REPO_PATTERN.fullmatch(normalized):
+            return f"https://github.com/{normalized}.git"
+
+        repo_path = Path(normalized).expanduser()
+        if repo_path.exists():
+            return str(repo_path.resolve())
+        return None
+
+    @staticmethod
+    def _workspace_root() -> Path:
+        root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        return Path(root).resolve() / "workspaces"
+
+    def _find_existing_workspace_repo(self, *, exclude_run_id: str) -> str | None:
+        workspace_root = self._workspace_root()
+        if not workspace_root.exists():
+            return None
+
+        candidates: list[Path] = []
+        for child in workspace_root.iterdir():
+            if not child.is_dir() or child.name == exclude_run_id:
+                continue
+            repo_dir = child / "repo"
+            if (repo_dir / ".git").exists():
+                candidates.append(repo_dir)
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return str(candidates[0])
+
+    async def _run_git_command(
+        self,
+        args: list[str],
+        *,
+        allow_failure: bool = False,
+    ) -> bool:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode == 0:
+            return True
+
+        self._logger.warning(
+            "git %s failed rc=%s stdout=%s stderr=%s",
+            " ".join(args),
+            process.returncode,
+            stdout.decode("utf-8", errors="replace").strip()[:400],
+            stderr.decode("utf-8", errors="replace").strip()[:400],
+        )
+        if allow_failure:
+            return False
+        raise RuntimeError(f"git {' '.join(args)} failed with exit code {process.returncode}")
+
+    async def _prepare_workspace(
+        self,
+        *,
+        run_id: str,
+        request: AgentExecutionRequest,
+        workspace_path: str | None,
+    ) -> str | None:
+        if workspace_path:
+            return workspace_path
+
+        workspace_root = self._workspace_root()
+        run_workspace = workspace_root / run_id / "repo"
+        if run_workspace.exists():
+            return str(run_workspace)
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        repo_ref = workspace_spec.get("repository") or workspace_spec.get("repo")
+        clone_source = (
+            self._normalize_clone_source(str(repo_ref))
+            if isinstance(repo_ref, str)
+            else None
+        )
+        if clone_source is None:
+            clone_source = self._find_existing_workspace_repo(exclude_run_id=run_id)
+        if clone_source is None:
+            return None
+
+        run_workspace.parent.mkdir(parents=True, exist_ok=True)
+        branch = self._extract_workspace_branch(workspace_spec)
+        clone_args: list[str] = ["clone"]
+        if branch and not Path(clone_source).exists():
+            clone_args.extend(["--branch", branch, "--single-branch"])
+        clone_args.extend(["--", clone_source, str(run_workspace)])
+        cloned = await self._run_git_command(clone_args, allow_failure=True)
+        if not cloned:
+            return None
+
+        if branch:
+            checkout_ok = await self._run_git_command(
+                ["-C", str(run_workspace), "checkout", branch],
+                allow_failure=True,
+            )
+            if not checkout_ok:
+                await self._run_git_command(
+                    ["-C", str(run_workspace), "fetch", "origin", branch],
+                    allow_failure=True,
+                )
+                await self._run_git_command(
+                    ["-C", str(run_workspace), "checkout", "-B", branch, f"origin/{branch}"],
+                    allow_failure=True,
+                )
+        return str(run_workspace)
+
+    @staticmethod
+    def _build_tmate_wrapper_script(
+        cmd: list[str],
+        *,
+        socket_path: str,
+        session_name: str,
+    ) -> str:
+        """Build a shell script that runs agent cmd and force-closes tmate session."""
+        cmd_str = shlex.join(cmd)
+        return (
+            "#!/usr/bin/env bash\n"
+            "set +e\n"
+            f"{cmd_str}\n"
+            "mm_rc=$?\n"
+            f"tmate -S {shlex.quote(socket_path)} "
+            f"kill-session -t {shlex.quote(session_name)} >/dev/null 2>&1 || true\n"
+            "exit \"$mm_rc\"\n"
+        )
 
     @staticmethod
     def _resolve_repository_source(repository: str) -> str:
@@ -46,11 +199,11 @@ class ManagedRuntimeLauncher:
             "Unsupported workspaceSpec.repository format; expected owner/repo, URL, or local path"
         )
 
-    async def _run_checked_command(
+    async def _run_command(
         self,
         *cmd: str,
         cwd: str | None = None,
-    ) -> None:
+    ) -> tuple[int, str, str]:
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -58,14 +211,27 @@ class ManagedRuntimeLauncher:
             cwd=cwd,
         )
         stdout, stderr = await process.communicate()
-        if process.returncode == 0:
+        return (
+            int(process.returncode),
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+        )
+
+    async def _run_checked_command(
+        self,
+        *cmd: str,
+        cwd: str | None = None,
+    ) -> None:
+        returncode, stdout_text, stderr_text = await self._run_command(
+            *cmd,
+            cwd=cwd,
+        )
+        if returncode == 0:
             return
-        stderr_text = stderr.decode("utf-8", errors="replace").strip()
-        stdout_text = stdout.decode("utf-8", errors="replace").strip()
         detail = stderr_text or stdout_text or "no output"
         rendered_cmd = " ".join(shlex.quote(part) for part in cmd)
         raise RuntimeError(
-            f"Command failed with exit code {process.returncode}: {rendered_cmd}; {detail}"
+            f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
         )
 
     async def _prepare_workspace_path(
@@ -115,14 +281,42 @@ class ManagedRuntimeLauncher:
 
         new_branch = str(workspace_spec.get("newBranch") or "").strip()
         if new_branch:
-            await self._run_checked_command(
+            returncode, stdout_text, stderr_text = await self._run_command(
                 "git",
                 "-C",
                 str(repo_path),
                 "checkout",
-                "-b",
                 new_branch,
             )
+            if returncode != 0:
+                failure_detail = (stderr_text or stdout_text).lower()
+                branch_missing = (
+                    "did not match any file(s) known to git" in failure_detail
+                    or "pathspec" in failure_detail
+                )
+                if not branch_missing:
+                    detail = stderr_text or stdout_text or "no output"
+                    rendered_cmd = " ".join(
+                        shlex.quote(part)
+                        for part in [
+                            "git",
+                            "-C",
+                            str(repo_path),
+                            "checkout",
+                            new_branch,
+                        ]
+                    )
+                    raise RuntimeError(
+                        f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
+                    )
+                await self._run_checked_command(
+                    "git",
+                    "-C",
+                    str(repo_path),
+                    "checkout",
+                    "-b",
+                    new_branch,
+                )
 
         return str(repo_path)
 
@@ -137,31 +331,49 @@ class ManagedRuntimeLauncher:
         model = (
             request.parameters.get("model") if request.parameters else None
         ) or profile.default_model
-        if model:
-            cmd.extend(["--model", model])
 
-        effort = (
-            request.parameters.get("effort") if request.parameters else None
-        ) or profile.default_effort
-        if effort:
-            cmd.extend(["--effort", effort])
-
-        if request.instruction_ref:
-            if profile.runtime_id == "gemini_cli":
+        if profile.runtime_id == "codex_cli":
+            # Codex CLI: `codex exec -m MODEL [PROMPT]`
+            # --effort is not supported; --model is -m on exec subcommand.
+            if model:
+                cmd.extend(["-m", model])
+            if request.instruction_ref:
+                cmd.append(request.instruction_ref)
+        elif profile.runtime_id == "gemini_cli":
+            if model:
+                cmd.extend(["--model", model])
+            effort = (
+                request.parameters.get("effort") if request.parameters else None
+            ) or profile.default_effort
+            if effort:
+                cmd.extend(["--effort", effort])
+            if request.instruction_ref:
                 cmd.extend(["--yolo", "--prompt", request.instruction_ref])
-            elif profile.runtime_id == "cursor_cli":
+        elif profile.runtime_id == "cursor_cli":
+            if model:
+                cmd.extend(["--model", model])
+            if request.instruction_ref:
                 cmd.extend(["-p", request.instruction_ref])
-                cmd.extend(["--output-format", "stream-json"])
-                cmd.extend(["--force"])
-                sandbox_mode = (
-                    request.parameters.get("sandbox_mode")
-                    if request.parameters
-                    else None
-                )
-                if sandbox_mode:
-                    cmd.extend(["--sandbox", sandbox_mode])
-            else:
-                cmd.extend(["--instruction-ref", request.instruction_ref])
+            cmd.extend(["--output-format", "stream-json"])
+            cmd.extend(["--force"])
+            sandbox_mode = (
+                request.parameters.get("sandbox_mode")
+                if request.parameters
+                else None
+            )
+            if sandbox_mode:
+                cmd.extend(["--sandbox", sandbox_mode])
+        else:
+            # Generic / claude_code path
+            if model:
+                cmd.extend(["--model", model])
+            effort = (
+                request.parameters.get("effort") if request.parameters else None
+            ) or profile.default_effort
+            if effort:
+                cmd.extend(["--effort", effort])
+            if request.instruction_ref:
+                cmd.extend(["--prompt", request.instruction_ref])
 
         return cmd
 
@@ -195,17 +407,31 @@ class ManagedRuntimeLauncher:
             request=request,
             workspace_path=workspace_path,
         )
+        if resolved_workspace_path is None:
+            resolved_workspace_path = await self._prepare_workspace(
+                run_id=run_id,
+                request=request,
+                workspace_path=workspace_path,
+            )
+
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(
             os.environ
         )
 
-        # Ensure HOME and GEMINI_HOME are set for gemini cli
-        if "GEMINI_HOME" not in env_overrides and "GEMINI_HOME" in os.environ:
-            env_overrides["GEMINI_HOME"] = os.environ["GEMINI_HOME"]
-        if "GEMINI_CLI_HOME" not in env_overrides and "GEMINI_CLI_HOME" in os.environ:
-            env_overrides["GEMINI_CLI_HOME"] = os.environ["GEMINI_CLI_HOME"]
-        if "HOME" not in env_overrides and "HOME" in os.environ:
-            env_overrides["HOME"] = os.environ["HOME"]
+        # Ensure runtime-specific home dirs are set so CLIs can find their
+        # auth credentials even when env_overrides comes from a different
+        # worker (the workflow worker) that may lack these variables.
+        _runtime_env_keys = (
+            "HOME",
+            "GEMINI_HOME",
+            "GEMINI_CLI_HOME",
+            "CODEX_HOME",
+            "CODEX_CONFIG_HOME",
+            "CODEX_CONFIG_PATH",
+        )
+        for key in _runtime_env_keys:
+            if key not in env_overrides and key in os.environ:
+                env_overrides[key] = os.environ[key]
 
         use_tmate = shutil.which("tmate") is not None
         endpoints: dict[str, str] | None = None
@@ -225,17 +451,15 @@ class ManagedRuntimeLauncher:
             env_overrides["MM_EXIT_FILE"] = str(exit_code_path)
 
             session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            wrapped_command = shlex.join(
-                [
-                    "bash",
-                    "-c",
-                    "\"$@\"\n"
-                    "rc=$?\n"
-                    "printf '%s\\n' \"$rc\" > \"$MM_EXIT_FILE\"\n"
-                    "exit 0\n",
-                    "--",
-                    *cmd,
-                ]
+            # Build the command inline rather than via "$@" positional args.
+            # tmate passes the new-session command to sh -c as a single string,
+            # so positional args after "--" are not forwarded to the inner bash.
+            escaped_cmd = shlex.join(cmd)
+            wrapped_command = (
+                f"{escaped_cmd}\n"
+                f"rc=$?\n"
+                f"printf '%s\\n' \"$rc\" > \"$MM_EXIT_FILE\"\n"
+                f"exit 0\n"
             )
 
             tmate_cmd = [

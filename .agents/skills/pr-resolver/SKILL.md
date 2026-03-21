@@ -20,10 +20,11 @@ You are the master orchestrator for finishing Pull Requests. Use bounded retries
 - inputs.finalizeMaxElapsedSeconds (default 900)
 
 ## Primary Command (use first)
-Run the orchestration entrypoint:
+Run the orchestration entrypoint. **You MUST provide the `--pr` argument** (using either the PR number or the branch name) to ensure the script targets the correct PR, even if you are on a different branch or detached HEAD:
 
 ```bash
 python3 .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py \
+  --pr <pr_number_or_branch> \
   --merge-method <merge|squash|rebase> \
   --fix-max-iterations <maxIterations> \
   --finalize-max-retries <finalizeMaxRetries> \
@@ -32,9 +33,9 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py \
   --max-elapsed-seconds <finalizeMaxElapsedSeconds>
 ```
 
-This writes (explicitly bypass ignore checking when reading these artifacts):
-- `artifacts/pr_resolver_result.json` (terminal orchestration summary)
-- `artifacts/pr_resolver_attempts/*.json` (per-attempt finalize/full artifacts)
+This writes:
+- `var/pr_resolver/result.json` (terminal orchestration summary)
+- `var/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
 
 ## Retry Policy
 - Full-remediation escalation reasons:
@@ -51,7 +52,7 @@ This writes (explicitly bypass ignore checking when reading these artifacts):
   - any unknown blocker
 
 ## Manual Remediation Loop (only when needed)
-When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `artifacts/pr_resolver_result.json` (explicitly bypass ignore checking when reading this artifact):
+When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `var/pr_resolver/result.json`:
 
 - `run_fix_merge_conflicts_skill`: read `.agents/skills/fix-merge-conflicts/SKILL.md` and execute it.
 - `run_fix_comments_skill`: read `.agents/skills/fix-comments/SKILL.md` and execute it.
@@ -65,13 +66,13 @@ After applying any fix, run the orchestration command again.
 - Finalize-only gate checker:
 
 ```bash
-python3 .agents/skills/pr-resolver/bin/pr_resolve_finalize.py --merge-method <merge|squash|rebase>
+python3 .agents/skills/pr-resolver/bin/pr_resolve_finalize.py --pr <pr_number_or_branch> --merge-method <merge|squash|rebase>
 ```
 
 - Full gate classifier (no merge, deterministic state classification):
 
 ```bash
-python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --merge-method <merge|squash|rebase> --max-iterations <maxIterations>
+python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --pr <pr_number_or_branch> --merge-method <merge|squash|rebase> --max-iterations <maxIterations>
 ```
 
 ## Constraints

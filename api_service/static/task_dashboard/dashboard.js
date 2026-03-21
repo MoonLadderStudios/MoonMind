@@ -2624,7 +2624,6 @@
     const normalizedMode = String(runtimeMode || "").trim().toLowerCase();
     const temporalSubmitEnabled = Boolean(options.temporalSubmitEnabled);
     const isEditMode = Boolean(options.isEditMode);
-    const proposeTasksRequested = Boolean(options.proposeTasks);
     if (!temporalSubmitEnabled) {
       return false;
     }
@@ -2632,9 +2631,6 @@
       return false;
     }
     if (isEditMode) {
-      return false;
-    }
-    if (proposeTasksRequested) {
       return false;
     }
     return true;
@@ -3324,7 +3320,7 @@
           "",
         ).trim(),
         queueName: "-",
-        runtimeMode: null,
+        runtimeMode: pick(item, "targetRuntime", "target_runtime") || null,
         skillId: null,
         rawStatus: rawState,
         rawState,
@@ -6590,7 +6586,6 @@
         {
           temporalSubmitEnabled,
           isEditMode,
-          proposeTasks,
         },
       );
       if (submitDestination.mode === "temporal" && hasAttachments) {

@@ -60,6 +60,9 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         else {}
     )
 
+    if normalize_text(pr.get("state")).upper() == "MERGED":
+        return {"action": "already_merged", "reason": "already_merged"}
+
     if not bool(comments_fetch.get("succeeded")):
         return {"action": "blocked", "reason": "comments_unavailable"}
     if comments_summary.get("includeBotReviewComments") is not True:
@@ -82,8 +85,9 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
     return {"action": "blocked", "reason": "merge_not_ready"}
 
 
-def _run_snapshot(snapshot_script: Path, pr: str | None) -> None:
+def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
     cmd = [sys.executable, str(snapshot_script)]
+    cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
     subprocess.run(cmd, check=True)
@@ -159,16 +163,16 @@ def main() -> None:
     parser.add_argument(
         "--skip-refresh",
         action="store_true",
-        help="Use existing artifacts/pr_resolver_snapshot.json without refreshing",
+        help="Use existing var/pr_resolver/snapshot.json without refreshing",
     )
     parser.add_argument(
         "--snapshot-path",
-        default="artifacts/pr_resolver_snapshot.json",
+        default="var/pr_resolver/snapshot.json",
         help="Snapshot path to read/write",
     )
     parser.add_argument(
         "--result-path",
-        default="artifacts/pr_resolver_result.json",
+        default="var/pr_resolver/result.json",
         help="Result artifact path",
     )
     parser.add_argument(
@@ -189,7 +193,33 @@ def main() -> None:
 
     try:
         if not args.skip_refresh:
-            _run_snapshot(snapshot_script, args.pr)
+            try:
+                _run_snapshot(snapshot_script, args.pr, snapshot_path)
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode == EXIT_CODE_FAILED:
+                    _write_result(
+                        result_path,
+                        snapshot={"pr": {}},
+                        decision="failed",
+                        merge_outcome="failed",
+                        status="failed",
+                        reason="pr_not_found",
+                    )
+                    print(f"Failed: pr_not_found\n{exc.stderr}", file=sys.stderr)
+                    sys.exit(EXIT_CODE_FAILED if args.strict_exit_codes else 0)
+                
+                # Snapshot refresh can fail transiently (network/auth/API blips).
+                # Treat as blocked so orchestrate can retry with backoff.
+                _write_result(
+                    result_path,
+                    snapshot={"pr": {}},
+                    decision="blocked",
+                    merge_outcome="blocked",
+                    status="blocked",
+                    reason="snapshot_refresh_failed",
+                )
+                print(f"Blocked: snapshot_refresh_failed\n{exc.stderr}", file=sys.stderr)
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
         snapshot = _read_snapshot(snapshot_path)
         decision = evaluate_finalize_action(snapshot)
 
@@ -200,6 +230,18 @@ def main() -> None:
 
         action = decision["action"]
         reason = decision["reason"]
+
+        if action == "already_merged":
+            _write_result(
+                result_path,
+                snapshot=snapshot,
+                decision="already merged",
+                merge_outcome="merged",
+                status="merged",
+                reason=reason,
+            )
+            print("PR is already merged.")
+            sys.exit(EXIT_CODE_MERGED)
 
         if action == "merge_now":
             if args.dry_run:

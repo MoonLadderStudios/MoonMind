@@ -3,7 +3,7 @@
 ## Prerequisites
 - Python environment with MoonMind installed (`poetry install` or container image).
 - Qdrant endpoint reachable from worker host with credentials: `QDRANT_URL` or `QDRANT_HOST` + `QDRANT_PORT`, optional `QDRANT_API_KEY`.
-- Embedding provider credentials (default `GOOGLE_API_KEY` + `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`).
+- Embedding provider credentials (default `GOOGLE_API_KEY` + `GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview`).
 - Optional RetrievalGateway URL (`MOONMIND_RETRIEVAL_URL`) when workers cannot reach Qdrant directly.
 
 ## CLI Installation

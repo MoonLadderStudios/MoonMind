@@ -140,12 +140,14 @@ class _FakeJulesClient:
         *,
         create_status: str = "pending",
         get_status: str = "completed",
+        get_pull_request_url: str | None = None,
     ) -> None:
         self.created: list[object] = []
         self.lookups: list[object] = []
         self.closed = False
         self._create_status = create_status
         self._get_status = get_status
+        self._get_pull_request_url = get_pull_request_url
 
     async def create_task(self, request):
         self.created.append(request)
@@ -157,10 +159,14 @@ class _FakeJulesClient:
 
     async def get_task(self, request):
         self.lookups.append(request)
+        outputs = []
+        if self._get_pull_request_url is not None:
+            outputs = [{"pullRequest": {"url": self._get_pull_request_url}}]
         return JulesTaskResponse(
             task_id=request.task_id,
             status=self._get_status,
             url="https://jules.test/task-001",
+            outputs=outputs,
         )
 
     async def aclose(self) -> None:
@@ -683,8 +689,9 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
                 external_id="task-001",
                 principal="user-1",
             )
-            assert len(fetched) == 1
-            assert fetched[0].artifact_id.startswith("art_")
+            assert len(fetched["outputRefs"]) == 1
+            assert fetched["outputRefs"][0].startswith("art_")
+            assert fetched["metadata"]["normalizedStatus"] == "succeeded"
             # Client is now reused by the adapter (not closed per-call).
 
 
@@ -794,15 +801,64 @@ async def test_jules_fetch_result_writes_failure_summary_artifact(tmp_path: Path
                 ),
             )
 
-            assert len(fetched) == 2
+            assert len(fetched["outputRefs"]) == 2
             _artifact, summary_payload = await service.read(
-                artifact_id=fetched[1].artifact_id,
+                artifact_id=fetched["outputRefs"][1],
                 principal="user-1",
             )
             summary = json.loads(summary_payload.decode("utf-8"))
             assert summary["providerStatus"] == "failed"
             assert summary["normalizedStatus"] == "failed"
             assert summary["externalId"] == "task-001"
+
+
+async def test_jules_status_pr_creation_forces_succeeded_normalization(
+    tmp_path: Path,
+):
+    fake_client = _FakeJulesClient(
+        get_status="in_progress",
+        get_pull_request_url="https://github.com/org/repo/pull/123",
+    )
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalIntegrationActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            status = await activities.integration_jules_status(
+                external_id="task-001",
+                principal="user-1",
+            )
+            assert status.provider_status == "in_progress"
+            assert status.normalized_status == "succeeded"
+            assert status.terminal is True
+            assert status.external_url == "https://github.com/org/repo/pull/123"
+
+
+async def test_jules_fetch_result_accepts_request_without_principal(tmp_path: Path):
+    fake_client = _FakeJulesClient(
+        get_status="in_progress",
+        get_pull_request_url="https://github.com/org/repo/pull/456",
+    )
+
+    activities = TemporalIntegrationActivities(
+        artifact_service=None,
+        client_factory=lambda: fake_client,
+    )
+    fetched = await activities.integration_jules_fetch_result(
+        {"external_id": "task-001"},
+    )
+
+    assert fetched["failureClass"] is None
+    assert fetched["outputRefs"] == []
+    assert fetched["metadata"]["normalizedStatus"] == "succeeded"
+    assert fetched["metadata"]["externalUrl"] == "https://github.com/org/repo/pull/456"
 
 
 async def test_jules_status_unknown_provider_state_is_non_terminal(tmp_path: Path):
@@ -1181,4 +1237,6 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert {binding.fleet for binding in bindings} == {AGENT_RUNTIME_FLEET}
             bound_types = {binding.activity_type for binding in bindings}
             assert "agent_runtime.publish_artifacts" in bound_types
+            assert "agent_runtime.status" in bound_types
+            assert "agent_runtime.fetch_result" in bound_types
             assert "agent_runtime.cancel" in bound_types

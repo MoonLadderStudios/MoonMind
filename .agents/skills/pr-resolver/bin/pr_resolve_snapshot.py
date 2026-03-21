@@ -6,11 +6,20 @@ Gathers PR metadata, CI status, and comments to decide the next fix action.
 
 import argparse
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from urllib.parse import urlparse
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from pr_resolve_contract import EXIT_CODE_FAILED
 
 _RUNNING_CHECK_STATES = {"IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"}
 _FAILURE_CHECK_STATES = {
@@ -24,6 +33,50 @@ _FAILURE_CHECK_STATES = {
     "STALE",
 }
 
+_SYSTEM_PATH_FALLBACK = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_PR_VIEW_FIELDS = (
+    "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,"
+    "mergeStateStatus,reviewDecision,statusCheckRollup"
+)
+_COMMAND_COMMENT_PATTERN = re.compile(
+    r"^/(review|gemini|qodo|jules|copilot|cc|re[-_ ]?run)\b",
+    re.IGNORECASE,
+)
+
+
+def _build_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    existing_parts = [part for part in env.get("PATH", "").split(":") if part]
+    for fallback in _SYSTEM_PATH_FALLBACK.split(":"):
+        if fallback not in existing_parts:
+            existing_parts.append(fallback)
+    env["PATH"] = ":".join(existing_parts) if existing_parts else _SYSTEM_PATH_FALLBACK
+    return env
+
+
+def _resolve_command(cmd: list[str]) -> list[str]:
+    if not cmd:
+        return cmd
+    executable = str(cmd[0])
+    if "/" in executable:
+        return [str(part) for part in cmd]
+    raw_path = os.environ.get("PATH", "")
+    fallback_path = (
+        f"{raw_path}:{_SYSTEM_PATH_FALLBACK}" if raw_path else _SYSTEM_PATH_FALLBACK
+    )
+    resolved = shutil.which(executable, path=raw_path) or shutil.which(
+        executable, path=fallback_path
+    )
+    if resolved:
+        return [resolved, *[str(part) for part in cmd[1:]]]
+    return [str(part) for part in cmd]
+
+
+def _compact_error_details(stdout: str, stderr: str) -> str:
+    return "\n".join(
+        item.strip() for item in (stdout or "", stderr or "") if item.strip()
+    )
+
 
 def run_command(
     cmd,
@@ -32,32 +85,33 @@ def run_command(
     initial_delay_seconds=1.0,
     max_delay_seconds=8.0,
 ):
+    resolved_cmd = _resolve_command(cmd)
+    env = _build_subprocess_env()
     for attempt in range(1, max_attempts + 1):
         try:
             completed = subprocess.run(
-                cmd,
+                resolved_cmd,
                 text=True,
                 capture_output=True,
                 check=False,
+                env=env,
             )
             output = completed.stdout
             stderr = completed.stderr
             if completed.returncode != 0:
-                details = "\n".join(
-                    item.strip() for item in (output or "", stderr or "") if item.strip()
-                )
+                details = _compact_error_details(output, stderr)
                 if attempt < max_attempts:
                     delay = min(
                         max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
                     )
                     print(
-                        f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...",
+                        f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(resolved_cmd)}. Retrying in {delay:.1f}s...",
                         file=sys.stderr,
                     )
                     time.sleep(delay)
                     continue
                 print(
-                    f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{details}",
+                    f"Command failed: {' '.join(resolved_cmd)}\n{failure_hint}\n{details}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -65,35 +119,147 @@ def run_command(
                 return {}
             return json.loads(output)
         except FileNotFoundError:
-            print(f"Command not found: {cmd[0]}", file=sys.stderr)
+            print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
             sys.exit(1)
         except json.JSONDecodeError:
-            print(f"Command returned invalid JSON: {' '.join(cmd)}", file=sys.stderr)
+            print(
+                f"Command returned invalid JSON: {' '.join(resolved_cmd)}",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
 
-def run_command_optional(cmd) -> dict | list | None:
+def run_command_optional_with_error(cmd) -> tuple[dict | list | None, str | None]:
+    resolved_cmd = _resolve_command(cmd)
     try:
         completed = subprocess.run(
-            cmd,
+            resolved_cmd,
             text=True,
             capture_output=True,
             check=False,
+            env=_build_subprocess_env(),
+        )
+    except OSError as exc:
+        return None, str(exc)
+    if completed.returncode != 0:
+        details = _compact_error_details(completed.stdout, completed.stderr)
+        return (
+            None,
+            f"command failed ({completed.returncode}): {' '.join(resolved_cmd)}"
+            + (f"\n{details}" if details else ""),
+        )
+    output = completed.stdout
+    if output.strip() == "":
+        return {}, None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None, f"invalid JSON from command: {' '.join(resolved_cmd)}"
+    if isinstance(payload, (dict, list)):
+        return payload, None
+    return None, f"unsupported JSON payload type from command: {' '.join(resolved_cmd)}"
+
+
+def run_command_optional(cmd) -> dict | list | None:
+    payload, _ = run_command_optional_with_error(cmd)
+    return payload
+
+
+def _current_branch_name() -> str | None:
+    resolved_cmd = _resolve_command(["git", "branch", "--show-current"])
+    try:
+        completed = subprocess.run(
+            resolved_cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_build_subprocess_env(),
         )
     except OSError:
         return None
     if completed.returncode != 0:
         return None
-    output = completed.stdout
-    if output.strip() == "":
-        return {}
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
+    branch = (completed.stdout or "").strip()
+    if branch in {"", "HEAD"}:
         return None
-    if isinstance(payload, (dict, list)):
-        return payload
-    return None
+    return branch
+
+
+def _fetch_pr_data_from_selector(
+    selector: str | None,
+) -> tuple[dict | None, str | None]:
+    cmd = ["gh", "pr", "view"]
+    if selector:
+        cmd.append(selector)
+    cmd.extend(["--json", _PR_VIEW_FIELDS])
+    payload, error = run_command_optional_with_error(cmd)
+    if isinstance(payload, dict):
+        return payload, None
+    return None, error
+
+
+def _discover_pr_number_from_head_branch(branch: str) -> str | None:
+    payload = run_command_optional(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "all",
+            "--head",
+            branch,
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+    )
+    if not isinstance(payload, list) or not payload:
+        return None
+    first = payload[0]
+    if not isinstance(first, dict):
+        return None
+    number = first.get("number")
+    if number in {None, ""}:
+        return None
+    return str(number)
+
+
+def fetch_pr_data(
+    requested_pr_selector: str | None,
+) -> tuple[dict | None, str | None, list[str]]:
+    errors: list[str] = []
+    current_branch = _current_branch_name() if not requested_pr_selector else None
+    candidate_selectors: list[str | None] = []
+    if requested_pr_selector:
+        candidate_selectors.append(requested_pr_selector)
+    else:
+        candidate_selectors.append(None)
+        if current_branch:
+            candidate_selectors.append(current_branch)
+
+    attempted_labels: set[str] = set()
+    for selector in candidate_selectors:
+        label = selector or "<default>"
+        if label in attempted_labels:
+            continue
+        attempted_labels.add(label)
+        pr_data, error = _fetch_pr_data_from_selector(selector)
+        if pr_data:
+            return pr_data, selector, errors
+        if error:
+            errors.append(f"{label}: {error}")
+
+    if not requested_pr_selector and current_branch:
+        discovered_selector = _discover_pr_number_from_head_branch(current_branch)
+        if discovered_selector and discovered_selector not in attempted_labels:
+            pr_data, error = _fetch_pr_data_from_selector(discovered_selector)
+            if pr_data:
+                return pr_data, discovered_selector, errors
+            if error:
+                errors.append(f"{discovered_selector}: {error}")
+
+    return None, None, errors
 
 
 def infer_repo_from_pr_url(url: str | None) -> str | None:
@@ -139,6 +305,8 @@ def _classify_comment_actionability(
     if not (comment.get("body") or "").strip():
         return False, "empty_body"
 
+    body = str(comment.get("body") or "")
+    normalized_body = " ".join(body.strip().split())
     comment_type = comment.get("type")
 
     if comment_type == "review_comment":
@@ -149,6 +317,13 @@ def _classify_comment_actionability(
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
+
+    if (
+        comment_type == "issue_comment"
+        and normalized_body
+        and _COMMAND_COMMENT_PATTERN.match(normalized_body)
+    ):
+        return False, "command_comment"
 
     if is_bot_user(comment.get("user")):
         return False, "bot_comment_excluded"
@@ -171,10 +346,34 @@ def _is_comment_actionable(
     return actionable
 
 
+def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
+    """Load comment IDs that have been locally marked as addressed or not-applicable."""
+    path = ledger_path or Path("artifacts/pr_resolver_addressed_comments.json")
+    if not path.exists():
+        return set()
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if not isinstance(entries, list):
+        return set()
+    ids: set[int] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        disposition = str(entry.get("disposition") or "").strip().lower()
+        if disposition in {"addressed", "not-applicable"}:
+            cid = entry.get("id")
+            if isinstance(cid, int):
+                ids.add(cid)
+    return ids
+
+
 def summarize_comments(
     comments: list[dict],
     *,
     include_bot_review_comments: bool = True,
+    addressed_comment_ids: set[int] | None = None,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
@@ -187,11 +386,18 @@ def summarize_comments(
     non_actionable_reason_counts: dict[str, int] = {}
     classified_comments: list[dict] = []
 
+    resolved_ids = addressed_comment_ids or set()
+
     for comment in comments:
-        actionable, reason = _classify_comment_actionability(
-            comment,
-            include_bot_review_comments=include_bot_review_comments,
-        )
+        cid = comment.get("id")
+        if isinstance(cid, int) and cid in resolved_ids:
+            actionable = False
+            reason = "addressed_in_ledger"
+        else:
+            actionable, reason = _classify_comment_actionability(
+                comment,
+                include_bot_review_comments=include_bot_review_comments,
+            )
         if actionable:
             actionable_comments.append(comment)
         else:
@@ -417,22 +623,23 @@ def main():
         description="Snapshot PR state for pr-resolver skill"
     )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
+    parser.add_argument(
+        "--snapshot-path",
+        default="var/pr_resolver/snapshot.json",
+        help="Snapshot path to write",
+    )
     args = parser.parse_args()
 
-    # 1. Fetch PR Metadata
-    pr_cmd = ["gh", "pr", "view"]
-    if args.pr:
-        pr_cmd.append(args.pr)
-    pr_cmd.extend(
-        [
-            "--json",
-            "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
-        ]
-    )
+    # 1. Fetch PR metadata with resilient selector fallback.
+    pr_data, resolved_selector, pr_errors = fetch_pr_data(args.pr)
+    if not isinstance(pr_data, dict):
+        detail_lines = "\n".join(pr_errors[-3:]) if pr_errors else ""
+        message = "Unable to resolve PR metadata. Ensure gh is authenticated and the PR exists."
+        if detail_lines:
+            message = f"{message}\n{detail_lines}"
+        print(message, file=sys.stderr)
+        sys.exit(EXIT_CODE_FAILED)
 
-    pr_data = run_command(
-        pr_cmd, "Ensure gh is authenticated and the branch has an open PR."
-    )
     pr_repo = infer_repo_from_pr_url(pr_data.get("url"))
     if not pr_repo:
         pr_repo_data = run_command(
@@ -575,7 +782,12 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
-    comments_summary = summarize_comments(comments, include_bot_review_comments=True)
+    addressed_ids = _load_addressed_comment_ids()
+    comments_summary = summarize_comments(
+        comments,
+        include_bot_review_comments=True,
+        addressed_comment_ids=addressed_ids,
+    )
 
     # 4. Construct Snapshot
     snapshot = {
@@ -589,10 +801,8 @@ def main():
         "commentsSummary": comments_summary,
     }
 
-    # Save to artifacts/pr_resolver_snapshot.json
-    artifacts_dir = Path("artifacts")
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_path = artifacts_dir / "pr_resolver_snapshot.json"
+    snapshot_path = Path(args.snapshot_path)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(snapshot, indent=2))
 
     print(f"Snapshot written to {snapshot_path}")
@@ -600,6 +810,7 @@ def main():
     # Print a quick summary to stdout
     summary = {
         "pr_number": pr_data.get("number"),
+        "pr_selector": resolved_selector or "<default>",
         "mergeable": pr_data.get("mergeable"),
         "mergeStateStatus": pr_data.get("mergeStateStatus"),
         "reviewDecision": pr_data.get("reviewDecision"),

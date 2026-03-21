@@ -1,0 +1,465 @@
+openapi: 3.1.0
+info:
+  title: MoonMind Manifest Ingest Runtime Contract
+  version: 0.1.0
+  description: >
+    Planned Temporal-native contract for manifest ingest submission, status,
+    edit operations, and artifact-backed lineage queries.
+servers:
+  - url: http://localhost:8000
+paths:
+  /api/manifests/{name}/runs:
+    post:
+      summary: Submit a registry-backed manifest ingest
+      operationId: createRegistryManifestIngest
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManifestRegistryRunRequest"
+      responses:
+        "201":
+          description: Registry-backed manifest ingest accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestIngestSubmission"
+  /api/executions:
+    post:
+      summary: Start a manifest ingest from an artifact reference
+      operationId: createManifestIngestExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManifestIngestCreateExecutionRequest"
+      responses:
+        "201":
+          description: Manifest ingest execution created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestIngestExecutionDetail"
+  /api/executions/{workflowId}:
+    get:
+      summary: Describe one manifest ingest execution
+      operationId: describeManifestIngestExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Manifest ingest execution detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestIngestExecutionDetail"
+  /api/executions/{workflowId}/update:
+    post:
+      summary: Apply a validated manifest ingest update
+      operationId: updateManifestIngestExecution
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManifestIngestUpdateRequest"
+      responses:
+        "200":
+          description: Update accepted or rejected with apply semantics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestIngestUpdateResponse"
+  /api/executions/{workflowId}/manifest-status:
+    get:
+      summary: Read bounded manifest ingest status
+      operationId: getManifestIngestStatus
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current bounded status snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestIngestStatus"
+  /api/executions/{workflowId}/manifest-nodes:
+    get:
+      summary: Page manifest child-run lineage from the canonical run index
+      operationId: listManifestIngestNodes
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: state
+          required: false
+          schema:
+            type: string
+            enum: [ready, running, succeeded, failed, canceled]
+        - in: query
+          name: cursor
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Bounded manifest lineage page resolved from run-index artifacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManifestNodePage"
+components:
+  schemas:
+    ArtifactRef:
+      type: string
+      description: Artifact identifier or reference token.
+    RequestedBy:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          enum: [user, system]
+        id:
+          type: string
+    ManifestExecutionPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        failurePolicy:
+          type: string
+          enum: [fail_fast, continue_and_report, best_effort]
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 500
+        defaultTaskQueues:
+          type: object
+          additionalProperties:
+            type: string
+    ManifestRegistryRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          enum: [plan, run]
+          default: run
+        title:
+          type: string
+        failurePolicy:
+          type: string
+          enum: [fail_fast, continue_and_report, best_effort]
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 500
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+        idempotencyKey:
+          type: string
+    ManifestIngestCreateExecutionRequest:
+      type: object
+      additionalProperties: false
+      required: [workflowType, manifestArtifactRef]
+      properties:
+        workflowType:
+          type: string
+          const: MoonMind.ManifestIngest
+        manifestArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        title:
+          type: string
+        failurePolicy:
+          type: string
+          enum: [fail_fast, continue_and_report, best_effort]
+        initialParameters:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+    ManifestIngestSubmission:
+      type: object
+      additionalProperties: false
+      required: [source, execution]
+      properties:
+        source:
+          type: string
+          enum: [temporal]
+        execution:
+          $ref: "#/components/schemas/ManifestIngestExecutionSummary"
+    ManifestIngestExecutionSummary:
+      type: object
+      additionalProperties: false
+      required: [workflowId, temporalRunId, workflowType, state, temporalStatus]
+      properties:
+        workflowId:
+          type: string
+        temporalRunId:
+          type: string
+        workflowType:
+          type: string
+          const: MoonMind.ManifestIngest
+        state:
+          type: string
+          enum: [initializing, executing, finalizing, succeeded, failed, canceled]
+        temporalStatus:
+          type: string
+          enum: [running, completed, failed, canceled]
+        manifestArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        planArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        summaryArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        runIndexArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+    ManifestIngestExecutionDetail:
+      allOf:
+        - $ref: "#/components/schemas/ManifestIngestExecutionSummary"
+        - type: object
+          additionalProperties: false
+          required: [requestedBy, executionPolicy, counts]
+          properties:
+            requestedBy:
+              $ref: "#/components/schemas/RequestedBy"
+            executionPolicy:
+              $ref: "#/components/schemas/ManifestExecutionPolicy"
+            phase:
+              type: string
+            paused:
+              type: boolean
+            counts:
+              $ref: "#/components/schemas/ManifestNodeCounts"
+            checkpointArtifactRef:
+              $ref: "#/components/schemas/ArtifactRef"
+            latestRunView:
+              type: boolean
+              const: true
+    ManifestNodeCounts:
+      type: object
+      additionalProperties: false
+      required: [pending, ready, running, succeeded, failed, canceled]
+      properties:
+        pending:
+          type: integer
+          minimum: 0
+        ready:
+          type: integer
+          minimum: 0
+        running:
+          type: integer
+          minimum: 0
+        succeeded:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        canceled:
+          type: integer
+          minimum: 0
+    ManifestIngestStatus:
+      type: object
+      additionalProperties: false
+      required: [workflowId, state, phase, paused, maxConcurrency, counts]
+      properties:
+        workflowId:
+          type: string
+        state:
+          type: string
+          enum: [initializing, executing, finalizing, succeeded, failed, canceled]
+        phase:
+          type: string
+        paused:
+          type: boolean
+        maxConcurrency:
+          type: integer
+        failurePolicy:
+          type: string
+          enum: [fail_fast, continue_and_report, best_effort]
+        counts:
+          $ref: "#/components/schemas/ManifestNodeCounts"
+        planArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        summaryArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        runIndexArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+    ManifestNodeSummary:
+      type: object
+      additionalProperties: false
+      required: [nodeId, state]
+      properties:
+        nodeId:
+          type: string
+        title:
+          type: string
+        state:
+          type: string
+          enum: [ready, running, succeeded, failed, canceled]
+        childWorkflowId:
+          type: string
+        childRunId:
+          type: string
+        resultArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    ManifestNodePage:
+      type: object
+      additionalProperties: false
+      required: [items, count, runIndexArtifactRef]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ManifestNodeSummary"
+        nextCursor:
+          type: string
+        count:
+          type: integer
+          minimum: 0
+        runIndexArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+    ManifestIngestUpdateRequest:
+      oneOf:
+        - $ref: "#/components/schemas/UpdateManifestRequest"
+        - $ref: "#/components/schemas/SetConcurrencyRequest"
+        - $ref: "#/components/schemas/PauseRequest"
+        - $ref: "#/components/schemas/ResumeRequest"
+        - $ref: "#/components/schemas/CancelNodesRequest"
+        - $ref: "#/components/schemas/RetryNodesRequest"
+    UpdateManifestRequest:
+      type: object
+      additionalProperties: false
+      required: [updateName, newManifestArtifactRef, mode]
+      properties:
+        updateName:
+          type: string
+          const: UpdateManifest
+        newManifestArtifactRef:
+          $ref: "#/components/schemas/ArtifactRef"
+        mode:
+          type: string
+          enum: [REPLACE_FUTURE, APPEND]
+        idempotencyKey:
+          type: string
+    SetConcurrencyRequest:
+      type: object
+      additionalProperties: false
+      required: [updateName, maxConcurrency]
+      properties:
+        updateName:
+          type: string
+          const: SetConcurrency
+        maxConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 500
+        idempotencyKey:
+          type: string
+    PauseRequest:
+      type: object
+      additionalProperties: false
+      required: [updateName]
+      properties:
+        updateName:
+          type: string
+          const: Pause
+        idempotencyKey:
+          type: string
+    ResumeRequest:
+      type: object
+      additionalProperties: false
+      required: [updateName]
+      properties:
+        updateName:
+          type: string
+          const: Resume
+        idempotencyKey:
+          type: string
+    CancelNodesRequest:
+      type: object
+      additionalProperties: false
+      required: [updateName, nodeIds]
+      properties:
+        updateName:
+          type: string
+          const: CancelNodes
+        nodeIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        idempotencyKey:
+          type: string
+    RetryNodesRequest:
+      type: object
+      additionalProperties: false
+      required: [updateName, nodeIds]
+      properties:
+        updateName:
+          type: string
+          const: RetryNodes
+        nodeIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        idempotencyKey:
+          type: string
+    ManifestIngestUpdateResponse:
+      type: object
+      additionalProperties: false
+      required: [accepted, applied, message]
+      properties:
+        accepted:
+          type: boolean
+        applied:
+          type: string
+          enum: [immediate, next_safe_point, continue_as_new]
+        message:
+          type: string
+        continueAsNewCause:
+          type: string

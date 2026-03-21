@@ -99,6 +99,20 @@ def pr_resolve_orchestrate_module() -> dict[str, Any]:
     )
 
 
+@pytest.fixture
+def pr_resolve_contract_module() -> dict[str, Any]:
+    return _load_module(
+        str(
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "pr-resolver"
+            / "bin"
+            / "pr_resolve_contract.py"
+        )
+    )
+
+
 def test_parse_remote_url_accepts_https_and_ssh_urls(
     get_pr_comments_module: dict[str, Any],
 ) -> None:
@@ -193,6 +207,140 @@ def test_pr_resolve_snapshot_run_command_ignores_stderr_warnings(
     assert payload == {"ok": True, "result": "ready"}
 
 
+def test_pr_resolve_snapshot_run_command_resolves_executable_with_fallback_path(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_command = pr_resolve_snapshot_module["run_command"]
+    captured_cmd: list[str] = []
+    captured_path = ""
+
+    class _Completed:
+        returncode = 0
+        stdout = '{"ok": true}'
+        stderr = ""
+
+    def _fake_run(cmd: list[str], **kwargs: Any) -> _Completed:
+        nonlocal captured_cmd, captured_path
+        captured_cmd = cmd
+        captured_path = str((kwargs.get("env") or {}).get("PATH", ""))
+        return _Completed()
+
+    monkeypatch.setenv("PATH", "/tmp/custom-bin")
+
+    def _fake_which(executable: str, path: str | None = None) -> str | None:
+        if executable == "gh" and isinstance(path, str) and "/usr/bin" in path:
+            return "/usr/bin/gh"
+        return None
+
+    monkeypatch.setattr(pr_resolve_snapshot_module["shutil"], "which", _fake_which)
+    monkeypatch.setattr(pr_resolve_snapshot_module["subprocess"], "run", _fake_run)
+
+    payload = run_command(["gh", "api", "rate_limit"], "failure hint")
+    assert payload == {"ok": True}
+    assert captured_cmd[0] == "/usr/bin/gh"
+    assert "/usr/bin" in captured_path
+
+
+def test_fetch_pr_data_falls_back_to_current_branch_selector(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch_pr_data = pr_resolve_snapshot_module["fetch_pr_data"]
+    globals_dict = fetch_pr_data.__globals__
+
+    monkeypatch.setitem(
+        globals_dict,
+        "_current_branch_name",
+        lambda: "feature/test-branch",
+    )
+    monkeypatch.setitem(
+        globals_dict,
+        "_discover_pr_number_from_head_branch",
+        lambda _branch: None,
+    )
+
+    def _fake_fetch(selector: str | None) -> tuple[dict[str, Any] | None, str | None]:
+        if selector is None:
+            return None, "default failed"
+        if selector == "feature/test-branch":
+            return {"number": 780, "url": "https://github.com/org/repo/pull/780"}, None
+        return None, "unexpected selector"
+
+    monkeypatch.setitem(globals_dict, "_fetch_pr_data_from_selector", _fake_fetch)
+
+    pr_data, selector, errors = fetch_pr_data(None)
+    assert isinstance(pr_data, dict)
+    assert pr_data["number"] == 780
+    assert selector == "feature/test-branch"
+    assert len(errors) == 1
+    assert errors[0].startswith("<default>:")
+
+
+def test_fetch_pr_data_can_fallback_to_discovered_pr_number(
+    pr_resolve_snapshot_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetch_pr_data = pr_resolve_snapshot_module["fetch_pr_data"]
+    globals_dict = fetch_pr_data.__globals__
+
+    monkeypatch.setitem(
+        globals_dict,
+        "_current_branch_name",
+        lambda: "feature/test-branch",
+    )
+    monkeypatch.setitem(
+        globals_dict,
+        "_discover_pr_number_from_head_branch",
+        lambda _branch: "780",
+    )
+
+    def _fake_fetch(selector: str | None) -> tuple[dict[str, Any] | None, str | None]:
+        if selector == "780":
+            return {"number": 780, "url": "https://github.com/org/repo/pull/780"}, None
+        return None, "selector miss"
+
+    monkeypatch.setitem(globals_dict, "_fetch_pr_data_from_selector", _fake_fetch)
+
+    pr_data, selector, errors = fetch_pr_data(None)
+    assert isinstance(pr_data, dict)
+    assert pr_data["number"] == 780
+    assert selector == "780"
+    assert len(errors) >= 1
+
+
+def test_get_branch_pr_comments_resolve_metadata_falls_back_to_head_pr_list(
+    get_branch_pr_comments_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve_pr_metadata = get_branch_pr_comments_module["resolve_pr_metadata"]
+    globals_dict = resolve_pr_metadata.__globals__
+
+    def _fake_run_json_command(
+        command: list[str],
+        failure_hint: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if command[:4] == ["gh", "pr", "view", "feature/test-branch"]:
+            raise RuntimeError("no pull requests found for branch")
+        if command[:3] == ["gh", "pr", "list"]:
+            return [{"number": 780}]
+        if command[:4] == ["gh", "pr", "view", "780"]:
+            return {
+                "number": 780,
+                "title": "Fallback",
+                "url": "https://github.com/org/repo/pull/780",
+                "headRefName": "feature/test-branch",
+                "baseRefName": "main",
+            }
+        raise AssertionError(f"Unexpected command: {command} ({failure_hint})")
+
+    monkeypatch.setitem(globals_dict, "run_json_command", _fake_run_json_command)
+
+    payload = resolve_pr_metadata("feature/test-branch")
+    assert payload["number"] == 780
+    assert payload["headRefName"] == "feature/test-branch"
 def test_review_bot_comments_are_actionable_by_default(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -232,6 +380,32 @@ def test_review_bot_comments_can_be_excluded_when_disabled(
     summary = summarize_comments(comments, include_bot_review_comments=False)
     assert summary["actionableCommentCount"] == 0
     assert summary["includeBotReviewComments"] is False
+
+
+def test_issue_command_comments_are_not_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "issue_comment",
+            "id": 1,
+            "user": "human-reviewer",
+            "body": "/review",
+        },
+        {
+            "type": "review_comment",
+            "id": 2,
+            "user": "qodo-free-for-open-source-projects[bot]",
+            "body": "Please update this section.",
+        },
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary["actionableCommentCount"] == 1
+    assert summary["actionableCommentIds"] == [2]
+    assert summary["nonActionableReasonCounts"]["command_comment"] == 1
 
 
 def test_resolved_review_threads_are_not_actionable(
@@ -506,6 +680,74 @@ def test_orchestrate_ci_running_uses_finalize_only_retry_path(
     assert result["status"] == "merged"
     assert full_invocations == 0
     assert sleeps == [15]
+
+
+def test_contract_snapshot_refresh_failed_is_finalize_only_retry(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    classify_retry_action = pr_resolve_contract_module["classify_retry_action"]
+
+    action = classify_retry_action(
+        "snapshot_refresh_failed",
+        merge_not_ready_grace_remaining=1,
+    )
+    assert action == "finalize_only_retry"
+
+
+def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
+    exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
+
+    def _boom(
+        _snapshot_script: Path,
+        _pr: str | None,
+        _snapshot_path: Path,
+    ) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["python3", "pr_resolve_snapshot.py"],
+            output="transient failure",
+        )
+
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _boom)
+
+    result_path = tmp_path / "pr_resolver_result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+    assert int(raised.value.code) == 0
+
+    payload = result_path.read_text(encoding="utf-8")
+    assert '"status": "blocked"' in payload
+    assert '"reason": "snapshot_refresh_failed"' in payload
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--strict-exit-codes",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+    with pytest.raises(SystemExit) as raised_strict:
+        main()
+    assert int(raised_strict.value.code) == int(exit_code_blocked)
 
 
 def test_summarize_ci_treats_stale_rollup_as_running(
