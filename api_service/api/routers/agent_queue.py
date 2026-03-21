@@ -690,14 +690,6 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             "debugMessage": raw_message,
         }
         lowered = str(exc).lower()
-        if "targetruntime=claude requires anthropic_api_key" in lowered:
-            return HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "code": "claude_runtime_disabled",
-                    "message": "targetRuntime=claude is not available in the current server configuration",
-                },
-            )
         if "targetruntime=jules" in lowered and ("jules_api_key" in lowered or "jules_enabled" in lowered):
             return HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

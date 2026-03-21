@@ -6066,7 +6066,7 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.allowed_skills == ("auto",)
     assert config.default_codex_model is None
     assert config.default_codex_effort is None
-    assert config.claude_cli_auth_mode == "api_key"
+    assert config.claude_cli_auth_mode == "oauth"
     assert config.legacy_job_types_enabled is True
     assert config.worker_runtime == "codex"
     assert config.allowed_types == ("task", "codex_exec", "codex_skill")

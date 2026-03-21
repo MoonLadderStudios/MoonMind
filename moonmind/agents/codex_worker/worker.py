@@ -688,8 +688,8 @@ class CodexWorkerConfig:
                 cls._normalize_runtime_option_values(str(gemini_allowed_tools_raw))
             )
         claude_cli_auth_mode = (
-            str(source.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "api_key")).strip().lower()
-            or "api_key"
+            str(source.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "oauth")).strip().lower()
+            or "oauth"
         )
         if claude_cli_auth_mode not in {"api_key", "oauth"}:
             raise ValueError(

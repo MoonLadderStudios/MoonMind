@@ -565,32 +565,6 @@ def test_update_queued_job_not_found_maps_404(
     assert response.json()["detail"]["code"] == "job_not_found"
 
 
-def test_update_queued_job_claude_runtime_gate_maps_400(
-    client: tuple[TestClient, AsyncMock],
-) -> None:
-    """Queued job update runtime gate errors should map to HTTP 400."""
-
-    test_client, service = client
-    service.update_queued_job.side_effect = AgentQueueValidationError(
-        "targetRuntime=claude requires ANTHROPIC_API_KEY"
-    )
-
-    response = test_client.put(
-        f"/api/queue/jobs/{uuid4()}",
-        json={
-            "type": "task",
-            "payload": {
-                "repository": "Moon/Test",
-                "targetRuntime": "claude",
-                "task": {"instructions": "Update"},
-            },
-        },
-    )
-
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.json()["detail"]["code"] == "claude_runtime_disabled"
-
-
 def test_resubmit_job_success(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
@@ -736,32 +710,6 @@ def test_resubmit_job_requires_payload(
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
-def test_resubmit_job_claude_runtime_gate_maps_400(
-    client: tuple[TestClient, AsyncMock],
-) -> None:
-    """Resubmit runtime gate errors should return HTTP 400."""
-
-    test_client, service = client
-    service.resubmit_job.side_effect = AgentQueueValidationError(
-        "targetRuntime=claude requires ANTHROPIC_API_KEY"
-    )
-
-    response = test_client.post(
-        f"/api/queue/jobs/{uuid4()}/resubmit",
-        json={
-            "type": "task",
-            "payload": {
-                "repository": "Moon/Test",
-                "targetRuntime": "claude",
-                "task": {"instructions": "Retry"},
-            },
-        },
-    )
-
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.json()["detail"]["code"] == "claude_runtime_disabled"
-
-
 def test_resubmit_job_authorization_error_maps_403(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
@@ -801,37 +749,6 @@ def test_resubmit_job_not_found_maps_404(
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["detail"]["code"] == "job_not_found"
-
-
-def test_create_job_rejects_claude_runtime_without_api_key(
-    client: tuple[TestClient, AsyncMock],
-) -> None:
-    """Claude runtime requests should map to HTTP 400 when API key is missing."""
-
-    test_client, service = client
-    service.create_job.side_effect = AgentQueueValidationError(
-        "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured"
-    )
-
-    response = test_client.post(
-        "/api/queue/jobs",
-        json={
-            "type": "task",
-            "payload": {
-                "repository": "Moon/Mind",
-                "targetRuntime": "claude",
-            },
-        },
-    )
-
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    body = response.json()
-    assert body["detail"]["code"] == "claude_runtime_disabled"
-    assert (
-        body["detail"]["message"]
-        == "targetRuntime=claude is not available in the current server configuration"
-    )
-    service.create_job.assert_awaited_once()
 
 
 def test_create_job_rejects_jules_runtime_without_config(
