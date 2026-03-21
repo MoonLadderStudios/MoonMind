@@ -148,7 +148,35 @@ async def finalize_oauth_session(
         
     if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
-        
+
+    # Attempt volume verification (best-effort — Docker may not be available)
+    try:
+        from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
+            verify_volume_credentials,
+        )
+
+        verification = await verify_volume_credentials(
+            runtime_id=session_obj.runtime_id,
+            volume_ref=session_obj.volume_ref or "",
+            volume_mount_path=session_obj.volume_mount_path,
+        )
+        if not verification.get("verified", False):
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Volume verification failed for session %s: %s",
+                session_id,
+                verification.get("reason", "unknown"),
+            )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Volume verification unavailable for session %s",
+            session_id,
+            exc_info=True,
+        )
+
     session_obj.status = OAuthSessionStatus.SUCCEEDED
     session_obj.completed_at = datetime.now(timezone.utc)
     
