@@ -35,6 +35,7 @@ from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRunResult,
     ManagedRuntimeProfile,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
@@ -82,6 +83,9 @@ CodexCloudClientFactory = Callable[[], CodexCloudHttpClient]
 CodexCloudAdapterFactory = Callable[[], CodexCloudAgentAdapter]
 _PLACEHOLDER_DIGEST_FRAGMENT = "sha256:dummy"
 _GITHUB_REPOSITORY_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_GITHUB_PULL_REQUEST_URL_PATTERN = re.compile(
+    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+"
+)
 
 
 class TemporalActivityRuntimeError(RuntimeError):
@@ -195,6 +199,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
+    "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
@@ -222,6 +227,29 @@ def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
     if not normalized:
         raise TemporalActivityRuntimeError("artifact reference is required")
     return normalized
+
+
+def _derive_integration_title(
+    description: str, fallback_title: str | None = None
+) -> str:
+    """Derive a human-readable task title from the description if missing.
+
+    When *fallback_title* is ``None`` or blank the first non-empty line of
+    *description* is used (truncated to 100 chars).  An explicit title —
+    including one that happens to equal the default placeholder — is always
+    preserved.
+    """
+    original_title = str(fallback_title or "").strip()
+    if not original_title:
+        if description:
+            lines = [line.strip() for line in description.splitlines() if line.strip()]
+            if lines:
+                first_line = lines[0]
+                if len(first_line) > 100:
+                    first_line = first_line[:97] + "..."
+                if first_line:
+                    return first_line
+    return original_title or "MoonMind Integration Task"
 
 
 def _artifact_locator(value: ArtifactRef | str | None) -> str | None:
@@ -1370,6 +1398,30 @@ class TemporalIntegrationActivities:
     def _status_snapshot(raw_status: str | None) -> JulesStatusSnapshot:
         return normalize_jules_status(raw_status)
 
+    @staticmethod
+    def _status_snapshot_from_provider_and_hint(
+        *,
+        provider_status: str | None,
+        normalized_hint: str | None,
+    ) -> JulesStatusSnapshot:
+        snapshot = normalize_jules_status(provider_status)
+        token = str(normalized_hint or "").strip().lower()
+        if token == "cancelled":
+            token = "canceled"
+        if token not in {"queued", "running", "succeeded", "failed", "canceled", "unknown"}:
+            return snapshot
+
+        terminal = token in {"succeeded", "failed", "canceled"}
+        return JulesStatusSnapshot(
+            provider_status=snapshot.provider_status,
+            provider_status_token=snapshot.provider_status_token,
+            normalized_status=token,
+            terminal=terminal,
+            succeeded=token == "succeeded",
+            failed=token == "failed",
+            canceled=token == "canceled",
+        )
+
     async def _write_failure_summary_artifact(
         self,
         *,
@@ -1432,7 +1484,7 @@ class TemporalIntegrationActivities:
                 idempotency_key = request_payload.get("idempotency_key")
 
         parameters = dict(parameters or {})
-        title = str(parameters.get("title") or "MoonMind Integration Task").strip()
+        title_param = str(parameters.get("title") or "").strip()
         description = str(parameters.get("description") or "").strip()
 
         # Fallback: when dispatched from AgentRun, the task description lives
@@ -1462,6 +1514,11 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 "integration.jules.start requires parameters.description or inputs_ref"
             )
+
+        title = _derive_integration_title(
+            description=description,
+            fallback_title=title_param or None,
+        ) or "MoonMind Integration Task"
 
         metadata = parameters.get("metadata")
         if metadata is not None and not isinstance(metadata, Mapping):
@@ -1563,8 +1620,18 @@ class TemporalIntegrationActivities:
     ) -> IntegrationStatusResult:
         status = await self._adapter.status(external_id)
         provider_status = str(status.metadata.get("providerStatus") or "unknown")
-        external_url = str(status.metadata.get("externalUrl") or "").strip() or None
-        status_snapshot = self._status_snapshot(provider_status)
+        external_url = (
+            str(
+                status.metadata.get("pullRequestUrl")
+                or status.metadata.get("externalUrl")
+                or ""
+            ).strip()
+            or None
+        )
+        status_snapshot = self._status_snapshot_from_provider_and_hint(
+            provider_status=provider_status,
+            normalized_hint=status.metadata.get("normalizedStatus"),
+        )
 
         tracking_ref = None
         if self._artifact_service is not None and principal is not None:
@@ -1592,65 +1659,154 @@ class TemporalIntegrationActivities:
             url=external_url,
             normalized_status=status_snapshot.normalized_status,
             provider_status=status_snapshot.provider_status,
-            terminal=status.terminal,
+            terminal=status_snapshot.terminal or status.terminal,
         )
 
     async def integration_jules_fetch_result(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        external_id: str,
-        principal: str,
+        external_id: str | None = None,
+        principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
-    ) -> tuple[ArtifactRef, ...]:
-        if self._artifact_service is None:
+    ) -> dict[str, Any]:
+        request_payload = _coerce_activity_request(
+            request, activity_type="integration.jules.fetch_result"
+        )
+        if request_payload:
+            if external_id is None:
+                external_id = (
+                    request_payload.get("external_id")
+                    or request_payload.get("externalId")
+                    or request_payload.get("run_id")
+                    or request_payload.get("runId")
+                )
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref") or request_payload.get(
+                    "executionRef"
+                )
+        resolved_external_id = str(external_id or "").strip()
+        if not resolved_external_id:
             raise TemporalActivityRuntimeError(
-                "integration.jules.fetch_result requires artifact storage"
+                "integration.jules.fetch_result requires a non-empty external_id"
             )
 
         status = await self.integration_jules_status(
-            external_id=external_id,
+            external_id=resolved_external_id,
             principal=principal,
             execution_ref=execution_ref,
         )
-        output_refs: list[ArtifactRef] = []
+        output_refs: list[str] = []
         if status.tracking_ref is not None:
-            output_refs.append(status.tracking_ref)
-        if status.normalized_status in {"failed", "canceled"}:
-            output_refs.append(
-                await self._write_failure_summary_artifact(
-                    principal=principal,
-                    execution_ref=execution_ref,
-                    external_id=external_id,
-                    status=status,
-                )
+            output_refs.append(status.tracking_ref.artifact_id)
+
+        if (
+            status.normalized_status in {"failed", "canceled"}
+            and principal is not None
+            and self._artifact_service is not None
+        ):
+            failure_summary = await self._write_failure_summary_artifact(
+                principal=principal,
+                execution_ref=execution_ref,
+                external_id=resolved_external_id,
+                status=status,
             )
-        return tuple(output_refs)
+            output_refs.append(failure_summary.artifact_id)
+
+        failure_class: str | None = None
+        if status.normalized_status == "failed":
+            failure_class = "integration_error"
+        elif status.normalized_status == "canceled":
+            failure_class = "execution_error"
+
+        pull_request_url: str | None = None
+        if status.external_url:
+            pr_match = _GITHUB_PULL_REQUEST_URL_PATTERN.search(status.external_url)
+            if pr_match is not None:
+                pull_request_url = pr_match.group(0)
+
+        summary = (
+            f"Jules task {resolved_external_id} ended with provider status "
+            f"'{status.provider_status}'."
+        )
+        if pull_request_url is not None:
+            summary = (
+                f"Jules task {resolved_external_id} created pull request "
+                f"{pull_request_url} and reported provider status "
+                f"'{status.provider_status}'."
+            )
+
+        metadata: dict[str, Any] = {
+            "normalizedStatus": status.normalized_status,
+            "providerStatus": status.provider_status,
+            "terminal": status.terminal,
+        }
+        if status.external_url:
+            metadata["externalUrl"] = status.external_url
+        if pull_request_url is not None:
+            metadata["pullRequestUrl"] = pull_request_url
+
+        result = AgentRunResult(
+            outputRefs=output_refs,
+            summary=summary,
+            failureClass=failure_class,
+            providerErrorCode=status.provider_status if failure_class else None,
+            metadata=metadata,
+        )
+        return result.model_dump(mode="json", by_alias=True)
 
     async def integration_jules_cancel(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        external_id: str,
-        principal: str,
+        external_id: str | None = None,
+        principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
         """Attempt best-effort cancellation of one Jules task."""
+        request_payload = _coerce_activity_request(
+            request, activity_type="integration.jules.cancel"
+        )
+        if request_payload:
+            if external_id is None:
+                external_id = (
+                    request_payload.get("external_id")
+                    or request_payload.get("externalId")
+                    or request_payload.get("run_id")
+                    or request_payload.get("runId")
+                )
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref") or request_payload.get(
+                    "executionRef"
+                )
+        resolved_external_id = str(external_id or "").strip()
+        if not resolved_external_id:
+            raise TemporalActivityRuntimeError(
+                "integration.jules.cancel requires a non-empty external_id"
+            )
 
         adapter = self._build_adapter()
-        result = await adapter.cancel(external_id)
+        result = await adapter.cancel(resolved_external_id)
 
         provider_status = str(
             result.metadata.get("providerStatus") or ""
         ).strip() or "canceled"
-        normalized = self._normalize_status(provider_status)
+        normalized = self._status_snapshot(provider_status)
 
         tracking_ref: ArtifactRef | None = None
-        if self._artifact_service is not None:
+        if self._artifact_service is not None and principal is not None:
             tracking_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal=principal,
                 payload={
                     "activity": "integration.jules.cancel",
-                    "externalId": external_id,
+                    "externalId": resolved_external_id,
                     "providerStatus": provider_status,
                     "normalizedStatus": normalized.normalized_status,
                     "cancelAccepted": result.metadata.get("cancelAccepted", False),
@@ -1664,7 +1820,7 @@ class TemporalIntegrationActivities:
             )
 
         return IntegrationStatusResult(
-            external_id=external_id,
+            external_id=resolved_external_id,
             status=result.status,
             tracking_ref=tracking_ref,
             url=str(result.metadata.get("externalUrl") or "").strip() or None,
@@ -1694,6 +1850,63 @@ class TemporalIntegrationActivities:
                 )
 
         return await client.merge_pull_request(pr_url=pr_url)
+
+    async def integration_jules_send_message(
+        self,
+        *,
+        session_id: str,
+        prompt: str,
+        principal: str | None = None,
+        execution_ref: ExecutionRef | dict[str, Any] | None = None,
+    ) -> IntegrationStatusResult:
+        """Send a follow-up prompt to an existing Jules session.
+
+        Used for multi-step workflows: resumes the session with new
+        instructions instead of creating a new session.
+        """
+        if not session_id or not session_id.strip():
+            raise TemporalActivityRuntimeError(
+                "integration.jules.send_message requires a non-empty session_id"
+            )
+        if not prompt or not prompt.strip():
+            raise TemporalActivityRuntimeError(
+                "integration.jules.send_message requires a non-empty prompt"
+            )
+
+        result = await self._adapter.send_message(
+            run_id=session_id,
+            prompt=prompt,
+        )
+        status_snapshot = self._status_snapshot(
+            str(result.metadata.get("providerStatus") or "running")
+        )
+
+        tracking_ref = None
+        if self._artifact_service is not None and principal is not None:
+            tracking_ref = await _write_json_artifact(
+                self._artifact_service,
+                principal=principal,
+                payload={
+                    "activity": "integration.jules.send_message",
+                    "sessionId": session_id,
+                    "providerStatus": status_snapshot.provider_status,
+                    "normalizedStatus": status_snapshot.normalized_status,
+                },
+                execution_ref=execution_ref,
+                metadata_json={
+                    "name": "jules_send_message.json",
+                    "producer": "activity:integration.jules.send_message",
+                    "labels": ["integration", "jules", "send_message"],
+                },
+            )
+
+        return IntegrationStatusResult(
+            external_id=session_id,
+            status=status_snapshot.provider_status,
+            tracking_ref=tracking_ref,
+            normalized_status=status_snapshot.normalized_status,
+            provider_status=status_snapshot.provider_status,
+        )
 
     # ---- Codex Cloud integration handlers ----
 
@@ -1741,7 +1954,7 @@ class TemporalIntegrationActivities:
                 idempotency_key = request_payload.get("idempotency_key")
 
         parameters = dict(parameters or {})
-        title = str(parameters.get("title") or "MoonMind Integration Task").strip()
+        title_param = str(parameters.get("title") or "").strip()
         description = str(parameters.get("description") or "").strip()
 
         if not description and inputs_ref is not None:
@@ -1759,6 +1972,11 @@ class TemporalIntegrationActivities:
             raise TemporalActivityRuntimeError(
                 "integration.codex_cloud.start requires parameters.description or inputs_ref"
             )
+
+        title = _derive_integration_title(
+            description=description,
+            fallback_title=title_param or None,
+        ) or "MoonMind Integration Task"
 
         resolved_correlation_id = str(
             correlation_id or f"integration:codex_cloud:{title}"
@@ -2211,12 +2429,27 @@ class TemporalAgentRuntimeActivities:
             if isinstance(timeout_policy, dict)
             else getattr(timeout_policy, "timeout_seconds", 3600)
         )
+        exit_code_path = None
+        cleanup_paths: list[str] | None = None
+        if endpoints:
+            exit_code_path = endpoints.get("exit_code_path")
+            cleanup_paths = [
+                path
+                for path in (
+                    endpoints.get("tmate_socket_path"),
+                    endpoints.get("tmate_config_path"),
+                    exit_code_path,
+                )
+                if path
+            ]
 
         task = asyncio.create_task(
             self._run_supervisor.supervise(
                 run_id=run_id,
                 process=process,
                 timeout_seconds=timeout_seconds,
+                exit_code_path=exit_code_path,
+                cleanup_paths=cleanup_paths,
             )
         )
         self._supervision_tasks.add(task)

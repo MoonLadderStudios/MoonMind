@@ -601,6 +601,95 @@ async def test_fetch_result_reads_from_store(tmp_path: Path):
     assert "artifact://diag/123" in result.output_refs
 
 
+async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        (
+            "{\n"
+            '  "status": "failed",\n'
+            '  "final_reason": "no pull requests found for branch",\n'
+            '  "next_step": "manual_review"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-failure",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-failure",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-pr-failure")
+    assert result.failure_class == "execution_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'failed'" in result.summary
+    assert "manual_review" in result.summary
+
+
+async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
+    (artifacts_path / "pr_resolver_result.json").write_text(
+        "{\n  \"status\": \"merged\",\n  \"next_step\": \"done\"\n}\n",
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-merged",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-merged",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-pr-merged")
+    assert result.failure_class is None
+
+
 async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     from datetime import UTC, datetime
 

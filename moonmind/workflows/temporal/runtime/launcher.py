@@ -21,6 +21,11 @@ from .store import ManagedRunStore
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
+logger = logging.getLogger(__name__)
+
+TMATE_SOCKET_DIR = Path("/tmp/moonmind/tmate")
+TMATE_FOREGROUND_RESTART_OFF = "set tmate-foreground-restart 0\n"
+
 
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
@@ -178,6 +183,143 @@ class ManagedRuntimeLauncher:
             "exit \"$mm_rc\"\n"
         )
 
+    @staticmethod
+    def _resolve_repository_source(repository: str) -> str:
+        normalized = str(repository or "").strip()
+        if not normalized:
+            raise RuntimeError("workspaceSpec.repository must be non-empty")
+        if "://" in normalized or normalized.startswith("git@"):
+            return normalized
+        if normalized.startswith("/") or normalized.startswith("./") or normalized.startswith("../"):
+            return normalized
+        if normalized.count("/") == 1:
+            suffix = "" if normalized.endswith(".git") else ".git"
+            return f"https://github.com/{normalized}{suffix}"
+        raise RuntimeError(
+            "Unsupported workspaceSpec.repository format; expected owner/repo, URL, or local path"
+        )
+
+    async def _run_command(
+        self,
+        *cmd: str,
+        cwd: str | None = None,
+    ) -> tuple[int, str, str]:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+        )
+        stdout, stderr = await process.communicate()
+        return (
+            int(process.returncode),
+            stdout.decode("utf-8", errors="replace").strip(),
+            stderr.decode("utf-8", errors="replace").strip(),
+        )
+
+    async def _run_checked_command(
+        self,
+        *cmd: str,
+        cwd: str | None = None,
+    ) -> None:
+        returncode, stdout_text, stderr_text = await self._run_command(
+            *cmd,
+            cwd=cwd,
+        )
+        if returncode == 0:
+            return
+        detail = stderr_text or stdout_text or "no output"
+        rendered_cmd = " ".join(shlex.quote(part) for part in cmd)
+        raise RuntimeError(
+            f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
+        )
+
+    async def _prepare_workspace_path(
+        self,
+        *,
+        run_id: str,
+        request: AgentExecutionRequest,
+        workspace_path: str | Path | None,
+    ) -> str | None:
+        if workspace_path is not None:
+            resolved = Path(workspace_path).expanduser().resolve()
+            if not resolved.exists():
+                raise RuntimeError(f"workspace_path does not exist: {resolved}")
+            return str(resolved)
+
+        workspace_spec = (
+            request.workspace_spec
+            if isinstance(request.workspace_spec, dict)
+            else {}
+        )
+        repository = str(
+            workspace_spec.get("repository")
+            or workspace_spec.get("repo")
+            or ""
+        ).strip()
+        if not repository:
+            return None
+
+        workspace_root = (self._store.store_root.parent / "workspaces" / run_id).resolve()
+        repo_path = (workspace_root / "repo").resolve()
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        if repo_path.exists():
+            return str(repo_path)
+
+        source = self._resolve_repository_source(repository)
+        branch = str(
+            workspace_spec.get("startingBranch")
+            or workspace_spec.get("branch")
+            or ""
+        ).strip()
+
+        clone_cmd = ["git", "clone"]
+        if branch:
+            clone_cmd.extend(["--branch", branch, "--single-branch"])
+        clone_cmd.extend([source, str(repo_path)])
+        await self._run_checked_command(*clone_cmd, cwd=str(workspace_root))
+
+        new_branch = str(workspace_spec.get("newBranch") or "").strip()
+        if new_branch:
+            returncode, stdout_text, stderr_text = await self._run_command(
+                "git",
+                "-C",
+                str(repo_path),
+                "checkout",
+                new_branch,
+            )
+            if returncode != 0:
+                failure_detail = (stderr_text or stdout_text).lower()
+                branch_missing = (
+                    "did not match any file(s) known to git" in failure_detail
+                    or "pathspec" in failure_detail
+                )
+                if not branch_missing:
+                    detail = stderr_text or stdout_text or "no output"
+                    rendered_cmd = " ".join(
+                        shlex.quote(part)
+                        for part in [
+                            "git",
+                            "-C",
+                            str(repo_path),
+                            "checkout",
+                            new_branch,
+                        ]
+                    )
+                    raise RuntimeError(
+                        f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
+                    )
+                await self._run_checked_command(
+                    "git",
+                    "-C",
+                    str(repo_path),
+                    "checkout",
+                    "-b",
+                    new_branch,
+                )
+
+        return str(repo_path)
+
     def build_command(
         self,
         profile: ManagedRuntimeProfile,
@@ -189,20 +331,35 @@ class ManagedRuntimeLauncher:
         model = (
             request.parameters.get("model") if request.parameters else None
         ) or profile.default_model
-        if model:
-            cmd.extend(["--model", model])
 
-        effort = (
-            request.parameters.get("effort") if request.parameters else None
-        ) or profile.default_effort
-        if effort:
-            cmd.extend(["--effort", effort])
-
-        if request.instruction_ref:
-            if profile.runtime_id == "gemini_cli":
+        if profile.runtime_id == "codex_cli":
+            # Codex CLI: `codex exec -m MODEL [PROMPT]`
+            # --effort is not supported; --model is -m on exec subcommand.
+            if model:
+                cmd.extend(["-m", model])
+            if request.instruction_ref:
+                cmd.append(request.instruction_ref)
+        elif profile.runtime_id == "gemini_cli":
+            if model:
+                cmd.extend(["--model", model])
+            effort = (
+                request.parameters.get("effort") if request.parameters else None
+            ) or profile.default_effort
+            if effort:
+                cmd.extend(["--effort", effort])
+            if request.instruction_ref:
                 cmd.extend(["--yolo", "--prompt", request.instruction_ref])
-            else:
-                cmd.extend(["--instruction-ref", request.instruction_ref])
+        else:
+            # Generic / claude_code path
+            if model:
+                cmd.extend(["--model", model])
+            effort = (
+                request.parameters.get("effort") if request.parameters else None
+            ) or profile.default_effort
+            if effort:
+                cmd.extend(["--effort", effort])
+            if request.instruction_ref:
+                cmd.extend(["--prompt", request.instruction_ref])
 
         return cmd
 
@@ -212,7 +369,7 @@ class ManagedRuntimeLauncher:
         run_id: str,
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
-        workspace_path: str | None = None,
+        workspace_path: str | Path | None = None,
     ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process, dict[str, str] | None]:
         """Spawn a subprocess for the managed agent run.
 
@@ -231,88 +388,139 @@ class ManagedRuntimeLauncher:
             )
 
         cmd = self.build_command(profile, request)
-        workspace_path = await self._prepare_workspace(
+        resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
             workspace_path=workspace_path,
         )
-        env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(os.environ)
-        
-        # Ensure HOME and GEMINI_HOME are set for gemini cli
-        if "GEMINI_HOME" not in env_overrides and "GEMINI_HOME" in os.environ:
-            env_overrides["GEMINI_HOME"] = os.environ["GEMINI_HOME"]
-        if "GEMINI_CLI_HOME" not in env_overrides and "GEMINI_CLI_HOME" in os.environ:
-            env_overrides["GEMINI_CLI_HOME"] = os.environ["GEMINI_CLI_HOME"]
-        if "HOME" not in env_overrides and "HOME" in os.environ:
-            env_overrides["HOME"] = os.environ["HOME"]
+        if resolved_workspace_path is None:
+            resolved_workspace_path = await self._prepare_workspace(
+                run_id=run_id,
+                request=request,
+                workspace_path=workspace_path,
+            )
+
+        env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(
+            os.environ
+        )
+
+        # Ensure runtime-specific home dirs are set so CLIs can find their
+        # auth credentials even when env_overrides comes from a different
+        # worker (the workflow worker) that may lack these variables.
+        _runtime_env_keys = (
+            "HOME",
+            "GEMINI_HOME",
+            "GEMINI_CLI_HOME",
+            "CODEX_HOME",
+            "CODEX_CONFIG_HOME",
+            "CODEX_CONFIG_PATH",
+        )
+        for key in _runtime_env_keys:
+            if key not in env_overrides and key in os.environ:
+                env_overrides[key] = os.environ[key]
 
         use_tmate = shutil.which("tmate") is not None
-        endpoints = None
+        endpoints: dict[str, str] | None = None
 
         if use_tmate:
-            socket_dir = "/tmp/moonmind/tmate"
-            os.makedirs(socket_dir, exist_ok=True)
-            socket_path = os.path.join(socket_dir, f"{run_id}.sock")
-            wrapper_path = Path(socket_dir) / f"{run_id}.wrapper.sh"
-            if os.path.exists(socket_path):
-                os.remove(socket_path)
-            if wrapper_path.exists():
-                wrapper_path.unlink()
-                
-            session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            wrapper_script = self._build_tmate_wrapper_script(
-                cmd,
-                socket_path=socket_path,
-                session_name=session_name,
-            )
-            wrapper_path.write_text(wrapper_script, encoding="utf-8")
-            wrapper_path.chmod(0o700)
-            session_cmd = shlex.join(["bash", str(wrapper_path)])
+            TMATE_SOCKET_DIR.mkdir(parents=True, exist_ok=True)
+            socket_path = TMATE_SOCKET_DIR / f"{run_id}.sock"
+            config_path = TMATE_SOCKET_DIR / f"{run_id}.conf"
+            exit_code_path = TMATE_SOCKET_DIR / f"{run_id}.exit"
+            for path in (socket_path, config_path, exit_code_path):
+                path.unlink(missing_ok=True)
 
-            # Start tmate server in foreground
+            config_path.write_text(
+                TMATE_FOREGROUND_RESTART_OFF,
+                encoding="utf-8",
+            )
+            env_overrides["MM_EXIT_FILE"] = str(exit_code_path)
+
+            session_name = f"mm-{run_id.replace('-', '')[:16]}"
+            # Build the command inline rather than via "$@" positional args.
+            # tmate passes the new-session command to sh -c as a single string,
+            # so positional args after "--" are not forwarded to the inner bash.
+            escaped_cmd = shlex.join(cmd)
+            wrapped_command = (
+                f"{escaped_cmd}\n"
+                f"rc=$?\n"
+                f"printf '%s\\n' \"$rc\" > \"$MM_EXIT_FILE\"\n"
+                f"exit 0\n"
+            )
+
             tmate_cmd = [
-                "tmate", "-S", socket_path, "-F",
-                "new-session", "-A", "-s", session_name, session_cmd
+                "tmate",
+                "-S",
+                str(socket_path),
+                "-f",
+                str(config_path),
+                "-F",
+                "new-session",
+                "-A",
+                "-s",
+                session_name,
+                wrapped_command,
             ]
-            
+
             process = await asyncio.create_subprocess_exec(
                 *tmate_cmd,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env_overrides,
-                cwd=workspace_path,
+                cwd=resolved_workspace_path,
             )
-            
-            try:
-                # Wait for tmate-ready
-                async def _wait_for_ready():
-                    ready_proc = await asyncio.create_subprocess_exec("tmate", "-S", socket_path, "wait", "tmate-ready")
-                    await ready_proc.wait()
-                
-                await asyncio.wait_for(_wait_for_ready(), timeout=10.0)
-                
-                async def get_endpoint(key):
-                    p = await asyncio.create_subprocess_exec(
-                        "tmate", "-S", socket_path, "display", "-p", f"#{{{key}}}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    stdout, _ = await p.communicate()
-                    return stdout.decode().strip() or None
 
-                endpoints = {
-                    "attach_ro": await get_endpoint("tmate_ssh_ro"),
-                    "attach_rw": await get_endpoint("tmate_ssh"),
-                    "web_ro": await get_endpoint("tmate_web_ro"),
-                    "web_rw": await get_endpoint("tmate_web"),
-                    "tmate_session_name": session_name,
-                    "tmate_socket_path": socket_path,
-                }
-            except Exception as e:
-                self._logger.warning("Failed to fetch tmate endpoints: %s", e)
-                pass # Proceed even if endpoints fail
-                
+            endpoints = {
+                "tmate_session_name": session_name,
+                "tmate_socket_path": str(socket_path),
+                "tmate_config_path": str(config_path),
+                "exit_code_path": str(exit_code_path),
+            }
+
+            try:
+                async def _wait_for_ready() -> None:
+                    ready_proc = await asyncio.create_subprocess_exec(
+                        "tmate",
+                        "-S",
+                        str(socket_path),
+                        "wait",
+                        "tmate-ready",
+                    )
+                    await ready_proc.wait()
+
+                await asyncio.wait_for(_wait_for_ready(), timeout=10.0)
+
+                async def get_endpoint(key: str) -> str | None:
+                    endpoint_proc = await asyncio.create_subprocess_exec(
+                        "tmate",
+                        "-S",
+                        str(socket_path),
+                        "display",
+                        "-p",
+                        f"#{{{key}}}",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await endpoint_proc.communicate()
+                    value = stdout.decode().strip()
+                    return value or None
+
+                for key, endpoint_key in (
+                    ("attach_ro", "tmate_ssh_ro"),
+                    ("attach_rw", "tmate_ssh"),
+                    ("web_ro", "tmate_web_ro"),
+                    ("web_rw", "tmate_web"),
+                ):
+                    endpoint_value = await get_endpoint(endpoint_key)
+                    if endpoint_value:
+                        endpoints[key] = endpoint_value
+            except Exception:
+                logger.warning(
+                    "Failed to fetch tmate endpoints for run_id=%s",
+                    run_id,
+                    exc_info=True,
+                )
         else:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -320,7 +528,7 @@ class ManagedRuntimeLauncher:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env_overrides,
-                cwd=workspace_path,
+                cwd=resolved_workspace_path,
             )
 
         record = ManagedRunRecord(
@@ -330,7 +538,7 @@ class ManagedRuntimeLauncher:
             status="launching",
             pid=process.pid,
             started_at=datetime.now(tz=UTC),
-            workspace_path=workspace_path,
+            workspace_path=resolved_workspace_path,
         )
         self._store.save(record)
         return record, process, endpoints

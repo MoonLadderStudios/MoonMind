@@ -18,14 +18,17 @@ class _FakeJulesAdapterClient:
         *,
         create_status: str = "pending",
         get_status: str = "completed",
+        get_pull_request_url: str | None = None,
         resolve_raises: bool = False,
     ) -> None:
         self.create_status = create_status
         self.get_status = get_status
+        self.get_pull_request_url = get_pull_request_url
         self.resolve_raises = resolve_raises
         self.created: list[object] = []
         self.lookups: list[object] = []
         self.resolved: list[object] = []
+        self.sent_messages: list[object] = []
         self.closed_count = 0
 
     async def create_task(self, request):
@@ -38,10 +41,14 @@ class _FakeJulesAdapterClient:
 
     async def get_task(self, request):
         self.lookups.append(request)
+        outputs = []
+        if self.get_pull_request_url is not None:
+            outputs = [{"pullRequest": {"url": self.get_pull_request_url}}]
         return JulesTaskResponse(
             task_id=request.task_id,
             status=self.get_status,
             url=f"https://jules.example.test/tasks/{request.task_id}",
+            outputs=outputs,
         )
 
     async def resolve_task(self, request):
@@ -56,6 +63,10 @@ class _FakeJulesAdapterClient:
 
     async def aclose(self):
         self.closed_count += 1
+
+    async def send_message(self, request):
+        self.sent_messages.append(request)
+        return None
 
 
 def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
@@ -102,6 +113,25 @@ async def test_status_and_fetch_result_normalize_provider_states():
     assert result.summary is not None
     assert "completed" in result.summary
     assert result.failure_class is None
+
+
+async def test_status_and_fetch_result_prefer_pull_request_url():
+    client = _FakeJulesAdapterClient(
+        get_status="in_progress",
+        get_pull_request_url="https://github.com/org/repo/pull/123",
+    )
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    status = await adapter.status("task-pr")
+    result = await adapter.fetch_result("task-pr")
+
+    assert status.status == "completed"
+    assert status.metadata["normalizedStatus"] == "succeeded"
+    assert status.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
+    assert status.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
+    assert result.metadata["normalizedStatus"] == "succeeded"
+    assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
+    assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
 
 
 async def test_cancel_returns_intervention_requested_when_provider_rejects_cancel():
@@ -243,3 +273,18 @@ async def test_start_defaults_automation_mode_for_branch_publish():
     create_req = client.created[0]
     assert create_req.automation_mode == "AUTO_CREATE_PR"
 
+
+async def test_send_message_returns_running_status():
+    """send_message() should call the client and return a running status."""
+    client = _FakeJulesAdapterClient()
+    adapter = JulesAgentAdapter(client_factory=lambda: client)
+
+    status = await adapter.send_message(run_id="session-42", prompt="Continue with step 2.")
+
+    assert status.run_id == "session-42"
+    assert status.status == "running"
+    assert status.metadata["normalizedStatus"] == "running"
+    assert len(client.sent_messages) == 1
+    sent_req = client.sent_messages[0]
+    assert sent_req.session_id == "session-42"
+    assert sent_req.prompt == "Continue with step 2."

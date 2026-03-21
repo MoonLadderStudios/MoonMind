@@ -89,6 +89,7 @@ class _FakeAdapter:
         self.status = AsyncMock(return_value=_mock_status())
         self.fetch_result = AsyncMock(return_value=_mock_result())
         self.cancel = AsyncMock(return_value=_mock_cancel_status())
+        self.send_message = AsyncMock(return_value=_mock_status())
 
 
 @pytest.fixture
@@ -167,3 +168,19 @@ async def test_build_adapter_raises_when_no_api_key():
     ):
         with pytest.raises(RuntimeError, match="JULES_API_KEY"):
             _build_adapter()
+
+
+async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_send_message_activity,
+    )
+
+    result = await jules_send_message_activity({
+        "session_id": "session-42",
+        "prompt": "Continue with step 2.",
+    })
+    assert result.run_id == "task-001"
+    _patch_build_adapter.send_message.assert_awaited_once_with(
+        run_id="session-42",
+        prompt="Continue with step 2.",
+    )

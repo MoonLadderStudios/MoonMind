@@ -14,7 +14,7 @@ Define the best way for Temporal Managed Agents (e.g., OpenHands workers) to rea
   - Temporal Server orchestrates all `AgentTaskWorkflows`.
   - Artifact uploads are recorded via Temporal Activity results or directly to artifact blob stores.
 - Vector storage is Qdrant (Docker service `qdrant`, default port `6333`).
-- Embedding provider defaults to Google `gemini-embedding-001` in app settings.
+- Embedding provider defaults to Google `gemini-embedding-2-preview` in app settings.
 - Embeddings are created in-process by MoonMind API Activities or directly by tools within the sandbox.
 
 ## Do All Vector Requests Need to Go Through the API Server?
@@ -92,6 +92,6 @@ Use a dedicated Python/Node.js Temporal worker (running outside the sandbox) to 
 ## Suggested Runtime Environment for Sandboxes
 
 - `GOOGLE_API_KEY` (or equivalent provider key) mapped for embedding calls.
-- `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
+- `GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview`
 - `QDRANT_HOST` / `QDRANT_PORT` (or `QDRANT_URL`) set to reachable internal endpoint.
 - Existing Temporal Worker configuration to stream progress.

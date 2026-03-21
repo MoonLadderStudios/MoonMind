@@ -58,9 +58,9 @@ def client() -> Iterator[TestClient]:
 
 def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("list")
-    assert _is_allowed_path("queue")
-    assert _is_allowed_path("queue/new")
-    assert _is_allowed_path("queue/123")
+    assert not _is_allowed_path("queue")
+    assert not _is_allowed_path("queue/new")
+    assert not _is_allowed_path("queue/123")
     assert not _is_allowed_path("orchestrator/run-1")
     assert _is_allowed_path("mm:123")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
@@ -97,9 +97,7 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
 def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
     for path in (
         "/tasks/list",
-        "/tasks/queue",
         "/tasks/new",
-        "/tasks/queue/new",
         "/tasks/create",
         "/tasks/manifests",
         "/tasks/manifests/new",
@@ -118,7 +116,6 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         f"/tasks/mm:{uuid4()}",
         "/tasks/mm:01JNX7SYH6A3K1V8Q2D7E9F4AB",
         "/tasks/mm:workflow-123",
-        f"/tasks/queue/{uuid4()}",
         f"/tasks/manifests/{uuid4()}",
         f"/tasks/schedules/{uuid4()}",
     ):
@@ -137,11 +134,11 @@ def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
         assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
-def test_temporal_source_root_still_renders_dashboard_shell(client: TestClient) -> None:
+def test_temporal_source_root_is_not_exposed(client: TestClient) -> None:
     response = client.get("/tasks/temporal")
 
-    assert response.status_code == 200
-    assert "task-dashboard-config" in response.text
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
 def test_temporal_source_subroutes_return_404_until_first_class_source_exists(
@@ -164,7 +161,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["code"] == "dashboard_route_not_found"
     assert detail["message"] == (
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
-        "/tasks/queue, /tasks/queue/new, /tasks/create, /tasks/new, "
+        "/tasks/create, /tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
         "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
     )

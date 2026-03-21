@@ -8,6 +8,7 @@ import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,9 @@ from .log_streamer import RuntimeLogStreamer
 from .store import ManagedRunStore
 
 HEARTBEAT_INTERVAL = 30  # seconds
-GRACEFUL_TERMINATE_WAIT_SECONDS = 2.0  # seconds to wait for graceful SIGTERM before SIGKILL
+GRACEFUL_TERMINATE_WAIT_SECONDS = (
+    2.0  # seconds to wait for graceful SIGTERM before SIGKILL
+)
 
 
 class ManagedRunSupervisor:
@@ -44,6 +47,7 @@ class ManagedRunSupervisor:
         self._log_streamer = log_streamer
         self._completion_callback = completion_callback
         self._active_processes: dict[str, asyncio.subprocess.Process] = {}
+        self._cleanup_paths: dict[str, tuple[str, ...]] = {}
 
     async def supervise(
         self,
@@ -51,30 +55,54 @@ class ManagedRunSupervisor:
         run_id: str,
         process: asyncio.subprocess.Process,
         timeout_seconds: int = 3600,
+        exit_code_path: str | None = None,
+        cleanup_paths: list[str] | None = None,
     ) -> ManagedRunRecord:
-        """Supervise a running process: stream logs, heartbeat, handle completion/timeout."""
+        """Supervise a process and track heartbeat, completion, and cleanup."""
         self._active_processes[run_id] = process
+        registered_paths: list[str] = list(cleanup_paths or [])
+        if exit_code_path:
+            registered_paths.append(exit_code_path)
+        self._cleanup_paths[run_id] = tuple(
+            path for path in dict.fromkeys(registered_paths) if path
+        )
         self._store.update_status(run_id, "running")
         start_time = datetime.now(tz=UTC)
 
         try:
             # Start log streaming tasks
-            stdout_task = asyncio.create_task(
-                self._log_streamer.stream_to_artifact(
-                    process.stdout, run_id=run_id, stream_name="stdout"
+            stdout_task = (
+                asyncio.create_task(
+                    self._log_streamer.stream_to_artifact(
+                        process.stdout,
+                        run_id=run_id,
+                        stream_name="stdout",
+                    )
                 )
-            ) if process.stdout else None
-            stderr_task = asyncio.create_task(
-                self._log_streamer.stream_to_artifact(
-                    process.stderr, run_id=run_id, stream_name="stderr"
+                if process.stdout
+                else None
+            )
+            stderr_task = (
+                asyncio.create_task(
+                    self._log_streamer.stream_to_artifact(
+                        process.stderr,
+                        run_id=run_id,
+                        stream_name="stderr",
+                    )
                 )
-            ) if process.stderr else None
+                if process.stderr
+                else None
+            )
 
             # Heartbeat + wait for process with timeout
             try:
-                exit_code = await asyncio.wait_for(
+                process_exit_code = await asyncio.wait_for(
                     self._heartbeat_and_wait(run_id, process),
                     timeout=timeout_seconds,
+                )
+                exit_code = self._resolve_effective_exit_code(
+                    process_exit_code=process_exit_code,
+                    exit_code_path=exit_code_path,
                 )
                 timed_out = False
             except asyncio.TimeoutError:
@@ -137,6 +165,7 @@ class ManagedRunSupervisor:
             return record
         finally:
             self._active_processes.pop(run_id, None)
+            self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
 
     async def _heartbeat_and_wait(
         self, run_id: str, process: asyncio.subprocess.Process
@@ -159,6 +188,7 @@ class ManagedRunSupervisor:
         """Cancel a running managed process: terminate -> wait -> kill."""
         process = self._active_processes.get(run_id)
         if process is None:
+            self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
             self._store.update_status(
                 run_id,
                 "cancelled",
@@ -169,6 +199,7 @@ class ManagedRunSupervisor:
 
         await self._terminate_process(process)
         self._active_processes.pop(run_id, None)
+        self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
         self._store.update_status(
             run_id,
             "cancelled",
@@ -188,7 +219,9 @@ class ManagedRunSupervisor:
                     "failed",
                     finished_at=datetime.now(tz=UTC),
                     failure_class="system_error",
-                    error_message=f"Process {record.pid} not found during reconciliation",
+                    error_message=(
+                        f"Process {record.pid} not found during reconciliation"
+                    ),
                 )
                 reconciled.append(updated)
         return reconciled
@@ -199,7 +232,10 @@ class ManagedRunSupervisor:
         with suppress(ProcessLookupError):
             process.terminate()
         try:
-            await asyncio.wait_for(process.wait(), timeout=GRACEFUL_TERMINATE_WAIT_SECONDS)
+            await asyncio.wait_for(
+                process.wait(),
+                timeout=GRACEFUL_TERMINATE_WAIT_SECONDS,
+            )
         except (asyncio.TimeoutError, ProcessLookupError):
             with suppress(ProcessLookupError):
                 process.kill()
@@ -216,6 +252,48 @@ class ManagedRunSupervisor:
         if exit_code == 0:
             return "completed", None
         return "failed", "execution_error"
+
+    @staticmethod
+    def _resolve_effective_exit_code(
+        *,
+        process_exit_code: int | None,
+        exit_code_path: str | None,
+    ) -> int | None:
+        """Resolve the authoritative exit code for the managed child process."""
+        if not exit_code_path:
+            return process_exit_code
+
+        parsed = ManagedRunSupervisor._read_exit_code_file(exit_code_path)
+        if parsed is None:
+            logger.warning(
+                "Missing or invalid managed exit code file at %s; failing closed",
+                exit_code_path,
+            )
+            return 1
+        return parsed
+
+    @staticmethod
+    def _read_exit_code_file(exit_code_path: str) -> int | None:
+        """Read one integer exit code from the given path."""
+        try:
+            raw_value = Path(exit_code_path).read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            return None
+        if not raw_value:
+            return None
+        try:
+            return int(raw_value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _cleanup_runtime_files(paths: tuple[str, ...]) -> None:
+        """Best-effort cleanup for launcher runtime files."""
+        for path in paths:
+            with suppress(OSError):
+                os.remove(path)
 
     @staticmethod
     def _build_completion_payload(

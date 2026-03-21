@@ -109,6 +109,89 @@ async def test_timeout_exit_classification(supervisor_env):
 
 
 @pytest.mark.asyncio
+async def test_exit_code_file_is_authoritative(supervisor_env, tmp_path):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-exit-file", "launching")
+    exit_code_path = tmp_path / "run-exit-file.exit"
+    exit_code_path.write_text("42\n", encoding="utf-8")
+
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", "exit 0",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-exit-file",
+        process=process,
+        timeout_seconds=30,
+        exit_code_path=str(exit_code_path),
+        cleanup_paths=[str(exit_code_path)],
+    )
+
+    assert record.status == "failed"
+    assert record.exit_code == 42
+    assert record.failure_class == "execution_error"
+    assert not exit_code_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_missing_exit_code_file_fails_closed(supervisor_env, tmp_path):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-missing-exit", "launching")
+    exit_code_path = tmp_path / "missing.exit"
+
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", "exit 0",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-missing-exit",
+        process=process,
+        timeout_seconds=30,
+        exit_code_path=str(exit_code_path),
+        cleanup_paths=[str(exit_code_path)],
+    )
+
+    assert record.status == "failed"
+    assert record.exit_code == 1
+    assert record.failure_class == "execution_error"
+
+
+@pytest.mark.asyncio
+async def test_timeout_ignores_exit_code_file_and_cleans_it(
+    supervisor_env, tmp_path
+):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-timeout-exit", "launching")
+    exit_code_path = tmp_path / "run-timeout.exit"
+    exit_code_path.write_text("0\n", encoding="utf-8")
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "60",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    record = await supervisor.supervise(
+        run_id="run-timeout-exit",
+        process=process,
+        timeout_seconds=1,
+        exit_code_path=str(exit_code_path),
+        cleanup_paths=[str(exit_code_path)],
+    )
+
+    assert record.status == "timed_out"
+    assert record.exit_code is None
+    assert not exit_code_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_cancel_terminates(supervisor_env):
     store, _, _, supervisor = supervisor_env
     _make_record(store, "run-1", "running")
@@ -126,6 +209,29 @@ async def test_cancel_terminates(supervisor_env):
     loaded = store.load("run-1")
     assert loaded.status == "cancelled"
     assert "run-1" not in supervisor._active_processes
+
+
+@pytest.mark.asyncio
+async def test_cancel_cleans_registered_runtime_files(supervisor_env, tmp_path):
+    store, _, _, supervisor = supervisor_env
+    _make_record(store, "run-cancel-cleanup", "running")
+    cleanup_path = tmp_path / "cleanup.target"
+    cleanup_path.write_text("keep", encoding="utf-8")
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "60",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    supervisor._active_processes["run-cancel-cleanup"] = process
+    supervisor._cleanup_paths["run-cancel-cleanup"] = (str(cleanup_path),)
+
+    await supervisor.cancel("run-cancel-cleanup")
+
+    loaded = store.load("run-cancel-cleanup")
+    assert loaded.status == "cancelled"
+    assert not cleanup_path.exists()
 
 
 @pytest.mark.asyncio
@@ -287,4 +393,3 @@ async def test_completion_callback_error_does_not_crash_supervisor(supervisor_en
         run_id="run-cb-err", process=process, timeout_seconds=30
     )
     assert record.status == "completed"
-
