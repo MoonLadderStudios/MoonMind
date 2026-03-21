@@ -1,10 +1,9 @@
 """Unit tests for RAG ContextInjectionService."""
 
 import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from moonmind.rag.context_injection import ContextInjectionService, PromptContextResolution
+from moonmind.rag.context_injection import ContextInjectionService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.rag.context_pack import ContextPack, ContextItem
 

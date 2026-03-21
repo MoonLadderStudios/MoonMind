@@ -113,7 +113,10 @@ class ContextInjectionService:
         transport = settings.resolved_transport(None)
 
         filters = settings.as_filter_metadata()
-        repo_filter = self._repository_filter_value(request.parameters.get("repository", ""))
+        repo_filter = self._repository_filter_value(
+            request.parameters.get("repository", "")
+            or request.workspace_spec.get("repository", "")
+        )
         if repo_filter:
             filters.setdefault("repo", repo_filter)
             filters.setdefault("repository", repo_filter)
@@ -147,7 +150,7 @@ class ContextInjectionService:
         instruction = request.instruction_ref or ""
         
         digest_input = f"{job_id}:{repo}:{instruction}".encode(
-            "utf-8", errors="ignore"
+            "utf-8", errors="replace"
         )
         digest = hashlib.sha256(digest_input).hexdigest()[:12]
         file_name = f"rag-context-{digest}.json"
