@@ -196,6 +196,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "oauth_session.ensure_volume": ("artifacts", "oauth_session_ensure_volume"),
     "oauth_session.update_status": ("artifacts", "oauth_session_update_status"),
     "oauth_session.mark_failed": ("artifacts", "oauth_session_mark_failed"),
+    "oauth_session.cleanup_stale": ("artifacts", "oauth_session_cleanup_stale"),
     "integration.jules.start": ("integrations", "integration_jules_start"),
     "integration.jules.status": ("integrations", "integration_jules_status"),
     "integration.jules.fetch_result": (
