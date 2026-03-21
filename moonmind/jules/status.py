@@ -35,7 +35,7 @@ _JULES_RUNNING_PROVIDER_STATUSES = frozenset(
     {"running", "in_progress", "in-progress", "processing"}
 )
 _JULES_AWAITING_FEEDBACK_PROVIDER_STATUSES = frozenset(
-    {"awaiting_user_feedback", "awaiting_plan_approval"}
+    {"awaiting_user_feedback"}
 )
 
 

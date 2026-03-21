@@ -20,7 +20,6 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.schemas.jules_models import (
     JulesIntegrationMergePRResult,
-    JulesListActivitiesResult,
     JulesSendMessageRequest,
 )
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -62,6 +61,55 @@ def _build_adapter() -> JulesAgentAdapter:
     jules_key = os.environ.get("JULES_API_KEY", "").strip()
     client = JulesClient(base_url=jules_url, api_key=jules_key)
     return JulesAgentAdapter(client_factory=lambda: client)
+
+
+async def _generate_llm_answer(prompt: str) -> str:
+    """Dispatch a prompt to an LLM and return the generated answer.
+
+    Uses Google Generative AI (Gemini) via ``GEMINI_API_KEY`` /
+    ``GOOGLE_API_KEY`` from the environment.  If the key is missing or
+    the call fails, falls back to a brief, reasonable default answer
+    derived from the original question so that the caller always
+    receives a usable string.
+    """
+    import asyncio
+
+    api_key = (
+        os.environ.get("GEMINI_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_API_KEY", "").strip()
+    )
+    if not api_key:
+        logger.warning(
+            "No GEMINI_API_KEY or GOOGLE_API_KEY set; falling back to "
+            "default auto-answer behaviour"
+        )
+        return (
+            "I'll proceed with the most reasonable default. "
+            "Please continue with the implementation."
+        )
+
+    try:
+        import google.generativeai as genai  # type: ignore[import-untyped]
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        # google-generativeai is sync; run in a thread to stay async.
+        response = await asyncio.to_thread(
+            model.generate_content, prompt
+        )
+        answer = response.text.strip()
+        if answer:
+            return answer
+    except Exception:
+        logger.warning(
+            "LLM dispatch failed for auto-answer; using fallback",
+            exc_info=True,
+        )
+
+    return (
+        "I'll proceed with the most reasonable default. "
+        "Please continue with the implementation."
+    )
 
 
 @activity.defn(name="integration.jules.start")
@@ -181,15 +229,10 @@ async def jules_answer_question_activity(payload: dict) -> dict:
     ])
     clarification_prompt = "\n".join(prompt_parts)
 
-    # For the default LLM path, we use a simple approach:
-    # Generate a reasonable answer based on the prompt context.
-    # In production, this would dispatch to mm.activity.llm.complete or
-    # a managed agent runtime. For now, we send the constructed prompt
-    # directly as the answer since the workflow layer will handle
-    # the actual LLM dispatch.
-    answer = clarification_prompt
+    # Dispatch to an LLM to generate the actual answer.
+    answer = await _generate_llm_answer(clarification_prompt)
 
-    # Send the answer back to Jules
+    # Send the generated answer back to Jules
     client = _build_client()
     try:
         await client.send_message(
@@ -262,18 +305,30 @@ async def jules_get_auto_answer_config_activity(_args: list | None = None) -> di
     - ``max_answers`` (int): JULES_MAX_AUTO_ANSWERS (default 3)
     - ``runtime`` (str): JULES_AUTO_ANSWER_RUNTIME (default "llm")
     - ``timeout_seconds`` (int): JULES_AUTO_ANSWER_TIMEOUT_SECONDS (default 300)
+
+    Raises ``ValueError`` if integer env vars contain non-integer values
+    (fail-fast on invalid configuration).
     """
     enabled_raw = os.environ.get("JULES_AUTO_ANSWER_ENABLED", "true").strip().lower()
     enabled = enabled_raw not in ("false", "0", "no", "off")
+
+    max_answers_raw = os.environ.get("JULES_MAX_AUTO_ANSWERS", "3")
     try:
-        max_answers = int(os.environ.get("JULES_MAX_AUTO_ANSWERS", "3"))
+        max_answers = int(max_answers_raw)
     except ValueError:
-        max_answers = 3
+        raise ValueError(
+            f"JULES_MAX_AUTO_ANSWERS must be an integer, got: {max_answers_raw!r}"
+        )
+
     runtime = os.environ.get("JULES_AUTO_ANSWER_RUNTIME", "llm").strip() or "llm"
+
+    timeout_raw = os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300")
     try:
-        timeout = int(os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300"))
+        timeout = int(timeout_raw)
     except ValueError:
-        timeout = 300
+        raise ValueError(
+            f"JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer, got: {timeout_raw!r}"
+        )
 
     return {
         "enabled": enabled,

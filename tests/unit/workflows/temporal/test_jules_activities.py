@@ -244,21 +244,26 @@ async def test_jules_list_activities_no_question(_patch_build_client):
 
 
 async def test_jules_answer_question_sends_answer(_patch_build_client):
-    """T020: answer_question orchestrates prompt → sendMessage."""
+    """T020: answer_question orchestrates prompt → LLM → sendMessage."""
     from moonmind.workflows.temporal.activities.jules_activities import (
         jules_answer_question_activity,
     )
 
     _patch_build_client.send_message = AsyncMock()
 
-    result = await jules_answer_question_activity({
-        "session_id": "ses-1",
-        "question": "Which branch?",
-        "task_context": "Fix bug in login",
-    })
+    with patch(
+        "moonmind.workflows.temporal.activities.jules_activities._generate_llm_answer",
+        new_callable=AsyncMock,
+        return_value="Use the main branch.",
+    ):
+        result = await jules_answer_question_activity({
+            "session_id": "ses-1",
+            "question": "Which branch?",
+            "task_context": "Fix bug in login",
+        })
     assert result["answered"] is True
     assert result["error"] is None
-    assert "Which branch?" in result["answer"]
+    assert result["answer"] == "Use the main branch."
     _patch_build_client.send_message.assert_awaited_once()
 
 
@@ -328,3 +333,23 @@ async def test_jules_get_auto_answer_config_custom_max():
     assert result["max_answers"] == 5
 
 
+async def test_jules_get_auto_answer_config_invalid_max_raises():
+    """get_auto_answer_config raises ValueError for non-integer JULES_MAX_AUTO_ANSWERS."""
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_get_auto_answer_config_activity,
+    )
+
+    with patch.dict("os.environ", {"JULES_MAX_AUTO_ANSWERS": "abc"}, clear=False):
+        with pytest.raises(ValueError, match="JULES_MAX_AUTO_ANSWERS must be an integer"):
+            await jules_get_auto_answer_config_activity()
+
+
+async def test_jules_get_auto_answer_config_invalid_timeout_raises():
+    """get_auto_answer_config raises ValueError for non-integer JULES_AUTO_ANSWER_TIMEOUT_SECONDS."""
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        jules_get_auto_answer_config_activity,
+    )
+
+    with patch.dict("os.environ", {"JULES_AUTO_ANSWER_TIMEOUT_SECONDS": "xyz"}, clear=False):
+        with pytest.raises(ValueError, match="JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer"):
+            await jules_get_auto_answer_config_activity()

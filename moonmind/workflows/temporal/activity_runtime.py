@@ -1939,6 +1939,7 @@ class TemporalIntegrationActivities:
     ) -> dict[str, Any]:
         """Orchestrate a full question-answer cycle for Jules."""
         from moonmind.schemas.jules_models import JulesSendMessageRequest
+        from moonmind.workflows.temporal.activities.jules_activities import _generate_llm_answer
 
         if not session_id or not question:
             return {"answered": False, "answer": "", "error": "Missing session_id or question"}
@@ -1956,7 +1957,10 @@ class TemporalIntegrationActivities:
             "choice, choose the most reasonable default and explain your reasoning briefly.",
             "Do not ask follow-up questions.",
         ])
-        answer = "\n".join(prompt_parts)
+        clarification_prompt = "\n".join(prompt_parts)
+
+        # Dispatch to an LLM to generate the actual answer.
+        answer = await _generate_llm_answer(clarification_prompt)
 
         client = self._client_factory()
         try:
@@ -1977,18 +1981,31 @@ class TemporalIntegrationActivities:
         self,
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        """Read auto-answer configuration from environment variables."""
+        """Read auto-answer configuration from environment variables.
+
+        Raises ``ValueError`` if integer env vars contain non-integer values.
+        """
         enabled_raw = os.environ.get("JULES_AUTO_ANSWER_ENABLED", "true").strip().lower()
         enabled = enabled_raw not in ("false", "0", "no", "off")
+
+        max_answers_raw = os.environ.get("JULES_MAX_AUTO_ANSWERS", "3")
         try:
-            max_answers = int(os.environ.get("JULES_MAX_AUTO_ANSWERS", "3"))
+            max_answers = int(max_answers_raw)
         except ValueError:
-            max_answers = 3
+            raise ValueError(
+                f"JULES_MAX_AUTO_ANSWERS must be an integer, got: {max_answers_raw!r}"
+            )
+
         runtime = os.environ.get("JULES_AUTO_ANSWER_RUNTIME", "llm").strip() or "llm"
+
+        timeout_raw = os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300")
         try:
-            timeout = int(os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300"))
+            timeout = int(timeout_raw)
         except ValueError:
-            timeout = 300
+            raise ValueError(
+                f"JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer, got: {timeout_raw!r}"
+            )
+
         return {
             "enabled": enabled,
             "max_answers": max_answers,

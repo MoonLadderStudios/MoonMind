@@ -38,7 +38,7 @@ class RunStatus:
 
 
 _TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out}
+    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out, "intervention_requested"}
 )
 
 _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
@@ -589,8 +589,18 @@ class MoonMindAgentRun:
 
                             if isinstance(handle_dict, dict) and "external_id" in handle_dict:
                                 status = handle_dict.get("normalized_status", "unknown")
-                                if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_feedback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
-                                    status = "running"
+                                _VALID_STATUSES = {"queued", "launching", "running", "awaiting_callback", "awaiting_feedback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}
+                                if status not in _VALID_STATUSES:
+                                    workflow.logger.warning(
+                                        "Unknown normalized_status %r from integration start; "
+                                        "treating as error",
+                                        status,
+                                    )
+                                    raise ApplicationError(
+                                        f"Unsupported normalized_status from integration start: {status!r}",
+                                        type="UnsupportedStatus",
+                                        non_retryable=True,
+                                    )
                                 handle = AgentRunHandle(
                                     runId=handle_dict["external_id"],
                                     agentKind="external",
@@ -705,7 +715,7 @@ class MoonMindAgentRun:
                                 # Extract the question
                                 activities_result = await workflow.execute_activity(
                                     "integration.jules.list_activities",
-                                    self.run_id,
+                                    {"session_id": self.run_id},
                                     task_queue=INTEGRATIONS_TASK_QUEUE,
                                     start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
