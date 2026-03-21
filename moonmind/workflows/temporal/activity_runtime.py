@@ -2202,14 +2202,78 @@ class TemporalProposalActivities:
         request: Mapping[str, Any] | None = None,
         /,
     ) -> list[dict[str, Any]]:
-        """Analyze execution artifacts and produce candidate proposals.
+        """Analyze execution context and produce candidate follow-up proposals.
 
-        Currently a stub returning an empty candidate array.
-        Future implementation will use LLM activities to analyze
-        step-level ``AgentRunResult`` data, execution artifacts,
-        and run diagnostics to produce structured proposals.
+        Generates structured proposal candidates from the workflow's
+        ``initialParameters`` (passed via the *request* payload by
+        ``_run_proposals_stage``).  Each candidate matches the schema
+        consumed by ``proposal_submit``: ``title``, ``summary``,
+        ``category``, ``tags``, and ``taskCreateRequest``.
+
+        Returns an empty list when insufficient context is available to
+        produce a meaningful proposal (e.g. missing instructions).
         """
-        return []
+        payload = dict(request or {})
+        parameters: dict[str, Any] = payload.get("parameters") or {}
+        repo = str(payload.get("repo") or parameters.get("repository") or "").strip()
+        workflow_id = str(payload.get("workflow_id") or "").strip()
+
+        # Extract instructions from the task payload or top-level parameters.
+        task_node = parameters.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        instructions = str(
+            task.get("instructions") or parameters.get("instructions") or ""
+        ).strip()
+
+        if not instructions:
+            # Without instructions there is not enough context to derive a
+            # meaningful follow-up proposal.
+            return []
+
+        # Derive a concise title from the first line of instructions.
+        first_line = instructions.splitlines()[0].strip()
+        title_prefix = "Follow-up: "
+        max_title_len = 200
+        title_body = first_line[: max_title_len - len(title_prefix)]
+        title = f"{title_prefix}{title_body}"
+
+        summary = (
+            f"Automatic follow-up proposal generated from workflow {workflow_id}. "
+            f"Original instructions: {instructions[:500]}"
+        )
+
+        # Reconstruct a task-create request envelope from the original
+        # execution context so that the proposal can be promoted to a
+        # queued task with one click.
+        runtime_node = task.get("runtime")
+        runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
+        git_node = task.get("git")
+        git = dict(git_node) if isinstance(git_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
+
+        task_create_request: dict[str, Any] = {
+            "type": "task",
+            "payload": {
+                "repository": repo,
+                "task": {
+                    "instructions": instructions,
+                    "runtime": runtime,
+                    "git": git,
+                    "publish": publish,
+                },
+            },
+        }
+
+        candidate: dict[str, Any] = {
+            "title": title,
+            "summary": summary,
+            "category": "follow_up",
+            "tags": ["auto-generated", "follow-up"],
+            "taskCreateRequest": task_create_request,
+        }
+
+        return [candidate]
 
     async def proposal_submit(
         self,
