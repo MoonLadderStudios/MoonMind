@@ -102,7 +102,7 @@ Resumed workflows seamlessly handoff or continue on newly upgraded workers holdi
 
 ### 6.2 External Agents
 
-For external agents (e.g., Jules), the pause mechanism behaves differently. We do not attempt to stop or interrupt the external agent's active process. Instead, the pause simply impacts the next Temporal workflow execution. This means we gracefully halt by not sending any further steps to the external agent until the system is resumed.
+For external agents (e.g., Jules), the pause mechanism behaves differently. External agent processes are not interrupted or canceled by a system pause. "Pause" (as currently implemented) primarily blocks new workflow submissions and relies on worker drain to stop further orchestration. Because the current code does not gate each individual step on the pause flag, in-flight workflows may still dispatch additional steps to external agents until the worker finishes draining.
 
 ---
 
