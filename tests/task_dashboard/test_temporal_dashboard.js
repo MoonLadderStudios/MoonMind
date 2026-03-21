@@ -299,3 +299,55 @@ const helpers = loadTemporalHelpers();
   const activeSlice = html.slice(Math.max(0, activeIdx - 100), activeIdx + 100);
   assert(activeSlice.includes('display:none'), "Active container should be hidden by default");
 })();
+
+(function testToTemporalRowsExtractsRuntimeModeFromTargetRuntime() {
+  const rows = helpers.toTemporalRows([
+    {
+      workflowId: "mm:rt-camel",
+      state: "executing",
+      targetRuntime: "codex",
+      startedAt: "2026-03-20T10:00:00Z",
+    },
+  ]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].runtimeMode, "codex", "should extract runtimeMode from targetRuntime (camelCase)");
+})();
+
+(function testToTemporalRowsExtractsRuntimeModeFromSnakeCaseTargetRuntime() {
+  const rows = helpers.toTemporalRows([
+    {
+      workflowId: "mm:rt-snake",
+      state: "executing",
+      target_runtime: "gemini_cli",
+      startedAt: "2026-03-20T10:00:00Z",
+    },
+  ]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].runtimeMode, "gemini_cli", "should extract runtimeMode from target_runtime (snake_case)");
+})();
+
+(function testToTemporalRowsRuntimeModeDefaultsToNullWhenMissing() {
+  const rows = helpers.toTemporalRows([
+    {
+      workflowId: "mm:rt-none",
+      state: "executing",
+      startedAt: "2026-03-20T10:00:00Z",
+    },
+  ]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].runtimeMode, null, "should default runtimeMode to null when neither property exists");
+})();
+
+(function testToTemporalRowsTargetRuntimeTakesPrecedenceOverSnakeCase() {
+  const rows = helpers.toTemporalRows([
+    {
+      workflowId: "mm:rt-both",
+      state: "executing",
+      targetRuntime: "codex",
+      target_runtime: "gemini_cli",
+      startedAt: "2026-03-20T10:00:00Z",
+    },
+  ]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].runtimeMode, "codex", "targetRuntime (camelCase) should take precedence");
+})();
