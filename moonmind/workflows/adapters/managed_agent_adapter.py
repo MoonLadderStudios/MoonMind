@@ -233,8 +233,16 @@ class ManagedAgentAdapter:
         )
         profile_id: str = profile["profile_id"]
         runtime_for_profile = self._runtime_id or request.agent_id
+
+        # --- Strategy delegation for defaults (Phase 1) ---
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+        _strategy = get_strategy(runtime_for_profile)
+
         default_auth = (
-            "oauth" if runtime_for_profile == "cursor_cli" else "api_key"
+            _strategy.default_auth_mode
+            if _strategy is not None
+            else ("oauth" if runtime_for_profile == "cursor_cli" else "api_key")
         )
         auth_mode: str = profile.get("auth_mode", default_auth)
 
@@ -283,7 +291,9 @@ class ManagedAgentAdapter:
             runtime_id_for_profile = self._runtime_id or request.agent_id
             cmd_template = profile.get("command_template")
             if not cmd_template:
-                if runtime_id_for_profile == "gemini_cli":
+                if _strategy is not None:
+                    cmd_template = list(_strategy.default_command_template)
+                elif runtime_id_for_profile == "gemini_cli":
                     cmd_template = ["gemini"]
                 elif runtime_id_for_profile == "claude_code":
                     cmd_template = ["claude"]
