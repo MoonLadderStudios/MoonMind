@@ -114,6 +114,19 @@ def test_shape_environment_for_oauth_without_mount_path():
     assert "GEMINI_API_KEY" not in shaped
 
 
+def test_shape_environment_for_oauth_preserves_github_cli_tokens():
+    base = {
+        "HOME": "/home/user",
+        "GH_TOKEN": "ghp-token",
+        "GITHUB_TOKEN": "github-token",
+        "OPENAI_API_KEY": "secret",
+    }
+    shaped = _shape_environment_for_oauth(base, volume_mount_path=None)
+    assert shaped["GH_TOKEN"] == "ghp-token"
+    assert shaped["GITHUB_TOKEN"] == "github-token"
+    assert "OPENAI_API_KEY" not in shaped
+
+
 def test_shape_environment_for_api_key_sets_ref():
     base = {"HOME": "/home/user"}
     shaped = _shape_environment_for_api_key(
@@ -195,6 +208,66 @@ async def test_resolve_profile_auto_picks_first():
     )
     handle = await adapter.start(request)
     assert handle.metadata["profile_id"] == "first"
+
+
+async def test_start_preserves_github_tokens_in_launch_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profiles = [
+        {
+            "profile_id": "oauth-prof",
+            "auth_mode": "oauth",
+            "volume_mount_path": "/mnt/auth",
+            "command_template": ["gemini"],
+        }
+    ]
+    captured_payload: dict[str, Any] = {}
+
+    async def _run_launcher(**kwargs: Any):
+        payload = kwargs.get("payload")
+        if isinstance(payload, dict):
+            captured_payload.update(payload)
+        return {"status": "launching"}
+
+    monkeypatch.setenv("GH_TOKEN", "ghp-direct")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
+    monkeypatch.setenv("OPENAI_API_KEY", "should-not-leak")
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-gh-token",
+        run_launcher=_run_launcher,
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        executionProfileRef="oauth-prof",
+        correlationId="corr-gh",
+        idempotencyKey="idem-gh",
+    )
+    await adapter.start(request)
+
+    profile_payload = (
+        captured_payload.get("profile")
+        if isinstance(captured_payload.get("profile"), dict)
+        else {}
+    )
+    env_overrides = (
+        profile_payload.get("env_overrides")
+        if isinstance(profile_payload.get("env_overrides"), dict)
+        else profile_payload.get("envOverrides")
+        if isinstance(profile_payload.get("envOverrides"), dict)
+        else {}
+    )
+    assert env_overrides["GH_TOKEN"] == "ghp-direct"
+    assert env_overrides["GITHUB_TOKEN"] == "ghp-legacy"
+    assert "OPENAI_API_KEY" not in env_overrides
 
 
 async def test_resolve_profile_raises_when_not_found():
@@ -558,4 +631,3 @@ async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     # Non-terminal: should return default empty result
     assert result.failure_class is None
     assert result.output_refs == []
-

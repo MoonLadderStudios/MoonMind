@@ -10,6 +10,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     AgentRunStatus,
     ManagedAgentAuthProfile,
+    ManagedRuntimeProfile,
     is_terminal_agent_run_state,
 )
 
@@ -85,3 +86,26 @@ def test_managed_agent_auth_profile_accepts_valid_per_profile_limits() -> None:
     )
     assert profile.max_parallel_runs == 2
     assert profile.cooldown_after_429 == 120
+
+
+def test_managed_runtime_profile_allows_github_cli_tokens_in_env_overrides() -> None:
+    profile = ManagedRuntimeProfile(
+        profileId="gemini_oauth_profile",
+        runtimeId="gemini_cli",
+        commandTemplate=["gemini"],
+        envOverrides={"GH_TOKEN": "ghp-1", "GITHUB_TOKEN": "ghp-2"},
+    )
+    assert profile.env_overrides["GH_TOKEN"] == "ghp-1"
+    assert profile.env_overrides["GITHUB_TOKEN"] == "ghp-2"
+
+
+def test_managed_runtime_profile_rejects_other_sensitive_env_override_keys() -> None:
+    with pytest.raises(
+        ValidationError, match="envOverrides must not contain raw credential keys"
+    ):
+        ManagedRuntimeProfile(
+            profileId="gemini_oauth_profile",
+            runtimeId="gemini_cli",
+            commandTemplate=["gemini"],
+            envOverrides={"OPENAI_API_KEY": "secret"},
+        )
