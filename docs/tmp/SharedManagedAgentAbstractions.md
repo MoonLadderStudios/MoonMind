@@ -57,7 +57,7 @@ class ManagedRuntimeStrategy(ABC):
 
 ### 3. Output/Stream Parsing
 
-Right now, different CLIs output differently (e.g., Cursor CLI has `--output-format stream-json`, Claude Code has `--output-format json`). The interpretation of success/failure (Exit Code Mapping) and the parsing of streams to MoonMind logs should be standardized. A strategy could define how to parse the CLI's standard output/error into canonical MoonMind events.
+Right now, different CLIs output differently (e.g., Cursor CLI is currently invoked with `--output-format stream-json`; Claude Code supports `--output-format json` (not currently enforced by the launcher unless included in the runtime profile's `command_template`)). The interpretation of success/failure (Exit Code Mapping) and the parsing of streams to MoonMind logs should be standardized. A strategy could define how to parse the CLI's standard output/error into canonical MoonMind events.
 
 ```python
 class ManagedRuntimeStrategy(ABC):
@@ -96,7 +96,9 @@ RUNTIME_STRATEGIES: dict[str, ManagedRuntimeStrategy] = {
 The launcher would simply look up the strategy:
 
 ```python
-strategy = RUNTIME_STRATEGIES.get(profile.runtime_id, DefaultStrategy())
+strategy = RUNTIME_STRATEGIES.get(profile.runtime_id)
+if strategy is None:
+    raise ValueError(f"Unsupported runtime: '{profile.runtime_id}'")
 cmd = strategy.build_command(profile, request)
 ```
 
