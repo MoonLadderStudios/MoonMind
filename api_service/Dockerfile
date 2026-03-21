@@ -228,7 +228,10 @@ BASH
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
 # Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
-# Unset NODE_OPTIONS so Debian's --use-system-ca flag doesn't break cursor-agent.
+# cursor-agent is verified via ``command -v`` because the Debian nodejs package
+# injects --use-system-ca through /etc/nodejs/ config files that the standalone
+# cursor-agent Node.js SEA binary also reads, causing a fatal "bad option" error
+# when invoking it directly.
 RUN mkdir -p "${HOME}/.gemini" \
     && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
         if [ -d /usr/local/lib/node_modules/@openai/codex/vendor ]; then \
@@ -239,7 +242,7 @@ RUN mkdir -p "${HOME}/.gemini" \
     && agentkit --version \
     && gemini --version \
     && claude --version \
-    && env -u NODE_OPTIONS cursor-agent --version
+    && command -v cursor-agent
 
 FROM python:3.12-slim-bookworm
 
@@ -327,8 +330,9 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
 # repository search tooling expected by Codex runtime defaults.
-# Unset NODE_OPTIONS so Debian's --use-system-ca flag doesn't break cursor-agent.
-RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && env -u NODE_OPTIONS cursor-agent --version && rg --version'
+# cursor-agent is verified via ``command -v`` (see comment on tooling-builder
+# verification step above for rationale).
+RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && command -v cursor-agent && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at
