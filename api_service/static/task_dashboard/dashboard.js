@@ -3319,7 +3319,7 @@
           "",
         ).trim(),
         queueName: "-",
-        runtimeMode: null,
+        runtimeMode: pick(item, "targetRuntime", "target_runtime") || null,
         skillId: null,
         rawStatus: rawState,
         rawState,
