@@ -15,6 +15,12 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from pr_resolve_contract import EXIT_CODE_FAILED
+
 _RUNNING_CHECK_STATES = {"IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "REQUESTED"}
 _FAILURE_CHECK_STATES = {
     "FAILURE",
@@ -199,7 +205,7 @@ def _discover_pr_number_from_head_branch(branch: str) -> str | None:
             "pr",
             "list",
             "--state",
-            "open",
+            "all",
             "--head",
             branch,
             "--json",
@@ -601,7 +607,7 @@ def main():
         if detail_lines:
             message = f"{message}\n{detail_lines}"
         print(message, file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_FAILED)
 
     pr_repo = infer_repo_from_pr_url(pr_data.get("url"))
     if not pr_repo:

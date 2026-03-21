@@ -24,6 +24,8 @@ FINALIZE_ONLY_RETRY_REASONS = {
 NON_RETRYABLE_REASONS = {
     "comment_policy_not_enforced",
     "merge_not_ready",
+    "pr_not_found",
+    "already_merged",
 }
 
 EXIT_CODE_MERGED = 0

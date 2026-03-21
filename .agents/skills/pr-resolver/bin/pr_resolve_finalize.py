@@ -60,6 +60,9 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         else {}
     )
 
+    if normalize_text(pr.get("state")).upper() == "MERGED":
+        return {"action": "already_merged", "reason": "already_merged"}
+
     if not bool(comments_fetch.get("succeeded")):
         return {"action": "blocked", "reason": "comments_unavailable"}
     if comments_summary.get("includeBotReviewComments") is not True:
@@ -192,7 +195,19 @@ def main() -> None:
         if not args.skip_refresh:
             try:
                 _run_snapshot(snapshot_script, args.pr, snapshot_path)
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode == EXIT_CODE_FAILED:
+                    _write_result(
+                        result_path,
+                        snapshot={"pr": {}},
+                        decision="failed",
+                        merge_outcome="failed",
+                        status="failed",
+                        reason="pr_not_found",
+                    )
+                    print(f"Failed: pr_not_found\n{exc.stderr}", file=sys.stderr)
+                    sys.exit(EXIT_CODE_FAILED if args.strict_exit_codes else 0)
+                
                 # Snapshot refresh can fail transiently (network/auth/API blips).
                 # Treat as blocked so orchestrate can retry with backoff.
                 _write_result(
@@ -203,7 +218,7 @@ def main() -> None:
                     status="blocked",
                     reason="snapshot_refresh_failed",
                 )
-                print("Blocked: snapshot_refresh_failed")
+                print(f"Blocked: snapshot_refresh_failed\n{exc.stderr}", file=sys.stderr)
                 sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
         snapshot = _read_snapshot(snapshot_path)
         decision = evaluate_finalize_action(snapshot)
@@ -215,6 +230,18 @@ def main() -> None:
 
         action = decision["action"]
         reason = decision["reason"]
+
+        if action == "already_merged":
+            _write_result(
+                result_path,
+                snapshot=snapshot,
+                decision="already merged",
+                merge_outcome="merged",
+                status="merged",
+                reason=reason,
+            )
+            print("PR is already merged.")
+            sys.exit(EXIT_CODE_MERGED)
 
         if action == "merge_now":
             if args.dry_run:
