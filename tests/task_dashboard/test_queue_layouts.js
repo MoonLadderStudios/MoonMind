@@ -153,7 +153,6 @@ function createProposalRow(overrides = {}) {
 (function testQueueFieldDefinitionsProvideSingleSourceOfTruth() {
   const keys = queueFieldDefinitions.map((definition) => definition.key);
   const expectedKeys = [
-    "finishOutcome",
     "runtimeMode",
     "skillId",
     "createdAt",
@@ -163,7 +162,6 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(keys.length, expectedKeys.length);
   assert.strictEqual(keys.join(","), expectedKeys.join(","));
   const labels = queueFieldDefinitions.map((definition) => definition.label);
-  assert(labels.includes("Outcome"));
   assert(labels.includes("Finished"));
   const rendered = renderQueueFieldValue(
     {

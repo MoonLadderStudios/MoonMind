@@ -2505,18 +2505,6 @@
   // fields") and add tests that exercise the new label/value pairs.
   const queueFieldDefinitions = [
     {
-      key: "finishOutcome",
-      label: "Outcome",
-      render: (row) => {
-        const stage = String(row.finishOutcomeStage || "").trim();
-        const reason = String(row.finishOutcomeReason || "").trim();
-        const tooltipParts = [stage, reason].filter(Boolean);
-        const title = tooltipParts.length ? ` title="${escapeHtml(tooltipParts.join(" | "))}"` : "";
-        return `<span${title}>${finishOutcomeBadge(row.finishOutcomeCode)}</span>`;
-      },
-      tableSection: "primary",
-    },
-    {
       key: "runtimeMode",
       label: "Runtime",
       render: (row) => renderRuntime(row.runtimeMode),
@@ -3320,8 +3308,16 @@
           "",
         ).trim(),
         queueName: "-",
-        runtimeMode: pick(item, "targetRuntime", "target_runtime") || null,
-        skillId: null,
+        runtimeMode: String([
+          pick(item, "targetRuntime", "target_runtime", "runtime"),
+          pick(searchAttributes, "mm_target_runtime", "mm_runtime", "runtime"),
+          pick(memo, "targetRuntime", "runtime"),
+        ].find(v => v != null) || "").trim() || null,
+        skillId: String([
+          pick(item, "targetSkill", "target_skill", "skillId", "skill_id", "skill"),
+          pick(searchAttributes, "mm_target_skill", "mm_skill_id", "mm_skill", "skillId", "skill"),
+          pick(memo, "targetSkill", "skillId", "skill"),
+        ].find(v => v != null) || "").trim() || null,
         rawStatus: rawState,
         rawState,
         temporalStatus: pick(item, "temporalStatus") || "",
