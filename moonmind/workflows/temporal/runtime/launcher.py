@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shlex
 import shutil
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ from moonmind.schemas.agent_runtime_models import (
 
 from .store import ManagedRunStore
 
+_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
 
 class ManagedRuntimeLauncher:
     """Spawns managed agent subprocesses and records them in the run store."""
@@ -25,6 +28,136 @@ class ManagedRuntimeLauncher:
     def __init__(self, store: ManagedRunStore) -> None:
         self._store = store
         self._logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
+        if not isinstance(workspace_spec, dict):
+            return None
+        for key in ("newBranch", "startingBranch", "branch"):
+            value = workspace_spec.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _normalize_clone_source(repo_ref: str) -> str | None:
+        normalized = str(repo_ref or "").strip()
+        if not normalized:
+            return None
+        if normalized.startswith(("http://", "https://", "git@", "file://")):
+            return normalized
+        if _OWNER_REPO_PATTERN.fullmatch(normalized):
+            return f"https://github.com/{normalized}.git"
+
+        repo_path = Path(normalized).expanduser()
+        if repo_path.exists():
+            return str(repo_path.resolve())
+        return None
+
+    @staticmethod
+    def _workspace_root() -> Path:
+        root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        return Path(root).resolve() / "workspaces"
+
+    def _find_existing_workspace_repo(self, *, exclude_run_id: str) -> str | None:
+        workspace_root = self._workspace_root()
+        if not workspace_root.exists():
+            return None
+
+        candidates: list[Path] = []
+        for child in workspace_root.iterdir():
+            if not child.is_dir() or child.name == exclude_run_id:
+                continue
+            repo_dir = child / "repo"
+            if (repo_dir / ".git").exists():
+                candidates.append(repo_dir)
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return str(candidates[0])
+
+    async def _run_git_command(
+        self,
+        args: list[str],
+        *,
+        allow_failure: bool = False,
+    ) -> bool:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode == 0:
+            return True
+
+        self._logger.warning(
+            "git %s failed rc=%s stdout=%s stderr=%s",
+            " ".join(args),
+            process.returncode,
+            stdout.decode("utf-8", errors="replace").strip()[:400],
+            stderr.decode("utf-8", errors="replace").strip()[:400],
+        )
+        if allow_failure:
+            return False
+        raise RuntimeError(f"git {' '.join(args)} failed with exit code {process.returncode}")
+
+    async def _prepare_workspace(
+        self,
+        *,
+        run_id: str,
+        request: AgentExecutionRequest,
+        workspace_path: str | None,
+    ) -> str | None:
+        if workspace_path:
+            return workspace_path
+
+        workspace_root = self._workspace_root()
+        run_workspace = workspace_root / run_id / "repo"
+        if run_workspace.exists():
+            return str(run_workspace)
+
+        workspace_spec = (
+            request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
+        )
+        repo_ref = workspace_spec.get("repository") or workspace_spec.get("repo")
+        clone_source = (
+            self._normalize_clone_source(str(repo_ref))
+            if isinstance(repo_ref, str)
+            else None
+        )
+        if clone_source is None:
+            clone_source = self._find_existing_workspace_repo(exclude_run_id=run_id)
+        if clone_source is None:
+            return None
+
+        run_workspace.parent.mkdir(parents=True, exist_ok=True)
+        branch = self._extract_workspace_branch(workspace_spec)
+        clone_args: list[str] = ["clone"]
+        if branch and not Path(clone_source).exists():
+            clone_args.extend(["--branch", branch, "--single-branch"])
+        clone_args.extend(["--", clone_source, str(run_workspace)])
+        cloned = await self._run_git_command(clone_args, allow_failure=True)
+        if not cloned:
+            return None
+
+        if branch:
+            checkout_ok = await self._run_git_command(
+                ["-C", str(run_workspace), "checkout", branch],
+                allow_failure=True,
+            )
+            if not checkout_ok:
+                await self._run_git_command(
+                    ["-C", str(run_workspace), "fetch", "origin", branch],
+                    allow_failure=True,
+                )
+                await self._run_git_command(
+                    ["-C", str(run_workspace), "checkout", "-B", branch, f"origin/{branch}"],
+                    allow_failure=True,
+                )
+        return str(run_workspace)
 
     @staticmethod
     def _build_tmate_wrapper_script(
@@ -98,6 +231,11 @@ class ManagedRuntimeLauncher:
             )
 
         cmd = self.build_command(profile, request)
+        workspace_path = await self._prepare_workspace(
+            run_id=run_id,
+            request=request,
+            workspace_path=workspace_path,
+        )
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(os.environ)
         
         # Ensure HOME and GEMINI_HOME are set for gemini cli

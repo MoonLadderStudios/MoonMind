@@ -1,4 +1,5 @@
 import shutil
+import subprocess
 
 import pytest
 
@@ -140,3 +141,42 @@ async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
         await launcher.launch(
             run_id="run-1", request=request, profile=profile
         )
+
+
+@pytest.mark.asyncio
+async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+
+    existing_repo = tmp_path / "workspaces" / "existing-run" / "repo"
+    existing_repo.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init"],
+        cwd=existing_repo,
+        check=True,
+        capture_output=True,
+    )
+    (existing_repo / "README.md").write_text("workspace seed\n", encoding="utf-8")
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        command_template=["pwd"],
+        default_model=None,
+        default_effort=None,
+    )
+    request = _make_request(
+        workspace_spec={"newBranch": "chore/update-pause-system-docs-16784273446666462405"}
+    )
+
+    record, process, _endpoints = await launcher.launch(
+        run_id="run-2",
+        request=request,
+        profile=profile,
+    )
+    stdout, _stderr = await process.communicate()
+
+    expected_workspace = tmp_path / "workspaces" / "run-2" / "repo"
+    assert record.workspace_path == str(expected_workspace)
+    assert expected_workspace.exists()
+    assert str(expected_workspace) in stdout.decode("utf-8", errors="replace")

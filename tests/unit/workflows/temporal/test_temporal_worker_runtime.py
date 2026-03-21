@@ -131,7 +131,11 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_build_bindings,
     mock_build_deps,
 ):
-    mock_build_deps.return_value = (MagicMock(), MagicMock(), MagicMock())
+    run_store = MagicMock()
+    run_supervisor = MagicMock()
+    run_supervisor.reconcile = AsyncMock(return_value=[])
+    run_launcher = MagicMock()
+    mock_build_deps.return_value = (run_store, run_supervisor, run_launcher)
     @asynccontextmanager
     async def _fake_session_context():
         yield "session"
@@ -173,6 +177,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         run_supervisor=ANY,
         run_launcher=ANY,
     )
+    run_supervisor.reconcile.assert_awaited_once()
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(
         dispatcher=mock_dispatcher_cls.return_value,
