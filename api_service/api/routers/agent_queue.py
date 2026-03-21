@@ -777,22 +777,29 @@ async def create_job(
     )
 
     if target == "temporal":
-        if payload.type == MANIFEST_JOB_TYPE:
-            from api_service.api.routers.executions import (
-                _create_execution_from_manifest_request,
-            )
+        try:
+            if payload.type == MANIFEST_JOB_TYPE:
+                from api_service.api.routers.executions import (
+                    _create_execution_from_manifest_request,
+                )
 
-            execution = await _create_execution_from_manifest_request(
-                request=payload,
-                service=temporal_service,
-                user=user,
-            )
-        else:
-            execution = await _create_execution_from_task_request(
-                request=payload,
-                service=temporal_service,
-                user=user,
-            )
+                execution = await _create_execution_from_manifest_request(
+                    request=payload,
+                    service=temporal_service,
+                    user=user,
+                )
+            else:
+                execution = await _create_execution_from_task_request(
+                    request=payload,
+                    service=temporal_service,
+                    user=user,
+                )
+        except HTTPException:
+            raise
+        except AgentQueueValidationError as exc:
+            raise _to_http_exception(exc) from exc
+        except Exception as exc:  # pragma: no cover
+            raise _to_http_exception(exc) from exc
 
         import uuid
 
@@ -1289,7 +1296,16 @@ async def claim_job(
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
 ) -> ClaimJobResponse:
-    """Claim the next eligible job for a worker."""
+    """Claim the next eligible job for a worker.
+
+    .. deprecated::
+        Queue-based job claiming is deprecated. Temporal workers poll native
+        task queues directly and do not use this endpoint.
+    """
+    logger.warning(
+        "Deprecated queue endpoint called: /jobs/claim — "
+        "Temporal workers should poll native task queues instead."
+    )
 
     try:
         _ensure_worker_identity(payload.worker_id, worker_auth)
@@ -1330,7 +1346,17 @@ async def heartbeat_job(
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
 ) -> JobModel:
-    """Extend lease for a running job."""
+    """Extend lease for a running job.
+
+    .. deprecated::
+        Queue-based heartbeat is deprecated. Temporal activities heartbeat
+        natively via the Temporal SDK.
+    """
+    logger.warning(
+        "Deprecated queue endpoint called: /jobs/%s/heartbeat — "
+        "Temporal activities heartbeat natively.",
+        job_id,
+    )
 
     try:
         _ensure_worker_identity(payload.worker_id, worker_auth)
@@ -1477,7 +1503,17 @@ async def complete_job(
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
 ) -> JobModel:
-    """Mark a running job as completed."""
+    """Mark a running job as completed.
+
+    .. deprecated::
+        Queue-based completion is deprecated. Temporal workflows complete
+        via activity return values.
+    """
+    logger.warning(
+        "Deprecated queue endpoint called: /jobs/%s/complete — "
+        "Temporal workflows complete via activity return.",
+        job_id,
+    )
 
     try:
         _ensure_worker_identity(payload.worker_id, worker_auth)
@@ -1503,7 +1539,17 @@ async def fail_job(
     service: AgentQueueService = Depends(_get_service),
     worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
 ) -> JobModel:
-    """Mark a running job as failed."""
+    """Mark a running job as failed.
+
+    .. deprecated::
+        Queue-based failure reporting is deprecated. Temporal activities
+        raise exceptions for failure handling.
+    """
+    logger.warning(
+        "Deprecated queue endpoint called: /jobs/%s/fail — "
+        "Temporal activities raise exceptions for failure.",
+        job_id,
+    )
 
     try:
         _ensure_worker_identity(payload.worker_id, worker_auth)
@@ -1579,7 +1625,17 @@ async def recover_job(
     service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecoverJobResponse:
-    """Cancel a stuck job and optionally clone a replacement."""
+    """Cancel a stuck job and optionally clone a replacement.
+
+    .. deprecated::
+        Queue-based job recovery is deprecated. Temporal has built-in
+        retry and timeout policies.
+    """
+    logger.warning(
+        "Deprecated queue endpoint called: /jobs/%s/recover — "
+        "Temporal has built-in retry and timeout policies.",
+        job_id,
+    )
 
     try:
         recovered, cloned = await service.recover_job(

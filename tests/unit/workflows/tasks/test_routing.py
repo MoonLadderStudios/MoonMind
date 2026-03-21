@@ -6,34 +6,42 @@ from moonmind.config.settings import settings
 from moonmind.workflows.tasks.routing import get_routing_target_for_task
 
 
+# --- T004: Always returns "temporal" when submit_enabled=True ---
+
+
 @pytest.mark.parametrize(
-    ("submit_enabled", "expected"),
+    ("is_manifest", "is_run"),
     [
-        (False, "queue"),
-        (True, "temporal"),
+        (True, False),
+        (False, True),
+        (False, False),
+        (True, True),
     ],
+    ids=["manifest", "run", "default", "both"],
 )
-def test_manifest_routing_follows_submit_flag(
+def test_routing_always_returns_temporal(
     monkeypatch: pytest.MonkeyPatch,
-    submit_enabled: bool,
-    expected: str,
+    is_manifest: bool,
+    is_run: bool,
 ) -> None:
+    """All task types route to Temporal when submit is enabled."""
     monkeypatch.setattr(
         settings.temporal_dashboard,
         "submit_enabled",
-        submit_enabled,
+        True,
         raising=False,
     )
+    assert (
+        get_routing_target_for_task(is_manifest=is_manifest, is_run=is_run)
+        == "temporal"
+    )
 
-    assert get_routing_target_for_task(is_manifest=True) == expected
 
-
-def test_run_routing_uses_temporal_when_proposals_requested(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True, raising=False)
-
+def test_routing_ignores_task_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """task_payload is accepted for API stability but has no effect."""
+    monkeypatch.setattr(
+        settings.temporal_dashboard, "submit_enabled", True, raising=False
+    )
     assert (
         get_routing_target_for_task(
             is_run=True,
@@ -44,21 +52,6 @@ def test_run_routing_uses_temporal_when_proposals_requested(
     assert (
         get_routing_target_for_task(
             is_run=True,
-            task_payload={"task": {"proposeTasks": "yes"}},
-        )
-        == "temporal"
-    )
-
-
-def test_run_routing_prefers_temporal_when_proposals_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True, raising=False)
-
-    assert (
-        get_routing_target_for_task(
-            is_run=True,
             task_payload={"task": {"proposeTasks": False}},
         )
         == "temporal"
@@ -66,24 +59,52 @@ def test_run_routing_prefers_temporal_when_proposals_disabled(
     assert (
         get_routing_target_for_task(
             is_run=True,
-            task_payload={"task": {"proposeTasks": "off"}},
+            task_payload=None,
         )
         == "temporal"
     )
 
 
-def test_run_routing_uses_default_proposal_flag_when_missing(
+# --- T005: Raises ValueError when submit_enabled=False ---
+
+
+def test_routing_raises_when_submit_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", True, raising=False)
-    assert get_routing_target_for_task(is_run=True, task_payload={"task": {}}) == "temporal"
-
-    monkeypatch.setattr(settings.workflow, "enable_task_proposals", False, raising=False)
-    assert (
-        get_routing_target_for_task(
-            is_run=True,
-            task_payload={"task": {}},
-        )
-        == "temporal"
+    """submit_enabled=False must fail fast, not fall back to queue."""
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "submit_enabled",
+        False,
+        raising=False,
     )
+    with pytest.raises(ValueError, match="legacy queue.*no longer supported"):
+        get_routing_target_for_task(is_manifest=True)
+
+
+def test_routing_raises_for_run_when_submit_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run submissions also fail fast when submit disabled."""
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "submit_enabled",
+        False,
+        raising=False,
+    )
+    with pytest.raises(ValueError, match="legacy queue.*no longer supported"):
+        get_routing_target_for_task(is_run=True)
+
+
+def test_routing_raises_for_default_when_submit_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even default routing (no manifest/run flags) fails fast."""
+    monkeypatch.setattr(
+        settings.temporal_dashboard,
+        "submit_enabled",
+        False,
+        raising=False,
+    )
+    with pytest.raises(ValueError, match="legacy queue.*no longer supported"):
+        get_routing_target_for_task()

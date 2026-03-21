@@ -214,7 +214,7 @@ def _build_control_event(task_run_id):
 @pytest.fixture
 def client(monkeypatch) -> Iterator[tuple[TestClient, AsyncMock]]:
     """Provide a TestClient with queue service dependency overridden."""
-    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
 
     app = FastAPI()
     app.include_router(router)
@@ -292,29 +292,43 @@ def superuser_client() -> Iterator[tuple[TestClient, AsyncMock]]:
     app.dependency_overrides.clear()
 
 
-def test_create_job_success(client: tuple[TestClient, AsyncMock]) -> None:
-    """POST /jobs should return created job payload."""
+def test_create_job_success(
+    client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /jobs should route to Temporal and return compatibility payload."""
 
     test_client, service = client
-    job = _build_job()
-    service.create_job.return_value = job
+    execution = SimpleNamespace(
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        started_at=None,
+    )
+    temporal_submit = AsyncMock(return_value=execution)
+    monkeypatch.setattr(
+        "api_service.api.routers.agent_queue._create_execution_from_task_request",
+        temporal_submit,
+    )
 
     response = test_client.post(
         "/api/queue/jobs",
         json={
-            "type": "codex_exec",
+            "type": "task",
             "priority": 10,
-            "payload": {"instruction": "run"},
+            "payload": {
+                "repository": "Moon/Test",
+                "task": {"instructions": "run"},
+            },
             "maxAttempts": 3,
         },
     )
 
     assert response.status_code == 201
     body = response.json()
-    assert body["id"] == str(job.id)
-    assert body["status"] == models.AgentJobStatus.QUEUED.value
-    assert body["type"] == "codex_exec"
-    service.create_job.assert_awaited_once()
+    assert body["status"] == "queued"
+    assert body["type"] == "task"
+    temporal_submit.assert_awaited_once()
+    service.create_job.assert_not_awaited()
 
 
 def test_create_job_routes_proposal_requested_tasks_to_temporal_when_enabled(
@@ -753,12 +767,19 @@ def test_resubmit_job_not_found_maps_404(
 
 def test_create_job_rejects_jules_runtime_without_config(
     client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Jules runtime requests should map to HTTP 400 when Jules is disabled."""
 
     test_client, service = client
-    service.create_job.side_effect = AgentQueueValidationError(
-        "targetRuntime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)"
+    temporal_submit = AsyncMock(
+        side_effect=AgentQueueValidationError(
+            "targetRuntime=jules requires JULES_API_KEY configured (set JULES_ENABLED=false to explicitly disable)"
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.agent_queue._create_execution_from_task_request",
+        temporal_submit,
     )
 
     response = test_client.post(
@@ -768,6 +789,7 @@ def test_create_job_rejects_jules_runtime_without_config(
             "payload": {
                 "repository": "Moon/Mind",
                 "targetRuntime": "jules",
+                "task": {"instructions": "test"},
             },
         },
     )
@@ -779,7 +801,7 @@ def test_create_job_rejects_jules_runtime_without_config(
         body["detail"]["message"]
         == "targetRuntime=jules is not available in the current server configuration"
     )
-    service.create_job.assert_awaited_once()
+    temporal_submit.assert_awaited_once()
 
 
 def test_create_job_with_attachments_success(
