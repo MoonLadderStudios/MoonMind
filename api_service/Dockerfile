@@ -227,7 +227,10 @@ BASH
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
 # broken. This helps catch upstream npm publish issues before the runtime image
 # is produced.
-RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
+# Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
+# Unset NODE_OPTIONS so Debian's --use-system-ca flag doesn't break cursor-agent.
+RUN mkdir -p "${HOME}/.gemini" \
+    && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
         if [ -d /usr/local/lib/node_modules/@openai/codex/vendor ]; then \
             cp -r /usr/local/lib/node_modules/@openai/codex/vendor/* /usr/local/vendor/; \
         fi; \
@@ -236,7 +239,7 @@ RUN if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
     && agentkit --version \
     && gemini --version \
     && claude --version \
-    && cursor-agent --version
+    && env -u NODE_OPTIONS cursor-agent --version
 
 FROM python:3.12-slim-bookworm
 
@@ -317,12 +320,15 @@ RUN apt-get update && \
 
 # Ensure the non-root ``app`` user exists for Temporal workers and the bundled
 # CLIs remain executable from its PATH.
+# Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
 RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
-    chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude /usr/local/bin/cursor-agent
+    chmod 0755 /usr/local/bin/codex /usr/local/bin/agentkit /usr/local/bin/gemini /usr/local/bin/claude /usr/local/bin/cursor-agent && \
+    mkdir -p /home/app/.gemini && chown app:app /home/app/.gemini
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
 # repository search tooling expected by Codex runtime defaults.
-RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && cursor-agent --version && rg --version'
+# Unset NODE_OPTIONS so Debian's --use-system-ca flag doesn't break cursor-agent.
+RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && env -u NODE_OPTIONS cursor-agent --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at
