@@ -232,16 +232,23 @@ def _artifact_id_from_ref(value: ArtifactRef | str) -> str:
 def _derive_integration_title(
     description: str, fallback_title: str | None = None
 ) -> str:
-    """Derive a human-readable task title from the description if missing or default."""
+    """Derive a human-readable task title from the description if missing.
+
+    When *fallback_title* is ``None`` or blank the first non-empty line of
+    *description* is used (truncated to 100 chars).  An explicit title —
+    including one that happens to equal the default placeholder — is always
+    preserved.
+    """
     original_title = str(fallback_title or "").strip()
-    if original_title == "MoonMind Integration Task" or not original_title:
+    if not original_title:
         if description:
             lines = [line.strip() for line in description.splitlines() if line.strip()]
             if lines:
                 first_line = lines[0]
                 if len(first_line) > 100:
-                    return first_line[:97] + "..."
-                return first_line
+                    first_line = first_line[:97] + "..."
+                if first_line:
+                    return first_line
     return original_title or "MoonMind Integration Task"
 
 
@@ -1510,8 +1517,8 @@ class TemporalIntegrationActivities:
 
         title = _derive_integration_title(
             description=description,
-            fallback_title=title_param or "MoonMind Integration Task",
-        )
+            fallback_title=title_param or None,
+        ) or "MoonMind Integration Task"
 
         metadata = parameters.get("metadata")
         if metadata is not None and not isinstance(metadata, Mapping):
@@ -1968,8 +1975,8 @@ class TemporalIntegrationActivities:
 
         title = _derive_integration_title(
             description=description,
-            fallback_title=title_param or "MoonMind Integration Task",
-        )
+            fallback_title=title_param or None,
+        ) or "MoonMind Integration Task"
 
         resolved_correlation_id = str(
             correlation_id or f"integration:codex_cloud:{title}"
