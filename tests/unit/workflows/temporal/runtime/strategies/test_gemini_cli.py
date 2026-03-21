@@ -4,17 +4,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from moonmind.workflows.temporal.runtime.strategies import (
     RUNTIME_STRATEGIES,
     GeminiCliStrategy,
     get_strategy,
 )
-from moonmind.workflows.temporal.runtime.strategies.gemini_cli import (
-    GeminiCliStrategy as GeminiCliStrategyDirect,
-)
-
 
 # ---------------------------------------------------------------------------
 # Helpers — lightweight stand-ins for Pydantic models

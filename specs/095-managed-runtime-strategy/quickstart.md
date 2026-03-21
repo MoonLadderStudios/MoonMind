@@ -6,8 +6,8 @@
 # Run all unit tests
 ./tools/test_unit.sh
 
-# Run only the strategy-specific tests
-python -m pytest tests/unit/workflows/temporal/runtime/strategies/ -v
+# Run only the strategy-specific tests (via test_unit.sh filter)
+./tools/test_unit.sh tests/unit/workflows/temporal/runtime/strategies/
 ```
 
 ## Verify Strategy Registration
