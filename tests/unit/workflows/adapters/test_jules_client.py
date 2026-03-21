@@ -106,7 +106,7 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
     assert normalize_jules_status("QUEUED") == "queued"
     assert normalize_jules_status("PLANNING") == "running"
     assert normalize_jules_status("AWAITING_PLAN_APPROVAL") == "running"
-    assert normalize_jules_status("AWAITING_USER_FEEDBACK") == "running"
+    assert normalize_jules_status("AWAITING_USER_FEEDBACK") == "awaiting_feedback"
     assert normalize_jules_status("IN_PROGRESS") == "running"
     assert normalize_jules_status("PAUSED") == "running"
     assert normalize_jules_status("FAILED") == "failed"
