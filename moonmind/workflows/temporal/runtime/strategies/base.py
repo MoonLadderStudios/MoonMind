@@ -58,6 +58,18 @@ class ManagedRuntimeStrategy(ABC):
         the specific types they need.
         """
 
+    def get_model(self, profile: Any, request: Any) -> str | None:
+        """Extract model from request parameters or profile default."""
+        return (
+            request.parameters.get("model") if request.parameters else None
+        ) or getattr(profile, "default_model", None)
+
+    def get_effort(self, profile: Any, request: Any) -> str | None:
+        """Extract effort from request parameters or profile default."""
+        return (
+            request.parameters.get("effort") if request.parameters else None
+        ) or getattr(profile, "default_effort", None)
+
     def shape_environment(
         self,
         base_env: dict[str, str],

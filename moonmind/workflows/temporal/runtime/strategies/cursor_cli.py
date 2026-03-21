@@ -36,9 +36,7 @@ class CursorCliStrategy(ManagedRuntimeStrategy):
         """
         cmd = list(profile.command_template)
 
-        model = (
-            request.parameters.get("model") if request.parameters else None
-        ) or profile.default_model
+        model = self.get_model(profile, request)
         if model:
             cmd.extend(["--model", model])
 
