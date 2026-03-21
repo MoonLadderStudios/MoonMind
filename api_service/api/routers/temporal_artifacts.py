@@ -342,7 +342,9 @@ async def download_artifact(
         )
         return FileResponse(
             path,
-            filename=artifact.artifact_id,
+            filename=f"{artifact.artifact_id}.json"
+            if artifact.content_type == "application/json"
+            else artifact.artifact_id,
             media_type=artifact.content_type or "application/octet-stream",
         )
     except TemporalArtifactValidationError:
@@ -364,7 +366,9 @@ async def download_artifact(
         chunks,
         media_type=artifact.content_type or "application/octet-stream",
         headers={
-            "content-disposition": f'attachment; filename="{artifact.artifact_id}"',
+            "content-disposition": f'attachment; filename="{artifact.artifact_id}.json"'
+            if artifact.content_type == "application/json"
+            else f'attachment; filename="{artifact.artifact_id}"'
         },
     )
 
