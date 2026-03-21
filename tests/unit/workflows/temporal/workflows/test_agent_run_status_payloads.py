@@ -87,3 +87,33 @@ def test_coerce_external_status_payload_handles_canonical_payload_with_provider_
     assert status.status == RunStatus.queued
     assert status.metadata.get("providerStatus") == "QUEUED"
     assert status.metadata.get("normalizedStatus") == "queued"
+
+
+def test_coerce_external_start_status_maps_unknown_to_awaiting_callback() -> None:
+    workflow_instance = MoonMindAgentRun()
+
+    status, normalized = workflow_instance._coerce_external_start_status(
+        {
+            "external_id": "jules-task-005",
+            "normalized_status": "unknown",
+            "provider_status": "STATE_UNSPECIFIED",
+        }
+    )
+
+    assert status == RunStatus.awaiting_callback
+    assert normalized == "unknown"
+
+
+def test_coerce_external_start_status_maps_succeeded_to_completed() -> None:
+    workflow_instance = MoonMindAgentRun()
+
+    status, normalized = workflow_instance._coerce_external_start_status(
+        {
+            "external_id": "jules-task-006",
+            "normalized_status": "succeeded",
+            "provider_status": "completed",
+        }
+    )
+
+    assert status == RunStatus.completed
+    assert normalized == "succeeded"

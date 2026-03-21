@@ -349,6 +349,43 @@ class MoonMindAgentRun:
         )
 
     @staticmethod
+    def _coerce_external_start_status(
+        handle_payload: dict[str, object],
+    ) -> tuple[str, str]:
+        """Map integration-start payload status fields into canonical run states."""
+        normalized_token = str(
+            handle_payload.get("normalized_status")
+            or handle_payload.get("normalizedStatus")
+            or ""
+        ).strip().lower() or None
+        run_status = MoonMindAgentRun._normalize_external_status(
+            normalized_status=normalized_token,
+            raw_status=handle_payload.get("status"),
+            provider_status=str(
+                handle_payload.get("provider_status")
+                or handle_payload.get("providerStatus")
+                or ""
+            ).strip() or None,
+        )
+        valid_statuses = {
+            "queued",
+            "launching",
+            "running",
+            "awaiting_callback",
+            "awaiting_feedback",
+            "awaiting_approval",
+            "intervention_requested",
+            "collecting_results",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+        }
+        if run_status not in valid_statuses:
+            raise ValueError(f"Unsupported run status from integration start: {run_status!r}")
+        return run_status, (normalized_token or run_status)
+
+    @staticmethod
     def _coerce_managed_status_payload(
         *,
         status_payload: object,
@@ -588,19 +625,17 @@ class MoonMindAgentRun:
                             )
 
                             if isinstance(handle_dict, dict) and "external_id" in handle_dict:
-                                status = handle_dict.get("normalized_status", "unknown")
-                                _VALID_STATUSES = {"queued", "launching", "running", "awaiting_callback", "awaiting_feedback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}
-                                if status not in _VALID_STATUSES:
-                                    workflow.logger.warning(
-                                        "Unknown normalized_status %r from integration start; "
-                                        "treating as error",
-                                        status,
+                                try:
+                                    status, normalized_for_metadata = self._coerce_external_start_status(
+                                        handle_dict
                                     )
+                                except ValueError as exc:
+                                    workflow.logger.warning(str(exc))
                                     raise ApplicationError(
-                                        f"Unsupported normalized_status from integration start: {status!r}",
+                                        str(exc),
                                         type="UnsupportedStatus",
                                         non_retryable=True,
-                                    )
+                                    ) from exc
                                 handle = AgentRunHandle(
                                     runId=handle_dict["external_id"],
                                     agentKind="external",
@@ -608,8 +643,8 @@ class MoonMindAgentRun:
                                     status=status,
                                     startedAt=workflow.now(),
                                     metadata={
-                                        "providerStatus": handle_dict.get("provider_status", "unknown"),
-                                        "normalizedStatus": status,
+                                        "providerStatus": handle_dict.get("provider_status", handle_dict.get("status", "unknown")),
+                                        "normalizedStatus": normalized_for_metadata,
                                         "externalUrl": handle_dict.get("url"),
                                         "callbackSupported": handle_dict.get("callback_supported", False),
                                     }

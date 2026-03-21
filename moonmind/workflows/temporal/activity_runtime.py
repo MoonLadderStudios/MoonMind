@@ -1620,12 +1620,47 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_status(
         self,
+        request: Mapping[str, Any] | str | None = None,
+        /,
         *,
-        external_id: str,
+        external_id: str | None = None,
         principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
-        status = await self._adapter.status(external_id)
+        request_payload: dict[str, Any] = {}
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.jules.status"
+            )
+        elif request is not None and not isinstance(request, str):
+            raise TemporalActivityRuntimeError(
+                "integration.jules.status payload must be a JSON object or string external_id"
+            )
+
+        if request_payload:
+            if external_id is None:
+                external_id = (
+                    request_payload.get("external_id")
+                    or request_payload.get("externalId")
+                    or request_payload.get("run_id")
+                    or request_payload.get("runId")
+                )
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref") or request_payload.get(
+                    "executionRef"
+                )
+        if external_id is None and isinstance(request, str):
+            external_id = request
+
+        resolved_external_id = str(external_id or "").strip()
+        if not resolved_external_id:
+            raise TemporalActivityRuntimeError(
+                "integration.jules.status requires a non-empty external_id"
+            )
+
+        status = await self._adapter.status(resolved_external_id)
         provider_status = str(status.metadata.get("providerStatus") or "unknown")
         external_url = (
             str(
