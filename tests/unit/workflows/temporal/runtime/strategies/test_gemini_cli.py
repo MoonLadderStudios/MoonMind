@@ -220,8 +220,14 @@ class TestLauncherDelegation:
         assert "--prompt" in cmd
 
     def test_unregistered_runtime_returns_none(self) -> None:
-        """Unregistered runtimes should get None from the registry,
-        meaning the launcher falls through to the if/elif."""
-        assert get_strategy("cursor_cli") is None
-        assert get_strategy("codex_cli") is None
-        assert get_strategy("claude_code") is None
+        """Truly unknown runtimes should get None from the registry."""
+        assert get_strategy("unknown_runtime") is None
+        assert get_strategy("some_future_cli") is None
+
+    def test_all_known_runtimes_are_registered(self) -> None:
+        """Since Phase 2, all four runtimes are registered."""
+        assert get_strategy("cursor_cli") is not None
+        assert get_strategy("codex_cli") is not None
+        assert get_strategy("claude_code") is not None
+        assert get_strategy("gemini_cli") is not None
+

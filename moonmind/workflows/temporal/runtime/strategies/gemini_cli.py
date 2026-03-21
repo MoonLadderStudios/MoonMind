@@ -43,15 +43,11 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
         """
         cmd = list(profile.command_template)
 
-        model = (
-            request.parameters.get("model") if request.parameters else None
-        ) or profile.default_model
+        model = self.get_model(profile, request)
         if model:
             cmd.extend(["--model", model])
 
-        effort = (
-            request.parameters.get("effort") if request.parameters else None
-        ) or profile.default_effort
+        effort = self.get_effort(profile, request)
         if effort:
             cmd.extend(["--effort", effort])
 
