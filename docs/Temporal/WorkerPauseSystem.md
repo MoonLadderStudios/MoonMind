@@ -100,6 +100,10 @@ Resumed workflows seamlessly handoff or continue on newly upgraded workers holdi
 
 **Important**: Quiesce is meant for short maintenance where workflows need to suspend rapidly without losing long-running context. For infrastructure upgrades, Drain is the safe path.
 
+### 6.2 External Agents
+
+For external agents (e.g., Jules), the pause mechanism behaves differently. External agent processes are not interrupted or canceled by a system pause. "Pause" (as currently implemented) primarily blocks new workflow submissions and relies on worker drain to stop further orchestration. Because the current code does not gate each individual step on the pause flag, in-flight workflows may still dispatch additional steps to external agents until the worker finishes draining.
+
 ---
 
 ## 7. Operational Playbook (Recommended)

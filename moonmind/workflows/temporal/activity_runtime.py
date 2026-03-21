@@ -22,6 +22,7 @@ from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.jules_models import JulesIntegrationMergePRResult
+from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.codex_cloud_agent_adapter import CodexCloudAgentAdapter
@@ -35,6 +36,7 @@ from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRunStatus,
     AgentRunResult,
     ManagedRuntimeProfile,
 )
@@ -213,6 +215,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_publish_artifacts",
     ),
+    "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
+    "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
     "proposal.generate": ("proposals", "proposal_generate"),
     "proposal.submit": ("proposals", "proposal_submit"),
@@ -2526,6 +2530,98 @@ class TemporalAgentRuntimeActivities:
                 exc_info=True,
             )
             return result
+
+    @staticmethod
+    def _agent_runtime_request_identifiers(
+        request: Any,
+    ) -> tuple[str, str]:
+        """Extract ``run_id`` and ``agent_id`` from a flexible request shape."""
+        if isinstance(request, Mapping):
+            run_id = str(
+                request.get("run_id")
+                or request.get("runId")
+                or ""
+            ).strip()
+            agent_id = str(
+                request.get("agent_id")
+                or request.get("agentId")
+                or request.get("agent")
+                or "managed"
+            ).strip() or "managed"
+            if not run_id:
+                raise TemporalActivityRuntimeError(
+                    "agent_runtime request requires run_id"
+                )
+            return run_id, agent_id
+        if isinstance(request, str):
+            run_id = request.strip()
+            if not run_id:
+                raise TemporalActivityRuntimeError(
+                    "agent_runtime request requires run_id"
+                )
+            return run_id, "managed"
+        raise TemporalActivityRuntimeError(
+            "agent_runtime request must be a mapping or run_id string"
+        )
+
+    async def agent_runtime_status(
+        self,
+        request: Any = None,
+        /,
+    ) -> dict[str, Any]:
+        """Read the latest managed run status via activity execution."""
+        if self._run_store is None:
+            raise TemporalActivityRuntimeError(
+                "run_store is required for agent_runtime.status"
+            )
+        run_id, agent_id = self._agent_runtime_request_identifiers(request)
+        record = self._run_store.load(run_id)
+        if record is None:
+            status = AgentRunStatus(
+                runId=run_id,
+                agentKind="managed",
+                agentId=agent_id,
+                status="running",
+            )
+            return status.model_dump(mode="json", by_alias=True)
+
+        status = AgentRunStatus(
+            runId=record.run_id,
+            agentKind="managed",
+            agentId=record.agent_id or agent_id,
+            status=record.status,
+            metadata={"runtimeId": record.runtime_id},
+        )
+        return status.model_dump(mode="json", by_alias=True)
+
+    async def agent_runtime_fetch_result(
+        self,
+        request: Any = None,
+        /,
+    ) -> dict[str, Any]:
+        """Read one managed run result via activity execution."""
+        if self._run_store is None:
+            raise TemporalActivityRuntimeError(
+                "run_store is required for agent_runtime.fetch_result"
+            )
+        run_id, _agent_id = self._agent_runtime_request_identifiers(request)
+
+        async def _unused_profile_fetcher(**_kwargs: Any) -> dict[str, Any]:
+            return {"profiles": []}
+
+        async def _unused_slot_signal(**_kwargs: Any) -> None:
+            return None
+
+        adapter = ManagedAgentAdapter(
+            profile_fetcher=_unused_profile_fetcher,
+            slot_requester=_unused_slot_signal,
+            slot_releaser=_unused_slot_signal,
+            cooldown_reporter=_unused_slot_signal,
+            workflow_id=f"agent_runtime_activity:{run_id}",
+            run_store=self._run_store,
+        )
+        result = await adapter.fetch_result(run_id)
+        return result.model_dump(mode="json", by_alias=True)
 
     async def agent_runtime_cancel(
         self,
