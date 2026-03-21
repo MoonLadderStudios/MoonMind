@@ -6779,8 +6779,22 @@ class CodexWorker:
         if not is_pr_resolution_task:
             return StepGateResult(passed=True)
 
-        snapshot_path = prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json"
-        result_path = prepared.repo_dir / "artifacts" / "pr_resolver_result.json"
+        snapshot_candidates = (
+            prepared.repo_dir / "var" / "pr_resolver" / "snapshot.json",
+            prepared.repo_dir / "artifacts" / "pr_resolver_snapshot.json",
+        )
+        result_candidates = (
+            prepared.repo_dir / "var" / "pr_resolver" / "result.json",
+            prepared.repo_dir / "artifacts" / "pr_resolver_result.json",
+        )
+        snapshot_path = next(
+            (path for path in snapshot_candidates if path.exists()),
+            snapshot_candidates[0],
+        )
+        result_path = next(
+            (path for path in result_candidates if path.exists()),
+            result_candidates[0],
+        )
         report_path = (
             prepared.artifacts_dir / "reports" / "pr_resolution_validation.json"
         )
@@ -6791,17 +6805,18 @@ class CodexWorker:
         snapshot_payload: dict[str, Any] = {}
         snapshot_error: str | None = None
         if not snapshot_path.exists():
-            snapshot_error = "missing artifacts/pr_resolver_snapshot.json"
+            snapshot_error = (
+                "missing pr-resolver snapshot artifact "
+                "(expected var/pr_resolver/snapshot.json)"
+            )
         else:
             try:
                 parsed_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                snapshot_error = "artifacts/pr_resolver_snapshot.json is not valid JSON"
+                snapshot_error = f"{snapshot_path.relative_to(prepared.repo_dir)} is not valid JSON"
             else:
                 if not isinstance(parsed_snapshot, Mapping):
-                    snapshot_error = (
-                        "artifacts/pr_resolver_snapshot.json must be a JSON object"
-                    )
+                    snapshot_error = f"{snapshot_path.relative_to(prepared.repo_dir)} must be a JSON object"
                 else:
                     snapshot_payload = dict(parsed_snapshot)
 
@@ -6880,8 +6895,8 @@ class CodexWorker:
             "reason": failure_reason or "pr-resolution final state is resolved",
             "objective": objective,
             "sources": {
-                "snapshotPath": "artifacts/pr_resolver_snapshot.json",
-                "resultPath": "artifacts/pr_resolver_result.json",
+                "snapshotPath": str(snapshot_path.relative_to(prepared.repo_dir)),
+                "resultPath": str(result_path.relative_to(prepared.repo_dir)),
             },
             "snapshot": {
                 "available": bool(snapshot_payload),

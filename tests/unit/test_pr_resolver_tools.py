@@ -309,6 +309,40 @@ def test_fetch_pr_data_can_fallback_to_discovered_pr_number(
     assert len(errors) >= 1
 
 
+def test_get_branch_pr_comments_resolve_metadata_falls_back_to_head_pr_list(
+    get_branch_pr_comments_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve_pr_metadata = get_branch_pr_comments_module["resolve_pr_metadata"]
+    globals_dict = resolve_pr_metadata.__globals__
+
+    def _fake_run_json_command(
+        command: list[str],
+        failure_hint: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if command[:4] == ["gh", "pr", "view", "feature/test-branch"]:
+            raise RuntimeError("no pull requests found for branch")
+        if command[:3] == ["gh", "pr", "list"]:
+            return [{"number": 780}]
+        if command[:4] == ["gh", "pr", "view", "780"]:
+            return {
+                "number": 780,
+                "title": "Fallback",
+                "url": "https://github.com/org/repo/pull/780",
+                "headRefName": "feature/test-branch",
+                "baseRefName": "main",
+            }
+        raise AssertionError(f"Unexpected command: {command} ({failure_hint})")
+
+    monkeypatch.setitem(globals_dict, "run_json_command", _fake_run_json_command)
+
+    payload = resolve_pr_metadata("feature/test-branch")
+    assert payload["number"] == 780
+    assert payload["headRefName"] == "feature/test-branch"
+
+
 def test_review_bot_comments_are_actionable_by_default(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
@@ -348,6 +382,32 @@ def test_review_bot_comments_can_be_excluded_when_disabled(
     summary = summarize_comments(comments, include_bot_review_comments=False)
     assert summary["actionableCommentCount"] == 0
     assert summary["includeBotReviewComments"] is False
+
+
+def test_issue_command_comments_are_not_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "issue_comment",
+            "id": 1,
+            "user": "human-reviewer",
+            "body": "/review",
+        },
+        {
+            "type": "review_comment",
+            "id": 2,
+            "user": "qodo-free-for-open-source-projects[bot]",
+            "body": "Please update this section.",
+        },
+    ]
+
+    summary = summarize_comments(comments, include_bot_review_comments=True)
+    assert summary["actionableCommentCount"] == 1
+    assert summary["actionableCommentIds"] == [2]
+    assert summary["nonActionableReasonCounts"]["command_comment"] == 1
 
 
 def test_resolved_review_threads_are_not_actionable(
@@ -647,7 +707,11 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     globals_dict = main.__globals__
     exit_code_blocked = pr_resolve_finalize_module["EXIT_CODE_BLOCKED"]
 
-    def _boom(_snapshot_script: Path, _pr: str | None) -> None:
+    def _boom(
+        _snapshot_script: Path,
+        _pr: str | None,
+        _snapshot_path: Path,
+    ) -> None:
         raise subprocess.CalledProcessError(
             returncode=1,
             cmd=["python3", "pr_resolve_snapshot.py"],
