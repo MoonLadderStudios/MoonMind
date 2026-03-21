@@ -17,9 +17,9 @@ If no constraints are provided, default to addressing all applicable feedback.
 ## Workflow
 
 1. Resolve PR and collect all comments.
-- Run `python3 tools/get_branch_pr_comments.py --output Saved/PRComments/current-branch-comments.json`.
+- Run `python3 tools/get_branch_pr_comments.py --output var/pr_comments/current-branch-comments.json`.
 - If PR resolution fails, stop and ask the user for a PR number/URL.
-- Load `Saved/PRComments/current-branch-comments.json` (explicitly bypass ignore checking when reading this artifact) and treat every entry in `comments` as input feedback.
+- Load `var/pr_comments/current-branch-comments.json` and treat every entry in `comments` as input feedback.
 
 2. Build a feedback ledger before editing code.
 - Create a working checklist with one row per comment:
