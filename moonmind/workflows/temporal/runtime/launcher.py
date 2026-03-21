@@ -392,6 +392,12 @@ class ManagedRuntimeLauncher:
             request=request,
             workspace_path=workspace_path,
         )
+        if resolved_workspace_path is None:
+            resolved_workspace_path = await self._prepare_workspace(
+                run_id=run_id,
+                request=request,
+                workspace_path=workspace_path,
+            )
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(
             os.environ
         )
