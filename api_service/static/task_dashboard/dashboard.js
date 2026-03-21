@@ -4281,8 +4281,8 @@
           </label>
         </div>
         <label>Queue Priority
-          <div class="priority-slider-container">
-            <input type="range" name="priority" min="-10" max="10" value="0" oninput="this.parentElement.querySelector('output').value = this.value" />
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="range" name="priority" min="-10" max="10" value="0" oninput="this.nextElementSibling.value = this.value" />
             <output>0</output>
           </div>
         </label>
@@ -4865,7 +4865,7 @@
     const queueDraftPriority = Number.isInteger(
       Number(sanitizedWorkerDraft.priority),
     )
-      ? Math.max(-10, Math.min(10, Number(sanitizedWorkerDraft.priority)))
+      ? Number(sanitizedWorkerDraft.priority)
       : 0;
     const queueDraftMaxAttempts = Number.isInteger(
       Number(sanitizedWorkerDraft.maxAttempts),
@@ -5018,8 +5018,8 @@
         ${attachmentSectionHtml}
         <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
-            <div class="priority-slider-container">
-              <input type="range" name="priority" min="-10" max="10" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" oninput="this.parentElement.querySelector('output').value = this.value" />
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <input type="range" name="priority" min="-10" max="10" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" oninput="this.nextElementSibling.value = this.value" />
               <output>${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}</output>
             </div>
           </label>
@@ -5039,18 +5039,12 @@
             <select name="scheduleMode" id="schedule-mode-select">
               <option value="immediate" selected>Immediate</option>
               <option value="once">Deferred (run once at a specific time)</option>
-              <option value="deferred_minutes">Deferred (run in N minutes)</option>
               <option value="recurring">Recurring (create a cron schedule)</option>
             </select>
           </label>
           <div id="schedule-once-fields" class="hidden">
             <label>Scheduled For
               <input type="datetime-local" name="scheduledFor" id="schedule-datetime" />
-            </label>
-          </div>
-          <div id="schedule-deferred-minutes-fields" class="hidden">
-            <label>Minutes from now
-              <input type="number" name="scheduleDeferredMinutes" min="1" max="525600" step="1" placeholder="e.g. 15" />
             </label>
           </div>
           <div id="schedule-recurring-fields" class="hidden">
@@ -5669,7 +5663,7 @@
     let templateItems = [];
     const templateInputMemory = {};
     const preferredTemplateSlug = "speckit-orchestrate";
-    const templateScopeLoadOrder = ["global", "personal"];
+    const templateScopeLoadOrder = ["global", "team", "personal"];
 
     const setTemplateMessage = (text, isError = false) => {
       if (!templateMessage) {
@@ -5754,6 +5748,9 @@
       const scope = String(item?.scope || "").trim().toLowerCase();
       if (scope === "personal") {
         return "Personal";
+      }
+      if (scope === "team") {
+        return "Team";
       }
       return "Global";
     };
@@ -6109,9 +6106,21 @@
         return;
       }
       const description = window.prompt("Preset description", `Saved from queue draft: ${title}`) || "";
-      // For saving from a task, scope is always personal.
-      const scope = "personal";
-      const scopeRef = "";
+      const scope = (window.prompt("Scope (personal/team)", "personal") || "personal")
+        .trim()
+        .toLowerCase();
+      if (!["personal", "team"].includes(scope)) {
+        setTemplateMessage("Scope must be personal or team.", true);
+        return;
+      }
+      const scopeRef =
+        scope === "team"
+          ? String(window.prompt("Team scopeRef (required for team)", "") || "").trim()
+          : "";
+      if (scope === "team" && !scopeRef) {
+        setTemplateMessage("Team scopeRef is required for team presets.", true);
+        return;
+      }
 
       const steps = stepState
         .map((step) => {
@@ -6211,16 +6220,12 @@
     // --- Schedule panel toggle ---
     const scheduleModeSelect = form.querySelector("#schedule-mode-select");
     const scheduleOnceFields = form.querySelector("#schedule-once-fields");
-    const scheduleDeferredMinutesFields = form.querySelector("#schedule-deferred-minutes-fields");
     const scheduleRecurringFields = form.querySelector("#schedule-recurring-fields");
     if (scheduleModeSelect) {
       scheduleModeSelect.addEventListener("change", () => {
         const mode = String(scheduleModeSelect.value || "immediate").trim();
         if (scheduleOnceFields) {
           scheduleOnceFields.classList.toggle("hidden", mode !== "once");
-        }
-        if (scheduleDeferredMinutesFields) {
-          scheduleDeferredMinutesFields.classList.toggle("hidden", mode !== "deferred_minutes");
         }
         if (scheduleRecurringFields) {
           scheduleRecurringFields.classList.toggle("hidden", mode !== "recurring");
@@ -6542,30 +6547,6 @@
           if (isNaN(scheduledForDate.getTime()) || scheduledForDate <= new Date()) {
             message.className = "notice error queue-submit-message";
             message.textContent = "Scheduled time must be a valid future date.";
-            return;
-          }
-          requestBody.payload.schedule = {
-            mode: "once",
-            scheduledFor: scheduledForDate.toISOString(),
-          };
-        } else if (scheduleMode === "deferred_minutes") {
-          const scheduleDeferredMinutesRaw = String(formData.get("scheduleDeferredMinutes") || "").trim();
-          const scheduleDeferredMinutes = Number(scheduleDeferredMinutesRaw);
-          if (!Number.isFinite(scheduleDeferredMinutes) || !Number.isInteger(scheduleDeferredMinutes) || scheduleDeferredMinutes <= 0) {
-            message.className = "notice error queue-submit-message";
-            message.textContent = "A valid positive whole number of minutes is required for deferred scheduling.";
-            return;
-          }
-          if (scheduleDeferredMinutes > 525600) {
-            message.className = "notice error queue-submit-message";
-            message.textContent = "Deferred minutes cannot exceed 525 600 (one year).";
-            return;
-          }
-          const scheduledForMs = Date.now() + scheduleDeferredMinutes * 60000;
-          const scheduledForDate = new Date(scheduledForMs);
-          if (!Number.isFinite(scheduledForDate.getTime())) {
-            message.className = "notice error queue-submit-message";
-            message.textContent = "Unable to compute a valid schedule date from the provided minutes.";
             return;
           }
           requestBody.payload.schedule = {
@@ -10551,19 +10532,6 @@
           <div data-auth-profiles-table>
             <p class="loading">Loading profiles...</p>
           </div>
-          <dialog id="oauth-session-modal">
-            <form method="dialog">
-              <h3>Connect with OAuth</h3>
-              <p>Runtime: <span id="oauth-modal-runtime"></span></p>
-              <p>Profile: <span id="oauth-modal-profile"></span></p>
-              <div id="oauth-modal-status" style="margin: 1rem 0;"></div>
-              <menu>
-                <button type="button" id="oauth-modal-start" class="btn">Start Session</button>
-                <button type="button" id="oauth-modal-cancel" class="btn" style="display:none;">Cancel Session</button>
-                <button value="close" class="btn-cancel">Close</button>
-              </menu>
-            </form>
-          </dialog>
           <details class="auth-profile-create-toggle">
             <summary>Create New Profile</summary>
             <form data-auth-profile-form="create" class="stack">
@@ -10814,9 +10782,6 @@
                 <td>${p.cooldown_after_429_seconds ?? "-"}s</td>
                 <td>${p.enabled ? "✅" : "❌"}</td>
                 <td>
-                  <button class="btn-small" data-profile-oauth="${escapeHtml(p.profile_id)}" data-runtime="${escapeHtml(p.runtime_id || "")}" data-volume="${escapeHtml(p.volume_ref || "")}">
-                    Connect with OAuth
-                  </button>
                   <button class="btn-small" data-profile-toggle="${escapeHtml(p.profile_id)}">
                     ${p.enabled ? "Disable" : "Enable"}
                   </button>
@@ -10858,102 +10823,6 @@
     }
 
     function attachProfileHandlers() {
-      document.querySelectorAll("[data-profile-oauth]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const profileId = btn.dataset.profileOauth;
-          const runtimeId = btn.dataset.runtime;
-          const volumeRef = btn.dataset.volume;
-          const modal = document.getElementById("oauth-session-modal");
-          const statusDiv = document.getElementById("oauth-modal-status");
-          
-          document.getElementById("oauth-modal-profile").textContent = profileId;
-          document.getElementById("oauth-modal-runtime").textContent = runtimeId;
-          statusDiv.innerHTML = "";
-          
-          const startBtn = document.getElementById("oauth-modal-start");
-          const cancelBtn = document.getElementById("oauth-modal-cancel");
-          
-          startBtn.style.display = "inline-block";
-          cancelBtn.style.display = "none";
-          
-          let currentSessionId = null;
-          
-          startBtn.onclick = async () => {
-            startBtn.disabled = true;
-            statusDiv.textContent = "Starting session...";
-            try {
-              const res = await fetch("/api/v1/oauth-sessions", {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  profile_id: profileId,
-                  runtime_id: runtimeId,
-                  volume_ref: volumeRef,
-                  account_label: profileId,
-                }),
-              });
-              if (!res.ok) {
-                const err = await res.json();
-                statusDiv.textContent = "Error: " + (err.detail || res.statusText);
-                startBtn.disabled = false;
-                return;
-              }
-              const data = await res.json();
-              currentSessionId = data.session_id;
-              startBtn.style.display = "none";
-              cancelBtn.style.display = "inline-block";
-              
-              // Poll for status
-              const pollInterval = setInterval(async () => {
-                const pollRes = await fetch(`/api/v1/oauth-sessions/${currentSessionId}`, {
-                  credentials: "include"
-                });
-                if (pollRes.ok) {
-                  const pollData = await pollRes.json();
-                  statusDiv.textContent = `Status: `;
-                  const strong = document.createElement("strong");
-                  strong.textContent = pollData.status;
-                  statusDiv.appendChild(strong);
-                  if (pollData.tmate_web_url) {
-                    statusDiv.appendChild(document.createElement("br"));
-                    const a = document.createElement("a");
-                    a.href = pollData.tmate_web_url;
-                    a.target = "_blank";
-                    a.textContent = "Open Tmate Web Terminal";
-                    statusDiv.appendChild(a);
-                  }
-                  if (["succeeded", "failed", "cancelled", "expired"].includes(pollData.status)) {
-                    clearInterval(pollInterval);
-                    cancelBtn.style.display = "none";
-                  }
-                }
-              }, 2000);
-              
-              registerDisposer(() => clearInterval(pollInterval));
-              modal.addEventListener("close", () => clearInterval(pollInterval), { once: true });
-              
-            } catch (e) {
-              statusDiv.textContent = "Error: " + e.message;
-              startBtn.disabled = false;
-            }
-          };
-          
-          cancelBtn.onclick = async () => {
-            if (currentSessionId) {
-              await fetch(`/api/v1/oauth-sessions/${currentSessionId}/cancel`, {
-                method: "POST",
-                credentials: "include"
-              });
-              statusDiv.appendChild(document.createElement("br"));
-              statusDiv.appendChild(document.createTextNode("Cancel requested."));
-            }
-          };
-          
-          modal.showModal();
-        });
-      });
-
       document.querySelectorAll("[data-profile-toggle]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const profileId = btn.dataset.profileToggle;

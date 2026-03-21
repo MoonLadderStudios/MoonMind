@@ -12,7 +12,6 @@ from typing import Any
 import httpx
 
 from moonmind.schemas.jules_models import (
-    JulesActivity,
     JulesCreateTaskRequest,
     JulesGetTaskRequest,
     JulesIntegrationCancelResult,
@@ -21,7 +20,6 @@ from moonmind.schemas.jules_models import (
     JulesIntegrationStartRequest,
     JulesIntegrationStartResult,
     JulesIntegrationStatusResult,
-    JulesListActivitiesResult,
     JulesResolveTaskRequest,
     JulesSendMessageRequest,
     JulesTaskResponse,
@@ -114,48 +112,6 @@ class JulesClient:
         """
         path = f"/sessions/{request.session_id}:sendMessage"
         await self._post_json_empty(path, json={"prompt": request.prompt})
-
-    async def list_activities(
-        self,
-        session_id: str,
-    ) -> JulesListActivitiesResult:
-        """Fetch session activities and extract the latest agent question.
-
-        Calls ``GET /v1alpha/sessions/{session}/activities`` to retrieve all
-        activities.  Scans for the most recent ``AgentMessaged`` activity from
-        ``originator == "agent"`` and returns its ``agentMessage`` text and
-        ``id`` for deduplication.
-
-        See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions.activities/list
-        """
-        data = await self._get_json(f"/sessions/{session_id}/activities")
-        raw_activities = data.get("activities", [])
-
-        # Parse and sort by createTime descending for deterministic ordering.
-        activities: list[JulesActivity] = [
-            JulesActivity.model_validate(a) for a in raw_activities
-        ]
-        activities.sort(
-            key=lambda a: a.create_time or "",
-            reverse=True,
-        )
-
-        latest_question: str | None = None
-        activity_id: str | None = None
-        for activity in activities:
-            if (
-                activity.originator == "agent"
-                and activity.agent_messaged is not None
-            ):
-                latest_question = activity.agent_messaged.agent_message
-                activity_id = activity.id
-                break
-
-        return JulesListActivitiesResult(
-            sessionId=session_id,
-            latestAgentQuestion=latest_question,
-            activityId=activity_id,
-        )
 
     async def resolve_task(self, request: JulesResolveTaskRequest) -> JulesTaskResponse:
         data = await self._post_json(

@@ -202,9 +202,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
     "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
-    "integration.jules.list_activities": ("integrations", "integration_jules_list_activities"),
-    "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
-    "integration.jules.get_auto_answer_config": ("integrations", "integration_jules_get_auto_answer_config"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
@@ -1914,104 +1911,6 @@ class TemporalIntegrationActivities:
             normalized_status=status_snapshot.normalized_status,
             provider_status=status_snapshot.provider_status,
         )
-
-    async def integration_jules_list_activities(
-        self,
-        *,
-        session_id: str,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Fetch session activities and extract the latest agent question."""
-        client = self._client_factory()
-        try:
-            result = await client.list_activities(session_id)
-            return result.model_dump(by_alias=True)
-        finally:
-            await client.aclose()
-
-    async def integration_jules_answer_question(
-        self,
-        *,
-        session_id: str,
-        question: str,
-        task_context: str = "",
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Orchestrate a full question-answer cycle for Jules."""
-        from moonmind.schemas.jules_models import JulesSendMessageRequest
-        from moonmind.workflows.temporal.activities.jules_activities import _generate_llm_answer
-
-        if not session_id or not question:
-            return {"answered": False, "answer": "", "error": "Missing session_id or question"}
-
-        prompt_parts = [
-            "You are answering a clarification question from Jules (an AI coding agent).",
-        ]
-        if task_context:
-            prompt_parts.append(f"Task context: {task_context}")
-        prompt_parts.extend([
-            "",
-            f"Jules's question:\n{question}",
-            "",
-            "Provide a concise, actionable answer. If the question asks about a preference or",
-            "choice, choose the most reasonable default and explain your reasoning briefly.",
-            "Do not ask follow-up questions.",
-        ])
-        clarification_prompt = "\n".join(prompt_parts)
-
-        # Dispatch to an LLM to generate the actual answer.
-        answer = await _generate_llm_answer(clarification_prompt)
-
-        client = self._client_factory()
-        try:
-            await client.send_message(
-                JulesSendMessageRequest(session_id=session_id, prompt=answer)
-            )
-            return {"answered": True, "answer": answer, "error": None}
-        except Exception as exc:
-            logger.error(
-                "Failed to send auto-answer to Jules session %s: %s",
-                session_id, exc, exc_info=True,
-            )
-            return {"answered": False, "answer": answer, "error": str(exc)}
-        finally:
-            await client.aclose()
-
-    async def integration_jules_get_auto_answer_config(
-        self,
-        **_kwargs: Any,
-    ) -> dict[str, Any]:
-        """Read auto-answer configuration from environment variables.
-
-        Raises ``ValueError`` if integer env vars contain non-integer values.
-        """
-        enabled_raw = os.environ.get("JULES_AUTO_ANSWER_ENABLED", "true").strip().lower()
-        enabled = enabled_raw not in ("false", "0", "no", "off")
-
-        max_answers_raw = os.environ.get("JULES_MAX_AUTO_ANSWERS", "3")
-        try:
-            max_answers = int(max_answers_raw)
-        except ValueError:
-            raise ValueError(
-                f"JULES_MAX_AUTO_ANSWERS must be an integer, got: {max_answers_raw!r}"
-            )
-
-        runtime = os.environ.get("JULES_AUTO_ANSWER_RUNTIME", "llm").strip() or "llm"
-
-        timeout_raw = os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300")
-        try:
-            timeout = int(timeout_raw)
-        except ValueError:
-            raise ValueError(
-                f"JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer, got: {timeout_raw!r}"
-            )
-
-        return {
-            "enabled": enabled,
-            "max_answers": max_answers,
-            "runtime": runtime,
-            "timeout_seconds": timeout,
-        }
 
     # ---- Codex Cloud integration handlers ----
 

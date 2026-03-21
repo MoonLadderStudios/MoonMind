@@ -30,7 +30,6 @@ class RunStatus:
     launching = "launching"
     running = "running"
     awaiting_callback = "awaiting_callback"
-    awaiting_feedback = "awaiting_feedback"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -38,7 +37,7 @@ class RunStatus:
 
 
 _TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out, "intervention_requested"}
+    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out}
 )
 
 _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
@@ -49,7 +48,6 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "in-progress": RunStatus.running,
     "processing": RunStatus.running,
     "awaiting_callback": RunStatus.awaiting_callback,
-    "awaiting_feedback": RunStatus.awaiting_feedback,
     "awaiting_approval": "awaiting_approval",
     "intervention_requested": "intervention_requested",
     "collecting_results": "collecting_results",
@@ -130,9 +128,6 @@ class MoonMindAgentRun:
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
         self._external_agent_id: str | None = None
-        # Auto-answer state (Jules question auto-answer, spec 094)
-        self._answered_activity_ids: set[str] = set()
-        self._auto_answer_count: int = 0
 
     async def _ensure_manager_and_signal(
         self,
@@ -589,18 +584,8 @@ class MoonMindAgentRun:
 
                             if isinstance(handle_dict, dict) and "external_id" in handle_dict:
                                 status = handle_dict.get("normalized_status", "unknown")
-                                _VALID_STATUSES = {"queued", "launching", "running", "awaiting_callback", "awaiting_feedback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}
-                                if status not in _VALID_STATUSES:
-                                    workflow.logger.warning(
-                                        "Unknown normalized_status %r from integration start; "
-                                        "treating as error",
-                                        status,
-                                    )
-                                    raise ApplicationError(
-                                        f"Unsupported normalized_status from integration start: {status!r}",
-                                        type="UnsupportedStatus",
-                                        non_retryable=True,
-                                    )
+                                if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
+                                    status = "running"
                                 handle = AgentRunHandle(
                                     runId=handle_dict["external_id"],
                                     agentKind="external",
@@ -682,87 +667,6 @@ class MoonMindAgentRun:
                                     )
 
                             self.run_status = status_obj.status
-
-                            # --- Jules auto-answer sub-flow (spec 094) ---
-                            if (
-                                status_obj.status == RunStatus.awaiting_feedback
-                                and request.agent_kind == "external"
-                                and self._external_agent_id == "jules"
-                            ):
-                                # Read config via activity (determinism-safe)
-                                auto_answer_config = await workflow.execute_activity(
-                                    "integration.jules.get_auto_answer_config",
-                                    [],
-                                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                                    start_to_close_timeout=timedelta(seconds=10),
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                )
-                                aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
-                                aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
-
-                                if not aa_enabled or self._auto_answer_count >= aa_max:
-                                    # Opt-out or max cycles exhausted → escalate
-                                    self.run_status = "intervention_requested"
-                                    workflow.logger.warning(
-                                        "Jules auto-answer %s for session %s (count=%d, max=%d)",
-                                        "disabled" if not aa_enabled else "exhausted",
-                                        self.run_id,
-                                        self._auto_answer_count,
-                                        aa_max,
-                                    )
-                                    break
-
-                                # Extract the question
-                                activities_result = await workflow.execute_activity(
-                                    "integration.jules.list_activities",
-                                    {"session_id": self.run_id},
-                                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                                    start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                )
-
-                                act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
-                                question = activities_result.get("latestAgentQuestion") if isinstance(activities_result, dict) else None
-
-                                if question and act_id and act_id not in self._answered_activity_ids:
-                                    # Dispatch question-answer cycle
-                                    task_context = request.instruction_ref or request.agent_id or ""
-                                    answer_result = await workflow.execute_activity(
-                                        "integration.jules.answer_question",
-                                        {
-                                            "session_id": self.run_id,
-                                            "question": question,
-                                            "task_context": task_context,
-                                        },
-                                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                                        start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
-                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                    )
-                                    if isinstance(answer_result, dict) and answer_result.get("answered"):
-                                        self._answered_activity_ids.add(act_id)
-                                        self._auto_answer_count += 1
-                                        workflow.logger.info(
-                                            "Jules auto-answer #%d sent for session %s (activity %s)",
-                                            self._auto_answer_count,
-                                            self.run_id,
-                                            act_id,
-                                        )
-                                    else:
-                                        workflow.logger.warning(
-                                            "Jules auto-answer failed for session %s: %s",
-                                            self.run_id,
-                                            answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
-                                        )
-                                else:
-                                    # No new question or already answered this one;
-                                    # wait for Jules to transition on its own.
-                                    pass
-
-                                # Continue polling regardless of answer success
-                                self.run_status = RunStatus.running
-                                continue
-                            # --- end auto-answer sub-flow ---
-
                             if status_obj.status in _TERMINAL_RUN_STATUSES:
                                 break
 

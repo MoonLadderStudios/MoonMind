@@ -126,8 +126,8 @@ class TaskTemplateSaveService:
         slug: str | None = None,
     ) -> dict[str, Any]:
         normalized_scope = str(scope or "").strip().lower() or "personal"
-        if normalized_scope not in {"personal"}:
-            raise TaskTemplateValidationError("scope must be personal")
+        if normalized_scope not in {"personal", "team"}:
+            raise TaskTemplateValidationError("scope must be one of: personal, team")
         normalized_title = str(title or "").strip()
         normalized_description = str(description or "").strip() or normalized_title
         if not normalized_title:

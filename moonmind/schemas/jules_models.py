@@ -13,7 +13,6 @@ JulesNormalizedStatus = Literal[
     "failed",
     "canceled",
     "unknown",
-    "awaiting_feedback",
 ]
 
 _JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
@@ -21,7 +20,7 @@ _JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
     "assigned": "queued",
     # -- Actual Jules API State enum values (case-insensitive) --
     "awaiting_plan_approval": "running",
-    "awaiting_user_feedback": "awaiting_feedback",
+    "awaiting_user_feedback": "running",
     "blocked": "running",
     "canceled": "canceled",
     "cancelled": "canceled",
@@ -311,47 +310,8 @@ class JulesIntegrationMergePRResult(BaseModel):
     summary: str = Field(..., alias="summary")
 
 
-class JulesAgentMessage(BaseModel):
-    """The ``AgentMessaged`` activity type from the Jules Activities API.
-
-    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions.activities#AgentMessaged
-    """
-
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
-
-    agent_message: str = Field(..., alias="agentMessage")
-
-
-class JulesActivity(BaseModel):
-    """A single activity from a Jules session.
-
-    See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions.activities#Activity
-    """
-
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
-
-    name: Optional[str] = Field(None, alias="name")
-    id: Optional[str] = Field(None, alias="id")
-    description: Optional[str] = Field(None, alias="description")
-    create_time: Optional[str] = Field(None, alias="createTime")
-    originator: Optional[str] = Field(None, alias="originator")
-    agent_messaged: Optional[JulesAgentMessage] = Field(None, alias="agentMessaged")
-
-
-class JulesListActivitiesResult(BaseModel):
-    """Result from ``integration.jules.list_activities``."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    session_id: str = Field(..., alias="sessionId")
-    latest_agent_question: Optional[str] = Field(None, alias="latestAgentQuestion")
-    activity_id: Optional[str] = Field(None, alias="activityId")
-
-
 __all__ = [
     "GitHubRepoContext",
-    "JulesActivity",
-    "JulesAgentMessage",
     "JulesCreateTaskRequest",
     "JulesIntegrationCancelResult",
     "JulesIntegrationFetchResult",
@@ -359,7 +319,6 @@ __all__ = [
     "JulesIntegrationStartRequest",
     "JulesIntegrationStartResult",
     "JulesIntegrationStatusResult",
-    "JulesListActivitiesResult",
     "JulesResolveTaskRequest",
     "JulesGetTaskRequest",
     "JulesSendMessageRequest",
@@ -368,4 +327,3 @@ __all__ = [
     "SourceContext",
     "normalize_jules_status",
 ]
-

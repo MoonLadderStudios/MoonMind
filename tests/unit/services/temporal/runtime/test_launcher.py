@@ -177,56 +177,6 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
-    monkeypatch.setenv("GH_TOKEN", "ghp-runtime")
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp-legacy")
-
-    store = ManagedRunStore(tmp_path)
-    launcher = ManagedRuntimeLauncher(store)
-    profile = _make_profile(
-        command_template=["echo", "hello"],
-        env_overrides={"MM_SAFE": "1"},
-        passthrough_env_keys=["GH_TOKEN", "GITHUB_TOKEN"],
-    )
-    request = _make_request()
-
-    class _FakeProcess:
-        def __init__(self, pid: int = 777) -> None:
-            self.pid = pid
-            self.returncode = 0
-
-        async def wait(self) -> int:
-            return 0
-
-        async def communicate(self) -> tuple[bytes, bytes]:
-            return b"", b""
-
-    captured_env: dict[str, str] = {}
-
-    async def _fake_create_subprocess_exec(*_args, **kwargs):
-        env = kwargs.get("env")
-        if isinstance(env, dict):
-            captured_env.update(env)
-        return _FakeProcess()
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
-        _fake_create_subprocess_exec,
-    )
-
-    _record, process, endpoints = await launcher.launch(
-        run_id="run-passthrough-1", request=request, profile=profile
-    )
-    await process.wait()
-
-    assert endpoints is None
-    assert captured_env["MM_SAFE"] == "1"
-    assert captured_env["GH_TOKEN"] == "ghp-runtime"
-    assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
-
-
-@pytest.mark.asyncio
 async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path)

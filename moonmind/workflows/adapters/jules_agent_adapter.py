@@ -31,7 +31,6 @@ JulesClientFactory = Callable[[], JulesClient]
 _JULES_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "queued": "queued",
     "running": "running",
-    "awaiting_feedback": "awaiting_feedback",
     "succeeded": "completed",
     "failed": "failed",
     "canceled": "cancelled",

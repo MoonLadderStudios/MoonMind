@@ -103,12 +103,12 @@ def resolve_template_scope_for_user(
     user_id = str(getattr(user, "id", "") or "")
     is_superuser = bool(getattr(user, "is_superuser", False))
 
-    if normalized_scope not in {"global", "personal"}:
+    if normalized_scope not in {"global", "team", "personal"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "invalid_template_scope",
-                "message": "scope must be one of: global, personal",
+                "message": "scope must be one of: global, team, personal",
             },
         )
 
@@ -130,7 +130,7 @@ def resolve_template_scope_for_user(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "code": "template_scope_ref_required",
-                "message": "scopeRef is required when scope is personal.",
+                "message": "scopeRef is required when scope is team/personal.",
             },
         )
 
@@ -145,3 +145,16 @@ def resolve_template_scope_for_user(
             )
         return "personal", normalized_scope_ref
 
+    # Team scope access is limited to owner/admin until a dedicated membership model is available.
+    if not is_superuser and normalized_scope_ref != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "template_scope_forbidden",
+                "message": (
+                    "Team templates are only accessible to the template owner "
+                    "or an admin."
+                ),
+            },
+        )
+    return "team", normalized_scope_ref

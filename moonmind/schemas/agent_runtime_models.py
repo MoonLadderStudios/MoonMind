@@ -40,8 +40,8 @@ _SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "api_key",
     "private_key",
 )
-_ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS: frozenset[str] = frozenset(
-    {"GH_TOKEN", "GITHUB_TOKEN"}
+_ALLOWED_SENSITIVE_ENV_OVERRIDE_KEYS: frozenset[str] = frozenset(
+    {"GITHUB_TOKEN", "GH_TOKEN"}
 )
 _MAX_SUMMARY_CHARS = 4096
 
@@ -281,9 +281,6 @@ class ManagedRuntimeProfile(BaseModel):
     env_overrides: dict[str, str] = Field(
         default_factory=dict, alias="envOverrides"
     )
-    passthrough_env_keys: list[str] = Field(
-        default_factory=list, alias="passthroughEnvKeys"
-    )
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":
@@ -292,26 +289,11 @@ class ManagedRuntimeProfile(BaseModel):
         )
         if not self.command_template:
             raise ValueError("commandTemplate must not be empty")
-        if _contains_sensitive_key(self.env_overrides):
+        if _contains_sensitive_key(
+            self.env_overrides,
+            allowed_sensitive_keys=_ALLOWED_SENSITIVE_ENV_OVERRIDE_KEYS,
+        ):
             raise ValueError("envOverrides must not contain raw credential keys")
-
-        normalized_passthrough: list[str] = []
-        seen: set[str] = set()
-        for key in self.passthrough_env_keys:
-            normalized_key = _require_non_blank(
-                str(key), field_name="passthroughEnvKeys[]"
-            ).upper()
-            if normalized_key not in _ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS:
-                supported = ", ".join(sorted(_ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS))
-                raise ValueError(
-                    "passthroughEnvKeys contains unsupported key "
-                    f"'{normalized_key}'. Supported keys: {supported}"
-                )
-            if normalized_key in seen:
-                continue
-            seen.add(normalized_key)
-            normalized_passthrough.append(normalized_key)
-        self.passthrough_env_keys = normalized_passthrough
         return self
 
 

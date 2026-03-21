@@ -114,7 +114,7 @@ def test_shape_environment_for_oauth_without_mount_path():
     assert "GEMINI_API_KEY" not in shaped
 
 
-def test_shape_environment_for_oauth_clears_github_cli_tokens():
+def test_shape_environment_for_oauth_preserves_github_cli_tokens():
     base = {
         "HOME": "/home/user",
         "GH_TOKEN": "ghp-token",
@@ -122,8 +122,8 @@ def test_shape_environment_for_oauth_clears_github_cli_tokens():
         "OPENAI_API_KEY": "secret",
     }
     shaped = _shape_environment_for_oauth(base, volume_mount_path=None)
-    assert "GH_TOKEN" not in shaped
-    assert "GITHUB_TOKEN" not in shaped
+    assert shaped["GH_TOKEN"] == "ghp-token"
+    assert shaped["GITHUB_TOKEN"] == "github-token"
     assert "OPENAI_API_KEY" not in shaped
 
 
@@ -210,7 +210,7 @@ async def test_resolve_profile_auto_picks_first():
     assert handle.metadata["profile_id"] == "first"
 
 
-async def test_start_uses_passthrough_keys_for_github_tokens(
+async def test_start_preserves_github_tokens_in_launch_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profiles = [
@@ -265,16 +265,8 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
         if isinstance(profile_payload.get("envOverrides"), dict)
         else {}
     )
-    passthrough_env_keys = (
-        profile_payload.get("passthrough_env_keys")
-        if isinstance(profile_payload.get("passthrough_env_keys"), list)
-        else profile_payload.get("passthroughEnvKeys")
-        if isinstance(profile_payload.get("passthroughEnvKeys"), list)
-        else []
-    )
-    assert set(passthrough_env_keys) == {"GH_TOKEN", "GITHUB_TOKEN"}
-    assert "GH_TOKEN" not in env_overrides
-    assert "GITHUB_TOKEN" not in env_overrides
+    assert env_overrides["GH_TOKEN"] == "ghp-direct"
+    assert env_overrides["GITHUB_TOKEN"] == "ghp-legacy"
     assert "OPENAI_API_KEY" not in env_overrides
 
 

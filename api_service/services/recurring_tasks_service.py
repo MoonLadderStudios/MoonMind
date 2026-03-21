@@ -99,7 +99,7 @@ def _normalize_scope_type(value: object) -> RecurringTaskScopeType:
         return RecurringTaskScopeType(raw)
     except ValueError as exc:
         raise RecurringTaskValidationError(
-            "scopeType must be one of: personal, global"
+            "scopeType must be one of: personal, team, global"
         ) from exc
 
 
@@ -337,7 +337,7 @@ class RecurringTasksService:
 
         if not can_manage_global:
             raise RecurringTaskAuthorizationError(
-                "Operator privileges are required to manage this schedule"
+                "Operator privileges are required for team schedules"
             )
         return definition
 
