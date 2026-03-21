@@ -107,7 +107,7 @@ class MoonMindOAuthSessionWorkflow:
     async def run(self, input_payload: dict[str, Any]) -> OAuthSessionOutput:
         self._session_id = input_payload.get("session_id", "")
         runtime_id = input_payload.get("runtime_id", "")
-        profile_id = input_payload.get("profile_id", "")
+        _profile_id = input_payload.get("profile_id", "")  # noqa: F841 — used in Phase 2
         volume_ref = input_payload.get("volume_ref", "")
 
         if not self._session_id or not runtime_id:

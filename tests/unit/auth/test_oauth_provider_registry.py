@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from moonmind.workflows.temporal.runtime.providers.base import OAuthProviderSpec
 from moonmind.workflows.temporal.runtime.providers.registry import (
     OAUTH_PROVIDERS,
     get_provider,
