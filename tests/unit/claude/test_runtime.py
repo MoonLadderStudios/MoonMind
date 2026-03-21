@@ -40,12 +40,9 @@ def test_resolve_anthropic_api_key_falls_back_to_alias(monkeypatch) -> None:
 
 def test_is_claude_runtime_enabled_respects_alias(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setenv("CLAUDE_API_KEY", "alias-key")
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
 
     assert is_claude_runtime_enabled()
-
-    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
-    assert is_claude_runtime_enabled() is False
 
 
 def test_build_runtime_gate_state_reports_source(monkeypatch) -> None:
@@ -65,6 +62,6 @@ def test_build_runtime_gate_state_honors_custom_error_message(monkeypatch) -> No
 
     state = build_runtime_gate_state(error_message="custom-error")
 
-    assert state.enabled is False
-    assert state.source_env is None
+    assert state.enabled is True
+    assert state.source_env == "unconditional"
     assert state.error_message == "custom-error"

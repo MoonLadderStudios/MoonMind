@@ -653,33 +653,6 @@ async def test_create_task_job_uses_default_model_for_configured_runtime(
     assert job.payload["requiredCapabilities"] == ["gemini_cli", "git"]
 
 
-async def test_create_task_job_rejects_claude_runtime_without_api_key(
-    tmp_path: Path,
-) -> None:
-    """Queue service should reject Claude runtime when API key is missing."""
-
-    async with queue_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
-            with pytest.raises(
-                AgentQueueValidationError,
-                match="targetRuntime=claude requires ANTHROPIC_API_KEY",
-            ):
-                await service.create_job(
-                    job_type="task",
-                    payload={
-                        "repository": "Moon/Mind",
-                        "task": {
-                            "instructions": "Run task",
-                            "runtime": {"mode": "claude"},
-                            "git": {"startingBranch": None, "newBranch": None},
-                            "publish": {"mode": "none"},
-                        },
-                    },
-                )
-
-
 async def test_create_task_job_explicit_runtime_overrides_default_runtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

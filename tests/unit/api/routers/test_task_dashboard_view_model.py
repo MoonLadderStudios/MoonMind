@@ -299,8 +299,8 @@ def test_normalize_status_maps_temporal_waits_to_awaiting_action() -> None:
     assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
 
 
-def test_build_runtime_config_includes_claude_when_api_key_set(monkeypatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "enabled")
+def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(settings.jules, "jules_enabled", False)
     monkeypatch.setattr(settings.jules, "jules_api_url", None)
     monkeypatch.setattr(settings.jules, "jules_api_key", None)

@@ -68,7 +68,9 @@ def build_runtime_gate_state(
                 enabled=True, source_env=key, error_message=error_message
             )
 
-    return RuntimeGateState(enabled=False, source_env=None, error_message=error_message)
+    return RuntimeGateState(
+        enabled=True, source_env="unconditional", error_message=error_message
+    )
 
 
 def is_claude_runtime_enabled(
@@ -76,7 +78,7 @@ def is_claude_runtime_enabled(
 ) -> bool:
     """Return whether Claude runtime should be enabled based on API key presence."""
 
-    return build_runtime_gate_state(api_key=api_key, env=env).enabled
+    return True
 
 
 __all__ = [

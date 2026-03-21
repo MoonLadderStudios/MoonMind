@@ -806,26 +806,6 @@ def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
 
 
 class TestAppSettingsRuntimeValidation:
-    def test_app_settings_rejects_claude_default_without_api_key(
-        self, app_settings_defaults, monkeypatch
-    ):
-        for key in (
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_API_KEY",
-        ):
-            monkeypatch.delenv(key, raising=False)
-        defaults = dict(app_settings_defaults)
-        defaults["workflow"] = {"default_task_runtime": "claude"}
-
-        with pytest.raises(
-            ValueError,
-            match="default_task_runtime=claude requires ANTHROPIC_API_KEY or CLAUDE_API_KEY",
-        ):
-            AppSettings(**defaults)
-
     def test_app_settings_allows_claude_default_with_api_key(
         self, app_settings_defaults, monkeypatch
     ):
