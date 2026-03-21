@@ -432,6 +432,11 @@ class ManagedRuntimeLauncher:
         for key in _runtime_env_keys:
             if key not in env_overrides and key in os.environ:
                 env_overrides[key] = os.environ[key]
+        for key in profile.passthrough_env_keys:
+            value = os.environ.get(key)
+            if value is None or not str(value).strip():
+                continue
+            env_overrides[key] = value
 
         use_tmate = shutil.which("tmate") is not None
         endpoints: dict[str, str] | None = None

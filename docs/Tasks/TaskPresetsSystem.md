@@ -56,7 +56,7 @@ Plan Interpreter (MoonMind.Run workflow)
 
 ### Goals
 
-- Provide a single authoritative preset catalog with versioning, ownership, and scopes (global / team / personal).
+- Provide a single authoritative preset catalog with versioning, ownership, and scopes (global / personal).
 - Offer deterministic server-side expansion that produces validated `PlanDefinition` artifacts with pinned registry snapshots.
 - Deliver UI conveniences (preview, append/replace, collapse-as-group, favorites) without changing the Plan execution contract.
 - Support CLI/MCP flows via REST endpoints identical to the UI.
@@ -120,8 +120,8 @@ A preset is a `TaskStepTemplate` row with versioned releases:
 | Field | Type | Description |
 |-------|------|-------------|
 | `slug` | `String(128)` | Unique identifier within scope. URL-safe, lowercase. |
-| `scope_type` | `Enum(GLOBAL, TEAM, PERSONAL)` | Visibility scope. |
-| `scope_ref` | `String(64)` | Owner reference (user_id or team_id). Null for GLOBAL. |
+| `scope_type` | `Enum(GLOBAL, PERSONAL)` | Visibility scope. |
+| `scope_ref` | `String(64)` | Owner reference (user_id for PERSONAL). Null for GLOBAL. |
 | `title` | `String(255)` | Human-readable display name. |
 | `description` | `Text` | Long-form description shown in catalog. |
 | `tags` | `JSON[List[str]]` | Searchable tags for filtering. |
@@ -338,7 +338,7 @@ Base path: `/api/task-step-templates`
 |--------|------|-------------|
 | `GET /` | List presets | Filterable by scope, tags, favorites, recency. |
 | `POST /` | Create preset | New catalog entry with initial version. |
-| `POST /save-from-task` | Save from steps | Convert executed steps into a personal/team preset. |
+| `POST /save-from-task` | Save from steps | Convert executed steps into a personal preset. |
 | `POST /{slug}:expand` | Expand preset | Compile to `PlanDefinition` with given inputs. Returns Plan artifact ref. |
 | `GET /{slug}` | Get latest version | Fetch preset details with latest active release. |
 | `GET /{slug}/versions/{version}` | Get specific version | Fetch a pinned version. |
@@ -435,7 +435,6 @@ The save service sanitizes steps (strips forbidden keys), scans for secrets (Git
 | Scope | Visibility | Create | Activate | Delete |
 |-------|-----------|--------|----------|--------|
 | `PERSONAL` | Owner only | Any user | Auto (DRAFT default) | Owner |
-| `TEAM` | Team members | Team members | Team admin | Team admin |
 | `GLOBAL` | All users | Admin | Admin (requires review) | Admin |
 
 ### 7.2 Access enforcement
@@ -466,7 +465,7 @@ The save service sanitizes steps (strips forbidden keys), scans for secrets (Git
 - Select steps from an executed task.
 - Scrub detected secrets (highlighted in UI).
 - Parameterize repeated values as input placeholders.
-- Choose scope (personal or team; global requires admin promotion).
+- Choose scope (personal; global requires admin promotion).
 
 ---
 

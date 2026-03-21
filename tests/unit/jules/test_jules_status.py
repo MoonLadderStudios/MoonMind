@@ -98,3 +98,15 @@ class TestNormalizeJulesStatus:
         snapshot = normalize_jules_status("  completed  ")
         assert snapshot.normalized_status == "succeeded"
         assert snapshot.provider_status == "completed"
+
+    @pytest.mark.parametrize(
+        "raw_status",
+        ["awaiting_user_feedback", "AWAITING_USER_FEEDBACK"],
+    )
+    def test_awaiting_feedback_statuses(self, raw_status: str) -> None:
+        """T009: awaiting_user_feedback must map to awaiting_feedback."""
+        snapshot = normalize_jules_status(raw_status)
+        assert snapshot.normalized_status == "awaiting_feedback"
+        assert snapshot.terminal is False
+        assert snapshot.succeeded is False
+        assert snapshot.failed is False
