@@ -22,7 +22,7 @@ The following documents contain valuable architectural concepts or workflows but
 | Document | Status | Judgment |
 |----------|--------|----------|
 | `docs/LiveTaskHandoff.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/LiveTaskManagement.md` and restructured to cover live log tailing + terminal handoff) |
-| `docs/ManifestTaskSystem.md` | Partially out-of-date | Updated (Moved to `docs/Tasks/ManifestTaskSystem.md` and refactored) |
+| `docs/ManifestTaskSystem.md` | Partially out-of-date | Merged into `docs/RAG/ManifestIngestDesign.md` (§17–§19) and deleted |
 | `docs/OrchestratorArchitecture.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorArchitecture.md` and refactored) |
 | `docs/OrchestratorTaskRuntime.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorTaskRuntime.md` and refactored) |
 | `docs/SecretStore.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/SecretStore.md` and refactored) |
@@ -30,7 +30,7 @@ The following documents contain valuable architectural concepts or workflows but
 | `docs/SkillGithubPrResolver.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/SkillGithubPrResolver.md` and refactored) |
 | `docs/WorkerGitAuth.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/WorkerGitAuth.md` and refactored) |
 | `docs/WorkerPauseSystem.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/WorkerPauseSystem.md` and refactored) |
-| `docs/WorkerRag.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/WorkerRag.md` and refactored) |
+| `docs/WorkerRag.md` | Partially out-of-date | Updated (Moved to `docs/RAG/WorkflowRag.md` and refactored) |
 | `docs/WorkerVectorEmbedding.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/WorkerVectorEmbedding.md` and refactored) |
 | `docs/ops-runbook.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/ops-runbook.md` and refactored) |
 | `docs/Tasks/TasksJira.md` | Partially out-of-date | Updated (Finished Temporal Activity Implementation Details) |

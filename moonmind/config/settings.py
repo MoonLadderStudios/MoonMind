@@ -1305,6 +1305,9 @@ class SecuritySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
 
+DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
+
+
 class GoogleSettings(BaseSettings):
     """Google/Gemini API settings"""
 
@@ -1316,9 +1319,11 @@ class GoogleSettings(BaseSettings):
     )
     google_chat_model: str = Field("gemini-3.1-pro", env="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
-        "gemini-embedding-001", env="GOOGLE_EMBEDDING_MODEL"
+        "gemini-embedding-2-preview", env="GOOGLE_EMBEDDING_MODEL"
     )
-    google_embedding_dimensions: int = Field(3072, env="GOOGLE_EMBEDDING_DIMENSIONS")
+    google_embedding_dimensions: int = Field(
+        DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS, env="GOOGLE_EMBEDDING_DIMENSIONS"
+    )
     google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
     google_embed_batch_size: int = Field(100, env="GOOGLE_EMBED_BATCH_SIZE")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
@@ -1912,6 +1917,23 @@ class AppSettings(BaseSettings):
         env="GEMINI_HOME",
         validation_alias=AliasChoices("gemini_home", "GEMINI_HOME"),
         description="Compatibility passthrough for legacy Gemini auth home.",
+        exclude=True,
+    )
+    moonmind_claude_cli_auth_mode: Optional[str] = Field(
+        None,
+        env="MOONMIND_CLAUDE_CLI_AUTH_MODE",
+        validation_alias=AliasChoices(
+            "moonmind_claude_cli_auth_mode",
+            "MOONMIND_CLAUDE_CLI_AUTH_MODE",
+        ),
+        description="Compatibility passthrough for legacy Claude CLI auth mode.",
+        exclude=True,
+    )
+    claude_home: Optional[str] = Field(
+        None,
+        env="CLAUDE_HOME",
+        validation_alias=AliasChoices("claude_home", "CLAUDE_HOME"),
+        description="Compatibility passthrough for legacy Claude auth home.",
         exclude=True,
     )
 

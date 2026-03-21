@@ -32,7 +32,7 @@ export MOONMIND_ALLOWED_SKILLS="agentkit,custom-skill"
 
 # Embedding fast path
 export DEFAULT_EMBEDDING_PROVIDER="google"
-export GOOGLE_EMBEDDING_MODEL="gemini-embedding-001"
+export GOOGLE_EMBEDDING_MODEL="gemini-embedding-2-preview"
 export GOOGLE_API_KEY="<google-api-key>"
 ```
 

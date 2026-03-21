@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 import pytest
@@ -7,6 +8,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
     MoonMindRun,
+    _build_runtime_planner,
     _build_runtime_activities,
     main_async,
     resolve_external_adapter,
@@ -15,6 +17,67 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
+
+
+def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                    "version": "1.0",
+                    "inputs": {"pr": "123", "repo": "MoonLadderStudios/MoonMind"},
+                },
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["instructions"].startswith(
+        "Execute skill 'pr-resolver' with inputs:"
+    )
+    assert '"pr": "123"' in node_inputs["instructions"]
+    assert node_inputs["repo"] == "MoonLadderStudios/MoonMind"
+
+
+def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "pr-resolver task requires task.tool.inputs.pr or "
+            "task.git.startingBranch"
+        ),
+    ):
+        planner(
+            inputs={
+                "task": {
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                        "version": "1.0",
+                    },
+                    "runtime": {"mode": "gemini_cli"},
+                }
+            },
+            parameters={},
+            snapshot=snapshot,
+        )
 
 
 @pytest.mark.asyncio

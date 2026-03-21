@@ -16,7 +16,7 @@ Bring up Codex + Gemini workers with:
 - Required environment values:
   - `GOOGLE_API_KEY`
   - `DEFAULT_EMBEDDING_PROVIDER=google`
-  - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-001`
+  - `GOOGLE_EMBEDDING_MODEL=gemini-embedding-2-preview`
   - `CODEX_ENV=prod`
   - `CODEX_MODEL=gpt-5-codex`
   - `GITHUB_TOKEN`
@@ -74,7 +74,7 @@ Expected output:
 
 ```text
 google
-gemini-embedding-001
+gemini-embedding-2-preview
 ```
 
 ## 6) Validate workflow API compatibility

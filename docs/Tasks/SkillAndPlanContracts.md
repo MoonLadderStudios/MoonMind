@@ -2,8 +2,8 @@
 
 MoonMind system design (Temporal-first)
 
-Status: **Ready for implementation** (greenfield)
-Last updated: 2026-03-05
+Status: **Implemented** (contracts active, runtime live)
+Last updated: 2026-03-20
 
 ---
 
@@ -34,14 +34,33 @@ Canonical terminology for execution payloads is:
 
 * **task** (top-level user request)
 * **step** (plan node)
-* **tool** (executable capability)
+* **tool** (executable capability — Temporal contract object)
 
-A **skill** is a tool subtype (`tool.type = "skill"`).
+There are two tool subtypes:
+
+* `tool.type = "skill"` — dispatched as a Temporal Activity (`mm.tool.execute` / `mm.skill.execute`). Uses a `ToolDefinition` from the registry snapshot.
+* `tool.type = "agent_runtime"` — dispatched as a child `MoonMind.AgentRun` workflow. Uses an `AgentExecutionRequest`.
+
+> **Note:** The term **"Skill"** in `.agents/skills/` directories and `SKILL.md` files
+> refers to **agent instruction bundles** — markdown files that AI agents read for
+> guidance. These are a separate concept from the Temporal contract `ToolDefinition`
+> objects described in this document.
+
+Canonical Python class names:
+
+| Contract | Canonical class | Legacy alias |
+|---|---|---|
+| Tool definition | `ToolDefinition` | `SkillDefinition` |
+| Tool result | `ToolResult` | `SkillResult` |
+| Tool failure | `ToolFailure` | `SkillFailure` |
+| Plan node | `Step` | `SkillInvocation` |
+| Policies | `ToolPolicies` | `SkillPolicies` |
 
 Compatibility rule:
 
-* legacy `skill` payload fields are accepted during migration
-* new runtime and API payloads should emit `tool` fields as canonical
+* Legacy `Skill*` aliases are re-exported for backward compatibility
+* New code should import canonical `Tool*` names
+* Legacy `skill` payload fields are accepted during migration
 
 ---
 
@@ -96,7 +115,7 @@ Large inputs/outputs (plans, manifests, patches, logs, model transcripts) are st
 
 ---
 
-## 4) Tool contract (skill subtype)
+## 4) Tool contract
 
 ### 4.1 Definition
 
@@ -104,12 +123,18 @@ A **Tool** is a named capability defined by:
 
 * input schema
 * output schema
-* execution binding (how it is executed as an Activity)
+* execution binding (how it is executed as an Activity or child workflow)
 * default policies (timeouts, retries)
 * capability requirements (what worker fleet can run it)
 
-A Tool is not a workflow. Workflows interpret Plans and invoke Tools as Activities.
-In current MoonMind execution, the active tool subtype is `skill`.
+A Tool is not a workflow. Workflows interpret Plans and invoke Tools as Activities (or child workflows for `agent_runtime`).
+
+Two tool subtypes are currently in use:
+
+| `tool.type` | Dispatch mechanism | Contract |
+|---|---|---|
+| `skill` | Temporal Activity (`mm.tool.execute`) | `ToolDefinition` from registry snapshot |
+| `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
 ---
 
@@ -272,7 +297,7 @@ All failures normalize to:
 
 #### Retry semantics
 
-* Activity retry policy is derived from SkillDefinition defaults.
+* Activity retry policy is derived from ToolDefinition defaults.
 * `non_retryable_error_codes` stop retries immediately.
 * `retryable` is informative; the actual retry decision is policy-driven.
 
@@ -295,7 +320,7 @@ All failures normalize to:
 
 ### 5.3 Worker capability model
 
-Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). SkillDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
+Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). ToolDefinitions declare requirements. The runtime selects a task queue based on capabilities (details in Worker Topology doc).
 
 ---
 
@@ -303,7 +328,7 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`). S
 
 ### 6.1 Definition
 
-A **Plan** is a DAG of SkillInvocations with explicit dependencies and policy.
+A **Plan** is a DAG of tool invocations (Steps) with explicit dependencies and policy.
 
 ### 6.2 Plan schema (DAG-first)
 
@@ -432,24 +457,24 @@ Planning is expressed as one or more skills (e.g., `plan.generate`) executed as 
 
 **Inputs**
 
-* `SkillInvocation` node
+* `Step` (plan node)
 * pinned `registry_snapshot`
 
 **Resolution**
 
-* Resolve `SkillDefinition` from snapshot.
-* Derive Activity Type and routing target (task queue) from SkillDefinition + worker capabilities.
+* Resolve `ToolDefinition` from snapshot.
+* Derive Activity Type and routing target (task queue) from ToolDefinition + worker capabilities.
 
 **Invocation payload**
 
-* `skill.name`, `skill.version`
+* `tool.name`, `tool.version`
 * `inputs` (with references resolved to concrete values or artifact refs)
 * an execution context (execution identifiers, correlation IDs)
 * optional overrides (timeouts/retries within allowed bounds)
 
 **Result**
 
-* `SkillResult` recorded by Temporal as the activity result (small)
+* `ToolResult` recorded by Temporal as the activity result (small)
 * large outputs written as artifacts and referenced
 
 ---
@@ -482,8 +507,8 @@ Progress is represented as a small structured object:
 
 ### 10.3 Intermediate outputs
 
-* Each node completion produces a `SkillResult`.
-* If `SkillResult` is small, store inline in interpreter state.
+* Each node completion produces a `ToolResult`.
+* If `ToolResult` is small, store inline in interpreter state.
 * If large, store as artifact and keep only `artifact_ref`.
 * Nodes may reference previous outputs via `ref` pointers (resolved deterministically).
 
@@ -491,7 +516,7 @@ Progress is represented as a small structured object:
 
 ## 11) Validation rules (authoritative)
 
-### 11.1 Skill registry validation
+### 11.1 Tool registry validation
 
 * unique `(name, version)`
 * valid JSON Schemas
@@ -614,9 +639,9 @@ Reserve fields without enabling them:
 
 ## 13) Deliverables (this doc’s outputs)
 
-### A) Skill registry spec
+### A) Tool registry spec
 
-* SkillDefinition schema (required fields, validation)
+* ToolDefinition schema (required fields, validation)
 * Static snapshot mechanism (digest + artifact ref)
 * Capability requirements and policy defaults
 * Activity type binding rules (hybrid model)
@@ -642,7 +667,7 @@ Reserve fields without enabling them:
 
 ## 14) Implementation checklist (minimum to start coding)
 
-1. Define Skill registry file format + loader + validator.
+1. Define Tool registry file format + loader + validator.
 2. Implement registry snapshot digest + artifact storage.
 3. Implement `plan.validate` activity (deep validation).
 4. Implement Plan Interpreter inside `MoonMind.Run` workflow:

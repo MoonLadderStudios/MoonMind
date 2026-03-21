@@ -78,7 +78,7 @@
 {
   "error": {
     "code": "embedding_dimension_mismatch",
-    "message": "Collection moonmind__repo expects dim=768 but gemini-embedding-001 outputs 3072.",
+    "message": "Collection moonmind__repo expects dim=768 but gemini-embedding-2-preview outputs 3072.",
     "action": "Run moonmind rag sync-embedding --collection moonmind__repo"
   }
 }

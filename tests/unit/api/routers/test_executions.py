@@ -304,10 +304,18 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
                 "requiredCapabilities": ["git"],
                 "task": {
                     "instructions": "Fix failing Temporal run.",
-                    "runtime": {"mode": "codex", "model": "gpt-5-codex", "effort": "high"},
+                    "runtime": {
+                        "mode": "codex",
+                        "model": "gpt-5-codex",
+                        "effort": "high",
+                    },
                     "skill": {
                         "id": "pr-resolver",
                         "args": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+                    },
+                    "git": {
+                        "startingBranch": "feature/resolve-pr",
+                        "newBranch": "codex/pr-resolver",
                     },
                 },
             },
@@ -329,6 +337,74 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     assert initial_parameters["task"]["skill"] == {
         "name": "pr-resolver",
         "version": "1.0",
+    }
+    assert initial_parameters["task"]["git"] == {
+        "startingBranch": "feature/resolve-pr",
+        "newBranch": "codex/pr-resolver",
+    }
+
+
+def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                        "version": "1.0",
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "pr-resolver task requires payload.task.instructions, payload.task.inputs.pr, "
+        "or payload.task.git.startingBranch."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "task": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                        "version": "1.0",
+                    },
+                    "git": {"startingBranch": "feature/resolve-pr"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["task"]["git"] == {
+        "startingBranch": "feature/resolve-pr"
     }
 
 

@@ -4,7 +4,7 @@
 
 ## Summary
 
-Harden and validate the existing Temporal-based manifest ingest implementation to match the updated `docs/Tasks/ManifestTaskSystem.md` design. This consolidates specs 032 and 034 into a single aligned spec with full test coverage. Primary work is test augmentation and verification, with targeted code fixes for any gaps discovered.
+Harden and validate the existing Temporal-based manifest ingest implementation to match the updated `docs/RAG/ManifestTaskSystem.md` design. This consolidates specs 032 and 034 into a single aligned spec with full test coverage. Primary work is test augmentation and verification, with targeted code fixes for any gaps discovered.
 
 ## Technical Context
 

@@ -341,8 +341,6 @@ def test_get_branch_pr_comments_resolve_metadata_falls_back_to_head_pr_list(
     payload = resolve_pr_metadata("feature/test-branch")
     assert payload["number"] == 780
     assert payload["headRefName"] == "feature/test-branch"
-
-
 def test_review_bot_comments_are_actionable_by_default(
     pr_resolve_snapshot_module: dict[str, Any],
 ) -> None:
