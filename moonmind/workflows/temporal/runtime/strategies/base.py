@@ -122,5 +122,7 @@ class ManagedRuntimeStrategy(ABC):
 
         Returns ``None`` by default.  Override for structured output
         formats like Cursor NDJSON (``--output-format stream-json``).
+
+        See :class:`~moonmind.workflows.temporal.runtime.output_parser.RuntimeOutputParser`.
         """
         return None
