@@ -25,13 +25,19 @@ def upgrade() -> None:
         create_type=False
     )
     oauth_status_enum.create(op.get_bind(), checkfirst=True)
+    managed_agent_auth_mode_enum = postgresql.ENUM(
+        'oauth',
+        'api_key',
+        name='managedagentauthmode',
+        create_type=False,
+    )
 
     op.create_table(
         'managed_agent_oauth_sessions',
         sa.Column('session_id', sa.String(length=128), nullable=False),
         sa.Column('runtime_id', sa.String(length=64), nullable=False),
         sa.Column('profile_id', sa.String(length=128), nullable=False),
-        sa.Column('auth_mode', sa.Enum('oauth', 'api_key', name='managedagentauthmode'), server_default='oauth', nullable=False),
+        sa.Column('auth_mode', managed_agent_auth_mode_enum, server_default='oauth', nullable=False),
         sa.Column('session_transport', sa.String(length=64), server_default=sa.text("'tmate'"), nullable=False),
         sa.Column('volume_ref', sa.String(length=255), nullable=True),
         sa.Column('volume_mount_path', sa.String(length=512), nullable=True),
