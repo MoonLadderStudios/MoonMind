@@ -415,3 +415,114 @@ async def test_import_seed_templates_skips_existing(tmp_path):
                 seed_dir=seed_dir
             )
             assert created_count_second == 0
+
+
+async def test_sync_seed_templates_creates_missing_seed(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed_data = {
+        "slug": "speckit-orchestrate",
+        "title": "Speckit Orchestrate",
+        "description": "Seeded preset",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [
+            {
+                "title": "Specify",
+                "instructions": "Use {{ inputs.feature_request }}",
+                "skill": {"id": "speckit-specify", "args": {}},
+            }
+        ],
+        "inputs": [
+            {
+                "name": "feature_request",
+                "label": "Feature Request",
+                "type": "markdown",
+                "required": True,
+            }
+        ],
+    }
+    _write_seed_template(seed_dir, seed_data)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            result = await service.sync_seed_templates(seed_dir=seed_dir)
+
+            assert result.created == 1
+            assert result.updated == 0
+
+            template = await service._get_template_for_scope(
+                slug="speckit-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Speckit Orchestrate"
+            assert template.latest_version is not None
+            assert template.latest_version.steps[0]["skill"]["id"] == "speckit-specify"
+
+
+async def test_sync_seed_templates_updates_existing_seed(tmp_path):
+    seed_dir = tmp_path / "seeds"
+    seed_data = {
+        "slug": "speckit-orchestrate",
+        "title": "Speckit Orchestrate",
+        "description": "Updated seeded preset",
+        "scope": "global",
+        "version": "1.0.0",
+        "steps": [
+            {
+                "title": "Specify",
+                "instructions": "Translate {{ inputs.feature_request }} into spec artifacts.",
+                "skill": {"id": "speckit-specify", "args": {}},
+            },
+            {
+                "title": "Plan",
+                "instructions": "Plan the implementation.",
+                "skill": {"id": "speckit-plan", "args": {}},
+            },
+        ],
+        "inputs": [
+            {
+                "name": "feature_request",
+                "label": "Feature Request",
+                "type": "markdown",
+                "required": True,
+            }
+        ],
+        "annotations": {"sourceSkill": "speckit-orchestrate"},
+    }
+    _write_seed_template(seed_dir, seed_data)
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TaskTemplateCatalogService(session)
+            await service.create_template(
+                slug="speckit-orchestrate",
+                title="Legacy Preset",
+                description="Old preset",
+                scope="global",
+                scope_ref=None,
+                tags=["legacy"],
+                inputs_schema=[],
+                steps=[{"instructions": "legacy step"}],
+                annotations={"sourceSkill": "agentkit-orchestrate"},
+                required_capabilities=[],
+                created_by=None,
+                release_status=TaskTemplateReleaseStatus.ACTIVE,
+            )
+
+            result = await service.sync_seed_templates(seed_dir=seed_dir)
+
+            assert result.created == 0
+            assert result.updated == 1
+
+            template = await service._get_template_for_scope(
+                slug="speckit-orchestrate",
+                scope=TaskTemplateScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.description == "Updated seeded preset"
+            assert template.latest_version is not None
+            assert len(template.latest_version.steps) == 2
+            assert template.latest_version.steps[0]["skill"]["id"] == "speckit-specify"
+            assert template.latest_version.annotations["sourceSkill"] == "speckit-orchestrate"

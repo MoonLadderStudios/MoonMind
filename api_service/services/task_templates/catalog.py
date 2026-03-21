@@ -299,6 +299,14 @@ def load_seed_template_definitions(seed_dir: Path) -> list[dict[str, Any]]:
     return loaded
 
 
+@dataclass(slots=True)
+class SeedSyncResult:
+    """Summary of a seed synchronization run."""
+
+    created: int = 0
+    updated: int = 0
+
+
 class TaskTemplateCatalogService:
     """Catalog service for task step templates."""
 
@@ -1140,3 +1148,147 @@ class TaskTemplateCatalogService:
         if created > 0:
             await self._session.commit()
         return created
+
+    async def sync_seed_templates(
+        self,
+        *,
+        seed_dir: Path,
+    ) -> SeedSyncResult:
+        """Create or refresh seeded templates from YAML definitions."""
+
+        loaded = load_seed_template_definitions(seed_dir)
+        result = SeedSyncResult()
+
+        for item in loaded:
+            scope = _normalize_scope(str(item.get("scope", "global")).strip() or "global")
+            scope_ref = _normalize_scope_ref(scope, item.get("scopeRef"))
+            slug = str(item.get("slug") or _slugify_from_title(item.get("title", "")))
+            normalized_slug = _normalize_slug(slug)
+            title = str(item.get("title") or "").strip()
+            description = str(item.get("description") or "").strip() or "Seed template."
+            version_label = str(item.get("version", "1.0.0")).strip() or "1.0.0"
+            validated_inputs = self._validate_inputs_schema(item.get("inputs") or [])
+            validated_steps = self._validate_template_steps(item.get("steps") or [])
+            annotations = dict(item.get("annotations") or {})
+            derived_capabilities = _normalize_capabilities(
+                (item.get("requiredCapabilities") or [])
+                + [
+                    cap
+                    for step in validated_steps
+                    for cap in _extract_step_capabilities(step)
+                ]
+            )
+
+            existing = await self._session.execute(
+                select(TaskStepTemplate)
+                .where(
+                    TaskStepTemplate.slug == normalized_slug,
+                    TaskStepTemplate.scope_type == scope,
+                    TaskStepTemplate.scope_ref == scope_ref,
+                )
+                .options(
+                    selectinload(TaskStepTemplate.latest_version),
+                    selectinload(TaskStepTemplate.versions),
+                )
+                .limit(1)
+            )
+            template = existing.scalar_one_or_none()
+
+            if template is None:
+                await self.create_template(
+                    slug=normalized_slug,
+                    title=title,
+                    description=description,
+                    scope=scope.value,
+                    scope_ref=scope_ref,
+                    tags=item.get("tags") or [],
+                    inputs_schema=validated_inputs,
+                    steps=validated_steps,
+                    annotations=annotations,
+                    required_capabilities=derived_capabilities,
+                    created_by=None,
+                    version=version_label,
+                    release_status=TaskTemplateReleaseStatus.ACTIVE,
+                    seed_source=item.get("seedSource"),
+                    auto_commit=False,
+                )
+                result.created += 1
+                continue
+
+            updated = False
+            normalized_tags = _normalize_tag_list(item.get("tags") or [])
+            if template.title != title:
+                template.title = title
+                updated = True
+            if template.description != description:
+                template.description = description
+                updated = True
+            if list(template.tags or []) != normalized_tags:
+                template.tags = normalized_tags
+                updated = True
+            if list(template.required_capabilities or []) != list(derived_capabilities):
+                template.required_capabilities = list(derived_capabilities)
+                updated = True
+            if not template.is_active:
+                template.is_active = True
+                updated = True
+
+            version_model = next(
+                (
+                    candidate
+                    for candidate in template.versions
+                    if candidate.version == version_label
+                ),
+                None,
+            )
+            if version_model is None:
+                version_model = TaskStepTemplateVersion(
+                    id=uuid4(),
+                    template=template,
+                    version=version_label,
+                    inputs_schema=validated_inputs,
+                    steps=validated_steps,
+                    annotations=annotations,
+                    required_capabilities=derived_capabilities,
+                    max_step_count=max(1, len(validated_steps)),
+                    release_status=TaskTemplateReleaseStatus.ACTIVE,
+                    seed_source=item.get("seedSource"),
+                )
+                self._session.add(version_model)
+                updated = True
+            else:
+                if list(version_model.inputs_schema or []) != validated_inputs:
+                    version_model.inputs_schema = validated_inputs
+                    updated = True
+                if list(version_model.steps or []) != validated_steps:
+                    version_model.steps = validated_steps
+                    updated = True
+                if dict(version_model.annotations or {}) != annotations:
+                    version_model.annotations = annotations
+                    updated = True
+                if list(version_model.required_capabilities or []) != list(
+                    derived_capabilities
+                ):
+                    version_model.required_capabilities = list(derived_capabilities)
+                    updated = True
+                max_step_count = max(1, len(validated_steps))
+                if int(version_model.max_step_count or 0) != max_step_count:
+                    version_model.max_step_count = max_step_count
+                    updated = True
+                if version_model.release_status is not TaskTemplateReleaseStatus.ACTIVE:
+                    version_model.release_status = TaskTemplateReleaseStatus.ACTIVE
+                    updated = True
+                if version_model.seed_source != item.get("seedSource"):
+                    version_model.seed_source = item.get("seedSource")
+                    updated = True
+
+            if template.latest_version_id != version_model.id:
+                template.latest_version = version_model
+                updated = True
+            if updated:
+                result.updated += 1
+
+        if result.created > 0 or result.updated > 0:
+            await self._session.commit()
+
+        return result

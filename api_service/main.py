@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
 import time
+from pathlib import Path
 
 # Now proceed with other imports
 from uuid import uuid4
@@ -21,8 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from llama_index.core import VectorStoreIndex, load_index_from_storage
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
-from api_service.db.base import get_async_session_context
 from api_service.api.routers import retrieval_gateway as retrieval_router
 from api_service.api.routers import (
     summarization as summarization_router,  # Added import for summarization router
@@ -60,6 +61,8 @@ from api_service.api.routers.temporal_artifacts import (
 )
 from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.schemas import UserProfileUpdate
+from api_service.db.base import get_async_session_context
+from api_service.services.task_templates.catalog import TaskTemplateCatalogService
 
 # Auth imports
 from api_service.auth import (
@@ -80,6 +83,10 @@ from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
 
 logger.info("Starting FastAPI...")
+
+_TASK_TEMPLATE_SEED_DIR = (
+    Path(__file__).resolve().parent / "data" / "task_step_templates"
+)
 
 
 def _initialize_embedding_model(app_state, app_settings):
@@ -548,6 +555,7 @@ async def startup_event():
             "Retrieval service startup initialization skipped: %s",
             exc,
         )
+    await _sync_task_template_seed_catalog()
 
     # Ensure default user and profile exist if auth is disabled
     if settings.oidc.AUTH_PROVIDER == "disabled":
@@ -632,3 +640,38 @@ def teardown_providers():
     Optional: If your providers need explicit cleanup, do it here.
     """
     pass
+
+
+async def _sync_task_template_seed_catalog() -> None:
+    """Ensure YAML-backed default task presets exist in the catalog."""
+
+    if not settings.feature_flags.task_template_catalog_enabled:
+        return
+    if not _TASK_TEMPLATE_SEED_DIR.exists():
+        logger.info(
+            "Task template seed sync skipped: seed directory missing at %s",
+            _TASK_TEMPLATE_SEED_DIR,
+        )
+        return
+
+    try:
+        async with get_async_session_context() as session:
+            service = TaskTemplateCatalogService(session)
+            result = await service.sync_seed_templates(seed_dir=_TASK_TEMPLATE_SEED_DIR)
+    except (OperationalError, ProgrammingError) as exc:
+        logger.warning(
+            "Task template seed sync skipped because preset tables are unavailable: %s",
+            exc,
+        )
+        return
+    except Exception as exc:
+        logger.warning("Task template seed sync failed: %s", exc, exc_info=True)
+        return
+
+    if result.created or result.updated:
+        logger.info(
+            "Task template seeds synchronized from %s (created=%s updated=%s).",
+            _TASK_TEMPLATE_SEED_DIR,
+            result.created,
+            result.updated,
+        )
