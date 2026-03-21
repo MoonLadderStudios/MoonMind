@@ -230,3 +230,107 @@ async def finalize_oauth_session(
     
     return {"status": "succeeded"}
 
+
+@router.get("/history/{profile_id}")
+async def get_session_history(
+    profile_id: str,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+    limit: int = 20,
+):
+    """Return the session history for a given profile."""
+    from sqlalchemy import desc
+
+    result = await db.execute(
+        select(ManagedAgentOAuthSession).where(
+            ManagedAgentOAuthSession.profile_id == profile_id,
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
+        ).order_by(desc(ManagedAgentOAuthSession.created_at)).limit(min(limit, 100))
+    )
+    sessions = result.scalars().all()
+
+    return [
+        {
+            "session_id": s.session_id,
+            "profile_id": s.profile_id,
+            "runtime_id": s.runtime_id,
+            "status": s.status.value if s.status else None,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+            "failure_reason": s.failure_reason,
+            "tmate_web_url": s.tmate_web_url,
+        }
+        for s in sessions
+    ]
+
+
+@router.post("/{session_id}/reconnect", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED)
+async def reconnect_oauth_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
+):
+    """Create a new session from an expired, failed, or cancelled predecessor.
+
+    Copies the profile and volume settings from the previous session.
+    """
+    result = await db.execute(
+        select(ManagedAgentOAuthSession).where(
+            ManagedAgentOAuthSession.session_id == session_id,
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
+        )
+    )
+    old_session = result.scalars().first()
+    if not old_session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    reconnectable_statuses = [
+        OAuthSessionStatus.EXPIRED,
+        OAuthSessionStatus.FAILED,
+        OAuthSessionStatus.CANCELLED,
+    ]
+    if old_session.status not in reconnectable_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot reconnect from {old_session.status.name} state. Only expired/failed/cancelled sessions can be reconnected.",
+        )
+
+    new_session_id = f"oas_{uuid.uuid4().hex[:12]}"
+    new_session = ManagedAgentOAuthSession(
+        session_id=new_session_id,
+        profile_id=old_session.profile_id,
+        runtime_id=old_session.runtime_id,
+        volume_ref=old_session.volume_ref,
+        volume_mount_path=old_session.volume_mount_path,
+        account_label=old_session.account_label,
+        requested_by_user_id=str(current_user.id),
+        status=OAuthSessionStatus.PENDING,
+        created_at=datetime.now(timezone.utc),
+        metadata_json=old_session.metadata_json,
+    )
+    db.add(new_session)
+    await db.commit()
+    await db.refresh(new_session)
+
+    try:
+        from api_service.services.oauth_session_service import (
+            start_oauth_session_workflow,
+        )
+        await start_oauth_session_workflow(new_session)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "Failed to start workflow for reconnected session %s",
+            new_session_id,
+        )
+
+    return OAuthSessionResponse(
+        session_id=new_session.session_id,
+        profile_id=new_session.profile_id,
+        runtime_id=new_session.runtime_id,
+        status=new_session.status.value,
+        created_at=new_session.created_at,
+        tmate_web_url=new_session.tmate_web_url,
+        tmate_ssh_url=new_session.tmate_ssh_url,
+        expires_at=new_session.expires_at,
+    )

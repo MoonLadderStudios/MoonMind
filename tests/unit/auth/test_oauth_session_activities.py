@@ -47,3 +47,10 @@ class TestOAuthSessionWorkflowRegistration:
 
     def test_workflow_type_registered(self) -> None:
         assert "MoonMind.OAuthSession" in REGISTERED_TEMPORAL_WORKFLOW_TYPES
+
+    def test_cleanup_stale_in_catalog(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity("oauth_session.cleanup_stale")
+        assert route.activity_type == "oauth_session.cleanup_stale"
+        assert route.fleet == "artifacts"
+        assert route.timeouts.start_to_close_seconds == 60
