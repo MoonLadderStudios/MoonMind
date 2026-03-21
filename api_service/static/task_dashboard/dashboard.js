@@ -4281,7 +4281,10 @@
           </label>
         </div>
         <label>Queue Priority
-          <input type="number" name="priority" value="0" />
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="range" name="priority" min="-10" max="10" value="0" oninput="this.nextElementSibling.value = this.value" />
+            <output>0</output>
+          </div>
         </label>
         <div class="actions">
           <button type="submit" class="queue-submit-primary">Create Manifest Job</button>
@@ -5015,7 +5018,10 @@
         ${attachmentSectionHtml}
         <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
-            <input type="number" name="priority" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" />
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <input type="range" name="priority" min="-10" max="10" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" oninput="this.nextElementSibling.value = this.value" />
+              <output>${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}</output>
+            </div>
           </label>
           <label>Max Attempts
             <input type="number" min="1" name="maxAttempts" value="${Number.isFinite(queueDraftMaxAttempts) ? queueDraftMaxAttempts : 3}" />
