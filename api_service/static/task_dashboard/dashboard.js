@@ -4281,8 +4281,8 @@
           </label>
         </div>
         <label>Queue Priority
-          <div style="display: flex; gap: 0.5rem; align-items: center;">
-            <input type="range" name="priority" min="-10" max="10" value="0" oninput="this.nextElementSibling.value = this.value" />
+          <div class="priority-slider-container">
+            <input type="range" name="priority" min="-10" max="10" value="0" oninput="this.parentElement.querySelector('output').value = this.value" />
             <output>0</output>
           </div>
         </label>
@@ -4865,7 +4865,7 @@
     const queueDraftPriority = Number.isInteger(
       Number(sanitizedWorkerDraft.priority),
     )
-      ? Number(sanitizedWorkerDraft.priority)
+      ? Math.max(-10, Math.min(10, Number(sanitizedWorkerDraft.priority)))
       : 0;
     const queueDraftMaxAttempts = Number.isInteger(
       Number(sanitizedWorkerDraft.maxAttempts),
@@ -5018,8 +5018,8 @@
         ${attachmentSectionHtml}
         <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
-            <div style="display: flex; gap: 0.5rem; align-items: center;">
-              <input type="range" name="priority" min="-10" max="10" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" oninput="this.nextElementSibling.value = this.value" />
+            <div class="priority-slider-container">
+              <input type="range" name="priority" min="-10" max="10" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" oninput="this.parentElement.querySelector('output').value = this.value" />
               <output>${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}</output>
             </div>
           </label>
