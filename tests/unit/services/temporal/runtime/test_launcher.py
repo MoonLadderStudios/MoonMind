@@ -264,7 +264,9 @@ async def test_tmate_launch_writes_config_and_exit_file_contract(
 
     launch_call = next(args for args, _ in calls if "new-session" in args)
     wrapped_command = str(launch_call[-1])
-    assert "\"$@\"" in wrapped_command
+    # The wrapped command should contain the actual CLI command inline
+    # (not "$@" positional args, which don't work with tmate's sh -c)
+    assert "gemini" in wrapped_command
     assert "MM_EXIT_FILE" in wrapped_command
 
     launch_env = next(kwargs for args, kwargs in calls if "new-session" in args)[

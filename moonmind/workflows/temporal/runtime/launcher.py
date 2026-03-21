@@ -277,17 +277,15 @@ class ManagedRuntimeLauncher:
             env_overrides["MM_EXIT_FILE"] = str(exit_code_path)
 
             session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            wrapped_command = shlex.join(
-                [
-                    "bash",
-                    "-c",
-                    "\"$@\"\n"
-                    "rc=$?\n"
-                    "printf '%s\\n' \"$rc\" > \"$MM_EXIT_FILE\"\n"
-                    "exit 0\n",
-                    "--",
-                    *cmd,
-                ]
+            # Build the command inline rather than via "$@" positional args.
+            # tmate passes the new-session command to sh -c as a single string,
+            # so positional args after "--" are not forwarded to the inner bash.
+            escaped_cmd = shlex.join(cmd)
+            wrapped_command = (
+                f"{escaped_cmd}\n"
+                f"rc=$?\n"
+                f"printf '%s\\n' \"$rc\" > \"$MM_EXIT_FILE\"\n"
+                f"exit 0\n"
             )
 
             tmate_cmd = [
