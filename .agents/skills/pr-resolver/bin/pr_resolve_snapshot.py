@@ -572,6 +572,11 @@ def main():
         description="Snapshot PR state for pr-resolver skill"
     )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
+    parser.add_argument(
+        "--snapshot-path",
+        default="var/artifacts/pr_resolver/snapshot.json",
+        help="Snapshot path to write",
+    )
     args = parser.parse_args()
 
     # 1. Fetch PR metadata with resilient selector fallback.
@@ -740,10 +745,8 @@ def main():
         "commentsSummary": comments_summary,
     }
 
-    # Save to artifacts/pr_resolver_snapshot.json
-    artifacts_dir = Path("artifacts")
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_path = artifacts_dir / "pr_resolver_snapshot.json"
+    snapshot_path = Path(args.snapshot_path)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(snapshot, indent=2))
 
     print(f"Snapshot written to {snapshot_path}")

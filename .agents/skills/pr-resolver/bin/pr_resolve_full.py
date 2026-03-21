@@ -31,8 +31,9 @@ from pr_resolve_contract import (  # noqa: E402
 from pr_resolve_finalize import evaluate_finalize_action  # noqa: E402
 
 
-def _run_snapshot(snapshot_script: Path, pr: str | None) -> None:
+def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
     cmd = [sys.executable, str(snapshot_script)]
+    cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
     subprocess.run(cmd, check=True)
@@ -144,16 +145,16 @@ def main() -> None:
     parser.add_argument(
         "--skip-refresh",
         action="store_true",
-        help="Use existing artifacts/pr_resolver_snapshot.json without refreshing",
+        help="Use existing var/artifacts/pr_resolver/snapshot.json without refreshing",
     )
     parser.add_argument(
         "--snapshot-path",
-        default="artifacts/pr_resolver_snapshot.json",
+        default="var/artifacts/pr_resolver/snapshot.json",
         help="Snapshot path to read/write",
     )
     parser.add_argument(
         "--result-path",
-        default="artifacts/pr_resolver_full_result.json",
+        default="var/artifacts/pr_resolver/full_result.json",
         help="Full remediation result artifact path",
     )
     args = parser.parse_args()
@@ -164,7 +165,7 @@ def main() -> None:
 
     try:
         if not args.skip_refresh:
-            _run_snapshot(snapshot_script, args.pr)
+            _run_snapshot(snapshot_script, args.pr, snapshot_path)
         snapshot = _read_snapshot(snapshot_path)
         evaluation = evaluate_full_state(snapshot)
         _write_result(
