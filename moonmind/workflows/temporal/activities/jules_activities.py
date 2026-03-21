@@ -253,14 +253,46 @@ async def jules_merge_pr_activity(payload: dict) -> JulesIntegrationMergePRResul
     return await client.merge_pull_request(pr_url=pr_url)
 
 
+@activity.defn(name="integration.jules.get_auto_answer_config")
+async def jules_get_auto_answer_config_activity(_args: list | None = None) -> dict:
+    """Read auto-answer configuration from environment variables.
+
+    Returns a dict with:
+    - ``enabled`` (bool): JULES_AUTO_ANSWER_ENABLED (default True)
+    - ``max_answers`` (int): JULES_MAX_AUTO_ANSWERS (default 3)
+    - ``runtime`` (str): JULES_AUTO_ANSWER_RUNTIME (default "llm")
+    - ``timeout_seconds`` (int): JULES_AUTO_ANSWER_TIMEOUT_SECONDS (default 300)
+    """
+    enabled_raw = os.environ.get("JULES_AUTO_ANSWER_ENABLED", "true").strip().lower()
+    enabled = enabled_raw not in ("false", "0", "no", "off")
+    try:
+        max_answers = int(os.environ.get("JULES_MAX_AUTO_ANSWERS", "3"))
+    except ValueError:
+        max_answers = 3
+    runtime = os.environ.get("JULES_AUTO_ANSWER_RUNTIME", "llm").strip() or "llm"
+    try:
+        timeout = int(os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300"))
+    except ValueError:
+        timeout = 300
+
+    return {
+        "enabled": enabled,
+        "max_answers": max_answers,
+        "runtime": runtime,
+        "timeout_seconds": timeout,
+    }
+
+
 __all__ = [
     "jules_answer_question_activity",
     "jules_cancel_activity",
     "jules_fetch_result_activity",
+    "jules_get_auto_answer_config_activity",
     "jules_list_activities_activity",
     "jules_merge_pr_activity",
     "jules_send_message_activity",
     "jules_start_activity",
     "jules_status_activity",
 ]
+
 
