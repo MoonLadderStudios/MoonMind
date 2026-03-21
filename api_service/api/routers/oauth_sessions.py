@@ -9,6 +9,7 @@ from api_service.auth_providers import get_current_user
 from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
 from api_service.services.auth_profile_service import sync_auth_profile_manager
 from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentAuthProfile, ManagedAgentAuthMode, ManagedAgentRateLimitPolicy
+from api_service.services.auth_profile_service import sync_auth_profile_manager
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
 
@@ -46,6 +47,7 @@ async def create_oauth_session(
         runtime_id=request.runtime_id,
         profile_id=request.profile_id,
         volume_ref=request.volume_ref,
+        volume_mount_path=request.volume_mount_path,
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
         requested_by_user_id=str(current_user.id),
@@ -145,13 +147,10 @@ async def finalize_oauth_session(
     session_obj = result.scalars().first()
     if not session_obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-        
-    if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
+
+if session_obj.status not in [OAuthSessionStatus.AWAITING_USER, OAuthSessionStatus.VERIFYING]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
         
-    session_obj.status = OAuthSessionStatus.SUCCEEDED
-    session_obj.completed_at = datetime.now(timezone.utc)
-    
     profile_result = await db.execute(
         select(ManagedAgentAuthProfile).where(
             ManagedAgentAuthProfile.profile_id == session_obj.profile_id
@@ -170,8 +169,11 @@ async def finalize_oauth_session(
             detail=f"Unsupported rate_limit_policy: {policy_str}"
         )
 
-    if existing_profile and existing_profile.owner_user_id is not None and str(existing_profile.owner_user_id) != str(current_user.id):
+    if existing_profile and getattr(existing_profile, "owner_user_id", None) is not None and str(existing_profile.owner_user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this profile")
+
+    if not getattr(session_obj, "volume_mount_path", None):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="volume_mount_path is required for OAuth")
 
     profile_data = {
         "runtime_id": session_obj.runtime_id,
@@ -196,9 +198,11 @@ async def finalize_oauth_session(
         )
         db.add(new_profile)
 
+    session_obj.status = OAuthSessionStatus.SUCCEEDED
+    session_obj.completed_at = datetime.now(timezone.utc)
+
     await db.commit()
     
     await sync_auth_profile_manager(session=db, runtime_id=session_obj.runtime_id)
     
     return {"status": "succeeded"}
-

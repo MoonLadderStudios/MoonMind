@@ -10,6 +10,7 @@ class CreateOAuthSessionRequest(BaseModel):
     runtime_id: str
     profile_id: str
     volume_ref: str
+    volume_mount_path: Optional[str] = None
     account_label: str
     max_parallel_runs: int = 1
     cooldown_after_429_seconds: int = 300
