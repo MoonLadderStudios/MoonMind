@@ -3308,18 +3308,16 @@
           "",
         ).trim(),
         queueName: "-",
-        runtimeMode: String(
-          pick(item, "targetRuntime", "target_runtime", "runtime") ||
-          pick(searchAttributes, "mm_target_runtime", "mm_runtime", "runtime") ||
-          pick(memo, "targetRuntime", "runtime") ||
-          ""
-        ).trim() || null,
-        skillId: String(
-          pick(item, "targetSkill", "target_skill", "skillId", "skill_id", "skill") ||
-          pick(searchAttributes, "mm_target_skill", "mm_skill_id", "mm_skill", "skillId", "skill") ||
-          pick(memo, "targetSkill", "skillId", "skill") ||
-          ""
-        ).trim() || null,
+        runtimeMode: String([
+          pick(item, "targetRuntime", "target_runtime", "runtime"),
+          pick(searchAttributes, "mm_target_runtime", "mm_runtime", "runtime"),
+          pick(memo, "targetRuntime", "runtime"),
+        ].find(v => v != null) || "").trim() || null,
+        skillId: String([
+          pick(item, "targetSkill", "target_skill", "skillId", "skill_id", "skill"),
+          pick(searchAttributes, "mm_target_skill", "mm_skill_id", "mm_skill", "skillId", "skill"),
+          pick(memo, "targetSkill", "skillId", "skill"),
+        ].find(v => v != null) || "").trim() || null,
         rawStatus: rawState,
         rawState,
         temporalStatus: pick(item, "temporalStatus") || "",

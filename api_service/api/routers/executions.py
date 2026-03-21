@@ -284,6 +284,12 @@ def _serialize_execution(
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+    task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+    tool_params = task_params.get("tool") if isinstance(task_params.get("tool"), dict) else {}
+    skill_params = task_params.get("skill") if isinstance(task_params.get("skill"), dict) else {}
+    target_skill = (
+        str(tool_params.get("name") or skill_params.get("name") or "").strip() or None
+    )
 
     return ExecutionModel(
         task_id=record.workflow_id,
@@ -310,6 +316,7 @@ def _serialize_execution(
         search_attributes=search_attributes,
         memo=memo,
         target_runtime=target_runtime,
+        target_skill=target_skill,
         model=param_model,
         effort=param_effort,
         artifact_refs=(
