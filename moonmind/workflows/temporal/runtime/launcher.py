@@ -328,52 +328,29 @@ class ManagedRuntimeLauncher:
         """Construct the CLI command from a runtime profile and request params."""
         cmd = list(profile.command_template)
 
+        # --- Strategy delegation (Phase 1) ---
+        # Check the strategy registry before falling through to the
+        # legacy if/elif block.  Registered runtimes are handled by
+        # their strategy; unregistered runtimes use the existing code.
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+        strategy = get_strategy(profile.runtime_id)
+        if strategy is not None:
+            return strategy.build_command(profile, request)
+
+        # Generic fallback for any future unregistered runtime.
         model = (
             request.parameters.get("model") if request.parameters else None
         ) or profile.default_model
-
-        if profile.runtime_id == "codex_cli":
-            # Codex CLI: `codex exec -m MODEL [PROMPT]`
-            # --effort is not supported; --model is -m on exec subcommand.
-            if model:
-                cmd.extend(["-m", model])
-            if request.instruction_ref:
-                cmd.append(request.instruction_ref)
-        elif profile.runtime_id == "gemini_cli":
-            if model:
-                cmd.extend(["--model", model])
-            effort = (
-                request.parameters.get("effort") if request.parameters else None
-            ) or profile.default_effort
-            if effort:
-                cmd.extend(["--effort", effort])
-            if request.instruction_ref:
-                cmd.extend(["--yolo", "--prompt", request.instruction_ref])
-        elif profile.runtime_id == "cursor_cli":
-            if model:
-                cmd.extend(["--model", model])
-            if request.instruction_ref:
-                cmd.extend(["-p", request.instruction_ref])
-            cmd.extend(["--output-format", "stream-json"])
-            cmd.extend(["--force"])
-            sandbox_mode = (
-                request.parameters.get("sandbox_mode")
-                if request.parameters
-                else None
-            )
-            if sandbox_mode:
-                cmd.extend(["--sandbox", sandbox_mode])
-        else:
-            # Generic / claude_code path
-            if model:
-                cmd.extend(["--model", model])
-            effort = (
-                request.parameters.get("effort") if request.parameters else None
-            ) or profile.default_effort
-            if effort:
-                cmd.extend(["--effort", effort])
-            if request.instruction_ref:
-                cmd.extend(["--prompt", request.instruction_ref])
+        if model:
+            cmd.extend(["--model", model])
+        effort = (
+            request.parameters.get("effort") if request.parameters else None
+        ) or profile.default_effort
+        if effort:
+            cmd.extend(["--effort", effort])
+        if request.instruction_ref:
+            cmd.extend(["--prompt", request.instruction_ref])
 
         return cmd
 

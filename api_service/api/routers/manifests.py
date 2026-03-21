@@ -32,6 +32,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows import get_agent_queue_service, get_temporal_artifact_service
 from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
 from moonmind.workflows.agent_queue.service import AgentQueueValidationError
+from moonmind.workflows.tasks.routing import TemporalSubmitDisabledError
 from moonmind.workflows.temporal import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactStateError,
@@ -215,6 +216,11 @@ async def create_manifest_run(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "manifest_forbidden", "message": str(exc)},
+        ) from exc
+    except TemporalSubmitDisabledError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "temporal_submit_disabled", "message": str(exc)},
         ) from exc
     except AgentQueueValidationError as exc:
         raise HTTPException(
