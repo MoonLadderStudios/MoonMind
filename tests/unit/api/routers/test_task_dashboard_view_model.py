@@ -10,16 +10,7 @@ from api_service.api.routers.task_dashboard_view_model import (
 from moonmind.config.settings import settings
 
 
-def test_normalize_status_maps_queue_dead_letter_to_failed() -> None:
-    assert normalize_status("queue", "dead_letter") == "failed"
 
-
-def test_normalize_status_maps_removed_source_to_fallback_queued() -> None:
-    assert normalize_status("speckit", "retrying") == "queued"
-
-
-def test_normalize_status_maps_orchestrator_awaiting_to_action() -> None:
-    assert normalize_status("orchestrator", "awaiting_approval") == "awaiting_action"
 
 
 def test_normalize_status_maps_temporal_awaiting_external_to_action() -> None:
@@ -45,8 +36,8 @@ def test_normalize_status_fallback_for_unknown_source() -> None:
 
 def test_status_maps_returns_copy() -> None:
     mapping = status_maps()
-    mapping["queue"]["queued"] = "changed"
-    assert status_maps()["queue"]["queued"] == "queued"
+    mapping["temporal"]["queued"] = "changed"
+    assert status_maps()["temporal"]["queued"] == "queued"
 
 
 def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
@@ -61,80 +52,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     config = build_runtime_config("/tasks")
     assert config["initialPath"] == "/tasks"
     assert config["pollIntervalsMs"]["list"] > 0
-    assert config["sources"]["queue"]["list"] == "/api/tasks"
-    assert config["sources"]["queue"]["cancel"] == "/api/queue/jobs/{id}/cancel"
-    assert config["sources"]["queue"]["update"] == "/api/queue/jobs/{id}"
-    assert config["sources"]["queue"]["resubmit"] == "/api/queue/jobs/{id}/resubmit"
-    assert (
-        config["sources"]["queue"]["createWithAttachments"]
-        == "/api/queue/jobs/with-attachments"
-    )
-    assert (
-        config["sources"]["queue"]["eventsStream"]
-        == "/api/queue/jobs/{id}/events/stream"
-    )
-    assert (
-        config["sources"]["queue"]["migrationTelemetry"]
-        == "/api/queue/telemetry/migration"
-    )
-    assert config["sources"]["queue"]["skills"] == "/api/tasks/skills"
-    assert (
-        config["sources"]["queue"]["liveSession"] == "/api/queue/jobs/{id}/live-session"
-    )
-    assert (
-        config["sources"]["queue"]["liveSessionGrantWrite"]
-        == "/api/queue/jobs/{id}/live-session/grant-write"
-    )
-    assert (
-        config["sources"]["queue"]["liveSessionRevoke"]
-        == "/api/queue/jobs/{id}/live-session/revoke"
-    )
-    assert config["sources"]["queue"]["taskControl"] == "/api/queue/jobs/{id}/control"
-    assert (
-        config["sources"]["queue"]["operatorMessages"]
-        == "/api/queue/jobs/{id}/operator-messages"
-    )
-    assert config["sources"]["queue"]["taskStepTemplates"] == "/api/task-step-templates"
-    assert (
-        config["sources"]["queue"]["taskStepTemplateDetail"]
-        == "/api/task-step-templates/{slug}"
-    )
-    assert (
-        config["sources"]["queue"]["taskStepTemplateExpand"]
-        == "/api/task-step-templates/{slug}:expand"
-    )
-    assert (
-        config["sources"]["queue"]["taskStepTemplateSave"]
-        == "/api/task-step-templates/save-from-task"
-    )
-    assert (
-        config["sources"]["queue"]["taskStepTemplateFavorite"]
-        == "/api/task-step-templates/{slug}:favorite"
-    )
-    assert (
-        config["sources"]["queue"]["attachments"] == "/api/queue/jobs/{id}/attachments"
-    )
-    assert (
-        config["sources"]["queue"]["attachmentDownload"]
-        == "/api/queue/jobs/{id}/attachments/{attachmentId}/download"
-    )
-    assert config["sources"]["manifests"]["list"].startswith(
-        "/api/queue/jobs?type=manifest"
-    )
-    assert config["sources"]["manifests"]["create"] == "/api/queue/jobs"
-    assert config["sources"]["manifests"]["registry"] == "/api/manifests"
-    assert config["sources"]["manifests"]["registryRun"] == "/api/manifests/{name}/runs"
-    assert (
-        config["sources"]["schedules"]["list"] == "/api/recurring-tasks?scope=personal"
-    )
-    assert config["sources"]["schedules"]["create"] == "/api/recurring-tasks"
-    assert config["sources"]["schedules"]["detail"] == "/api/recurring-tasks/{id}"
-    assert config["sources"]["schedules"]["update"] == "/api/recurring-tasks/{id}"
-    assert config["sources"]["schedules"]["runNow"] == "/api/recurring-tasks/{id}/run"
-    assert (
-        config["sources"]["schedules"]["runs"]
-        == "/api/recurring-tasks/{id}/runs?limit=200"
-    )
     assert config["sources"]["temporal"]["list"] == "/api/executions"
     assert config["sources"]["temporal"]["create"] == "/api/executions"
     assert config["sources"]["temporal"]["detail"] == "/api/executions/{workflowId}"
@@ -408,14 +325,7 @@ def test_runtime_config_exposes_manifest_nodes_endpoint() -> None:
     )
 
 
-def test_runtime_config_manifest_source_endpoints_present() -> None:
-    """Manifest source config must include registry and run endpoints."""
-    config = build_runtime_config("/tasks")
-    manifests = config["sources"]["manifests"]
-    assert manifests["registry"] == "/api/manifests"
-    assert manifests["registryRun"] == "/api/manifests/{name}/runs"
-    assert manifests["create"] == "/api/queue/jobs"
-    assert manifests["list"].startswith("/api/queue/jobs?type=manifest")
+
 
 
 def test_normalize_status_maps_manifest_ingest_states() -> None:

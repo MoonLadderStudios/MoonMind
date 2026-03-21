@@ -53,9 +53,7 @@ def _raise_task_resolution_http_error(error: Exception) -> None:
 @router.get("/list", response_model=TaskCompatibilityListResponse)
 async def list_compatibility_tasks(
     *,
-    source: Literal["queue", "temporal", "all"] | None = Query(
-        None, alias="source"
-    ),
+    source: str | None = Query(None, alias="source", deprecated=True, description="The source filter is deprecated."),
     entry: Literal["run", "manifest"] | None = Query(None, alias="entry"),
     workflow_type: str | None = Query(None, alias="workflowType"),
     status_filter: (
@@ -95,9 +93,7 @@ async def list_compatibility_tasks(
 async def get_compatibility_task_detail(
     task_id: str,
     *,
-    source_hint: Literal["queue", "temporal"] | None = Query(
-        None, alias="source"
-    ),
+    source_hint: str | None = Query(None, alias="source", deprecated=True, description="The source hint is deprecated."),
     service: TaskCompatibilityService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> TaskCompatibilityDetail:
