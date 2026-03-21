@@ -106,7 +106,7 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
     assert normalize_jules_status("QUEUED") == "queued"
     assert normalize_jules_status("PLANNING") == "running"
     assert normalize_jules_status("AWAITING_PLAN_APPROVAL") == "running"
-    assert normalize_jules_status("AWAITING_USER_FEEDBACK") == "running"
+    assert normalize_jules_status("AWAITING_USER_FEEDBACK") == "awaiting_feedback"
     assert normalize_jules_status("IN_PROGRESS") == "running"
     assert normalize_jules_status("PAUSED") == "running"
     assert normalize_jules_status("FAILED") == "failed"
@@ -435,3 +435,139 @@ async def test_send_message_retries_on_503():
         JulesSendMessageRequest(sessionId="session-42", prompt="retry prompt")
     )
     assert call_count == 3
+
+
+# --- T010: Pydantic model tests ---
+
+
+def test_jules_agent_message_model():
+    """T010: JulesAgentMessage parses from alias and field name."""
+    from moonmind.schemas.jules_models import JulesAgentMessage
+
+    msg = JulesAgentMessage.model_validate({"agentMessage": "What branch?"})
+    assert msg.agent_message == "What branch?"
+
+    msg2 = JulesAgentMessage(agent_message="test")
+    assert msg2.agent_message == "test"
+
+
+def test_jules_activity_model():
+    """T010: JulesActivity parses with all fields."""
+    from moonmind.schemas.jules_models import JulesActivity
+
+    data = {
+        "name": "act-1",
+        "id": "abc123",
+        "description": "Agent asked a question",
+        "createTime": "2026-03-21T10:00:00Z",
+        "originator": "agent",
+        "agentMessaged": {"agentMessage": "Which branch?"},
+    }
+    activity = JulesActivity.model_validate(data)
+    assert activity.id == "abc123"
+    assert activity.originator == "agent"
+    assert activity.agent_messaged is not None
+    assert activity.agent_messaged.agent_message == "Which branch?"
+    assert activity.create_time == "2026-03-21T10:00:00Z"
+
+
+def test_jules_activity_model_no_message():
+    """T010: JulesActivity with no agentMessaged field."""
+    from moonmind.schemas.jules_models import JulesActivity
+
+    activity = JulesActivity.model_validate({"name": "act-2", "originator": "user"})
+    assert activity.agent_messaged is None
+    assert activity.originator == "user"
+
+
+def test_jules_list_activities_result_model():
+    """T010: JulesListActivitiesResult parses aliases."""
+    from moonmind.schemas.jules_models import JulesListActivitiesResult
+
+    result = JulesListActivitiesResult.model_validate({
+        "sessionId": "ses-1",
+        "latestAgentQuestion": "Which branch?",
+        "activityId": "abc123",
+    })
+    assert result.session_id == "ses-1"
+    assert result.latest_agent_question == "Which branch?"
+    assert result.activity_id == "abc123"
+
+
+def test_jules_list_activities_result_model_no_question():
+    """T010: JulesListActivitiesResult with no question."""
+    from moonmind.schemas.jules_models import JulesListActivitiesResult
+
+    result = JulesListActivitiesResult(sessionId="ses-2")
+    assert result.session_id == "ses-2"
+    assert result.latest_agent_question is None
+    assert result.activity_id is None
+
+
+# --- T018: list_activities transport tests ---
+
+
+@pytest.mark.asyncio
+async def test_list_activities_extracts_latest_agent_question():
+    """T018: list_activities parses activities and extracts the latest agent question."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert "/sessions/session-42/activities" in request.url.path
+        return httpx.Response(200, json={
+            "activities": [
+                {
+                    "id": "act-old",
+                    "originator": "agent",
+                    "createTime": "2026-03-21T09:00:00Z",
+                    "agentMessaged": {"agentMessage": "Old question"},
+                },
+                {
+                    "id": "act-new",
+                    "originator": "agent",
+                    "createTime": "2026-03-21T10:00:00Z",
+                    "agentMessaged": {"agentMessage": "Which branch?"},
+                },
+                {
+                    "id": "act-user",
+                    "originator": "user",
+                    "createTime": "2026-03-21T10:30:00Z",
+                },
+            ],
+        })
+
+    client = _make_client(handler)
+    result = await client.list_activities("session-42")
+    assert result.session_id == "session-42"
+    assert result.latest_agent_question == "Which branch?"
+    assert result.activity_id == "act-new"
+
+
+@pytest.mark.asyncio
+async def test_list_activities_no_agent_questions():
+    """T018: list_activities returns None when no agent questions exist."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "activities": [
+                {"id": "act-user", "originator": "user", "createTime": "2026-03-21T10:00:00Z"},
+            ],
+        })
+
+    client = _make_client(handler)
+    result = await client.list_activities("session-42")
+    assert result.latest_agent_question is None
+    assert result.activity_id is None
+
+
+@pytest.mark.asyncio
+async def test_list_activities_empty_response():
+    """T018: list_activities handles empty activities list."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"activities": []})
+
+    client = _make_client(handler)
+    result = await client.list_activities("session-42")
+    assert result.latest_agent_question is None
+    assert result.activity_id is None
