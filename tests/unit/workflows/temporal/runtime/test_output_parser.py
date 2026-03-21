@@ -141,13 +141,13 @@ class TestCursorCliClassifyExit:
         )
         status, failure = s.classify_exit(1, stdout_line, "")
         assert status == "failed"
-        assert failure == "rate_limited"
+        assert failure == "integration_error"
 
     def test_rate_limited_via_stderr(self) -> None:
         s = CursorCliStrategy()
         status, failure = s.classify_exit(1, "", "Error: 429 rate limit exceeded")
         assert status == "failed"
-        assert failure == "rate_limited"
+        assert failure == "integration_error"
 
 
 class TestCursorCliOutputParser:

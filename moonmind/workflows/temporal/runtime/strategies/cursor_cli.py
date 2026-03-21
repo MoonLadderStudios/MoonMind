@@ -75,7 +75,7 @@ class CursorCliStrategy(ManagedRuntimeStrategy):
         parsed = parser.parse(stdout, stderr)
 
         if parsed.rate_limited:
-            return "failed", "rate_limited"
+            return "failed", "integration_error"
 
         if exit_code == 0:
             return "completed", None
