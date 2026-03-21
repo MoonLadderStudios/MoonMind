@@ -346,10 +346,34 @@ def _is_comment_actionable(
     return actionable
 
 
+def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
+    """Load comment IDs that have been locally marked as addressed or not-applicable."""
+    path = ledger_path or Path("artifacts/pr_resolver_addressed_comments.json")
+    if not path.exists():
+        return set()
+    try:
+        entries = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if not isinstance(entries, list):
+        return set()
+    ids: set[int] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        disposition = str(entry.get("disposition") or "").strip().lower()
+        if disposition in {"addressed", "not-applicable"}:
+            cid = entry.get("id")
+            if isinstance(cid, int):
+                ids.add(cid)
+    return ids
+
+
 def summarize_comments(
     comments: list[dict],
     *,
     include_bot_review_comments: bool = True,
+    addressed_comment_ids: set[int] | None = None,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
@@ -362,11 +386,18 @@ def summarize_comments(
     non_actionable_reason_counts: dict[str, int] = {}
     classified_comments: list[dict] = []
 
+    resolved_ids = addressed_comment_ids or set()
+
     for comment in comments:
-        actionable, reason = _classify_comment_actionability(
-            comment,
-            include_bot_review_comments=include_bot_review_comments,
-        )
+        cid = comment.get("id")
+        if isinstance(cid, int) and cid in resolved_ids:
+            actionable = False
+            reason = "addressed_in_ledger"
+        else:
+            actionable, reason = _classify_comment_actionability(
+                comment,
+                include_bot_review_comments=include_bot_review_comments,
+            )
         if actionable:
             actionable_comments.append(comment)
         else:
@@ -751,7 +782,12 @@ def main():
     )
     if not isinstance(comments, list):
         comments = []
-    comments_summary = summarize_comments(comments, include_bot_review_comments=True)
+    addressed_ids = _load_addressed_comment_ids()
+    comments_summary = summarize_comments(
+        comments,
+        include_bot_review_comments=True,
+        addressed_comment_ids=addressed_ids,
+    )
 
     # 4. Construct Snapshot
     snapshot = {
