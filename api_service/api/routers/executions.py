@@ -334,6 +334,7 @@ def _serialize_execution(
         paused=_manifest_attr(manifest_status, "paused"),
         counts=_manifest_attr(manifest_status, "counts"),
         artifacts_count=len(record.artifact_refs or []),
+        scheduled_for=getattr(record, "scheduled_for", None),
         created_at=record.started_at,
         actions=actions,
         debug_fields=debug_fields,
@@ -1003,7 +1004,7 @@ async def _resolve_schedule_routing(
         return _ScheduleRouteResult(recurring_response=response)
 
     if schedule.mode == "once":
-        if schedule.scheduledFor is None:
+        if schedule.scheduled_for is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
@@ -1011,7 +1012,7 @@ async def _resolve_schedule_routing(
                     "message": "scheduledFor is required when schedule.mode is 'once'.",
                 },
             )
-        scheduled_for_dt = schedule.scheduledFor
+        scheduled_for_dt = schedule.scheduled_for
         delay = _compute_schedule_delay(scheduled_for_dt)
         return _ScheduleRouteResult(
             start_delay=delay,

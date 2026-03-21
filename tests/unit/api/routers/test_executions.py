@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import AsyncMock
@@ -406,6 +406,40 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["task"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }
+
+
+def test_create_task_shaped_execution_once_schedule_sets_start_delay(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    scheduled_for = datetime.now(UTC) + timedelta(minutes=5)
+    record = _build_execution_record(state=MoonMindWorkflowState.SCHEDULED)
+    record.scheduled_for = scheduled_for
+    service.create_execution.return_value = record
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "task",
+            "payload": {
+                "schedule": {
+                    "mode": "once",
+                    "scheduledFor": scheduled_for.isoformat(),
+                },
+                "task": {
+                    "instructions": "Run this later",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["scheduled_for"] == scheduled_for
+    start_delay = called_kwargs["start_delay"]
+    assert start_delay is not None
+    assert 200 <= start_delay.total_seconds() <= 300
+    assert response.json()["scheduledFor"] is not None
 
 
 def test_create_execution_surfaces_domain_validation_errors(
