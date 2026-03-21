@@ -13,7 +13,11 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
+from moonmind.workflows.task_proposals.service import TaskProposalService
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
@@ -334,12 +338,12 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
             ),
-            # TODO: wire proposal_service_factory once full proposal
-            # generation is implemented.  While the generator stub returns
-            # an empty candidate list, proposal_submit is never invoked
-            # with real data and the factory is not required.
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
+                proposal_service_factory=lambda: TaskProposalService(
+                    TaskProposalRepository(session),
+                    AgentQueueService(AgentQueueRepository(session)),
+                ),
             ),
             review_activities=TemporalReviewActivities(),
         )
