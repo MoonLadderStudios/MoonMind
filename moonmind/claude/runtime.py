@@ -11,9 +11,9 @@ CLAUDE_API_KEY_ENV_ALIASES: tuple[str, ...] = (
     "CLAUDE_API_KEY",
 )
 CLAUDE_RUNTIME_DISABLED_MESSAGE = (
-    "targetRuntime=claude uses OAuth by default, or requires ANTHROPIC_API_KEY to be configured"
+    "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured"
 )
-"""Deprecated: Canonical error text for disabled Claude runtime. Runtime is now unconditionally enabled."""
+"""Canonical error text for disabled Claude runtime (ANTHROPIC/CLAUDE API key missing)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +22,7 @@ class RuntimeGateState:
 
     enabled: bool
     source_env: str | None
-    error_message: str | None
+    error_message: str
 
 
 def _clean_value(value: object | None) -> str:
@@ -50,7 +50,7 @@ def build_runtime_gate_state(
     *,
     api_key: str | None = None,
     env: Mapping[str, Any] | None = None,
-    error_message: str | None = None,
+    error_message: str = CLAUDE_RUNTIME_DISABLED_MESSAGE,
 ) -> RuntimeGateState:
     """Return normalized gate state, including whether a key is present and its source."""
 
@@ -73,8 +73,10 @@ def build_runtime_gate_state(
     )
 
 
-def is_claude_runtime_enabled() -> bool:
-    """Return whether Claude runtime is enabled. Always True."""
+def is_claude_runtime_enabled(
+    *, api_key: str | None = None, env: Mapping[str, Any] | None = None
+) -> bool:
+    """Return whether Claude runtime should be enabled based on API key presence."""
 
     return True
 

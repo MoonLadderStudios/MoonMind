@@ -687,16 +687,10 @@ class CodexWorkerConfig:
             gemini_allowed_tools = tuple(
                 cls._normalize_runtime_option_values(str(gemini_allowed_tools_raw))
             )
-        claude_cli_auth_mode_raw = str(source.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "")).strip().lower()
-        if claude_cli_auth_mode_raw:
-            claude_cli_auth_mode = claude_cli_auth_mode_raw
-        else:
-            has_key = bool(
-                str(source.get("ANTHROPIC_API_KEY", "")).strip() or
-                str(source.get("CLAUDE_API_KEY", "")).strip()
-            )
-            claude_cli_auth_mode = "api_key" if has_key else "oauth"
-
+        claude_cli_auth_mode = (
+            str(source.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "oauth")).strip().lower()
+            or "oauth"
+        )
         if claude_cli_auth_mode not in {"api_key", "oauth"}:
             raise ValueError(
                 "MOONMIND_CLAUDE_CLI_AUTH_MODE must be one of: api_key, oauth"
@@ -10179,7 +10173,7 @@ class CodexWorker:
             ).strip()
             if not claude_home:
                 logger.warning(
-                    "Claude CLI auth mode is oauth but CLAUDE_HOME "
+                    "MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth is set but CLAUDE_HOME "
                     "is missing; retaining API key variables for Claude runtime command auth.",
                     extra={"claude_cli_auth_mode": self._config.claude_cli_auth_mode},
                 )

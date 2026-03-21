@@ -129,20 +129,12 @@ def inspect_gemini_home_for_auth_mode(
 def resolve_claude_cli_auth_mode(
     *,
     env: Mapping[str, str] | None = None,
-    default_mode: str | None = None,
+    default_mode: str = "api_key",
 ) -> tuple[str, str]:
     """Resolve Claude CLI auth mode and return (mode, raw_value)."""
 
     env_map = env or os.environ
-    raw = str(env_map.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", "")).strip()
-    
-    if default_mode is None:
-        has_key = bool(
-            str(env_map.get("ANTHROPIC_API_KEY", "")).strip() or 
-            str(env_map.get("CLAUDE_API_KEY", "")).strip()
-        )
-        default_mode = "api_key" if has_key else "oauth"
-
+    raw = str(env_map.get("MOONMIND_CLAUDE_CLI_AUTH_MODE", default_mode)).strip()
     mode = raw.lower() if raw else default_mode
     if mode not in ALLOWED_CLAUDE_CLI_AUTH_MODES:
         return default_mode, raw

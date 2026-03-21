@@ -292,9 +292,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 if not anthropic_key and not claude_key:
                     raise RuntimeError(
                         "ANTHROPIC_API_KEY or CLAUDE_API_KEY is required when "
-                        "Claude runtime uses API key authentication. "
-                        "Set MOONMIND_CLAUDE_CLI_AUTH_MODE=oauth and provide CLAUDE_HOME "
-                        "to use OAuth instead."
+                        "Claude runtime uses API key authentication."
                     )
             if claude_auth_mode == "oauth":
                 claude_home = source.get("CLAUDE_HOME")
@@ -306,8 +304,7 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 )
                 if issue == "missing_for_oauth":
                     raise RuntimeError(
-                        "CLAUDE_HOME is required for OAuth Claude CLI authentication. "
-                        "Either provide CLAUDE_HOME, or provide ANTHROPIC_API_KEY to use API keys."
+                        "CLAUDE_HOME is required for OAuth Claude CLI authentication."
                     )
                 if issue == "not_directory":
                     raise RuntimeError(

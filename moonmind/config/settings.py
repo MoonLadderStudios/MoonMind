@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from moonmind.claude.runtime import CLAUDE_RUNTIME_DISABLED_MESSAGE
 from moonmind.claude.runtime import (
     build_runtime_gate_state as build_claude_runtime_gate_state,
 )
@@ -2043,6 +2044,7 @@ class AppSettings(BaseSettings):
         return build_claude_runtime_gate_state(
             env=os.environ,
             api_key=self.anthropic.anthropic_api_key,
+            error_message=CLAUDE_RUNTIME_DISABLED_MESSAGE,
         )
 
     @property
