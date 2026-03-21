@@ -10855,10 +10855,11 @@
           
           startBtn.onclick = async () => {
             startBtn.disabled = true;
-            statusDiv.innerHTML = "Starting session...";
+            statusDiv.textContent = "Starting session...";
             try {
               const res = await fetch("/api/v1/oauth-sessions", {
                 method: "POST",
+                credentials: "include",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   profile_id: profileId,
@@ -10869,7 +10870,7 @@
               });
               if (!res.ok) {
                 const err = await res.json();
-                statusDiv.innerHTML = "Error: " + (err.detail || res.statusText);
+                statusDiv.textContent = "Error: " + (err.detail || res.statusText);
                 startBtn.disabled = false;
                 return;
               }
@@ -10880,12 +10881,22 @@
               
               // Poll for status
               const pollInterval = setInterval(async () => {
-                const pollRes = await fetch(`/api/v1/oauth-sessions/${currentSessionId}`);
+                const pollRes = await fetch(`/api/v1/oauth-sessions/${currentSessionId}`, {
+                  credentials: "include"
+                });
                 if (pollRes.ok) {
                   const pollData = await pollRes.json();
-                  statusDiv.innerHTML = `Status: <strong>${pollData.status}</strong>`;
+                  statusDiv.textContent = `Status: `;
+                  const strong = document.createElement("strong");
+                  strong.textContent = pollData.status;
+                  statusDiv.appendChild(strong);
                   if (pollData.tmate_web_url) {
-                    statusDiv.innerHTML += `<br><a href="${pollData.tmate_web_url}" target="_blank">Open Tmate Web Terminal</a>`;
+                    statusDiv.appendChild(document.createElement("br"));
+                    const a = document.createElement("a");
+                    a.href = pollData.tmate_web_url;
+                    a.target = "_blank";
+                    a.textContent = "Open Tmate Web Terminal";
+                    statusDiv.appendChild(a);
                   }
                   if (["succeeded", "failed", "cancelled", "expired"].includes(pollData.status)) {
                     clearInterval(pollInterval);
@@ -10894,18 +10905,23 @@
                 }
               }, 2000);
               
+              registerDisposer(() => clearInterval(pollInterval));
               modal.addEventListener("close", () => clearInterval(pollInterval), { once: true });
               
             } catch (e) {
-              statusDiv.innerHTML = "Error: " + e.message;
+              statusDiv.textContent = "Error: " + e.message;
               startBtn.disabled = false;
             }
           };
           
           cancelBtn.onclick = async () => {
             if (currentSessionId) {
-              await fetch(`/api/v1/oauth-sessions/${currentSessionId}/cancel`, { method: "POST" });
-              statusDiv.innerHTML += "<br>Cancel requested.";
+              await fetch(`/api/v1/oauth-sessions/${currentSessionId}/cancel`, {
+                method: "POST",
+                credentials: "include"
+              });
+              statusDiv.appendChild(document.createElement("br"));
+              statusDiv.appendChild(document.createTextNode("Cancel requested."));
             }
           };
           

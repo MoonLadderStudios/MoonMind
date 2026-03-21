@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from api_service.api.dependencies import get_db_session, require_authenticated_user
+from api_service.db.base import get_async_session
+from api_service.auth_providers import get_current_user
 from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
 from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User
 
@@ -13,8 +14,8 @@ router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
 @router.post("", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_oauth_session(
     request: CreateOAuthSessionRequest,
-    db: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
 ):
     # Check for existing active session for this profile
     result = await db.execute(
@@ -46,7 +47,7 @@ async def create_oauth_session(
         volume_ref=request.volume_ref,
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
-        requested_by_user_id=current_user.user_id,
+        requested_by_user_id=str(current_user.id),
         metadata_json={
             "max_parallel_runs": request.max_parallel_runs,
             "cooldown_after_429_seconds": request.cooldown_after_429_seconds,
@@ -70,11 +71,14 @@ async def create_oauth_session(
 @router.get("/{session_id}", response_model=OAuthSessionResponse)
 async def get_oauth_session(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
 ):
     result = await db.execute(
-        select(ManagedAgentOAuthSession).where(ManagedAgentOAuthSession.session_id == session_id)
+        select(ManagedAgentOAuthSession).where(
+            ManagedAgentOAuthSession.session_id == session_id,
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id)
+        )
     )
     session = result.scalars().first()
     if not session:
@@ -94,11 +98,14 @@ async def get_oauth_session(
 @router.post("/{session_id}/cancel")
 async def cancel_oauth_session(
     session_id: str,
-    db: AsyncSession = Depends(get_db_session),
-    current_user: User = Depends(require_authenticated_user),
+    db: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user()),
 ):
     result = await db.execute(
-        select(ManagedAgentOAuthSession).where(ManagedAgentOAuthSession.session_id == session_id)
+        select(ManagedAgentOAuthSession).where(
+            ManagedAgentOAuthSession.session_id == session_id,
+            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id)
+        )
     )
     session = result.scalars().first()
     if not session:
