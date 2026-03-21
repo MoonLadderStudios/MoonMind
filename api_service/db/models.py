@@ -1823,6 +1823,87 @@ class ManagedAgentAuthProfile(Base):
     )
 
 
+class OAuthSessionStatus(str, enum.Enum):
+    """Lifecycle status for a managed agent OAuth session."""
+
+    PENDING = "pending"
+    STARTING = "starting"
+    TMATE_READY = "tmate_ready"
+    AWAITING_USER = "awaiting_user"
+    VERIFYING = "verifying"
+    REGISTERING_PROFILE = "registering_profile"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class ManagedAgentOAuthSession(Base):
+    """OAuth Session for managed agents using tmate transport."""
+
+    __tablename__ = "managed_agent_oauth_sessions"
+    __table_args__ = (
+        Index("ix_oauth_sessions_profile", "profile_id"),
+        Index("ix_oauth_sessions_status", "status"),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    auth_mode: Mapped[ManagedAgentAuthMode] = mapped_column(
+        Enum(
+            ManagedAgentAuthMode,
+            name="managedagentauthmode",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=ManagedAgentAuthMode.OAUTH,
+        server_default=ManagedAgentAuthMode.OAUTH.value,
+    )
+    session_transport: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="tmate", server_default=text("'tmate'")
+    )
+    volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    volume_mount_path: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )
+    status: Mapped[OAuthSessionStatus] = mapped_column(
+        Enum(
+            OAuthSessionStatus,
+            name="oauthsessionstatus",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=OAuthSessionStatus.PENDING,
+        server_default=OAuthSessionStatus.PENDING.value,
+    )
+    requested_by_user_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tmate_web_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    tmate_ssh_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    container_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    worker_service: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
