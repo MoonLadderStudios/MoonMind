@@ -95,12 +95,17 @@ class NdjsonOutputParser(RuntimeOutputParser):
         # Also scan stderr for error indicators
         for line in stderr.splitlines():
             stripped = line.strip()
-            if stripped and any(
-                indicator in stripped.lower()
-                for indicator in ("error:", "fatal:", "429", "rate limit")
-            ):
-                if "rate limit" in stripped.lower() or "429" in stripped:
-                    rate_limited = True
+            if not stripped:
+                continue
+            lower = stripped.lower()
+            is_rate_limit = "rate limit" in lower or "429" in lower
+            is_error = any(
+                ind in lower for ind in ("error:", "fatal:")
+            )
+            if is_rate_limit:
+                rate_limited = True
+                error_messages.append(stripped)
+            elif is_error:
                 error_messages.append(stripped)
 
         return ParsedOutput(

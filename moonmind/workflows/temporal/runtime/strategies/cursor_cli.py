@@ -71,7 +71,7 @@ class CursorCliStrategy(ManagedRuntimeStrategy):
         Detects HTTP 429 rate limiting from NDJSON events or stderr,
         reporting ``'rate_limited'`` failure class to enable cooldown.
         """
-        parser = NdjsonOutputParser()
+        parser = self.create_output_parser()
         parsed = parser.parse(stdout, stderr)
 
         if parsed.rate_limited:
