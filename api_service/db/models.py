@@ -1810,6 +1810,9 @@ class ManagedAgentAuthProfile(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+    owner_user_id: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
