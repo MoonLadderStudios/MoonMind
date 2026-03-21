@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 from datetime import UTC, datetime
+from pathlib import Path
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -26,22 +27,23 @@ class ManagedRuntimeLauncher:
         self._logger = logging.getLogger(__name__)
 
     @staticmethod
-    def _build_tmate_session_command(
+    def _build_tmate_wrapper_script(
         cmd: list[str],
         *,
         socket_path: str,
         session_name: str,
     ) -> str:
-        """Wrap agent command so the tmate session is force-closed on completion."""
+        """Build a shell script that runs agent cmd and force-closes tmate session."""
         cmd_str = shlex.join(cmd)
-        wrapped_script = (
-            f"{cmd_str}; "
-            "mm_rc=$?; "
+        return (
+            "#!/usr/bin/env bash\n"
+            "set +e\n"
+            f"{cmd_str}\n"
+            "mm_rc=$?\n"
             f"tmate -S {shlex.quote(socket_path)} "
-            f"kill-session -t {shlex.quote(session_name)} >/dev/null 2>&1 || true; "
-            "exit $mm_rc"
+            f"kill-session -t {shlex.quote(session_name)} >/dev/null 2>&1 || true\n"
+            "exit \"$mm_rc\"\n"
         )
-        return shlex.join(["bash", "-lc", wrapped_script])
 
     def build_command(
         self,
@@ -113,15 +115,21 @@ class ManagedRuntimeLauncher:
             socket_dir = "/tmp/moonmind/tmate"
             os.makedirs(socket_dir, exist_ok=True)
             socket_path = os.path.join(socket_dir, f"{run_id}.sock")
+            wrapper_path = Path(socket_dir) / f"{run_id}.wrapper.sh"
             if os.path.exists(socket_path):
                 os.remove(socket_path)
+            if wrapper_path.exists():
+                wrapper_path.unlink()
                 
             session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            session_cmd = self._build_tmate_session_command(
+            wrapper_script = self._build_tmate_wrapper_script(
                 cmd,
                 socket_path=socket_path,
                 session_name=session_name,
             )
+            wrapper_path.write_text(wrapper_script, encoding="utf-8")
+            wrapper_path.chmod(0o700)
+            session_cmd = shlex.join(["bash", str(wrapper_path)])
 
             # Start tmate server in foreground
             tmate_cmd = [

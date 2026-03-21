@@ -88,14 +88,14 @@ def test_build_command_per_runtime():
     assert "--effort" not in cmd
 
 
-def test_build_tmate_session_command_kills_session_on_exit():
-    cmd = ManagedRuntimeLauncher._build_tmate_session_command(
+def test_build_tmate_wrapper_script_kills_session_on_exit():
+    script = ManagedRuntimeLauncher._build_tmate_wrapper_script(
         ["gemini", "--model", "gemini-3.1-pro-preview", "--prompt", "hi"],
         socket_path="/tmp/moonmind/tmate/run-1.sock",
         session_name="mm-run1",
     )
-    assert "tmate -S /tmp/moonmind/tmate/run-1.sock kill-session -t mm-run1" in cmd
-    assert "exit $mm_rc" in cmd
+    assert "tmate -S /tmp/moonmind/tmate/run-1.sock kill-session -t mm-run1" in script
+    assert "exit \"$mm_rc\"" in script
 
 
 @pytest.mark.asyncio
