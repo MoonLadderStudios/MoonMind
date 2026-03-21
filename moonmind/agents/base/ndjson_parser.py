@@ -57,10 +57,15 @@ def parse_ndjson_line(line: str) -> CursorStreamEvent | None:
         logger.warning("NDJSON line missing 'type' field: %s", stripped[:200])
         return None
 
+    raw_data = obj.get("data", {})
+    if not isinstance(raw_data, dict):
+        logger.warning("NDJSON event data is not a dict (got %s), coercing to {}", type(raw_data).__name__)
+        raw_data = {}
+
     return CursorStreamEvent(
         event_type=str(event_type),
         timestamp=obj.get("timestamp"),
-        data=obj.get("data", {}),
+        data=raw_data,
     )
 
 
@@ -105,7 +110,8 @@ def detect_rate_limit(event: CursorStreamEvent) -> dict[str, Any]:
                 retry_after = _extract_retry_after(data)
                 return {"detected": True, "retry_after_seconds": retry_after}
         except (ValueError, TypeError):
-            pass
+            # Non-integer status value; treat as non-429 and continue.
+            logger.debug("Non-integer status in rate-limit detection: %r", status)
 
     # Check error / message text for rate-limit phrases.
     for key in ("error", "message"):

@@ -193,3 +193,14 @@ def test_detect_rate_limit_not_detected():
     assert result["detected"] is False
     assert result["retry_after_seconds"] is None
 
+
+def test_parse_ndjson_line_non_dict_data():
+    """Non-dict data value is coerced to empty dict."""
+    line = json.dumps({"type": "error", "data": ["some", "list"]})
+    event = parse_ndjson_line(line)
+    assert event is not None
+    assert event.data == {}
+    # Verify detect_rate_limit does not raise on this event
+    result = detect_rate_limit(event)
+    assert result["detected"] is False
+

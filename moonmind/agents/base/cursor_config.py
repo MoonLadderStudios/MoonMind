@@ -80,12 +80,10 @@ def generate_cursor_cli_json(approval_policy: dict[str, Any]) -> dict[str, Any]:
         for cmd in approval_policy.get("allow_shell", []):
             allow_rules.append(f"Shell({cmd})")
     else:
-        # Unknown level — fail-fast with permissive default.
-        logger.warning(
-            "Unknown approval_policy level %r, defaulting to full_autonomy",
-            level,
+        raise ValueError(
+            f"Unknown approval_policy level {level!r}; "
+            f"expected one of: full_autonomy, supervised, restricted"
         )
-        allow_rules = list(_FULL_AUTONOMY_ALLOW)
 
     return {
         "permissions": {

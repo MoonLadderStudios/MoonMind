@@ -89,13 +89,12 @@ def test_explicit_deny_rules():
     assert "WebFetch(*)" in perms["deny"]
 
 
-def test_unknown_level_defaults_to_full_autonomy():
-    """Unknown policy level defaults to full_autonomy with warning."""
-    config = generate_cursor_cli_json({"level": "unknown_mode"})
-    perms = config["permissions"]
-    assert "Read(**)" in perms["allow"]
-    assert "Write(**)" in perms["allow"]
-    assert "Shell(**)" in perms["allow"]
+def test_unknown_level_raises_value_error():
+    """Unknown policy level raises ValueError (fail-fast)."""
+    import pytest
+
+    with pytest.raises(ValueError, match="Unknown approval_policy level"):
+        generate_cursor_cli_json({"level": "unknown_mode"})
 
 
 def test_write_cursor_cli_json(tmp_path):

@@ -412,14 +412,14 @@ volumes:
 
 ```yaml
 cursor-auth-init:
-  image: alpine:3.19
+  image: alpine:3.20
   volumes:
-    - cursor_auth_volume:/home/app/.cursor
-  entrypoint: >
+    - cursor_auth_volume:${CURSOR_VOLUME_PATH:-/home/app/.cursor}
+  command: >
     sh -c "
-      mkdir -p /home/app/.cursor &&
-      chown -R 1000:1000 /home/app/.cursor &&
-      chmod 0775 /home/app/.cursor
+      mkdir -p ${CURSOR_VOLUME_PATH:-/home/app/.cursor} &&
+      chown -R 1000:1000 ${CURSOR_VOLUME_PATH:-/home/app/.cursor} &&
+      chmod 0775 ${CURSOR_VOLUME_PATH:-/home/app/.cursor}
     "
   restart: "no"
 ```

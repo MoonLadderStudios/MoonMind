@@ -178,12 +178,15 @@ fi
 
 # Install Cursor CLI — standalone binary downloaded via curl (not npm).
 # Renamed to cursor-agent to avoid namespace conflicts with other `agent` binaries.
+stub_cursor() {
+    printf '%s\n' "#!/usr/bin/env bash" \
+                   "echo \"cursor-agent stub: $1\" >&2" \
+                   "exit 127" > /usr/local/bin/cursor-agent
+    chmod +x /usr/local/bin/cursor-agent
+}
 if [ "${INSTALL_CURSOR_CLI}" != "true" ]; then
     echo "INSTALL_CURSOR_CLI=${INSTALL_CURSOR_CLI}; skipping Cursor CLI install and using stub" >&2
-    printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"cursor-agent stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/cursor-agent
-    chmod +x /usr/local/bin/cursor-agent
+    stub_cursor "package unavailable during image build"
 elif curl -fsSL https://cursor.com/install | bash; then
     # Installer puts binary at ~/.local/bin/agent — move and rename it
     if [ -f "${HOME}/.local/bin/agent" ]; then
@@ -191,17 +194,11 @@ elif curl -fsSL https://cursor.com/install | bash; then
         chmod +x /usr/local/bin/cursor-agent
     else
         echo "Warning: Cursor CLI installer succeeded but binary not found at expected path; installing stub" >&2
-        printf '%s\n' "#!/usr/bin/env bash" \
-                       "echo \"cursor-agent stub: binary not found after install\" >&2" \
-                       "exit 0" > /usr/local/bin/cursor-agent
-        chmod +x /usr/local/bin/cursor-agent
+        stub_cursor "binary not found after install"
     fi
 else
     echo "Warning: Failed to install Cursor CLI; installing stub binary" >&2
-    printf '%s\n' "#!/usr/bin/env bash" \
-                   "echo \"cursor-agent stub: package unavailable during image build\" >&2" \
-                   "exit 0" > /usr/local/bin/cursor-agent
-    chmod +x /usr/local/bin/cursor-agent
+    stub_cursor "package unavailable during image build"
 fi
 
 # Ensure LICENSE files exist so COPY instructions in the next stage do not fail.
