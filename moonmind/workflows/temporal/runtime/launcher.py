@@ -87,11 +87,19 @@ class ManagedRuntimeLauncher:
         *,
         allow_failure: bool = False,
     ) -> bool:
+        env = dict(os.environ)
+        # Local fallback clones may target repos created by previous worker runs
+        # with different UID ownership. Trust workspace directories for this
+        # command invocation so clone/checkout can proceed non-interactively.
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "safe.directory"
+        env["GIT_CONFIG_VALUE_0"] = "*"
         process = await asyncio.create_subprocess_exec(
             "git",
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
