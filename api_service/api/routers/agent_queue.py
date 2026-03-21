@@ -117,7 +117,10 @@ from moonmind.workflows.agent_queue.service import (
     QueueSystemMetadata,
     WorkerAuthPolicy,
 )
-from moonmind.workflows.tasks.routing import get_routing_target_for_task
+from moonmind.workflows.tasks.routing import (
+    TemporalSubmitDisabledError,
+    get_routing_target_for_task,
+)
 from moonmind.workflows.temporal import TemporalExecutionService
 
 router = APIRouter(prefix="/api/queue", tags=["agent-queue"])
@@ -591,6 +594,14 @@ def _merge_allowed_types(
 
 
 def _to_http_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, TemporalSubmitDisabledError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_submit_disabled",
+                "message": str(exc),
+            },
+        )
     if isinstance(exc, AgentQueueAuthenticationError):
         return HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -770,11 +781,14 @@ async def create_job(
 ) -> JobModel | dict[str, Any]:
     """Create a queued job for worker execution."""
 
-    target = get_routing_target_for_task(
-        is_manifest=(payload.type == MANIFEST_JOB_TYPE),
-        is_run=(payload.type == CANONICAL_TASK_JOB_TYPE),
-        task_payload=(payload.payload if isinstance(payload.payload, dict) else None),
-    )
+    try:
+        target = get_routing_target_for_task(
+            is_manifest=(payload.type == MANIFEST_JOB_TYPE),
+            is_run=(payload.type == CANONICAL_TASK_JOB_TYPE),
+            task_payload=(payload.payload if isinstance(payload.payload, dict) else None),
+        )
+    except TemporalSubmitDisabledError as exc:
+        raise _to_http_exception(exc) from exc
 
     if target == "temporal":
         try:
@@ -798,7 +812,8 @@ async def create_job(
             raise
         except AgentQueueValidationError as exc:
             raise _to_http_exception(exc) from exc
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # pragma: no cover — catch-all for unexpected service errors
+            logger.exception("Unexpected error in Temporal task submission")
             raise _to_http_exception(exc) from exc
 
         import uuid
@@ -947,6 +962,8 @@ async def create_job_with_attachments(
                 else None
             ),
         )
+    except TemporalSubmitDisabledError as exc:
+        raise _to_http_exception(exc) from exc
     except ValidationError:
         target = "queue"
 

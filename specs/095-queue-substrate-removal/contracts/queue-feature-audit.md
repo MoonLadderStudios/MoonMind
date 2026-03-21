@@ -21,7 +21,7 @@ Temporal workers poll native task queues (`mm.workflow`, `mm.activity.*`) and ne
 | Endpoint | Method | Status | Temporal Equivalent |
 |----------|--------|--------|-------------------|
 | `/api/queue/jobs` | POST | ✅ **Already delegated** | `create_job()` calls `get_routing_target_for_task()` → `_create_execution_from_task_request()` / `_create_execution_from_manifest_request()` |
-| `/api/queue/jobs/with-attachments` | POST | ✅ **Already delegated** | Routes through same path with attachment handling |
+| `/api/queue/jobs/with-attachments` | POST | 🔴 **Deprecated** | Returns 400 for Temporal routing target; use Temporal artifact upload flow instead |
 
 ### Task List & Detail (User-facing)
 

@@ -807,7 +807,7 @@ def test_create_job_rejects_jules_runtime_without_config(
 def test_create_job_with_attachments_success(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """POST /jobs/with-attachments should call attachment-aware service."""
+    """POST /jobs/with-attachments should return 400 since Temporal routing rejects legacy attachments."""
 
     test_client, service = client
     job = _build_job()
@@ -839,18 +839,10 @@ def test_create_job_with_attachments_success(
         "/api/queue/jobs/with-attachments", data=payload, files=files
     )
 
-    assert response.status_code == 201
-    body = response.json()
-    assert body["job"]["id"] == str(job.id)
-    assert len(body["attachments"]) == 1
-    service.create_job_with_attachments.assert_awaited_once()
-    called_attachments = service.create_job_with_attachments.await_args.kwargs[
-        "attachments"
-    ]
-    assert len(called_attachments) == 1
-    assert called_attachments[0].filename == "image.png"
-    assert called_attachments[0].content_type == "image/png"
-    assert called_attachments[0].data.startswith(b"\x89PNG")
+    # Attachment submission is deprecated for Temporal-backed workflows
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_routing_target"
+    service.create_job_with_attachments.assert_not_awaited()
 
 
 def test_create_job_with_attachments_rejects_temporal_routing(
@@ -909,7 +901,7 @@ def test_create_job_with_attachments_file_too_large(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Router should reject oversized attachments before service dispatch."""
+    """Attachment endpoint returns 400 before file-size checks since Temporal routing rejects it."""
 
     test_client, service = client
     monkeypatch.setattr(
@@ -928,7 +920,9 @@ def test_create_job_with_attachments_file_too_large(
         data={"request": json.dumps({"type": "task", "payload": {}})},
         files=files,
     )
-    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    # Routing returns "temporal" → endpoint blocks with 400 before file-size validation
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "invalid_routing_target"
     service.create_job_with_attachments.assert_not_awaited()
 
 
@@ -936,7 +930,7 @@ def test_create_job_with_attachments_total_too_large(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Router should enforce total attachment byte limits."""
+    """Attachment endpoint returns 400 before total-size checks since Temporal routing rejects it."""
 
     test_client, service = client
     monkeypatch.setattr(
@@ -953,14 +947,16 @@ def test_create_job_with_attachments_total_too_large(
         data={"request": json.dumps({"type": "task", "payload": {}})},
         files=files,
     )
-    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    # Routing returns "temporal" → endpoint blocks with 400 before total-size validation
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "invalid_routing_target"
     service.create_job_with_attachments.assert_not_awaited()
 
 
 def test_create_job_with_attachments_maps_attachment_type_error(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """Attachment validation errors should surface a stable API error code."""
+    """Attachment endpoint returns 400 since Temporal routing rejects legacy attachments."""
 
     test_client, service = client
     service.create_job_with_attachments.side_effect = AgentQueueValidationError(
@@ -979,8 +975,9 @@ def test_create_job_with_attachments_maps_attachment_type_error(
         files=files,
     )
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert response.json()["detail"]["code"] == "attachment_type_not_allowed"
+    # Routing returns "temporal" → endpoint blocks with 400 before attachment-type validation
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["detail"]["code"] == "invalid_routing_target"
 
 
 def test_list_job_attachments_unauthorized_maps_403(
@@ -1018,12 +1015,24 @@ def test_download_job_attachment_unauthorized_maps_403(
 
 def test_create_manifest_job_sanitizes_payload(
     client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Manifest submissions should return sanitized payload metadata."""
+    """Manifest submissions should route to Temporal and return execution metadata."""
 
     test_client, service = client
-    job = _build_manifest_job()
-    service.create_job.return_value = job
+    now = datetime.now(UTC)
+    mock_execution = SimpleNamespace(
+        workflow_id="wf-manifest-123",
+        run_id="run-manifest-456",
+        created_at=now,
+        updated_at=now,
+        started_at=now,
+    )
+    mock_create = AsyncMock(return_value=mock_execution)
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._create_execution_from_manifest_request",
+        mock_create,
+    )
 
     response = test_client.post(
         "/api/queue/jobs",
@@ -1039,36 +1048,26 @@ def test_create_manifest_job_sanitizes_payload(
     )
 
     assert response.status_code == 201
-    payload = response.json()["payload"]
-    assert payload["manifest"]["name"] == "demo-manifest"
-    assert payload["manifest"]["source"]["kind"] == "inline"
-    assert "content" not in payload["manifest"]["source"]
-    assert payload["manifestHash"] == "sha256:abc123"
-    assert payload["manifestSecretRefs"]["profile"] == [
-        {
-            "envKey": "OPENAI_API_KEY",
-            "provider": "openai",
-            "field": "api_key",
-            "normalized": "profile://openai#api_key",
-        }
-    ]
-    assert payload["manifestSecretRefs"]["vault"] == [
-        {
-            "ref": "vault://kv/manifests/demo-manifest#token",
-            "mount": "kv",
-            "path": "manifests/demo-manifest",
-            "field": "token",
-        }
-    ]
+    body = response.json()
+    assert body["type"] == "manifest"
+    assert body["status"] == "queued"
+    mock_create.assert_awaited_once()
 
 
 def test_create_manifest_job_validation_error(
     client: tuple[TestClient, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Manifest contract errors should map to HTTP 422."""
+    """Manifest contract errors from Temporal path should map to HTTP 422."""
 
     test_client, service = client
-    service.create_job.side_effect = AgentQueueValidationError("invalid manifest")
+    mock_create = AsyncMock(
+        side_effect=AgentQueueValidationError("invalid manifest")
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions._create_execution_from_manifest_request",
+        mock_create,
+    )
 
     response = test_client.post(
         "/api/queue/jobs",
@@ -1084,7 +1083,7 @@ def test_create_manifest_job_validation_error(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert response.json()["detail"]["code"] == "invalid_manifest_job"
+    assert response.json()["detail"]["code"] == "invalid_queue_payload"
 
 
 def test_claim_job_empty_queue_returns_null(

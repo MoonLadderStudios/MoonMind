@@ -4,6 +4,15 @@ from moonmind.config.settings import settings
 
 TaskTarget = Literal["temporal"]
 
+
+class TemporalSubmitDisabledError(RuntimeError):
+    """Raised when Temporal task submission is disabled via configuration.
+
+    API routers should catch this and return HTTP 503 Service Unavailable
+    with a structured error body rather than allowing it to surface as a 500.
+    """
+
+
 # Accepted truthy string forms: 1, true, yes, on
 # Accepted falsy string forms:  0, false, no, off
 _TRUTHY_STRINGS = frozenset({"1", "true", "yes", "on"})
@@ -47,7 +56,7 @@ def get_routing_target_for_task(
     Proposal generation (``task.proposeTasks``) is handled inside Temporal workflows.
     """
     if not settings.temporal_dashboard.submit_enabled:
-        raise ValueError(
+        raise TemporalSubmitDisabledError(
             "Temporal task submission is disabled "
             "(temporal_dashboard.submit_enabled=False). "
             "The legacy queue execution substrate is no longer supported. "

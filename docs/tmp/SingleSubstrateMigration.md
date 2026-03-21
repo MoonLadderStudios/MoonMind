@@ -35,13 +35,13 @@ The target state is clean: **Temporal owns execution truth. Period.**
 #### Python Backend
 | Component | File | Legacy Reference |
 |-----------|------|-----------------|
-| View model | [task_dashboard_view_model.py](file:///Users/nsticco/MoonMind/api_service/api/routers/task_dashboard_view_model.py) | `sources.queue` config block (15+ queue API endpoints), `sources.manifests` pointing at queue, `_STATUS_MAPS` with `queue` and `orchestrator` entries |
-| Task compatibility router | [task_compatibility.py](file:///Users/nsticco/MoonMind/api_service/api/routers/task_compatibility.py) | `source` filter accepts `queue` literal, `source_hint` accepts `queue` |
-| Queue router | [agent_queue.py](file:///Users/nsticco/MoonMind/api_service/api/routers/agent_queue.py) | Full queue API: `/api/queue/jobs`, `/api/tasks`, etc. |
-| Agent queue module | [moonmind/workflows/agent_queue/](file:///Users/nsticco/MoonMind/moonmind/workflows/agent_queue/) | `service.py` (112 KB), `repositories.py` (50 KB), `models.py`, `task_contract.py` (48 KB), etc. |
-| Task routing | [routing.py](file:///Users/nsticco/MoonMind/moonmind/workflows/tasks/routing.py) | References to orchestrator |
-| Automation orchestrator | [orchestrator.py](file:///Users/nsticco/MoonMind/moonmind/workflows/automation/orchestrator.py) | Automation-level orchestration code |
-| Settings | [settings.py](file:///Users/nsticco/MoonMind/moonmind/config/settings.py) | Queue/orchestrator config entries |
+| View model | [task_dashboard_view_model.py](../../api_service/api/routers/task_dashboard_view_model.py) | `sources.queue` config block (15+ queue API endpoints), `sources.manifests` pointing at queue, `_STATUS_MAPS` with `queue` and `orchestrator` entries |
+| Task compatibility router | [task_compatibility.py](../../api_service/api/routers/task_compatibility.py) | `source` filter accepts `queue` literal, `source_hint` accepts `queue` |
+| Queue router | [agent_queue.py](../../api_service/api/routers/agent_queue.py) | Full queue API: `/api/queue/jobs`, `/api/tasks`, etc. |
+| Agent queue module | [moonmind/workflows/agent_queue/](../../moonmind/workflows/agent_queue/) | `service.py` (112 KB), `repositories.py` (50 KB), `models.py`, `task_contract.py` (48 KB), etc. |
+| Task routing | [routing.py](../../moonmind/workflows/tasks/routing.py) | References to orchestrator |
+| Automation orchestrator | [orchestrator.py](../../moonmind/workflows/automation/orchestrator.py) | Automation-level orchestration code |
+| Settings | [settings.py](../../moonmind/config/settings.py) | Queue/orchestrator config entries |
 
 #### Frontend (dashboard.js)
 | Area | Legacy Reference |
@@ -54,19 +54,19 @@ The target state is clean: **Temporal owns execution truth. Period.**
 #### Tests
 | Area | Files |
 |------|-------|
-| Queue layout fixtures | [queue_rows.js](file:///Users/nsticco/MoonMind/tests/task_dashboard/__fixtures__/queue_rows.js) — `createOrchestratorRow()` |
-| Submit runtime tests | [test_submit_runtime.js](file:///Users/nsticco/MoonMind/tests/task_dashboard/test_submit_runtime.js) — orchestrator validation, priority, UI state |
-| Queue layout tests | [test_queue_layouts.js](file:///Users/nsticco/MoonMind/tests/task_dashboard/test_queue_layouts.js) — orchestrator row rendering |
-| View model tests | [test_task_dashboard_view_model.py](file:///Users/nsticco/MoonMind/tests/unit/api/routers/test_task_dashboard_view_model.py) |
-| Orchestrator removal coverage | [test_doc_req_coverage.py](file:///Users/nsticco/MoonMind/tests/unit/orchestrator_removal/test_doc_req_coverage.py) |
+| Queue layout fixtures | [queue_rows.js](../../tests/task_dashboard/__fixtures__/queue_rows.js) — `createOrchestratorRow()` |
+| Submit runtime tests | [test_submit_runtime.js](../../tests/task_dashboard/test_submit_runtime.js) — orchestrator validation, priority, UI state |
+| Queue layout tests | [test_queue_layouts.js](../../tests/task_dashboard/test_queue_layouts.js) — orchestrator row rendering |
+| View model tests | [test_task_dashboard_view_model.py](../../tests/unit/api/routers/test_task_dashboard_view_model.py) |
+| Orchestrator removal coverage | [test_doc_req_coverage.py](../../tests/unit/orchestrator_removal/test_doc_req_coverage.py) |
 
 #### Docs
 | Document | Issue |
 |----------|-------|
-| [SourceOfTruthAndProjectionModel.md](file:///Users/nsticco/MoonMind/docs/Temporal/SourceOfTruthAndProjectionModel.md) | Describes mixed-source as "migration stance", projection as "temporary implementation posture" |
-| [TaskExecutionCompatibilityModel.md](file:///Users/nsticco/MoonMind/docs/Temporal/TaskExecutionCompatibilityModel.md) | Lists `queue`, `orchestrator`, `temporal` as execution sources; multi-source pagination rules |
-| [VisibilityAndUiQueryModel.md](file:///Users/nsticco/MoonMind/docs/Temporal/VisibilityAndUiQueryModel.md) | References mixed-source pages, `queue`/`orchestrator` dashboard sources |
-| [OrchestratorRemovalPlan.md](file:///Users/nsticco/MoonMind/docs/tmp/OrchestratorRemovalPlan.md) | Partially executed plan, tracked as H.1 |
+| [SourceOfTruthAndProjectionModel.md](../Temporal/SourceOfTruthAndProjectionModel.md) | Describes mixed-source as "migration stance", projection as "temporary implementation posture" |
+| [TaskExecutionCompatibilityModel.md](../Temporal/TaskExecutionCompatibilityModel.md) | Lists `queue`, `orchestrator`, `temporal` as execution sources; multi-source pagination rules |
+| [VisibilityAndUiQueryModel.md](../Temporal/VisibilityAndUiQueryModel.md) | References mixed-source pages, `queue`/`orchestrator` dashboard sources |
+| [OrchestratorRemovalPlan.md](OrchestratorRemovalPlan.md) | Partially executed plan, tracked as H.1 |
 
 ---
 
