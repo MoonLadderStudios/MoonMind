@@ -48,7 +48,7 @@
 
 - [X] T008 [P] [US1] Add workflow unit coverage for artifact-read, parse, validate, compile, plan persistence, and child-run lineage in `tests/unit/workflows/temporal/test_manifest_ingest.py` (DOC-REQ-002, DOC-REQ-003, DOC-REQ-006, DOC-REQ-008, DOC-REQ-014)
 - [X] T009 [P] [US1] Add service and router tests for registry-backed and artifact-first manifest-ingest creation in `tests/unit/services/test_manifests_service.py`, `tests/unit/api/routers/test_manifests.py`, and `tests/unit/api/routers/test_executions.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-005, DOC-REQ-013)
-- [ ] T010 [P] [US1] Add contract and Temporal integration coverage for `MoonMind.ManifestIngest` startup and child-run orchestration in `tests/contract/test_temporal_execution_api.py` and `tests/integration/temporal/test_manifest_ingest_runtime.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-006, DOC-REQ-016)
+- [X] T010 [P] [US1] Add contract and Temporal integration coverage for `MoonMind.ManifestIngest` startup and child-run orchestration in `tests/contract/test_temporal_execution_api.py` and `tests/integration/temporal/test_manifest_ingest_runtime.py` (DOC-REQ-001, DOC-REQ-002, DOC-REQ-004, DOC-REQ-006, DOC-REQ-016)
 
 ### Implementation for User Story 1
 
@@ -94,7 +94,7 @@
 
 - [X] T022 [P] [US3] Add workflow and activity tests for concurrency caps, `FAIL_FAST`, `continue_and_report`, and `BEST_EFFORT` behavior, checkpoint artifacts, Continue-As-New, and request-cancel child shutdown in `tests/unit/workflows/temporal/test_manifest_ingest.py` and `tests/unit/workflows/temporal/test_activity_runtime.py` (DOC-REQ-009, DOC-REQ-010, DOC-REQ-011, DOC-REQ-014)
 - [X] T023 [P] [US3] Add service and router tests for unauthorized artifact access, authorization lineage propagation, and secret-safe manifest responses in `tests/unit/services/test_manifests_service.py` and `tests/unit/api/routers/test_manifests.py` (DOC-REQ-013, DOC-REQ-016)
-- [ ] T024 [P] [US3] Add integration, API, and dashboard coverage for run-index pagination, shared visibility totals, and large-ingest rollover behavior in `tests/integration/temporal/test_manifest_ingest_runtime.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/task_dashboard/test_temporal_run_history.js` (DOC-REQ-010, DOC-REQ-012, DOC-REQ-015, DOC-REQ-016)
+- [X] T024 [P] [US3] Add integration, API, and dashboard coverage for run-index pagination, shared visibility totals, and large-ingest rollover behavior in `tests/integration/temporal/test_manifest_ingest_runtime.py`, `tests/unit/api/routers/test_task_dashboard_view_model.py`, and `tests/task_dashboard/test_temporal_run_history.js` (DOC-REQ-010, DOC-REQ-012, DOC-REQ-015, DOC-REQ-016)
 
 ### Implementation for User Story 3
 
