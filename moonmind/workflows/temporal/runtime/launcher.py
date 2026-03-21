@@ -178,20 +178,35 @@ class ManagedRuntimeLauncher:
         model = (
             request.parameters.get("model") if request.parameters else None
         ) or profile.default_model
-        if model:
-            cmd.extend(["--model", model])
 
-        effort = (
-            request.parameters.get("effort") if request.parameters else None
-        ) or profile.default_effort
-        if effort:
-            cmd.extend(["--effort", effort])
-
-        if request.instruction_ref:
-            if profile.runtime_id == "gemini_cli":
+        if profile.runtime_id == "codex_cli":
+            # Codex CLI: `codex exec -m MODEL [PROMPT]`
+            # --effort is not supported; --model is -m on exec subcommand.
+            if model:
+                cmd.extend(["-m", model])
+            if request.instruction_ref:
+                cmd.append(request.instruction_ref)
+        elif profile.runtime_id == "gemini_cli":
+            if model:
+                cmd.extend(["--model", model])
+            effort = (
+                request.parameters.get("effort") if request.parameters else None
+            ) or profile.default_effort
+            if effort:
+                cmd.extend(["--effort", effort])
+            if request.instruction_ref:
                 cmd.extend(["--yolo", "--prompt", request.instruction_ref])
-            else:
-                cmd.extend(["--instruction-ref", request.instruction_ref])
+        else:
+            # Generic / claude_code path
+            if model:
+                cmd.extend(["--model", model])
+            effort = (
+                request.parameters.get("effort") if request.parameters else None
+            ) or profile.default_effort
+            if effort:
+                cmd.extend(["--effort", effort])
+            if request.instruction_ref:
+                cmd.extend(["--prompt", request.instruction_ref])
 
         return cmd
 

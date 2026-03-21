@@ -71,8 +71,56 @@ def test_build_command_with_instruction_ref():
     request = _make_request(instruction_ref="instr-ref-1")
 
     cmd = launcher.build_command(profile, request)
-    assert "--instruction-ref" in cmd
+    assert "--prompt" in cmd
     assert "instr-ref-1" in cmd
+
+
+def test_build_command_codex_cli():
+    """Codex CLI uses `codex exec -m MODEL [PROMPT]` — no --effort or --prompt flags."""
+    store = ManagedRunStore("/tmp/test-store")
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="codex_cli",
+        command_template=["codex", "exec", "--full-auto"],
+        default_model="gpt-5.3-codex",
+        default_effort="high",
+    )
+    request = _make_request(
+        instruction_ref="Fix the bug",
+        parameters={"model": "o3"},
+    )
+
+    cmd = launcher.build_command(profile, request)
+    assert cmd[:3] == ["codex", "exec", "--full-auto"]
+    assert "-m" in cmd
+    assert "o3" in cmd
+    # Codex does not support --effort or --model (long form)
+    assert "--effort" not in cmd
+    assert "--model" not in cmd
+    # Prompt is positional, not via --prompt
+    assert "--prompt" not in cmd
+    assert "Fix the bug" in cmd
+
+
+def test_build_command_gemini_cli():
+    """Gemini CLI uses `gemini --yolo --prompt PROMPT --model MODEL`."""
+    store = ManagedRunStore("/tmp/test-store")
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        runtime_id="gemini_cli",
+        command_template=["gemini"],
+        default_model="gemini-2.5-pro",
+        default_effort="high",
+    )
+    request = _make_request(instruction_ref="Fix the bug")
+
+    cmd = launcher.build_command(profile, request)
+    assert cmd[0] == "gemini"
+    assert "--model" in cmd
+    assert "--yolo" in cmd
+    assert "--prompt" in cmd
+    assert "--effort" in cmd
+    assert "Fix the bug" in cmd
 
 
 def test_build_command_per_runtime():
