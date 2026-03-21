@@ -5657,7 +5657,7 @@
     let templateItems = [];
     const templateInputMemory = {};
     const preferredTemplateSlug = "speckit-orchestrate";
-    const templateScopeLoadOrder = ["global", "team", "personal"];
+    const templateScopeLoadOrder = ["global", "personal"];
 
     const setTemplateMessage = (text, isError = false) => {
       if (!templateMessage) {
@@ -5742,9 +5742,6 @@
       const scope = String(item?.scope || "").trim().toLowerCase();
       if (scope === "personal") {
         return "Personal";
-      }
-      if (scope === "team") {
-        return "Team";
       }
       return "Global";
     };
@@ -6100,21 +6097,14 @@
         return;
       }
       const description = window.prompt("Preset description", `Saved from queue draft: ${title}`) || "";
-      const scope = (window.prompt("Scope (personal/team)", "personal") || "personal")
+      const scope = (window.prompt("Scope (personal/global)", "personal") || "personal")
         .trim()
         .toLowerCase();
-      if (!["personal", "team"].includes(scope)) {
-        setTemplateMessage("Scope must be personal or team.", true);
+      if (!["personal", "global"].includes(scope)) {
+        setTemplateMessage("Scope must be personal or global.", true);
         return;
       }
-      const scopeRef =
-        scope === "team"
-          ? String(window.prompt("Team scopeRef (required for team)", "") || "").trim()
-          : "";
-      if (scope === "team" && !scopeRef) {
-        setTemplateMessage("Team scopeRef is required for team presets.", true);
-        return;
-      }
+      const scopeRef = "";
 
       const steps = stepState
         .map((step) => {

@@ -156,7 +156,6 @@ class RecurringTaskScopeType(str, enum.Enum):
     """Scope ownership for recurring definitions."""
 
     PERSONAL = "personal"
-    TEAM = "team"
     GLOBAL = "global"
 
 
@@ -418,7 +417,6 @@ class TaskTemplateScopeType(str, enum.Enum):
     """Scope owner for task step template visibility."""
 
     GLOBAL = "global"
-    TEAM = "team"
     PERSONAL = "personal"
 
 

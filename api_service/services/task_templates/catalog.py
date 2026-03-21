@@ -153,11 +153,10 @@ def _normalize_scope(scope: str) -> TaskTemplateScopeType:
     raw = str(scope or "").strip().lower()
     if raw not in {
         TaskTemplateScopeType.GLOBAL.value,
-        TaskTemplateScopeType.TEAM.value,
         TaskTemplateScopeType.PERSONAL.value,
     }:
         raise TaskTemplateValidationError(
-            "scope must be one of: global, team, personal"
+            "scope must be one of: global, personal"
         )
     return TaskTemplateScopeType(raw)
 
@@ -170,7 +169,7 @@ def _normalize_scope_ref(
         return None
     if cleaned is None:
         raise TaskTemplateValidationError(
-            "scopeRef is required for team/personal scopes."
+            "scopeRef is required for personal scopes."
         )
     return cleaned
 
