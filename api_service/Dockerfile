@@ -29,6 +29,7 @@ ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
+ARG INSTALL_CURSOR_CLI
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
