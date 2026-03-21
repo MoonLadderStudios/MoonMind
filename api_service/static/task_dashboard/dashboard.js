@@ -5044,7 +5044,7 @@
           </div>
           <div id="schedule-deferred-minutes-fields" class="hidden">
             <label>Minutes from now
-              <input type="number" name="scheduleDeferredMinutes" min="1" placeholder="e.g. 15" />
+              <input type="number" name="scheduleDeferredMinutes" min="1" max="525600" step="1" placeholder="e.g. 15" />
             </label>
           </div>
           <div id="schedule-recurring-fields" class="hidden">
@@ -6559,14 +6559,24 @@
           };
         } else if (scheduleMode === "deferred_minutes") {
           const scheduleDeferredMinutesRaw = String(formData.get("scheduleDeferredMinutes") || "").trim();
-          const scheduleDeferredMinutes = parseInt(scheduleDeferredMinutesRaw, 10);
-          if (isNaN(scheduleDeferredMinutes) || scheduleDeferredMinutes <= 0) {
+          const scheduleDeferredMinutes = Number(scheduleDeferredMinutesRaw);
+          if (!Number.isFinite(scheduleDeferredMinutes) || !Number.isInteger(scheduleDeferredMinutes) || scheduleDeferredMinutes <= 0) {
             message.className = "notice error queue-submit-message";
-            message.textContent = "A valid positive number of minutes is required for deferred scheduling.";
+            message.textContent = "A valid positive whole number of minutes is required for deferred scheduling.";
             return;
           }
-          const scheduledForDate = new Date();
-          scheduledForDate.setMinutes(scheduledForDate.getMinutes() + scheduleDeferredMinutes);
+          if (scheduleDeferredMinutes > 525600) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Deferred minutes cannot exceed 525 600 (one year).";
+            return;
+          }
+          const scheduledForMs = Date.now() + scheduleDeferredMinutes * 60000;
+          const scheduledForDate = new Date(scheduledForMs);
+          if (!Number.isFinite(scheduledForDate.getTime())) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Unable to compute a valid schedule date from the provided minutes.";
+            return;
+          }
           requestBody.payload.schedule = {
             mode: "once",
             scheduledFor: scheduledForDate.toISOString(),
