@@ -237,19 +237,15 @@ def _build_runtime_planner():
         ]
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-            pr_node_inputs = dict(node_inputs)
-            pr_node_inputs["instructions"] = "Create a GitHub pull request with the changes."
-            nodes.append(
-                {
-                    "id": f"{node_id}-publish-pr",
-                    "tool": {
-                        "type": "agent_runtime",
-                        "name": runtime_mode,
-                        "version": "1.0",
-                    },
-                    "inputs": pr_node_inputs,
-                }
+            # Append PR creation instructions to the primary node so the
+            # agent creates the PR in the same workspace where the changes
+            # were made.  A separate node would run in a fresh checkout with
+            # no changes to publish.
+            pr_suffix = (
+                "\n\nAfter completing the changes above, create a GitHub "
+                "pull request with the changes using `gh pr create`."
             )
+            node_inputs["instructions"] = instructions + pr_suffix
 
         return {
             "plan_version": "1.0",

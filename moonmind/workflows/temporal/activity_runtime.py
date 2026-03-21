@@ -2685,7 +2685,93 @@ class TemporalAgentRuntimeActivities:
             run_store=self._run_store,
         )
         result = await adapter.fetch_result(run_id)
-        return result.model_dump(mode="json", by_alias=True)
+        result_dict = result.model_dump(mode="json", by_alias=True)
+
+        # Enrich result with pull_request_url detected from workspace git
+        # state.  Managed agents run inside tmate so their stdout doesn't
+        # capture CLI output; we check for PRs from the workspace branch
+        # after the run completes instead.
+        if result.failure_class is None:
+            pr_url = self._detect_pr_url_from_workspace(run_id)
+            if pr_url:
+                meta = dict(result_dict.get("metadata") or {})
+                meta["pull_request_url"] = pr_url
+                result_dict["metadata"] = meta
+
+        return result_dict
+
+    def _detect_pr_url_from_workspace(self, run_id: str) -> str | None:
+        """Best-effort detection of a PR URL from the workspace git state."""
+        import re
+        import subprocess
+
+        if self._run_store is None:
+            return None
+        record = self._run_store.load(run_id)
+        if record is None or not record.workspace_path:
+            return None
+
+        workspace = record.workspace_path
+        try:
+            # Get the current branch in the workspace
+            branch_result = subprocess.run(
+                ["git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if branch_result.returncode != 0:
+                return None
+            branch = branch_result.stdout.strip()
+            if not branch or branch in ("main", "master", "HEAD"):
+                return None
+
+            # Check for an open PR from this branch
+            pr_result = subprocess.run(
+                [
+                    "gh", "pr", "list",
+                    "--repo", self._detect_repo_from_workspace(workspace),
+                    "--head", branch,
+                    "--json", "url",
+                    "--limit", "1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=workspace,
+            )
+            if pr_result.returncode != 0:
+                return None
+            import json as _json
+            prs = _json.loads(pr_result.stdout.strip() or "[]")
+            if prs and isinstance(prs, list) and prs[0].get("url"):
+                return str(prs[0]["url"])
+        except Exception:
+            logger.debug(
+                "Failed to detect PR URL from workspace for run %s",
+                run_id,
+                exc_info=True,
+            )
+        return None
+
+    @staticmethod
+    def _detect_repo_from_workspace(workspace: str) -> str:
+        """Extract the GitHub owner/repo from the workspace remote URL."""
+        import re
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "-C", workspace, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return ""
+        url = result.stdout.strip()
+        # Match github.com/owner/repo or github.com:owner/repo
+        match = re.search(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$", url)
+        return match.group(1) if match else ""
 
     async def agent_runtime_cancel(
         self,
