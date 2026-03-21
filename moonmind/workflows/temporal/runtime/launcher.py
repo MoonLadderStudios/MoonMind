@@ -244,13 +244,20 @@ class ManagedRuntimeLauncher:
             os.environ
         )
 
-        # Ensure HOME and GEMINI_HOME are set for gemini cli
-        if "GEMINI_HOME" not in env_overrides and "GEMINI_HOME" in os.environ:
-            env_overrides["GEMINI_HOME"] = os.environ["GEMINI_HOME"]
-        if "GEMINI_CLI_HOME" not in env_overrides and "GEMINI_CLI_HOME" in os.environ:
-            env_overrides["GEMINI_CLI_HOME"] = os.environ["GEMINI_CLI_HOME"]
-        if "HOME" not in env_overrides and "HOME" in os.environ:
-            env_overrides["HOME"] = os.environ["HOME"]
+        # Ensure runtime-specific home dirs are set so CLIs can find their
+        # auth credentials even when env_overrides comes from a different
+        # worker (the workflow worker) that may lack these variables.
+        _runtime_env_keys = (
+            "HOME",
+            "GEMINI_HOME",
+            "GEMINI_CLI_HOME",
+            "CODEX_HOME",
+            "CODEX_CONFIG_HOME",
+            "CODEX_CONFIG_PATH",
+        )
+        for key in _runtime_env_keys:
+            if key not in env_overrides and key in os.environ:
+                env_overrides[key] = os.environ[key]
 
         use_tmate = shutil.which("tmate") is not None
         endpoints: dict[str, str] | None = None
