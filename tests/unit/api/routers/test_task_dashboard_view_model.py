@@ -250,8 +250,8 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
     config = build_runtime_config("/tasks")
 
     assert config["features"]["temporalDashboard"] == {
-        "enabled": True,
-        "listEnabled": True,
+        "enabled": False,
+        "listEnabled": False,
         "detailEnabled": True,
         "actionsEnabled": True,
         "submitEnabled": True,

@@ -192,11 +192,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         },
         "features": {
             "temporalDashboard": {
-                "enabled": True,
-                "listEnabled": True,
-                "detailEnabled": True,
-                "actionsEnabled": True,
-                "submitEnabled": True,
+                "enabled": bool(temporal_dashboard.enabled),
+                "listEnabled": bool(temporal_dashboard.list_enabled),
+                "detailEnabled": bool(temporal_dashboard.detail_enabled),
+                "actionsEnabled": bool(temporal_dashboard.actions_enabled),
+                "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
             "logTailingEnabled": bool(

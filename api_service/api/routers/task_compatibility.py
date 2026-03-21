@@ -76,17 +76,26 @@ async def list_compatibility_tasks(
     service: TaskCompatibilityService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> TaskCompatibilityListResponse:
-    return await service.list_tasks(
-        user=user,
-        source=source,
-        entry=entry,
-        workflow_type=workflow_type,
-        status_filter=status_filter,
-        owner_type=owner_type,
-        owner_id=owner_id,
-        page_size=page_size,
-        cursor=cursor,
-    )
+    try:
+        return await service.list_tasks(
+            user=user,
+            source=source,
+            entry=entry,
+            workflow_type=workflow_type,
+            status_filter=status_filter,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            page_size=page_size,
+            cursor=cursor,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "invalid_source_filter",
+                "message": str(error),
+            },
+        ) from error
 
 
 @router.get("/{task_id}", response_model=TaskCompatibilityDetail)
