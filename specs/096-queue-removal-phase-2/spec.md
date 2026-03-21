@@ -1,6 +1,6 @@
 # Feature Specification: Collapse Dashboard to Single Source
 
-**Feature Branch**: `097-queue-removal-phase-2`  
+**Feature Branch**: `096-queue-removal-phase-2`  
 **Created**: 2026-03-21  
 **Status**: Draft  
 **Input**: User description: "Implement Phase 2 of Single Substrate Migration"

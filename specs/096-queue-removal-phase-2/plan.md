@@ -1,7 +1,7 @@
 # Implementation Plan: Collapse Dashboard to Single Source
 
-**Branch**: `097-queue-removal-phase-2` | **Date**: 2026-03-21 | **Spec**: [spec.md](spec.md)
-**Input**: Feature specification from `/specs/097-queue-removal-phase-2/spec.md`
+**Branch**: `096-queue-removal-phase-2` | **Date**: 2026-03-21 | **Spec**: [spec.md](spec.md)
+**Input**: Feature specification from `/specs/096-queue-removal-phase-2/spec.md`
 
 ## Summary
 
@@ -33,7 +33,7 @@ Remove legacy `queue` and `orchestrator` substrate references from the Mission C
 ### Documentation (this feature)
 
 ```text
-specs/097-queue-removal-phase-2/
+specs/096-queue-removal-phase-2/
 ├── plan.md              # This file
 ├── contracts/
 │   └── requirements-traceability.md

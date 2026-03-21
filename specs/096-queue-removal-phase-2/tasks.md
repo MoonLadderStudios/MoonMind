@@ -1,6 +1,6 @@
 # Tasks: Collapse Dashboard to Single Source
 
-**Input**: Design documents from `/specs/097-queue-removal-phase-2/`
+**Input**: Design documents from `/specs/096-queue-removal-phase-2/`
 **Prerequisites**: plan.md (required), spec.md (required for user stories), contracts/
 
 ## Format: `[ID] [P?] [Story] Description`
@@ -9,7 +9,7 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Verify active branch is `097-queue-removal-phase-2`
+- [ ] T001 Verify active branch is `096-queue-removal-phase-2`
 
 ---
 

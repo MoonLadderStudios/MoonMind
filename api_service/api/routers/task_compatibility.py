@@ -88,14 +88,14 @@ async def list_compatibility_tasks(
             page_size=page_size,
             cursor=cursor,
         )
-    except ValueError as error:
+    except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "invalid_source_filter",
-                "message": str(error),
+                "message": str(exc),
             },
-        ) from error
+        ) from exc
 
 
 @router.get("/{task_id}", response_model=TaskCompatibilityDetail)
