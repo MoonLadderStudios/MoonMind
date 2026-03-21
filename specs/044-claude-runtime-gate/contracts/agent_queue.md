@@ -33,18 +33,4 @@ Conditions: Anthropic key present, payload valid.
 }
 ```
 
-## Error Response — Claude disabled
-Conditions: `targetRuntime` resolves to `claude` but `RuntimeGateState.enabled` is false.
-```json
-Status: 400 Bad Request
-{
-  "detail": {
-    "code": "claude_runtime_disabled",
-    "message": "targetRuntime=claude requires ANTHROPIC_API_KEY to be configured"
-  }
-}
-```
 
-Notes:
-- Queue service raises `AgentQueueValidationError` with the canonical message; the router maps that to the `claude_runtime_disabled` code.
-- Validation runs before any DB writes, so no job artifacts are created when the gate blocks a request.

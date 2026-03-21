@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from moonmind.claude.runtime import (
-    CLAUDE_RUNTIME_DISABLED_MESSAGE,
     RuntimeGateState,
     build_runtime_gate_state,
     is_claude_runtime_enabled,
@@ -53,7 +52,7 @@ def test_build_runtime_gate_state_reports_source(monkeypatch) -> None:
     assert isinstance(state, RuntimeGateState)
     assert state.enabled is True
     assert state.source_env == "ANTHROPIC_API_KEY"
-    assert state.error_message == CLAUDE_RUNTIME_DISABLED_MESSAGE
+    assert state.error_message is None
 
 
 def test_build_runtime_gate_state_honors_custom_error_message(monkeypatch) -> None:

@@ -99,7 +99,6 @@
   - `job_not_authorized` (403)
   - `job_state_conflict` (409)
   - `invalid_queue_payload` (422)
-  - `claude_runtime_disabled` (400)
   - `queue_internal_error` (500)
 
 ## State Transitions
