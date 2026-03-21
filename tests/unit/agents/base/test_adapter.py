@@ -80,3 +80,43 @@ def test_resolve_volume_mount_env_empty():
     
     assert shaped == base_env
     assert "GEMINI_HOME" not in shaped
+
+
+def test_resolve_volume_mount_env_cursor():
+    """Test volume mount resolution for Cursor CLI."""
+    base_env = {"EXISTING": "var"}
+    shaped = resolve_volume_mount_env(base_env, "cursor_cli", "/home/app/.cursor")
+
+    assert shaped["EXISTING"] == "var"
+    assert shaped["CURSOR_CONFIG_DIR"] == "/home/app/.cursor"
+    assert "GEMINI_HOME" not in shaped
+    assert "CLAUDE_HOME" not in shaped
+    assert "CODEX_HOME" not in shaped
+
+
+def test_shape_agent_environment_oauth_includes_cursor_key():
+    """Test that CURSOR_API_KEY is scrubbed when auth_mode is oauth."""
+    base_env = {
+        "CURSOR_API_KEY": "cursor-secret",
+        "ANTHROPIC_API_KEY": "anth-secret",
+        "OTHER_VAR": "keepme",
+    }
+
+    shaped = shape_agent_environment(base_env, "oauth")
+
+    assert shaped["CURSOR_API_KEY"] == ""
+    assert shaped["ANTHROPIC_API_KEY"] == ""
+    assert shaped["OTHER_VAR"] == "keepme"
+
+
+def test_shape_agent_environment_api_key_preserves_cursor_key():
+    """Test that CURSOR_API_KEY is preserved when auth_mode is api_key."""
+    base_env = {
+        "CURSOR_API_KEY": "cursor-secret",
+        "OTHER_VAR": "keepme",
+    }
+
+    shaped = shape_agent_environment(base_env, "api_key")
+
+    assert shaped["CURSOR_API_KEY"] == "cursor-secret"
+    assert shaped["OTHER_VAR"] == "keepme"

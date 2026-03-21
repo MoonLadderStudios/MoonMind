@@ -349,6 +349,20 @@ class ManagedRuntimeLauncher:
                 cmd.extend(["--effort", effort])
             if request.instruction_ref:
                 cmd.extend(["--yolo", "--prompt", request.instruction_ref])
+        elif profile.runtime_id == "cursor_cli":
+            if model:
+                cmd.extend(["--model", model])
+            if request.instruction_ref:
+                cmd.extend(["-p", request.instruction_ref])
+            cmd.extend(["--output-format", "stream-json"])
+            cmd.extend(["--force"])
+            sandbox_mode = (
+                request.parameters.get("sandbox_mode")
+                if request.parameters
+                else None
+            )
+            if sandbox_mode:
+                cmd.extend(["--sandbox", sandbox_mode])
         else:
             # Generic / claude_code path
             if model:
