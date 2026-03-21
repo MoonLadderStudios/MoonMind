@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from moonmind.workflows.temporal.runtime.strategies import (
     RUNTIME_STRATEGIES,
@@ -276,3 +279,20 @@ class TestCodexCliShapeEnvironment:
         s = CodexCliStrategy()
         result = s.shape_environment({}, None)
         assert result == {}
+
+
+class TestCodexCliPrepareWorkspace:
+    @pytest.mark.asyncio
+    @patch("moonmind.workflows.temporal.runtime.strategies.codex_cli.ContextInjectionService")
+    async def test_prepare_workspace_calls_injection(self, mock_service_class, tmp_path) -> None:
+        mock_service = mock_service_class.return_value
+        mock_service.inject_context = AsyncMock()
+        
+        s = CodexCliStrategy()
+        request = _make_request(instruction_ref="Do work")
+        await s.prepare_workspace(workspace_path=tmp_path, request=request)
+        
+        mock_service.inject_context.assert_called_once_with(
+            request=request,
+            workspace_path=tmp_path,
+        )
