@@ -1062,8 +1062,16 @@ class TemporalExecutionService:
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         record = await self._require_source_execution(workflow_id)
 
+        reason_text = (reason or "Canceled by user.").strip() or "Canceled by user."
+
         try:
-            await self._client_adapter.cancel_workflow(record.workflow_id)
+            if graceful:
+                await self._client_adapter.cancel_workflow(record.workflow_id)
+            else:
+                await self._client_adapter.terminate_workflow(
+                    record.workflow_id,
+                    reason=reason_text,
+                )
         except Exception as exc:
             raise TemporalExecutionValidationError(
                 f"Temporal cancel failed: {exc}"
@@ -1072,7 +1080,6 @@ class TemporalExecutionService:
         if record.state in TERMINAL_STATES:
             return await self._sync_projection_best_effort(record)
 
-        reason_text = (reason or "Canceled by user.").strip() or "Canceled by user."
         record.paused = False
         self._clear_waiting_metadata(record)
         if graceful:

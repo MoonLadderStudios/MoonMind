@@ -71,11 +71,13 @@ PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=5)
 AGENT_RUNTIME_CANCEL_TIMEOUT = timedelta(minutes=1)
+AGENT_RUNTIME_STATUS_TIMEOUT = timedelta(seconds=60)
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 INTEGRATIONS_ACTIVITY_TIMEOUT = timedelta(minutes=5)
 INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
+MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 
 
 @activity.defn(name="integration.resolve_external_adapter")
@@ -304,6 +306,31 @@ class MoonMindAgentRun:
             metadata=result_metadata,
         )
 
+    @staticmethod
+    def _coerce_managed_status_payload(
+        *,
+        status_payload: object,
+        run_id: str,
+        fallback_agent_id: str,
+    ) -> AgentRunStatusModel:
+        if isinstance(status_payload, AgentRunStatusModel):
+            return status_payload
+        if isinstance(status_payload, dict):
+            return AgentRunStatusModel(**status_payload)
+
+        payload = {
+            "runId": getattr(status_payload, "run_id", None)
+            or getattr(status_payload, "runId", None)
+            or run_id,
+            "agentKind": "managed",
+            "agentId": getattr(status_payload, "agent_id", None)
+            or getattr(status_payload, "agentId", None)
+            or fallback_agent_id,
+            "status": getattr(status_payload, "status", None) or "running",
+            "metadata": getattr(status_payload, "metadata", None) or {},
+        }
+        return AgentRunStatusModel(**payload)
+
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
@@ -314,6 +341,9 @@ class MoonMindAgentRun:
 
         # Loop for handling 429 cooldown & profile swaps safely within the timeout boundary
         overall_start = workflow.now()
+        use_managed_status_activity = workflow.patched(
+            MANAGED_STATUS_ACTIVITY_PATCH_ID
+        )
 
         try:
             while True:
@@ -551,9 +581,33 @@ class MoonMindAgentRun:
                                     fallback_agent_id=request.agent_id,
                                 )
                             else:
-                                # Managed agent: poll via adapter directly.
-                                status_obj = await adapter.status(self.run_id)
-                                workflow.logger.info(f"STATUS_OBJ for {self.run_id}: {status_obj}")
+                                if use_managed_status_activity:
+                                    status_payload = await workflow.execute_activity(
+                                        "agent_runtime.status",
+                                        {
+                                            "run_id": self.run_id,
+                                            "agent_id": request.agent_id,
+                                        },
+                                        task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                                        start_to_close_timeout=AGENT_RUNTIME_STATUS_TIMEOUT,
+                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                    )
+                                    status_obj = self._coerce_managed_status_payload(
+                                        status_payload=status_payload,
+                                        run_id=str(self.run_id or ""),
+                                        fallback_agent_id=request.agent_id,
+                                    )
+                                else:
+                                    # Legacy replay-compatibility path: older histories
+                                    # recorded timer-only polling for managed runs.
+                                    # Avoid consulting mutable run-store state during
+                                    # replay to keep command sequencing stable.
+                                    status_obj = AgentRunStatusModel(
+                                        runId=str(self.run_id or ""),
+                                        agentKind="managed",
+                                        agentId=request.agent_id,
+                                        status=RunStatus.running,
+                                    )
 
                             self.run_status = status_obj.status
                             if status_obj.status in _TERMINAL_RUN_STATUSES:
@@ -579,8 +633,25 @@ class MoonMindAgentRun:
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
-                        # Managed agent: fetch via adapter.
-                        self.final_result = await adapter.fetch_result(self.run_id)
+                        if use_managed_status_activity:
+                            result_payload = await workflow.execute_activity(
+                                "agent_runtime.fetch_result",
+                                {
+                                    "run_id": self.run_id,
+                                    "agent_id": request.agent_id,
+                                },
+                                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                                start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+                            self.final_result = (
+                                AgentRunResult(**result_payload)
+                                if isinstance(result_payload, dict)
+                                else result_payload
+                            )
+                        else:
+                            # Managed agent legacy path.
+                            self.final_result = await adapter.fetch_result(self.run_id)
 
                 # Check for 429
                 if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:

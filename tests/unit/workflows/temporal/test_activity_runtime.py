@@ -1237,4 +1237,6 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert {binding.fleet for binding in bindings} == {AGENT_RUNTIME_FLEET}
             bound_types = {binding.activity_type for binding in bindings}
             assert "agent_runtime.publish_artifacts" in bound_types
+            assert "agent_runtime.status" in bound_types
+            assert "agent_runtime.fetch_result" in bound_types
             assert "agent_runtime.cancel" in bound_types
