@@ -279,11 +279,32 @@ def _serialize_execution(
         attention_required=attention_required,
     )
 
-    params = dict(getattr(record, "parameters", None) or {})
+    params_raw = getattr(record, "parameters", None)
+    params = dict(params_raw) if isinstance(params_raw, dict) else {}
     target_runtime, param_model, param_effort = [
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+
+    task_payload = params.get("task")
+    if not isinstance(task_payload, dict):
+        task_payload = {}
+
+    git_payload = task_payload.get("git")
+    if not isinstance(git_payload, dict):
+        git_payload = {}
+
+    publish_payload = task_payload.get("publish")
+    if not isinstance(publish_payload, dict):
+        publish_payload = {}
+
+    starting_branch = str(git_payload.get("startingBranch") or params.get("startingBranch") or "").strip() or None
+    if not starting_branch:
+        default_branch = str(git_payload.get("defaultBranch") or params.get("defaultBranch") or "main").strip()
+        starting_branch = f"{default_branch} (default)"
+
+    target_branch = str(git_payload.get("newBranch") or params.get("newBranch") or "").strip() or None
+    publish_mode = str(params.get("publishMode") or publish_payload.get("mode") or "").strip() or None
 
     return ExecutionModel(
         task_id=record.workflow_id,
@@ -312,6 +333,9 @@ def _serialize_execution(
         target_runtime=target_runtime,
         model=param_model,
         effort=param_effort,
+        starting_branch=starting_branch,
+        target_branch=target_branch,
+        publish_mode=publish_mode,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),

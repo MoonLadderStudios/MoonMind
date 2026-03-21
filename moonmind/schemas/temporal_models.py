@@ -341,6 +341,9 @@ class ExecutionModel(BaseModel):
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     model: Optional[str] = Field(None, alias="model")
     effort: Optional[str] = Field(None, alias="effort")
+    starting_branch: Optional[str] = Field(None, alias="startingBranch")
+    target_branch: Optional[str] = Field(None, alias="targetBranch")
+    publish_mode: Optional[str] = Field(None, alias="publishMode")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")
     actions: ExecutionActionCapabilityModel = Field(
         default_factory=ExecutionActionCapabilityModel, alias="actions"
