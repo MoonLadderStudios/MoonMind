@@ -10387,6 +10387,211 @@
         || null,
     };
   }
+  async function renderUserSettingsPage() {
+    const state = {
+      profile: null,
+      notice: null,
+      requestInFlight: false,
+    };
+
+    function setNotice(level, text) {
+      if (!text) {
+        state.notice = null;
+        return;
+      }
+      state.notice = {
+        level: level === "error" ? "error" : "ok",
+        text,
+      };
+    }
+
+    const otherSettingsFields = [
+
+      { id: "ANTHROPIC_CHAT_MODEL", placeholder: "claude-sonnet-4-6" },
+      { id: "ANTHROPIC_ENABLED", placeholder: "true" },
+      { id: "ATLASSIAN_API_KEY", placeholder: "ATLASSIAN_API_KEY" },
+      { id: "ATLASSIAN_CONFLUENCE_ENABLED", placeholder: "false" },
+      { id: "ATLASSIAN_CONFLUENCE_SPACE_KEYS", placeholder: "ATLASSIAN_CONFLUENCE_SPACE_KEYS" },
+      { id: "ATLASSIAN_JIRA_ENABLED", placeholder: "false" },
+      { id: "ATLASSIAN_JIRA_FETCH_BATCH_SIZE", placeholder: "50" },
+      { id: "ATLASSIAN_JIRA_JQL_QUERY", placeholder: "ATLASSIAN_JIRA_JQL_QUERY" },
+      { id: "ATLASSIAN_USERNAME", placeholder: "ATLASSIAN_USERNAME" },
+      { id: "ATLASSIAN_URL", placeholder: "ATLASSIAN_URL" },
+      { id: "DEFAULT_CHAT_PROVIDER", placeholder: "google" },
+      { id: "DEFAULT_EMBEDDING_PROVIDER", placeholder: "google" },
+      { id: "GITHUB_ENABLED", placeholder: "false" },
+      { id: "GITHUB_REPOS", placeholder: "MoonLadderStudios/Moonmind" },
+      { id: "GITHUB_TOKEN", placeholder: "GITHUB_TOKEN" },
+
+      { id: "GOOGLE_APPLICATION_CREDENTIALS", placeholder: "GOOGLE_APPLICATION_CREDENTIALS" },
+      { id: "GOOGLE_CHAT_MODEL", placeholder: "models/gemini-3.1-pro" },
+      { id: "GOOGLE_DRIVE_ENABLED", placeholder: "false" },
+      { id: "GOOGLE_DRIVE_FOLDER_ID", placeholder: "GOOGLE_DRIVE_FOLDER_ID" },
+      { id: "GOOGLE_EMBEDDING_DIMENSIONS", placeholder: "3072" },
+      { id: "GOOGLE_EMBEDDING_MODEL", placeholder: "gemini-embedding-2-preview" },
+      { id: "GOOGLE_ENABLED", placeholder: "true" },
+
+      { id: "OPENAI_EMBEDDING_DIMENSIONS", placeholder: "3072" },
+      { id: "OPENAI_EMBEDDING_MODEL", placeholder: "text-embedding-3-large" },
+      { id: "OPENAI_CHAT_MODEL", placeholder: "o3" },
+      { id: "OPENAI_ENABLED", placeholder: "true" },
+    ];
+
+    function renderView() {
+      const noticeHtml = state.notice
+        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+        : "";
+
+      const managedProviders = ["openai", "google", "anthropic"];
+      let providersMarkup = managedProviders.map(provider => {
+        const isSet = state.profile && state.profile[`${provider}_api_key_encrypted`];
+        const statusHtml = isSet
+          ? `<div class="key-status status-set" style="margin-bottom:8px; padding:8px; border-radius:4px; background-color:#e7f4e4; border:1px solid #c8e6c9; color:#2e7d32;">${escapeHtml(provider.charAt(0).toUpperCase() + provider.slice(1))} API Key is SET.</div>
+             <p class="form-caption"><em>To change it, enter a new key below. Otherwise, leave blank to keep the current key.</em></p>`
+          : `<div class="key-status status-not-set" style="margin-bottom:8px; padding:8px; border-radius:4px; background-color:#fdecea; border:1px solid #f5c6cb; color:#c62828;">${escapeHtml(provider.charAt(0).toUpperCase() + provider.slice(1))} API Key is NOT SET.</div>`;
+        return `
+          <div class="form-group">
+            <label>
+              ${escapeHtml(provider.charAt(0).toUpperCase() + provider.slice(1))} API Key
+              ${statusHtml}
+              <input type="password" name="${provider}_api_key" placeholder="Enter new ${escapeHtml(provider.charAt(0).toUpperCase() + provider.slice(1))} API Key (optional)">
+            </label>
+          </div>
+        `;
+      }).join("");
+
+      let otherSettingsMarkup = otherSettingsFields.map(field => {
+        const val = state.profile && state.profile[field.id.toLowerCase()] != null ? state.profile[field.id.toLowerCase()] : "";
+        return `
+          <div class="form-group">
+            <label for="${field.id}">${field.id}</label>
+            <input type="text" id="${field.id}" name="${field.id}" placeholder="${field.placeholder}" value="${escapeHtml(String(val))}">
+          </div>
+        `;
+      }).join("");
+
+      const layout = `
+        <div data-user-settings-notice>${noticeHtml}</div>
+        <div class="system-settings-grid">
+          <section class="card system-settings-forms" style="grid-column: 1 / -1;">
+            <h3>Manage API Keys</h3>
+            <form data-user-settings-form class="stack">
+              <fieldset>
+                <legend>API Keys</legend>
+                ${providersMarkup}
+              </fieldset>
+
+              <fieldset style="margin-top:20px;">
+                <legend>Other Settings</legend>
+                <div class="stack">
+                  ${otherSettingsMarkup}
+                </div>
+              </fieldset>
+
+              <button type="submit" style="margin-top:20px;">Save API Keys</button>
+            </form>
+          </section>
+        </div>
+      `;
+
+      setView(
+        "Settings",
+        "Manage your profile settings and API keys.",
+        layout
+      );
+      attachHandlers();
+    }
+
+    function attachHandlers() {
+      const form = document.querySelector('[data-user-settings-form]');
+      if (!form) return;
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (state.requestInFlight) return;
+
+        const formData = new FormData(form);
+        const payload = {};
+        const managedProviders = ["openai", "google", "anthropic"];
+        let hasChanges = false;
+
+        managedProviders.forEach(provider => {
+          const val = formData.get(`${provider}_api_key`);
+          if (val) {
+            payload[`${provider}_api_key`] = val.trim();
+            hasChanges = true;
+          }
+        });
+
+        otherSettingsFields.forEach(field => {
+          const val = formData.get(field.id);
+          if (val !== null && val.trim() !== "") {
+            payload[field.id.toLowerCase()] = val.trim();
+            hasChanges = true;
+          }
+        });
+
+        if (!hasChanges) {
+          setNotice("ok", "No changes submitted.");
+          renderView();
+          return;
+        }
+
+        state.requestInFlight = true;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+
+        try {
+          const response = await fetch("/me", {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to update profile: ${response.statusText}`);
+          }
+
+          const updatedProfile = await response.json();
+          state.profile = updatedProfile;
+          setNotice("ok", "API keys updated successfully.");
+        } catch (error) {
+          console.error("Failed to update user settings:", error);
+          setNotice("error", error.message || "Failed to update API keys.");
+        } finally {
+          state.requestInFlight = false;
+          renderView();
+        }
+      });
+    }
+
+    async function loadProfile() {
+      try {
+        const response = await fetch("/me", {
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to fetch profile: ${response.statusText}`);
+        }
+        state.profile = await response.json();
+      } catch (error) {
+        console.error("Failed to load user profile:", error);
+        setNotice("error", "Failed to load profile data.");
+      }
+      renderView();
+    }
+
+    setView(
+      "Settings",
+      "Manage your profile settings and API keys.",
+      "<p class='loading'>Loading profile settings...</p>"
+    );
+    await loadProfile();
+  }
   async function renderSystemSettingsPage() {
     if (!workerPauseTransport) {
       setView(
@@ -11016,8 +11221,13 @@
       await renderProposalsListPage();
       return;
     }
-    if (normalizedRoute === "/tasks/settings") {
+    if (normalizedRoute === "/tasks/system") {
       await renderSystemSettingsPage();
+      return;
+    }
+
+    if (normalizedRoute === "/tasks/settings") {
+      await renderUserSettingsPage();
       return;
     }
 
