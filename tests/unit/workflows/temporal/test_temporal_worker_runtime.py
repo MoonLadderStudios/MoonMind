@@ -18,11 +18,13 @@ from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
 
 
 @pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
-async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_describe):
+async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_describe, mock_healthcheck):
     # Setup mocks
+    mock_healthcheck.return_value = AsyncMock()
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
     mock_topology.task_queues = ["mm.workflow"]
@@ -62,14 +64,16 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
 
 
 @pytest.mark.asyncio
+@patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime._build_runtime_activities")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
 @patch("moonmind.workflows.temporal.worker_runtime.Client.connect")
 @patch("moonmind.workflows.temporal.worker_runtime.Worker")
 async def test_main_async_activity_fleet(
-    mock_worker_cls, mock_connect, mock_describe, mock_runtime_activities
+    mock_worker_cls, mock_connect, mock_describe, mock_runtime_activities, mock_healthcheck
 ):
     # Setup mocks
+    mock_healthcheck.return_value = AsyncMock()
     mock_topology = MagicMock()
     mock_topology.fleet = "artifacts"
     mock_topology.task_queues = ["mm.activity.artifacts"]

@@ -21,7 +21,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 3. Provide a **clear, auditable operator control** (API + Mission Control Dashboard) with reason + timestamps.
 4. Support an upgrade-friendly workflow:
    * **Pause → Drain → Upgrade → Resume**
-5. Optional “quiesce” mode: allow operators to request that **running jobs pause at safe Activity boundaries** while retaining their state in Temporal history.
+5. Optional “quiesce” mode: allow operators to request that **running jobs pause at safe Activity boundaries** while retaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes).
 
 ---
 
@@ -114,7 +114,7 @@ Resumed workflows seamlessly handoff or continue on newly upgraded workers holdi
    * run migrations
    * restart services
 4. **Resume System**
-   * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the durable `ManagedRunStore`.
+   * Workers reconnect to Temporal and begin pulling Tasks. The `agent_runtime` workers securely resume tracking detached runtimes via the `ManagedRunStore` (backed by the persistent `agent_workspaces`/`/work/agent_jobs` volume). Note that cross-node upgrades require the replacement workers to mount the same persistent/shared store path.
    * Dashboard allows new workflow submissions.
 
 ---
