@@ -310,6 +310,12 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
 
         # Build agent_runtime dependencies (store + supervisor + launcher)
         run_store, run_supervisor, run_launcher = _build_agent_runtime_deps()
+        reconciled = await run_supervisor.reconcile()
+        if reconciled:
+            logger.info(
+                "Reconciled %d stale managed run records during startup",
+                len(reconciled),
+            )
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,

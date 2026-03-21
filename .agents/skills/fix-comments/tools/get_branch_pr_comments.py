@@ -137,10 +137,30 @@ def resolve_pr_metadata(selector: str | None) -> dict[str, Any]:
     if selector:
         command.append(selector)
     command.extend(["--json", "number,title,url,headRefName,baseRefName"])
-    payload = run_json_command(
-        command,
-        "Unable to resolve pull request metadata. Ensure gh is authenticated and the branch has an open PR.",
-    )
+    try:
+        payload = run_json_command(
+            command,
+            "Unable to resolve pull request metadata. Ensure gh is authenticated and the branch has an open PR.",
+        )
+    except RuntimeError as original_error:
+        discovered_number = discover_pr_number_from_head_branch(selector)
+        if discovered_number is None:
+            raise
+        fallback_command = [
+            "gh",
+            "pr",
+            "view",
+            str(discovered_number),
+            "--json",
+            "number,title,url,headRefName,baseRefName",
+        ]
+        try:
+            payload = run_json_command(
+                fallback_command,
+                "Unable to resolve pull request metadata from discovered PR number.",
+            )
+        except RuntimeError:
+            raise original_error
 
     if not isinstance(payload, dict):
         raise RuntimeError("Unexpected payload while resolving PR metadata.")
@@ -148,6 +168,43 @@ def resolve_pr_metadata(selector: str | None) -> dict[str, Any]:
         raise RuntimeError("Pull request metadata did not include a PR number.")
 
     return payload
+
+
+def discover_pr_number_from_head_branch(selector: str | None) -> int | None:
+    branch = (selector or "").strip()
+    if not branch:
+        return None
+    if branch.isdigit() or branch.startswith("http://") or branch.startswith("https://"):
+        return None
+
+    payload = run_json_command(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--head",
+            branch,
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ],
+        "Unable to discover pull request by branch head.",
+    )
+    if not isinstance(payload, list) or not payload:
+        return None
+    first = payload[0]
+    if not isinstance(first, dict):
+        return None
+    number = first.get("number")
+    if number in {None, ""}:
+        return None
+    try:
+        return int(number)
+    except (TypeError, ValueError):
+        return None
 
 
 def fetch_comments(

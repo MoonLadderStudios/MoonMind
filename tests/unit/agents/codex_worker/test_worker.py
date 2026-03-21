@@ -4725,8 +4725,9 @@ async def test_run_once_fails_resolve_pr_when_final_state_unresolved(
                 tmp_path
                 / str(job_id)
                 / "repo"
-                / "artifacts"
-                / "pr_resolver_snapshot.json"
+                / "var"
+                / "pr_resolver"
+                / "snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(
@@ -4834,8 +4835,9 @@ async def test_run_once_allows_resolve_pr_when_final_state_is_resolved(
                 tmp_path
                 / str(job_id)
                 / "repo"
-                / "artifacts"
-                / "pr_resolver_snapshot.json"
+                / "var"
+                / "pr_resolver"
+                / "snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(
@@ -4937,8 +4939,9 @@ async def test_run_once_fails_resolve_pr_when_ci_is_running_or_failing(
                 tmp_path
                 / str(job_id)
                 / "repo"
-                / "artifacts"
-                / "pr_resolver_snapshot.json"
+                / "var"
+                / "pr_resolver"
+                / "snapshot.json"
             )
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_text(

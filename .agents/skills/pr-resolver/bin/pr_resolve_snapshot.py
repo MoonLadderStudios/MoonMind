@@ -7,6 +7,7 @@ Gathers PR metadata, CI status, and comments to decide the next fix action.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,10 @@ _SYSTEM_PATH_FALLBACK = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
 _PR_VIEW_FIELDS = (
     "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,"
     "mergeStateStatus,reviewDecision,statusCheckRollup"
+)
+_COMMAND_COMMENT_PATTERN = re.compile(
+    r"^/(review|gemini|qodo|jules|copilot|cc|re[-_ ]?run)\b",
+    re.IGNORECASE,
 )
 
 
@@ -294,6 +299,8 @@ def _classify_comment_actionability(
     if not (comment.get("body") or "").strip():
         return False, "empty_body"
 
+    body = str(comment.get("body") or "")
+    normalized_body = " ".join(body.strip().split())
     comment_type = comment.get("type")
 
     if comment_type == "review_comment":
@@ -304,6 +311,13 @@ def _classify_comment_actionability(
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
+
+    if (
+        comment_type == "issue_comment"
+        and normalized_body
+        and _COMMAND_COMMENT_PATTERN.match(normalized_body)
+    ):
+        return False, "command_comment"
 
     if is_bot_user(comment.get("user")):
         return False, "bot_comment_excluded"
@@ -572,6 +586,11 @@ def main():
         description="Snapshot PR state for pr-resolver skill"
     )
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
+    parser.add_argument(
+        "--snapshot-path",
+        default="var/pr_resolver/snapshot.json",
+        help="Snapshot path to write",
+    )
     args = parser.parse_args()
 
     # 1. Fetch PR metadata with resilient selector fallback.
@@ -740,10 +759,8 @@ def main():
         "commentsSummary": comments_summary,
     }
 
-    # Save to artifacts/pr_resolver_snapshot.json
-    artifacts_dir = Path("artifacts")
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_path = artifacts_dir / "pr_resolver_snapshot.json"
+    snapshot_path = Path(args.snapshot_path)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.write_text(json.dumps(snapshot, indent=2))
 
     print(f"Snapshot written to {snapshot_path}")

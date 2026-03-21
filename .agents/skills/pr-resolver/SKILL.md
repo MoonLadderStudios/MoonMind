@@ -32,9 +32,9 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py \
   --max-elapsed-seconds <finalizeMaxElapsedSeconds>
 ```
 
-This writes (explicitly bypass ignore checking when reading these artifacts):
-- `artifacts/pr_resolver_result.json` (terminal orchestration summary)
-- `artifacts/pr_resolver_attempts/*.json` (per-attempt finalize/full artifacts)
+This writes:
+- `var/pr_resolver/result.json` (terminal orchestration summary)
+- `var/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
 
 ## Retry Policy
 - Full-remediation escalation reasons:
@@ -51,7 +51,7 @@ This writes (explicitly bypass ignore checking when reading these artifacts):
   - any unknown blocker
 
 ## Manual Remediation Loop (only when needed)
-When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `artifacts/pr_resolver_result.json` (explicitly bypass ignore checking when reading this artifact):
+When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `var/pr_resolver/result.json`:
 
 - `run_fix_merge_conflicts_skill`: read `.agents/skills/fix-merge-conflicts/SKILL.md` and execute it.
 - `run_fix_comments_skill`: read `.agents/skills/fix-comments/SKILL.md` and execute it.
