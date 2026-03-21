@@ -2014,14 +2014,15 @@ class TemporalArtifactActivities:
         from sqlalchemy import select
 
         from api_service.db.models import ManagedAgentAuthProfile
+        from api_service.db.base import get_async_session_context
 
-        session = self._service._repository._session
-        stmt = select(ManagedAgentAuthProfile).where(
-            ManagedAgentAuthProfile.runtime_id == runtime_id,
-            ManagedAgentAuthProfile.enabled.is_(True),
-        )
-        result = await session.execute(stmt)
-        rows = result.scalars().all()
+        async with get_async_session_context() as session:
+            stmt = select(ManagedAgentAuthProfile).where(
+                ManagedAgentAuthProfile.runtime_id == runtime_id,
+                ManagedAgentAuthProfile.enabled.is_(True),
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
 
         profiles = []
         for row in rows:
