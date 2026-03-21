@@ -23,6 +23,14 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 
 ---
 
+## TODO Soon
+
+* docs/ManagedAgents/UniversalTmateOAuth.md - 4 phases
+* Task proposal system is still not working
+* Overhaul and streamline schedules UI
+* Test out manifest system
+* Get the settings page migrated over to Mission Control
+
 ## Milestone 1 — Managed Agent Runtimes ✅
 
 **README claim:** *"MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure."*

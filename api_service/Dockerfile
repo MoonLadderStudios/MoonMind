@@ -12,7 +12,8 @@ ARG INSTALL_CURSOR_CLI=true
 ARG GEMINI_CLI_VERSION=latest
 ARG INSTALL_TEST_DEPS=false
 
-FROM node:20-bookworm AS tooling-builder
+# Cursor's `cursor-agent` launcher runs `node --use-system-ca`; that flag exists on Node 22+.
+FROM node:22-bookworm AS tooling-builder
 
 # Ensure all RUN commands in this stage use bash with pipefail and fail fast on
 # unset variables, so we don't hit dash incompatibilities or silently continue
@@ -29,7 +30,7 @@ ARG GEMINI_CLI_VERSION
 ARG INSTALL_GEMINI_CLI
 ARG CLAUDE_CLI_VERSION
 ARG INSTALL_CLAUDE_CLI
-ARG INSTALL_CURSOR_CLI
+ARG INSTALL_CURSOR_CLI=true
 
 # Install build prerequisites required for global npm CLI installs so future
 # stages can compile any optional native extensions.
@@ -180,19 +181,26 @@ fi
 # Install Cursor CLI — standalone binary downloaded via curl (not npm).
 # Renamed to cursor-agent to avoid namespace conflicts with other `agent` binaries.
 stub_cursor() {
+    rm -rf /usr/local/share/cursor-agent
+    install -d /usr/local/share/cursor-agent
     printf '%s\n' "#!/usr/bin/env bash" \
                    "echo \"cursor-agent stub: $1\" >&2" \
-                   "exit 127" > /usr/local/bin/cursor-agent
-    chmod +x /usr/local/bin/cursor-agent
+                   "exit 127" > /usr/local/share/cursor-agent/cursor-agent
+    chmod +x /usr/local/share/cursor-agent/cursor-agent
+    ln -sf /usr/local/share/cursor-agent/cursor-agent /usr/local/bin/cursor-agent
 }
 if [ "${INSTALL_CURSOR_CLI}" != "true" ]; then
     echo "INSTALL_CURSOR_CLI=${INSTALL_CURSOR_CLI}; skipping Cursor CLI install and using stub" >&2
     stub_cursor "package unavailable during image build"
 elif curl -fsSL https://cursor.com/install | bash; then
-    # Installer puts binary at ~/.local/bin/agent — move and rename it
-    if [ -f "${HOME}/.local/bin/agent" ]; then
-        mv "${HOME}/.local/bin/agent" /usr/local/bin/cursor-agent
-        chmod +x /usr/local/bin/cursor-agent
+    # Installer lays out ~/.local/share/cursor-agent/versions/<ver>/ (launcher, index.js, node).
+    # Copy that tree into the image; a lone launcher under /usr/local/bin breaks realpath layout.
+    if [ -e "${HOME}/.local/bin/agent" ]; then
+        CURSOR_HOME="$(dirname "$(readlink -f "${HOME}/.local/bin/agent")")"
+        rm -rf /usr/local/share/cursor-agent
+        cp -a "${CURSOR_HOME}" /usr/local/share/cursor-agent
+        ln -sf /usr/local/share/cursor-agent/cursor-agent /usr/local/bin/cursor-agent
+        chmod +x /usr/local/bin/cursor-agent /usr/local/share/cursor-agent/cursor-agent
     else
         echo "Warning: Cursor CLI installer succeeded but binary not found at expected path; installing stub" >&2
         stub_cursor "binary not found after install"
@@ -225,13 +233,8 @@ npm cache clean --force || true
 BASH
 
 # Fail the build early if the Codex or Spec Kit CLI binaries are missing or
-# broken. This helps catch upstream npm publish issues before the runtime image
-# is produced.
-# Pre-create ~/.gemini so gemini --version doesn't crash writing projects.json.
-# cursor-agent is verified via ``command -v`` because the Debian nodejs package
-# injects --use-system-ca through /etc/nodejs/ config files that the standalone
-# cursor-agent Node.js SEA binary also reads, causing a fatal "bad option" error
-# when invoking it directly.
+# broken. Pre-create ~/.gemini so `gemini --version` can persist registry state.
+# Strip NODE_OPTIONS for the cursor-agent check only (CI hosts sometimes inject Node flags).
 RUN mkdir -p "${HOME}/.gemini" \
     && if [ "${INSTALL_CODEX_CLI}" = "true" ]; then \
         if [ -d /usr/local/lib/node_modules/@openai/codex/vendor ]; then \
@@ -242,7 +245,7 @@ RUN mkdir -p "${HOME}/.gemini" \
     && agentkit --version \
     && gemini --version \
     && claude --version \
-    && command -v cursor-agent
+    && env -u NODE_OPTIONS -u npm_config_node_options cursor-agent --version
 
 FROM python:3.12-slim-bookworm
 
@@ -275,7 +278,9 @@ COPY --from=tooling-builder /usr/local/bin/codex /usr/local/bin/codex
 COPY --from=tooling-builder /usr/local/bin/agentkit /usr/local/bin/agentkit
 COPY --from=tooling-builder /usr/local/bin/gemini /usr/local/bin/gemini
 COPY --from=tooling-builder /usr/local/bin/claude /usr/local/bin/claude
-COPY --from=tooling-builder /usr/local/bin/cursor-agent /usr/local/bin/cursor-agent
+COPY --from=tooling-builder /usr/local/share/cursor-agent /usr/local/share/cursor-agent
+RUN ln -sf /usr/local/share/cursor-agent/cursor-agent /usr/local/bin/cursor-agent \
+    && chmod +x /usr/local/bin/cursor-agent /usr/local/share/cursor-agent/cursor-agent
 COPY --from=tooling-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=tooling-builder /usr/local/vendor /usr/local/vendor
 
@@ -330,9 +335,10 @@ RUN useradd --create-home --home-dir /home/app --shell /bin/bash app && \
 
 # Verify the non-root ``app`` user can resolve and execute the bundled CLIs and
 # repository search tooling expected by Codex runtime defaults.
-# cursor-agent is verified via ``command -v`` (see comment on tooling-builder
-# verification step above for rationale).
-RUN runuser -u app -- sh -c 'codex --version && agentkit --version && gemini --version && claude --version && command -v cursor-agent && rg --version'
+RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
+    HOME=/home/app \
+    PATH="/usr/local/bin:/usr/local/sbin:/usr/bin:/bin" \
+    sh -c 'codex --version && agentkit --version && gemini --version && claude --version && cursor-agent --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
 # approvals. The template will be merged into the worker's home directory at
