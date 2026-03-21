@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+import contextlib
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -88,7 +89,9 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
 
     async def test_service_factory_called(self) -> None:
         mock_service = AsyncMock()
-        factory = lambda: mock_service
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
         activities = TemporalProposalActivities(
             proposal_service_factory=factory,
         )
@@ -112,7 +115,9 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
     async def test_service_failure_recorded(self) -> None:
         mock_service = AsyncMock()
         mock_service.create_proposal.side_effect = RuntimeError("DB down")
-        factory = lambda: mock_service
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
         activities = TemporalProposalActivities(
             proposal_service_factory=factory,
         )
@@ -135,8 +140,11 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_stamped_into_candidate(self) -> None:
         """When default_runtime is set and candidate has no runtime, stamp it."""
         mock_service = AsyncMock()
+        @contextlib.asynccontextmanager
+        async def mock_factory():
+            yield mock_service
         activities = TemporalProposalActivities(
-            proposal_service_factory=lambda: mock_service,
+            proposal_service_factory=mock_factory,
         )
         candidates = [
             {
@@ -166,8 +174,11 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_preserves_existing(self) -> None:
         """When candidate already specifies a runtime, do not overwrite."""
         mock_service = AsyncMock()
+        @contextlib.asynccontextmanager
+        async def mock_factory():
+            yield mock_service
         activities = TemporalProposalActivities(
-            proposal_service_factory=lambda: mock_service,
+            proposal_service_factory=mock_factory,
         )
         candidates = [
             {
@@ -200,8 +211,11 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_stamps_missing_task_node(self) -> None:
         """When payload exists but has no task node, create it."""
         mock_service = AsyncMock()
+        @contextlib.asynccontextmanager
+        async def mock_factory():
+            yield mock_service
         activities = TemporalProposalActivities(
-            proposal_service_factory=lambda: mock_service,
+            proposal_service_factory=mock_factory,
         )
         candidates = [
             {
@@ -228,8 +242,11 @@ class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_no_default_runtime_leaves_candidate_untouched(self) -> None:
         """When default_runtime is None, do not modify the candidate."""
         mock_service = AsyncMock()
+        @contextlib.asynccontextmanager
+        async def mock_factory():
+            yield mock_service
         activities = TemporalProposalActivities(
-            proposal_service_factory=lambda: mock_service,
+            proposal_service_factory=mock_factory,
         )
         candidates = [
             {

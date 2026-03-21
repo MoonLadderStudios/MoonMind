@@ -2443,10 +2443,10 @@ class TemporalProposalActivities:
                 "errors": [],
             }
 
-        service = None
+        service_or_ctx = None
         if self._proposal_service_factory is not None:
             try:
-                service = self._proposal_service_factory()
+                service_or_ctx = self._proposal_service_factory()
             except Exception as exc:
                 logger.warning(
                     "proposal.submit: failed to create proposal service: %s", exc
@@ -2457,76 +2457,86 @@ class TemporalProposalActivities:
                     "errors": ["proposal service unavailable"],
                 }
 
-        for candidate in candidates[:max_items]:
-            if not isinstance(candidate, Mapping):
-                errors.append("skipped non-object candidate")
-                continue
-            title = str(candidate.get("title") or "").strip()
-            summary = str(candidate.get("summary") or "").strip()
-            task_create_request = candidate.get("taskCreateRequest")
-            if not title or not summary or not isinstance(task_create_request, Mapping):
-                errors.append(f"skipped malformed candidate: {title!r}")
-                continue
+        import contextlib
+        if hasattr(service_or_ctx, "__aenter__"):
+            ctx = service_or_ctx
+        else:
+            @contextlib.asynccontextmanager
+            async def _wrap():
+                yield service_or_ctx
+            ctx = _wrap()
 
-            # Stamp default runtime into taskCreateRequest if not already set
-            stamped_request = dict(task_create_request)
-            if default_runtime and isinstance(default_runtime, str):
-                payload_node = stamped_request.get("payload")
-                if isinstance(payload_node, dict):
-                    task_node = payload_node.get("task")
-                    if isinstance(task_node, dict):
-                        runtime_node = task_node.get("runtime")
-                        if isinstance(runtime_node, dict):
-                            if not runtime_node.get("mode"):
-                                runtime_node["mode"] = default_runtime
+        async with ctx as service:
+            for candidate in candidates[:max_items]:
+                if not isinstance(candidate, Mapping):
+                    errors.append("skipped non-object candidate")
+                    continue
+                title = str(candidate.get("title") or "").strip()
+                summary = str(candidate.get("summary") or "").strip()
+                task_create_request = candidate.get("taskCreateRequest")
+                if not title or not summary or not isinstance(task_create_request, Mapping):
+                    errors.append(f"skipped malformed candidate: {title!r}")
+                    continue
+
+                # Stamp default runtime into taskCreateRequest if not already set
+                stamped_request = dict(task_create_request)
+                if default_runtime and isinstance(default_runtime, str):
+                    payload_node = stamped_request.get("payload")
+                    if isinstance(payload_node, dict):
+                        task_node = payload_node.get("task")
+                        if isinstance(task_node, dict):
+                            runtime_node = task_node.get("runtime")
+                            if isinstance(runtime_node, dict):
+                                if not runtime_node.get("mode"):
+                                    runtime_node["mode"] = default_runtime
+                            else:
+                                task_node["runtime"] = {"mode": default_runtime}
                         else:
-                            task_node["runtime"] = {"mode": default_runtime}
-                    else:
-                        payload_node["task"] = {
-                            "runtime": {"mode": default_runtime}
+                            payload_node["task"] = {
+                                "runtime": {"mode": default_runtime}
+                            }
+
+                try:
+                    if service is not None:
+                        from moonmind.workflows.task_proposals.models import (
+                            TaskProposalOriginSource,
+                        )
+
+                        origin_source = TaskProposalOriginSource.WORKFLOW
+                        origin_metadata = {
+                            "workflowId": workflow_id,
+                            "temporalRunId": run_id,
+                            "triggerRepo": trigger_repo,
                         }
-
-            try:
-                if service is not None:
-                    from moonmind.workflows.task_proposals.models import (
-                        TaskProposalOriginSource,
-                    )
-
-                    origin_source = TaskProposalOriginSource.WORKFLOW
-                    origin_metadata = {
-                        "workflowId": workflow_id,
-                        "temporalRunId": run_id,
-                        "triggerRepo": trigger_repo,
-                    }
-                    await service.create_proposal(
-                        title=title,
-                        summary=summary,
-                        category=candidate.get("category"),
-                        tags=candidate.get("tags"),
-                        task_create_request=stamped_request,
-                        origin_source=origin_source,
-                        origin_id=None,
-                        origin_metadata=origin_metadata,
-                        proposed_by_worker_id=f"temporal:{workflow_id}",
-                        proposed_by_user_id=None,
-                    )
-                    submitted_count += 1
-                else:
-                    # No service available — log and count as submitted for
-                    # structural verification in tests.
-                    logger.info(
-                        "proposal.submit: would submit proposal %r (no service wired)",
+                        await service.create_proposal(
+                            title=title,
+                            summary=summary,
+                            category=candidate.get("category"),
+                            tags=candidate.get("tags"),
+                            task_create_request=stamped_request,
+                            origin_source=origin_source,
+                            origin_id=None,
+                            origin_metadata=origin_metadata,
+                            proposed_by_worker_id=f"temporal:{workflow_id}",
+                            proposed_by_user_id=None,
+                        )
+                        submitted_count += 1
+                    else:
+                        # No service available — log and count as submitted for
+                        # structural verification in tests.
+                        logger.info(
+                            "proposal.submit: would submit proposal %r (no service wired)",
+                            title,
+                        )
+                        submitted_count += 1
+                except Exception as exc:
+                    redacted_error = str(exc)[:200]
+                    errors.append(f"submission failed for {title!r}: {redacted_error}")
+                    logger.warning(
+                        "proposal.submit: failed to submit proposal %r: %s",
                         title,
+                        redacted_error,
                     )
-                    submitted_count += 1
-            except Exception as exc:
-                redacted_error = str(exc)[:200]
-                errors.append(f"submission failed for {title!r}: {redacted_error}")
-                logger.warning(
-                    "proposal.submit: failed to submit proposal %r: %s",
-                    title,
-                    redacted_error,
-                )
 
         return {
             "generated_count": generated_count,

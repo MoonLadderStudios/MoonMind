@@ -2,7 +2,16 @@ from typing import Literal
 
 from moonmind.config.settings import settings
 
-TaskTarget = Literal["temporal", "orchestrator", "queue"]
+TaskTarget = Literal["temporal"]
+
+
+class TemporalSubmitDisabledError(RuntimeError):
+    """Raised when Temporal task submission is disabled via configuration.
+
+    API routers should catch this and return HTTP 503 Service Unavailable
+    with a structured error body rather than allowing it to surface as a 500.
+    """
+
 
 # Accepted truthy string forms: 1, true, yes, on
 # Accepted falsy string forms:  0, false, no, off
@@ -40,15 +49,18 @@ def get_routing_target_for_task(
 ) -> TaskTarget:
     """Determine the deterministic backend execution target for a task.
 
+    All tasks now route to Temporal. The legacy queue and orchestrator
+    execution substrates are deprecated and no longer supported.
+
     ``task_payload`` is accepted for API stability; run routing does not branch on it.
     Proposal generation (``task.proposeTasks``) is handled inside Temporal workflows.
     """
     if not settings.temporal_dashboard.submit_enabled:
-        return "queue"
+        raise TemporalSubmitDisabledError(
+            "Temporal task submission is disabled "
+            "(temporal_dashboard.submit_enabled=False). "
+            "The legacy queue execution substrate is no longer supported. "
+            "Enable Temporal submission to proceed."
+        )
 
-    if is_manifest:
-        return "temporal"
-    if is_run:
-        return "temporal"
-
-    return "queue"
+    return "temporal"

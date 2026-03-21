@@ -270,5 +270,6 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         "proposal_service_factory"
     ]
     assert callable(proposal_service_factory)
-    assert isinstance(proposal_service_factory(), TaskProposalService)
+    import typing
+    assert isinstance(proposal_service_factory(), typing.AsyncContextManager)
     await resources.aclose()

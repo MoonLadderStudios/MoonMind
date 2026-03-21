@@ -1,3 +1,21 @@
+import contextlib
+
+def _build_proposal_service_factory():
+    from moonmind.workflows.task_proposals.service import TaskProposalService
+    from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
+    from moonmind.workflows.agent_queue.service import AgentQueueService
+    from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+    from api_service.db.base import get_async_session_context
+    
+    @contextlib.asynccontextmanager
+    async def factory():
+        async with get_async_session_context() as db_session:
+            yield TaskProposalService(
+                TaskProposalRepository(db_session),
+                AgentQueueService(AgentQueueRepository(db_session)),
+            )
+    return factory
+
 """Temporal worker runtime entrypoint."""
 
 import asyncio
@@ -340,10 +358,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             ),
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
-                proposal_service_factory=lambda: TaskProposalService(
-                    TaskProposalRepository(session),
-                    AgentQueueService(AgentQueueRepository(session)),
-                ),
+                proposal_service_factory=_build_proposal_service_factory(),
             ),
             review_activities=TemporalReviewActivities(),
         )
