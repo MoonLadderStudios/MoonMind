@@ -337,7 +337,7 @@ class RecurringTasksService:
 
         if not can_manage_global:
             raise RecurringTaskAuthorizationError(
-                "Operator privileges are required for global schedules"
+                "Operator privileges are required to manage this schedule"
             )
         return definition
 

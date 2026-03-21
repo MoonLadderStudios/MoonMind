@@ -6097,13 +6097,8 @@
         return;
       }
       const description = window.prompt("Preset description", `Saved from queue draft: ${title}`) || "";
-      const scope = (window.prompt("Scope (personal/global)", "personal") || "personal")
-        .trim()
-        .toLowerCase();
-      if (!["personal", "global"].includes(scope)) {
-        setTemplateMessage("Scope must be personal or global.", true);
-        return;
-      }
+      // For saving from a task, scope is always personal.
+      const scope = "personal";
       const scopeRef = "";
 
       const steps = stepState
