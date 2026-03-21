@@ -1,0 +1,58 @@
+# Manifest Schema & Data Pipeline — Minimal GitHub Reader Example
+# See: docs/RAG/LlamaIndexManifestSystem.md §4
+
+version: "v0"
+
+metadata:
+  name: "github-reader-minimal"
+  description: "Index a single GitHub repository"
+  owner: "moonmind-team"
+  tags: ["github", "example"]
+
+embeddings:
+  provider: "google"
+  model: "text-embedding-004"
+  batchSize: 128
+
+vectorStore:
+  type: "qdrant"
+  indexName: "github_docs"
+  connection:
+    host: "${QDRANT_HOST}"
+    port: 6333
+
+dataSources:
+  - id: "moonmind-repo"
+    type: "GithubRepositoryReader"
+    params:
+      owner: "MoonLadderStudios"
+      repo: "MoonMind"
+      branch: "main"
+      filterExtensions:
+        - ".md"
+        - ".py"
+    auth:
+      githubToken: "${GITHUB_TOKEN}"
+
+transforms:
+  splitter:
+    type: "TokenTextSplitter"
+    chunkSize: 1000
+    chunkOverlap: 100
+
+indices:
+  - id: "main-index"
+    type: "VectorStoreIndex"
+    sources: ["moonmind-repo"]
+
+retrievers:
+  - id: "default-retriever"
+    type: "Vector"
+    indices: ["main-index"]
+    params:
+      topK: 8
+
+run:
+  concurrency: 4
+  batchSize: 64
+  errorPolicy: "continue"

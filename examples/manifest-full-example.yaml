@@ -1,0 +1,112 @@
+# Manifest Schema & Data Pipeline — Full "Kitchen Sink" Example
+# See: docs/RAG/LlamaIndexManifestSystem.md §4
+
+version: "v0"
+
+metadata:
+  name: "full-kitchen-sink"
+  description: "Multi-source hybrid retrieval with evaluation"
+  owner: "moonmind-team"
+  tags: ["multi-source", "hybrid", "evaluation", "example"]
+
+llm:
+  provider: "google"
+  model: "gemini-2.0-flash"
+  temperature: 0.1
+
+embeddings:
+  provider: "google"
+  model: "text-embedding-004"
+  batchSize: 256
+
+vectorStore:
+  type: "qdrant"
+  indexName: "kitchen_sink"
+  connection:
+    host: "${QDRANT_HOST}"
+    port: 6333
+
+dataSources:
+  - id: "github-docs"
+    type: "GithubRepositoryReader"
+    params:
+      owner: "MoonLadderStudios"
+      repo: "MoonMind"
+      branch: "main"
+      filterExtensions: [".md"]
+    auth:
+      githubToken: "${GITHUB_TOKEN}"
+
+  - id: "local-specs"
+    type: "SimpleDirectoryReader"
+    params:
+      inputDir: "./specs"
+      recursive: true
+      requiredExts: [".md"]
+
+  - id: "confluence-wiki"
+    type: "ConfluenceReader"
+    params:
+      spaceKey: "MOONMIND"
+      maxPages: 100
+    auth:
+      baseUrl: "${CONFLUENCE_URL}"
+      token: "${CONFLUENCE_TOKEN}"
+
+transforms:
+  htmlToText: true
+  splitter:
+    type: "TokenTextSplitter"
+    chunkSize: 1200
+    chunkOverlap: 150
+  enrichMetadata:
+    - type: "TitleExtractor"
+
+indices:
+  - id: "docs-index"
+    type: "VectorStoreIndex"
+    sources: ["github-docs", "local-specs"]
+
+  - id: "wiki-index"
+    type: "VectorStoreIndex"
+    sources: ["confluence-wiki"]
+
+retrievers:
+  - id: "hybrid-main"
+    type: "Hybrid"
+    indices: ["docs-index", "wiki-index"]
+    params:
+      topK: 12
+      alpha: 0.6
+    reranker:
+      type: "CohereRerank"
+      topK: 5
+
+postprocessors:
+  - type: "SimilarityPostprocessor"
+    similarityCutoff: 0.65
+
+evaluation:
+  datasets:
+    - name: "smoke"
+      path: "examples/eval/smoke.jsonl"
+  metrics:
+    - name: "hitRate@10"
+      threshold: 0.7
+    - name: "ndcg@10"
+      threshold: 0.5
+
+run:
+  concurrency: 6
+  batchSize: 128
+  errorPolicy: "continue"
+
+security:
+  piiRedaction: true
+  allowlistMetadata:
+    - "source"
+    - "title"
+    - "chunk_id"
+    - "file_path"
+
+scheduling: "manual"

@@ -921,3 +921,250 @@ def test_manifest_workflow_dependency_ordering_blocks_dependents(
 
     assert result["status"] == "succeeded"
     assert child_execution_order == ["node-a", "node-b"]
+
+
+def test_best_effort_continues_after_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T022 DOC-REQ-009: best_effort absorbs child failures and continues independent nodes."""
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-be",
+            run_id="run-be",
+            search_attributes={"mm_owner_id": "user-1"},
+        ),
+    )
+
+    async def fake_execute_activity(name: str, *, args, **_kwargs):
+        if name == "manifest_read":
+            return MANIFEST_YAML
+        if name == "manifest_compile":
+            return {
+                "plan_ref": "art_plan_be",
+                "nodes": [
+                    {
+                        "nodeId": "node-a",
+                        "title": "A (will fail)",
+                        "sourceType": "github",
+                        "sourceId": "src-a",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": [],
+                    },
+                    {
+                        "nodeId": "node-b",
+                        "title": "B (independent, should succeed)",
+                        "sourceType": "github",
+                        "sourceId": "src-b",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": [],
+                    },
+                ],
+            }
+        if name == "manifest_write_summary":
+            return ("art_summary_be", "art_index_be")
+        raise AssertionError(f"unexpected activity {name}")
+
+    async def fake_execute_child_workflow(_name: str, *, args, id, **_kwargs):
+        if "node-a" in id:
+            raise RuntimeError("node-a failed")
+        return {"output_artifact_ref": "art_result_b"}
+
+    async def fake_wait_condition(_predicate):
+        return None
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+    result = asyncio.run(
+        workflow_instance.run(
+            {
+                "manifestArtifactRef": "art_manifest_be",
+                "requestedBy": {"type": "user", "id": "user-1"},
+                "executionPolicy": {
+                    "failurePolicy": "best_effort",
+                    "maxConcurrency": 50,
+                },
+            }
+        )
+    )
+
+    # best_effort: workflow completes with failed status, but node-b still ran
+    assert result["status"] == "failed"
+    assert workflow_instance._nodes["node-a"]["state"] == "failed"
+    assert workflow_instance._nodes["node-b"]["state"] == "succeeded"
+
+
+def test_continue_and_report_is_accepted_policy_value() -> None:
+    """T022 DOC-REQ-009: continue_and_report is an accepted failurePolicy value."""
+    from moonmind.workflows.temporal.manifest_ingest import (
+        _execution_policy_from_parameters,
+    )
+
+    policy = _execution_policy_from_parameters(
+        {"executionPolicy": {"failurePolicy": "continue_and_report", "maxConcurrency": 5}}
+    )
+    assert policy.failure_policy == "continue_and_report"
+    assert policy.max_concurrency == 5
+
+
+def test_set_concurrency_rejects_out_of_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T023 DOC-REQ-009: SetConcurrency rejects values outside 1-500."""
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-sc",
+            run_id="run-sc",
+            search_attributes={"mm_owner_id": "user-1"},
+        ),
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+
+    # Too high
+    response = asyncio.run(workflow_instance.set_concurrency({"maxConcurrency": 501}))
+    assert response["accepted"] is False
+    assert "1 and 500" in response["message"]
+
+    # Zero
+    response = asyncio.run(workflow_instance.set_concurrency({"maxConcurrency": 0}))
+    assert response["accepted"] is False
+
+    # Missing
+    response = asyncio.run(workflow_instance.set_concurrency({}))
+    assert response["accepted"] is False
+
+    # Valid
+    response = asyncio.run(workflow_instance.set_concurrency({"maxConcurrency": 10}))
+    assert response["accepted"] is True
+    assert workflow_instance._concurrency == 10
+
+
+def test_secrets_not_in_workflow_memo() -> None:
+    """T023 DOC-REQ-013: memo must not contain raw secrets or high-cardinality payloads."""
+    record = _record()
+
+    initialize_manifest_projection(record)
+
+    memo = record.memo
+    memo_json = json.dumps(memo)
+
+    # Memo should only contain bounded fields, not raw manifest content or tokens
+    assert "ghp_" not in memo_json
+    assert "password" not in memo_json.lower()
+    # Memo keys should be bounded metadata fields
+    allowed_memo_keys = {
+        "manifest_phase",
+        "manifest_counts",
+        "summary_artifact_ref",
+        "run_index_artifact_ref",
+        "checkpoint_artifact_ref",
+    }
+    assert set(memo.keys()) <= allowed_memo_keys
+
+
+def test_authorization_lineage_propagated_to_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T027 DOC-REQ-013: child workflows receive immutable requestedBy and owner lineage."""
+    child_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "info",
+        lambda: SimpleNamespace(
+            workflow_id="mm:manifest-auth",
+            run_id="run-auth",
+            search_attributes={"mm_owner_id": "user-42"},
+        ),
+    )
+
+    async def fake_execute_activity(name: str, *, args, **_kwargs):
+        if name == "manifest_read":
+            return MANIFEST_YAML
+        if name == "manifest_compile":
+            return {
+                "plan_ref": "art_plan_auth",
+                "nodes": [
+                    {
+                        "nodeId": "node-a",
+                        "title": "A",
+                        "sourceType": "github",
+                        "sourceId": "src-a",
+                        "requiredCapabilities": [],
+                        "runtimeHints": {},
+                        "dependencies": [],
+                    },
+                ],
+            }
+        if name == "manifest_write_summary":
+            return ("art_summary_auth", "art_index_auth")
+        raise AssertionError(f"unexpected activity {name}")
+
+    async def fake_execute_child_workflow(_name: str, *, args, **_kwargs):
+        child_calls.append(dict(args[0]))
+        return {"output_artifact_ref": "art_result_1"}
+
+    async def fake_wait_condition(_predicate):
+        return None
+
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    workflow_instance = ManifestIngestWorkflow()
+    result = asyncio.run(
+        workflow_instance.run(
+            {
+                "manifestArtifactRef": "art_manifest_auth",
+                "requestedBy": {"type": "user", "id": "user-42"},
+            }
+        )
+    )
+
+    assert result["status"] == "succeeded"
+    assert len(child_calls) == 1
+
+    child_params = child_calls[0]
+    # Child must receive the owner_id for authorization lineage
+    assert child_params["owner_id"] == "user-42"
+    # Child must receive the parent's requestedBy for immutable lineage
+    initial_params = child_params["initial_parameters"]
+    assert initial_params["requestedBy"] == {"type": "user", "id": "user-42"}
+    # Child must include parent workflow identity for lineage trace
+    assert initial_params["manifestIngestWorkflowId"] == "mm:manifest-auth"
+    assert initial_params["manifestIngestRunId"] == "run-auth"
+    # Child parent close policy must be REQUEST_CANCEL
+    assert initial_params["parentClosePolicy"] == "REQUEST_CANCEL"
