@@ -5033,12 +5033,18 @@
             <select name="scheduleMode" id="schedule-mode-select">
               <option value="immediate" selected>Immediate</option>
               <option value="once">Deferred (run once at a specific time)</option>
+              <option value="deferred_minutes">Deferred (run in N minutes)</option>
               <option value="recurring">Recurring (create a cron schedule)</option>
             </select>
           </label>
           <div id="schedule-once-fields" class="hidden">
             <label>Scheduled For
               <input type="datetime-local" name="scheduledFor" id="schedule-datetime" />
+            </label>
+          </div>
+          <div id="schedule-deferred-minutes-fields" class="hidden">
+            <label>Minutes from now
+              <input type="number" name="scheduleDeferredMinutes" min="1" max="525600" step="1" placeholder="e.g. 15" />
             </label>
           </div>
           <div id="schedule-recurring-fields" class="hidden">
@@ -6214,12 +6220,16 @@
     // --- Schedule panel toggle ---
     const scheduleModeSelect = form.querySelector("#schedule-mode-select");
     const scheduleOnceFields = form.querySelector("#schedule-once-fields");
+    const scheduleDeferredMinutesFields = form.querySelector("#schedule-deferred-minutes-fields");
     const scheduleRecurringFields = form.querySelector("#schedule-recurring-fields");
     if (scheduleModeSelect) {
       scheduleModeSelect.addEventListener("change", () => {
         const mode = String(scheduleModeSelect.value || "immediate").trim();
         if (scheduleOnceFields) {
           scheduleOnceFields.classList.toggle("hidden", mode !== "once");
+        }
+        if (scheduleDeferredMinutesFields) {
+          scheduleDeferredMinutesFields.classList.toggle("hidden", mode !== "deferred_minutes");
         }
         if (scheduleRecurringFields) {
           scheduleRecurringFields.classList.toggle("hidden", mode !== "recurring");
@@ -6541,6 +6551,30 @@
           if (isNaN(scheduledForDate.getTime()) || scheduledForDate <= new Date()) {
             message.className = "notice error queue-submit-message";
             message.textContent = "Scheduled time must be a valid future date.";
+            return;
+          }
+          requestBody.payload.schedule = {
+            mode: "once",
+            scheduledFor: scheduledForDate.toISOString(),
+          };
+        } else if (scheduleMode === "deferred_minutes") {
+          const scheduleDeferredMinutesRaw = String(formData.get("scheduleDeferredMinutes") || "").trim();
+          const scheduleDeferredMinutes = Number(scheduleDeferredMinutesRaw);
+          if (!Number.isFinite(scheduleDeferredMinutes) || !Number.isInteger(scheduleDeferredMinutes) || scheduleDeferredMinutes <= 0) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "A valid positive whole number of minutes is required for deferred scheduling.";
+            return;
+          }
+          if (scheduleDeferredMinutes > 525600) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Deferred minutes cannot exceed 525 600 (one year).";
+            return;
+          }
+          const scheduledForMs = Date.now() + scheduleDeferredMinutes * 60000;
+          const scheduledForDate = new Date(scheduledForMs);
+          if (!Number.isFinite(scheduledForDate.getTime())) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Unable to compute a valid schedule date from the provided minutes.";
             return;
           }
           requestBody.payload.schedule = {
