@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+
 
 from moonmind.manifest.validator import (
     ValidationResult,
@@ -73,7 +73,7 @@ def run_manifest(*, manifest_path: str) -> dict:
 def run_evaluate(
     *,
     manifest_path: str,
-    dataset: Optional[str] = None,
+    dataset: str | None = None,
 ) -> dict:
     """Evaluate retrieval quality against a golden dataset.
 

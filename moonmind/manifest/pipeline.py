@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from moonmind.manifest.reader_adapter import PlanResult, get_adapter
 from moonmind.schemas.manifest_v0_models import ManifestV0, DataSourceConfig
@@ -141,7 +141,7 @@ class ManifestPipeline:
         )
 
         run_cfg = self.manifest.run
-        concurrency = run_cfg.concurrency if run_cfg else 6
+        _concurrency = run_cfg.concurrency if run_cfg else 6  # noqa: F841 — reserved for T019 async fan-out
         error_policy = run_cfg.errorPolicy if run_cfg else "continue"
 
         for ds in self.manifest.dataSources:

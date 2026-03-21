@@ -215,7 +215,7 @@ def evaluate_manifest(
 
         # Try loading dataset (non-fatal if not found for now)
         try:
-            entries = _load_dataset(ds_cfg.path)
+            _entries = _load_dataset(ds_cfg.path)  # noqa: F841 — validated, retrieval in T019
         except (FileNotFoundError, ValueError) as exc:
             logger.warning("Could not load dataset '%s': %s", ds_cfg.name, exc)
             for metric_cfg in eval_config.metrics:

@@ -7,7 +7,6 @@ T027 (metadata allowlist).
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 from typing import Any, Dict, Iterator, Tuple
 
 import pytest
