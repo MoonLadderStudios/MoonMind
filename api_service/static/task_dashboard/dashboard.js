@@ -10545,6 +10545,19 @@
           <div data-auth-profiles-table>
             <p class="loading">Loading profiles...</p>
           </div>
+          <dialog id="oauth-session-modal">
+            <form method="dialog">
+              <h3>Connect with OAuth</h3>
+              <p>Runtime: <span id="oauth-modal-runtime"></span></p>
+              <p>Profile: <span id="oauth-modal-profile"></span></p>
+              <div id="oauth-modal-status" style="margin: 1rem 0;"></div>
+              <menu>
+                <button type="button" id="oauth-modal-start" class="btn">Start Session</button>
+                <button type="button" id="oauth-modal-cancel" class="btn" style="display:none;">Cancel Session</button>
+                <button value="close" class="btn-cancel">Close</button>
+              </menu>
+            </form>
+          </dialog>
           <details class="auth-profile-create-toggle">
             <summary>Create New Profile</summary>
             <form data-auth-profile-form="create" class="stack">
@@ -10795,6 +10808,9 @@
                 <td>${p.cooldown_after_429_seconds ?? "-"}s</td>
                 <td>${p.enabled ? "✅" : "❌"}</td>
                 <td>
+                  <button class="btn-small" data-profile-oauth="${escapeHtml(p.profile_id)}" data-runtime="${escapeHtml(p.runtime_id || "")}" data-volume="${escapeHtml(p.volume_ref || "")}">
+                    Connect with OAuth
+                  </button>
                   <button class="btn-small" data-profile-toggle="${escapeHtml(p.profile_id)}">
                     ${p.enabled ? "Disable" : "Enable"}
                   </button>
@@ -10836,6 +10852,102 @@
     }
 
     function attachProfileHandlers() {
+      document.querySelectorAll("[data-profile-oauth]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const profileId = btn.dataset.profileOauth;
+          const runtimeId = btn.dataset.runtime;
+          const volumeRef = btn.dataset.volume;
+          const modal = document.getElementById("oauth-session-modal");
+          const statusDiv = document.getElementById("oauth-modal-status");
+          
+          document.getElementById("oauth-modal-profile").textContent = profileId;
+          document.getElementById("oauth-modal-runtime").textContent = runtimeId;
+          statusDiv.innerHTML = "";
+          
+          const startBtn = document.getElementById("oauth-modal-start");
+          const cancelBtn = document.getElementById("oauth-modal-cancel");
+          
+          startBtn.style.display = "inline-block";
+          cancelBtn.style.display = "none";
+          
+          let currentSessionId = null;
+          
+          startBtn.onclick = async () => {
+            startBtn.disabled = true;
+            statusDiv.textContent = "Starting session...";
+            try {
+              const res = await fetch("/api/v1/oauth-sessions", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  profile_id: profileId,
+                  runtime_id: runtimeId,
+                  volume_ref: volumeRef,
+                  account_label: profileId,
+                }),
+              });
+              if (!res.ok) {
+                const err = await res.json();
+                statusDiv.textContent = "Error: " + (err.detail || res.statusText);
+                startBtn.disabled = false;
+                return;
+              }
+              const data = await res.json();
+              currentSessionId = data.session_id;
+              startBtn.style.display = "none";
+              cancelBtn.style.display = "inline-block";
+              
+              // Poll for status
+              const pollInterval = setInterval(async () => {
+                const pollRes = await fetch(`/api/v1/oauth-sessions/${currentSessionId}`, {
+                  credentials: "include"
+                });
+                if (pollRes.ok) {
+                  const pollData = await pollRes.json();
+                  statusDiv.textContent = `Status: `;
+                  const strong = document.createElement("strong");
+                  strong.textContent = pollData.status;
+                  statusDiv.appendChild(strong);
+                  if (pollData.tmate_web_url) {
+                    statusDiv.appendChild(document.createElement("br"));
+                    const a = document.createElement("a");
+                    a.href = pollData.tmate_web_url;
+                    a.target = "_blank";
+                    a.textContent = "Open Tmate Web Terminal";
+                    statusDiv.appendChild(a);
+                  }
+                  if (["succeeded", "failed", "cancelled", "expired"].includes(pollData.status)) {
+                    clearInterval(pollInterval);
+                    cancelBtn.style.display = "none";
+                  }
+                }
+              }, 2000);
+              
+              registerDisposer(() => clearInterval(pollInterval));
+              modal.addEventListener("close", () => clearInterval(pollInterval), { once: true });
+              
+            } catch (e) {
+              statusDiv.textContent = "Error: " + e.message;
+              startBtn.disabled = false;
+            }
+          };
+          
+          cancelBtn.onclick = async () => {
+            if (currentSessionId) {
+              await fetch(`/api/v1/oauth-sessions/${currentSessionId}/cancel`, {
+                method: "POST",
+                credentials: "include"
+              });
+              statusDiv.appendChild(document.createElement("br"));
+              statusDiv.appendChild(document.createTextNode("Cancel requested."));
+            }
+          };
+          
+          modal.showModal();
+        });
+      });
+
       document.querySelectorAll("[data-profile-toggle]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const profileId = btn.dataset.profileToggle;

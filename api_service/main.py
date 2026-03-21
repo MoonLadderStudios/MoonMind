@@ -40,6 +40,7 @@ from api_service.api.routers.executions import router as executions_router
 from api_service.api.routers.manifests import router as manifests_router
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.models import router as models_router
+from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
 from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
@@ -319,6 +320,7 @@ app.include_router(
 )  # Include profile router
 app.include_router(workflows_router)
 app.include_router(auth_profiles_router, prefix="/api/v1")
+app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
