@@ -52,6 +52,17 @@ def test_agent_run_status_terminal_helpers() -> None:
     assert is_terminal_agent_run_state("running") is False
 
 
+def test_agent_run_status_accepts_awaiting_feedback_non_terminal() -> None:
+    status = AgentRunStatus(
+        runId="run-2",
+        agentKind="external",
+        agentId="jules",
+        status="awaiting_feedback",
+    )
+    assert status.status == "awaiting_feedback"
+    assert status.terminal is False
+
+
 def test_agent_run_result_enforces_compact_summary_payloads() -> None:
     with pytest.raises(ValidationError, match="summary must be <="):
         AgentRunResult(

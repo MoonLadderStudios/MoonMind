@@ -1415,7 +1415,15 @@ class TemporalIntegrationActivities:
         token = str(normalized_hint or "").strip().lower()
         if token == "cancelled":
             token = "canceled"
-        if token not in {"queued", "running", "succeeded", "failed", "canceled", "unknown"}:
+        if token not in {
+            "queued",
+            "running",
+            "awaiting_feedback",
+            "succeeded",
+            "failed",
+            "canceled",
+            "unknown",
+        }:
             return snapshot
 
         terminal = token in {"succeeded", "failed", "canceled"}

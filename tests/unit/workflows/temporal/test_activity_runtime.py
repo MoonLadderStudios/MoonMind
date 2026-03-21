@@ -884,6 +884,41 @@ async def test_jules_status_unknown_provider_state_is_non_terminal(tmp_path: Pat
             assert status.terminal is False
 
 
+async def test_jules_status_maps_awaiting_feedback_without_validation_failure(
+    tmp_path: Path,
+):
+    fake_client = _FakeJulesClient(get_status="awaiting_user_feedback")
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalIntegrationActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            status = await activities.integration_jules_status(
+                external_id="task-001",
+                principal="user-1",
+            )
+            assert status.provider_status == "awaiting_user_feedback"
+            assert status.normalized_status == "awaiting_feedback"
+            assert status.terminal is False
+
+
+async def test_jules_status_snapshot_prefers_awaiting_feedback_hint_when_provider_unknown():
+    snapshot = TemporalIntegrationActivities._status_snapshot_from_provider_and_hint(
+        provider_status="STATE_UNSPECIFIED",
+        normalized_hint="awaiting_feedback",
+    )
+    assert snapshot.provider_status == "STATE_UNSPECIFIED"
+    assert snapshot.normalized_status == "awaiting_feedback"
+    assert snapshot.terminal is False
+
+
 async def test_jules_status_accepts_legacy_positional_external_id(tmp_path: Path):
     fake_client = _FakeJulesClient(get_status="completed")
 

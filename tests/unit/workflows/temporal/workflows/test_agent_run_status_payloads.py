@@ -65,6 +65,30 @@ def test_coerce_external_status_payload_maps_terminal_success() -> None:
     assert status.metadata.get("terminal") is True
 
 
+def test_coerce_external_status_payload_accepts_feedback_status() -> None:
+    workflow_instance = MoonMindAgentRun()
+
+    status = workflow_instance._coerce_external_status_payload(
+        status_payload={
+            "runId": "jules-task-003b",
+            "agentKind": "external",
+            "agentId": "jules",
+            "status": "awaiting_feedback",
+            "metadata": {
+                "providerStatus": "awaiting_user_feedback",
+                "normalizedStatus": "awaiting_feedback",
+            },
+        },
+        fallback_agent_id="jules",
+    )
+
+    assert status.run_id == "jules-task-003b"
+    assert status.status == RunStatus.awaiting_feedback
+    assert status.metadata.get("providerStatus") == "awaiting_user_feedback"
+    assert status.metadata.get("normalizedStatus") == "awaiting_feedback"
+    assert "terminal" not in status.metadata
+
+
 def test_coerce_external_status_payload_handles_canonical_payload_with_provider_status() -> None:
     workflow_instance = MoonMindAgentRun()
 
