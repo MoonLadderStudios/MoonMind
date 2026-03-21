@@ -259,7 +259,7 @@ class ManagedAgentAdapter:
                 elif runtime_id_for_profile == "claude_code":
                     cmd_template = ["claude"]
                 elif runtime_id_for_profile == "codex_cli":
-                    cmd_template = ["codex"]
+                    cmd_template = ["codex", "exec", "--full-auto"]
                 else:
                     cmd_template = [runtime_id_for_profile]
 

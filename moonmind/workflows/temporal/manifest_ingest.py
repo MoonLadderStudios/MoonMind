@@ -1017,7 +1017,9 @@ class ManifestIngestWorkflow:
                     continue
                 exc = d.exception()
                 if exc is not None:
-                    raise exc
+                    if failure_policy == "fail_fast":
+                        raise exc
+                    # best_effort / continue_and_report: absorb failure, continue
 
         self._status = "finalizing"
 
@@ -1073,8 +1075,24 @@ class ManifestIngestWorkflow:
     @workflow.update(name="SetConcurrency")
     async def set_concurrency(self, payload: dict[str, Any]) -> dict[str, Any]:
         max_concurrency = payload.get("maxConcurrency")
-        if max_concurrency is not None:
-            self._concurrency = max_concurrency
+        if max_concurrency is None:
+            return {
+                "accepted": False,
+                "message": "maxConcurrency is required",
+            }
+        try:
+            value = int(max_concurrency)
+        except (TypeError, ValueError):
+            return {
+                "accepted": False,
+                "message": "maxConcurrency must be an integer",
+            }
+        if not 1 <= value <= 500:
+            return {
+                "accepted": False,
+                "message": "maxConcurrency must be between 1 and 500",
+            }
+        self._concurrency = value
         return {"accepted": True, "applied": "immediate"}
 
     @workflow.update(name="Pause")

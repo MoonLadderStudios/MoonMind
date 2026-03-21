@@ -180,8 +180,8 @@ const helpers = loadSubmitRuntimeHelpers();
     endpoints,
     { temporalSubmitEnabled: true, isEditMode: false, proposeTasks: true },
   );
-  assert.strictEqual(proposalsTarget.mode, "worker");
-  assert.strictEqual(proposalsTarget.endpoint, "/api/queue/jobs");
+  assert.strictEqual(proposalsTarget.mode, "temporal");
+  assert.strictEqual(proposalsTarget.endpoint, "/api/executions");
   const attachmentTarget = helpers.determineSubmitDestination(
     "codex",
     endpoints,
@@ -198,7 +198,7 @@ const helpers = loadSubmitRuntimeHelpers();
       "codex",
       { temporalSubmitEnabled: true, proposeTasks: true },
     ),
-    false,
+    true,
   );
   assert.strictEqual(helpers.shouldUseTemporalSubmit("orchestrator", { temporalSubmitEnabled: true }), false);
   assert.strictEqual(helpers.isWorkerSubmitRuntime("temporal"), false);

@@ -28,7 +28,7 @@ def test_manifest_routing_follows_submit_flag(
     assert get_routing_target_for_task(is_manifest=True) == expected
 
 
-def test_run_routing_prefers_queue_when_proposals_requested(
+def test_run_routing_uses_temporal_when_proposals_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True, raising=False)
@@ -39,14 +39,14 @@ def test_run_routing_prefers_queue_when_proposals_requested(
             is_run=True,
             task_payload={"task": {"proposeTasks": True}},
         )
-        == "queue"
+        == "temporal"
     )
     assert (
         get_routing_target_for_task(
             is_run=True,
             task_payload={"task": {"proposeTasks": "yes"}},
         )
-        == "queue"
+        == "temporal"
     )
 
 

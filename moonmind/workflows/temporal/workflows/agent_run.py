@@ -32,6 +32,39 @@ class RunStatus:
     cancelled = "cancelled"
     timed_out = "timed_out"
 
+
+_TERMINAL_RUN_STATUSES = frozenset(
+    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out}
+)
+
+_EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
+    "queued": RunStatus.queued,
+    "launching": RunStatus.launching,
+    "running": RunStatus.running,
+    "in_progress": RunStatus.running,
+    "in-progress": RunStatus.running,
+    "processing": RunStatus.running,
+    "awaiting_callback": RunStatus.awaiting_callback,
+    "awaiting_approval": "awaiting_approval",
+    "intervention_requested": "intervention_requested",
+    "collecting_results": "collecting_results",
+    "completed": RunStatus.completed,
+    "succeeded": RunStatus.completed,
+    "success": RunStatus.completed,
+    "done": RunStatus.completed,
+    "resolved": RunStatus.completed,
+    "finished": RunStatus.completed,
+    "failed": RunStatus.failed,
+    "error": RunStatus.failed,
+    "errored": RunStatus.failed,
+    "cancelled": RunStatus.cancelled,
+    "canceled": RunStatus.cancelled,
+    "timed_out": RunStatus.timed_out,
+    "timeout": RunStatus.timed_out,
+    "timed-out": RunStatus.timed_out,
+    "unknown": RunStatus.awaiting_callback,
+}
+
 PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
 # Activity catalog constants for agent_runtime fleet routing.
@@ -137,6 +170,139 @@ class MoonMindAgentRun:
     def slot_assigned(self, payload: dict) -> None:
         self._assigned_profile_id = payload.get("profile_id")
         self.slot_assigned_event.set()
+
+    @staticmethod
+    def _normalize_external_status(
+        *,
+        normalized_status: str | None,
+        raw_status: object,
+        provider_status: str | None,
+    ) -> str:
+        for candidate in (normalized_status, raw_status, provider_status):
+            token = str(candidate or "").strip().lower()
+            if not token:
+                continue
+            mapped = _EXTERNAL_STATUS_TO_RUN_STATUS.get(token)
+            if mapped is not None:
+                return mapped
+        return RunStatus.awaiting_callback
+
+    def _coerce_external_status_payload(
+        self,
+        *,
+        status_payload: object,
+        fallback_agent_id: str,
+    ) -> AgentRunStatusModel:
+        if isinstance(status_payload, AgentRunStatusModel):
+            return status_payload
+
+        payload: dict
+        if isinstance(status_payload, dict):
+            payload = status_payload
+        else:
+            payload = {
+                "external_id": getattr(status_payload, "external_id", None),
+                "externalId": getattr(status_payload, "externalId", None),
+                "run_id": getattr(status_payload, "run_id", None),
+                "runId": getattr(status_payload, "runId", None),
+                "status": getattr(status_payload, "status", None),
+                "normalized_status": getattr(status_payload, "normalized_status", None),
+                "normalizedStatus": getattr(status_payload, "normalizedStatus", None),
+                "provider_status": getattr(status_payload, "provider_status", None),
+                "providerStatus": getattr(status_payload, "providerStatus", None),
+                "url": getattr(status_payload, "url", None),
+                "external_url": getattr(status_payload, "external_url", None),
+                "externalUrl": getattr(status_payload, "externalUrl", None),
+                "tracking_ref": getattr(status_payload, "tracking_ref", None),
+                "trackingRef": getattr(status_payload, "trackingRef", None),
+                "terminal": getattr(status_payload, "terminal", None),
+                "agent_id": getattr(status_payload, "agent_id", None),
+                "agentId": getattr(status_payload, "agentId", None),
+                "metadata": getattr(status_payload, "metadata", None),
+            }
+
+        # Preferred path: canonical AgentRunStatus contract.
+        try:
+            return AgentRunStatusModel(**payload)
+        except Exception:
+            pass
+
+        metadata = payload.get("metadata")
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+
+        external_id = str(
+            payload.get("external_id")
+            or payload.get("externalId")
+            or payload.get("run_id")
+            or payload.get("runId")
+            or self.run_id
+            or ""
+        ).strip()
+        if not external_id:
+            raise ValueError("External status payload is missing external_id/run_id")
+
+        normalized_status = str(
+            payload.get("normalized_status")
+            or payload.get("normalizedStatus")
+            or metadata_dict.get("normalizedStatus")
+            or metadata_dict.get("normalized_status")
+            or ""
+        ).strip().lower() or None
+        provider_status = str(
+            payload.get("provider_status")
+            or payload.get("providerStatus")
+            or metadata_dict.get("providerStatus")
+            or metadata_dict.get("provider_status")
+            or payload.get("status")
+            or "unknown"
+        ).strip()
+
+        run_status = self._normalize_external_status(
+            normalized_status=normalized_status,
+            raw_status=payload.get("status"),
+            provider_status=provider_status,
+        )
+
+        external_url = (
+            payload.get("url")
+            or payload.get("external_url")
+            or payload.get("externalUrl")
+            or metadata_dict.get("externalUrl")
+            or metadata_dict.get("external_url")
+        )
+        tracking_ref = (
+            payload.get("tracking_ref")
+            or payload.get("trackingRef")
+            or metadata_dict.get("trackingRef")
+            or metadata_dict.get("tracking_ref")
+        )
+        terminal = bool(payload.get("terminal", run_status in _TERMINAL_RUN_STATUSES))
+
+        agent_id = str(
+            payload.get("agent_id")
+            or payload.get("agentId")
+            or self._external_agent_id
+            or fallback_agent_id
+        ).strip() or fallback_agent_id
+
+        normalized_for_metadata = normalized_status or "unknown"
+        result_metadata = {
+            "providerStatus": provider_status,
+            "normalizedStatus": normalized_for_metadata,
+            "terminal": terminal,
+        }
+        if external_url is not None:
+            result_metadata["externalUrl"] = external_url
+        if tracking_ref is not None:
+            result_metadata["trackingRef"] = tracking_ref
+
+        return AgentRunStatusModel(
+            runId=external_id,
+            agentKind="external",
+            agentId=agent_id,
+            status=run_status,
+            metadata=result_metadata,
+        )
 
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
@@ -380,14 +546,17 @@ class MoonMindAgentRun:
                                     start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 )
-                                status_obj = AgentRunStatusModel(**status_dict) if isinstance(status_dict, dict) else status_dict
+                                status_obj = self._coerce_external_status_payload(
+                                    status_payload=status_dict,
+                                    fallback_agent_id=request.agent_id,
+                                )
                             else:
                                 # Managed agent: poll via adapter directly.
                                 status_obj = await adapter.status(self.run_id)
                                 workflow.logger.info(f"STATUS_OBJ for {self.run_id}: {status_obj}")
 
                             self.run_status = status_obj.status
-                            if status_obj.status in (RunStatus.completed, RunStatus.failed, RunStatus.cancelled):
+                            if status_obj.status in _TERMINAL_RUN_STATUSES:
                                 break
 
                 elapsed = (workflow.now() - overall_start).total_seconds()

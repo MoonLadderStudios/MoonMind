@@ -6,6 +6,8 @@ Gathers PR metadata, CI status, and comments to decide the next fix action.
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +26,46 @@ _FAILURE_CHECK_STATES = {
     "STALE",
 }
 
+_SYSTEM_PATH_FALLBACK = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_PR_VIEW_FIELDS = (
+    "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,"
+    "mergeStateStatus,reviewDecision,statusCheckRollup"
+)
+
+
+def _build_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    existing_parts = [part for part in env.get("PATH", "").split(":") if part]
+    for fallback in _SYSTEM_PATH_FALLBACK.split(":"):
+        if fallback not in existing_parts:
+            existing_parts.append(fallback)
+    env["PATH"] = ":".join(existing_parts) if existing_parts else _SYSTEM_PATH_FALLBACK
+    return env
+
+
+def _resolve_command(cmd: list[str]) -> list[str]:
+    if not cmd:
+        return cmd
+    executable = str(cmd[0])
+    if "/" in executable:
+        return [str(part) for part in cmd]
+    raw_path = os.environ.get("PATH", "")
+    fallback_path = (
+        f"{raw_path}:{_SYSTEM_PATH_FALLBACK}" if raw_path else _SYSTEM_PATH_FALLBACK
+    )
+    resolved = shutil.which(executable, path=raw_path) or shutil.which(
+        executable, path=fallback_path
+    )
+    if resolved:
+        return [resolved, *[str(part) for part in cmd[1:]]]
+    return [str(part) for part in cmd]
+
+
+def _compact_error_details(stdout: str, stderr: str) -> str:
+    return "\n".join(
+        item.strip() for item in (stdout or "", stderr or "") if item.strip()
+    )
+
 
 def run_command(
     cmd,
@@ -32,49 +74,181 @@ def run_command(
     initial_delay_seconds=1.0,
     max_delay_seconds=8.0,
 ):
+    resolved_cmd = _resolve_command(cmd)
+    env = _build_subprocess_env()
     for attempt in range(1, max_attempts + 1):
         try:
-            output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+            completed = subprocess.run(
+                resolved_cmd,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=env,
+            )
+            output = completed.stdout
+            stderr = completed.stderr
+            if completed.returncode != 0:
+                details = _compact_error_details(output, stderr)
+                if attempt < max_attempts:
+                    delay = min(
+                        max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
+                    )
+                    print(
+                        f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(resolved_cmd)}. Retrying in {delay:.1f}s...",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                print(
+                    f"Command failed: {' '.join(resolved_cmd)}\n{failure_hint}\n{details}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             if output.strip() == "":
                 return {}
             return json.loads(output)
-        except subprocess.CalledProcessError as e:
-            if attempt < max_attempts:
-                delay = min(
-                    max_delay_seconds, initial_delay_seconds * (2 ** (attempt - 1))
-                )
-                print(
-                    f"Retryable error on attempt {attempt}/{max_attempts} for command: {' '.join(cmd)}. Retrying in {delay:.1f}s...",
-                    file=sys.stderr,
-                )
-                time.sleep(delay)
-                continue
+        except FileNotFoundError:
+            print(f"Command not found: {resolved_cmd[0]}", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError:
             print(
-                f"Command failed: {' '.join(cmd)}\n{failure_hint}\n{e.output}",
+                f"Command returned invalid JSON: {' '.join(resolved_cmd)}",
                 file=sys.stderr,
             )
             sys.exit(1)
-        except json.JSONDecodeError:
-            print(f"Command returned invalid JSON: {' '.join(cmd)}", file=sys.stderr)
-            sys.exit(1)
 
 
-def run_command_optional(cmd) -> dict | list | None:
+def run_command_optional_with_error(cmd) -> tuple[dict | list | None, str | None]:
+    resolved_cmd = _resolve_command(cmd)
     try:
-        output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError:
-        return None
-    except OSError:
-        return None
+        completed = subprocess.run(
+            resolved_cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_build_subprocess_env(),
+        )
+    except OSError as exc:
+        return None, str(exc)
+    if completed.returncode != 0:
+        details = _compact_error_details(completed.stdout, completed.stderr)
+        return (
+            None,
+            f"command failed ({completed.returncode}): {' '.join(resolved_cmd)}"
+            + (f"\n{details}" if details else ""),
+        )
+    output = completed.stdout
     if output.strip() == "":
-        return {}
+        return {}, None
     try:
         payload = json.loads(output)
     except json.JSONDecodeError:
-        return None
+        return None, f"invalid JSON from command: {' '.join(resolved_cmd)}"
     if isinstance(payload, (dict, list)):
-        return payload
-    return None
+        return payload, None
+    return None, f"unsupported JSON payload type from command: {' '.join(resolved_cmd)}"
+
+
+def run_command_optional(cmd) -> dict | list | None:
+    payload, _ = run_command_optional_with_error(cmd)
+    return payload
+
+
+def _current_branch_name() -> str | None:
+    resolved_cmd = _resolve_command(["git", "branch", "--show-current"])
+    try:
+        completed = subprocess.run(
+            resolved_cmd,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=_build_subprocess_env(),
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    branch = (completed.stdout or "").strip()
+    if branch in {"", "HEAD"}:
+        return None
+    return branch
+
+
+def _fetch_pr_data_from_selector(
+    selector: str | None,
+) -> tuple[dict | None, str | None]:
+    cmd = ["gh", "pr", "view"]
+    if selector:
+        cmd.append(selector)
+    cmd.extend(["--json", _PR_VIEW_FIELDS])
+    payload, error = run_command_optional_with_error(cmd)
+    if isinstance(payload, dict):
+        return payload, None
+    return None, error
+
+
+def _discover_pr_number_from_head_branch(branch: str) -> str | None:
+    payload = run_command_optional(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--head",
+            branch,
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ]
+    )
+    if not isinstance(payload, list) or not payload:
+        return None
+    first = payload[0]
+    if not isinstance(first, dict):
+        return None
+    number = first.get("number")
+    if number in {None, ""}:
+        return None
+    return str(number)
+
+
+def fetch_pr_data(
+    requested_pr_selector: str | None,
+) -> tuple[dict | None, str | None, list[str]]:
+    errors: list[str] = []
+    current_branch = _current_branch_name() if not requested_pr_selector else None
+    candidate_selectors: list[str | None] = []
+    if requested_pr_selector:
+        candidate_selectors.append(requested_pr_selector)
+    else:
+        candidate_selectors.append(None)
+        if current_branch:
+            candidate_selectors.append(current_branch)
+
+    attempted_labels: set[str] = set()
+    for selector in candidate_selectors:
+        label = selector or "<default>"
+        if label in attempted_labels:
+            continue
+        attempted_labels.add(label)
+        pr_data, error = _fetch_pr_data_from_selector(selector)
+        if pr_data:
+            return pr_data, selector, errors
+        if error:
+            errors.append(f"{label}: {error}")
+
+    if not requested_pr_selector and current_branch:
+        discovered_selector = _discover_pr_number_from_head_branch(current_branch)
+        if discovered_selector and discovered_selector not in attempted_labels:
+            pr_data, error = _fetch_pr_data_from_selector(discovered_selector)
+            if pr_data:
+                return pr_data, discovered_selector, errors
+            if error:
+                errors.append(f"{discovered_selector}: {error}")
+
+    return None, None, errors
 
 
 def infer_repo_from_pr_url(url: str | None) -> str | None:
@@ -400,20 +574,16 @@ def main():
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
     args = parser.parse_args()
 
-    # 1. Fetch PR Metadata
-    pr_cmd = ["gh", "pr", "view"]
-    if args.pr:
-        pr_cmd.append(args.pr)
-    pr_cmd.extend(
-        [
-            "--json",
-            "number,title,url,isDraft,state,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
-        ]
-    )
+    # 1. Fetch PR metadata with resilient selector fallback.
+    pr_data, resolved_selector, pr_errors = fetch_pr_data(args.pr)
+    if not isinstance(pr_data, dict):
+        detail_lines = "\n".join(pr_errors[-3:]) if pr_errors else ""
+        message = "Unable to resolve PR metadata. Ensure gh is authenticated and the PR exists."
+        if detail_lines:
+            message = f"{message}\n{detail_lines}"
+        print(message, file=sys.stderr)
+        sys.exit(1)
 
-    pr_data = run_command(
-        pr_cmd, "Ensure gh is authenticated and the branch has an open PR."
-    )
     pr_repo = infer_repo_from_pr_url(pr_data.get("url"))
     if not pr_repo:
         pr_repo_data = run_command(
@@ -581,6 +751,7 @@ def main():
     # Print a quick summary to stdout
     summary = {
         "pr_number": pr_data.get("number"),
+        "pr_selector": resolved_selector or "<default>",
         "mergeable": pr_data.get("mergeable"),
         "mergeStateStatus": pr_data.get("mergeStateStatus"),
         "reviewDecision": pr_data.get("reviewDecision"),

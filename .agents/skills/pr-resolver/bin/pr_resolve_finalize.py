@@ -189,7 +189,21 @@ def main() -> None:
 
     try:
         if not args.skip_refresh:
-            _run_snapshot(snapshot_script, args.pr)
+            try:
+                _run_snapshot(snapshot_script, args.pr)
+            except subprocess.CalledProcessError:
+                # Snapshot refresh can fail transiently (network/auth/API blips).
+                # Treat as blocked so orchestrate can retry with backoff.
+                _write_result(
+                    result_path,
+                    snapshot={"pr": {}},
+                    decision="blocked",
+                    merge_outcome="blocked",
+                    status="blocked",
+                    reason="snapshot_refresh_failed",
+                )
+                print("Blocked: snapshot_refresh_failed")
+                sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
         snapshot = _read_snapshot(snapshot_path)
         decision = evaluate_finalize_action(snapshot)
 

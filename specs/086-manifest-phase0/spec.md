@@ -2,9 +2,12 @@
 
 **Feature Branch**: `086-manifest-phase0`
 **Created**: 2026-03-17  
-**Status**: Draft  
-**Input**: User description: "Update 032-manifest-phase0 based on docs/Tasks/ManifestTaskSystem.md and fully implement it. Merge in any still relevant functionality from 034 in preparation of deleting the obsolete 034 spec."  
+**Status**: DEPRECATED — merged into `070-manifest-ingest`  
+**Input**: User description: "Update 032-manifest-phase0 based on docs/RAG/ManifestTaskSystem.md and fully implement it. Merge in any still relevant functionality from 034 in preparation of deleting the obsolete 034 spec."  
 **Implementation Intent**: Runtime implementation. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests.
+
+> [!WARNING]
+> This spec has been merged into `specs/070-manifest-ingest/`. All requirements from this spec are now covered by 070. The source document `ManifestTaskSystem.md` has been merged into `docs/RAG/ManifestIngestDesign.md`. See that spec and doc for the authoritative requirements.
 
 ## Source Document Requirements
 
