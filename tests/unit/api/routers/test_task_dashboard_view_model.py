@@ -174,6 +174,8 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     )
     assert "speckit" not in config["sources"]
     assert "orchestrator" not in config["sources"]
+    assert "externalRuns" not in config["sources"]
+    assert "external" not in config["statusMaps"]
     temporal_dashboard = config["features"]["temporalDashboard"]
     assert temporal_dashboard["enabled"] is True
     assert temporal_dashboard["listEnabled"] is True
