@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from moonmind.rag.context_injection import ContextInjectionService
 from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeStrategy,
 )
@@ -62,3 +64,15 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
             k: v for k, v in base_env.items()
             if k in _CODEX_ENV_PASSTHROUGH_KEYS
         }
+
+    async def prepare_workspace(
+        self,
+        workspace_path: Path,
+        request: Any,
+    ) -> None:
+        """Inject RAG context into the instruction before building the command."""
+        service = ContextInjectionService()
+        await service.inject_context(
+            request=request,
+            workspace_path=workspace_path,
+        )
