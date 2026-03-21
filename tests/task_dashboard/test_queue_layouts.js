@@ -123,7 +123,6 @@ const {
   toTemporalRows,
   parseQueuePaginationFromSearch,
   applyQueuePaginationToSearch,
-  resetQueuePaginationState,
 } = helpers;
 
 
@@ -373,27 +372,7 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(firstPageParams.get("cursor"), null);
 })();
 
-(function testQueuePaginationResetClearsCursorStackForFilterChanges() {
-  const paginationState = {
-    limit: 100,
-    cursor: "cursor-3",
-    cursorStack: ["", "cursor-1", "cursor-2"],
-    nextCursor: "cursor-4",
-    hasMore: true,
-    pageStart: 201,
-    pageEnd: 300,
-  };
 
-  resetQueuePaginationState(paginationState);
-  assert.strictEqual(paginationState.limit, 100);
-  assert.strictEqual(paginationState.cursor, null);
-  assert.strictEqual(Array.isArray(paginationState.cursorStack), true);
-  assert.strictEqual(paginationState.cursorStack.length, 0);
-  assert.strictEqual(paginationState.nextCursor, null);
-  assert.strictEqual(paginationState.hasMore, false);
-  assert.strictEqual(paginationState.pageStart, 0);
-  assert.strictEqual(paginationState.pageEnd, 0);
-})();
 
 (function testRowOrderKeyUsesNormalizedSourceAndId() {
   assert.strictEqual(

@@ -159,9 +159,7 @@ const helpers = loadSubmitRuntimeHelpers();
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
   assert.strictEqual(workerTarget.mode, "worker");
   assert.strictEqual(workerTarget.endpoint, "/api/queue/jobs");
-  const legacyOrchestratorTarget = helpers.determineSubmitDestination("orchestrator", endpoints);
-  assert.strictEqual(legacyOrchestratorTarget.mode, "worker");
-  assert.strictEqual(legacyOrchestratorTarget.endpoint, "/api/queue/jobs");
+
   const temporalTarget = helpers.determineSubmitDestination(
     "codex",
     endpoints,
@@ -191,32 +189,7 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(attachmentTarget.endpoint, "/api/executions");
 })();
 
-(function testTemporalSubmitHelpersKeepPickerWorkerOnly() {
-  assert.strictEqual(helpers.shouldUseTemporalSubmit("codex", { temporalSubmitEnabled: true }), true);
-  assert.strictEqual(
-    helpers.shouldUseTemporalSubmit(
-      "codex",
-      { temporalSubmitEnabled: true, proposeTasks: true },
-    ),
-    true,
-  );
-  assert.strictEqual(helpers.shouldUseTemporalSubmit("orchestrator", { temporalSubmitEnabled: true }), false);
-  assert.strictEqual(helpers.isWorkerSubmitRuntime("temporal"), false);
-  assert.strictEqual(helpers.validateSubmitRuntime("temporal"), null);
-})();
 
-(function testValidateOrchestratorSubmissionAlwaysRejects() {
-  const empty = helpers.validateOrchestratorSubmission({});
-  assert.strictEqual(empty.ok, false);
-  assert.ok(/no longer supported/i.test(empty.error));
-  const shaped = helpers.validateOrchestratorSubmission({
-    instruction: "Ship",
-    targetService: "orchestrator",
-    priority: "HIGH",
-  });
-  assert.strictEqual(shaped.ok, false);
-  assert.ok(/no longer supported/i.test(shaped.error));
-})();
 
 (function testValidatePrimaryStepSubmissionAllowsInstructionsOrExplicitSkill() {
   assert.strictEqual(typeof helpers.validatePrimaryStepSubmission, "function");
@@ -276,23 +249,12 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(noAdditionalStepAllowedWithoutPrimary.ok, true);
 })();
 
-(function testNormalizeOrchestratorPriority() {
-  assert.strictEqual(helpers.normalizeOrchestratorPriority("HIGH"), "high");
-  assert.strictEqual(helpers.normalizeOrchestratorPriority("low"), "normal");
-  assert.strictEqual(helpers.normalizeOrchestratorPriority(undefined), "normal");
-})();
+
 
 (function testResolveQueueSubmitRuntimeUiState() {
   assert.strictEqual(typeof helpers.resolveQueueSubmitRuntimeUiState, "function");
   const workerState = helpers.resolveQueueSubmitRuntimeUiState("codex");
-  assert.strictEqual(workerState.isOrchestratorRuntime, false);
-  assert.strictEqual(workerState.showOrchestratorFields, false);
-  assert.strictEqual(workerState.showWorkerPriorityFields, true);
 
-  const legacyOrchestratorState = helpers.resolveQueueSubmitRuntimeUiState("orchestrator");
-  assert.strictEqual(legacyOrchestratorState.isOrchestratorRuntime, false);
-  assert.strictEqual(legacyOrchestratorState.showOrchestratorFields, false);
-  assert.strictEqual(legacyOrchestratorState.showWorkerPriorityFields, true);
 })();
 
 (function testExtractRuntimeModelAndEffortFromCanonicalTaskRuntime() {

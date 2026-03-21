@@ -219,6 +219,22 @@ def _ensure_actions_enabled() -> None:
             },
         )
 
+def _ensure_submit_enabled() -> None:
+    """FastAPI dependency: raise 503 when Temporal execution submission is disabled."""
+    if not settings.temporal_dashboard.submit_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_submit_disabled",
+                "message": (
+                    "Temporal task submission is disabled "
+                    "(temporal_dashboard.submit_enabled=False). "
+                    "The legacy queue execution substrate is no longer supported. "
+                    "Enable Temporal submission to proceed."
+                ),
+            },
+        )
+
 
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True
@@ -1035,7 +1051,21 @@ async def create_execution(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> ExecutionModel | ScheduleCreatedResponse:
+    from moonmind.config.settings import settings
+
+    if not settings.temporal_dashboard.submit_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_submit_disabled",
+                "message": "Temporal task submission is disabled (temporal_dashboard.submit_enabled=False). "
+                "The legacy queue execution substrate is no longer supported. "
+                "Enable Temporal submission to proceed.",
+            },
+        )
+
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)
