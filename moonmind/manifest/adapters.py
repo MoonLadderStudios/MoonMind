@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Tuple
 
 from moonmind.manifest.reader_adapter import PlanResult, register_adapter
 from moonmind.schemas.manifest_v0_models import DataSourceConfig
@@ -296,7 +296,7 @@ class ConfluenceReaderAdapter(_BaseAdapter):
         try:
             reader = ConfluenceReader(
                 base_url=base_url,
-                # ConfluenceReader uses 'password' for API token in some versions
+                oauth2={"token": token},
                 cloud=True,
             )
             if space_key:

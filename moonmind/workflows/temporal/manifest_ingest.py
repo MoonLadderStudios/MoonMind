@@ -1080,7 +1080,13 @@ class ManifestIngestWorkflow:
                 "accepted": False,
                 "message": "maxConcurrency is required",
             }
-        value = int(max_concurrency)
+        try:
+            value = int(max_concurrency)
+        except (TypeError, ValueError):
+            return {
+                "accepted": False,
+                "message": "maxConcurrency must be an integer",
+            }
         if not 1 <= value <= 500:
             return {
                 "accepted": False,

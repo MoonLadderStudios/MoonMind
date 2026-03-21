@@ -136,7 +136,7 @@ class TestSecretDetection:
             "GithubRepositoryReader",
         ).replace(
             'params:\n      inputDir: "./data"',
-            'params:\n      owner: "test"\n    auth:\n      githubToken: "ghp_aaaBBBcccDDDeeeFF1234567890abcdefghij1234"',
+            'params:\n      owner: "test"\n    auth:\n      githubToken: "ghp_FAKE_TEST_VALUE_DO_NOT_USE_00000000000"',
         )
         r = _result(bad)
         assert not r.valid
@@ -157,7 +157,7 @@ class TestSecretDetection:
     def test_openai_key_rejected(self):
         bad = MINIMAL_VALID.replace(
             'host: "localhost"',
-            'apiKey: "sk-abcdefghij1234567890abcdefghij1234567890"',
+            'apiKey: "sk-FAKETESTVALUEdonotuse00000000000000000000"',
         )
         r = _result(bad)
         # The key pattern should be detected somewhere
