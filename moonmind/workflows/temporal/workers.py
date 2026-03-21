@@ -78,6 +78,7 @@ REGISTERED_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.ManifestIngest",
     "MoonMind.AuthProfileManager",
     "MoonMind.AgentRun",
+    "MoonMind.OAuthSession",
 )
 
 
