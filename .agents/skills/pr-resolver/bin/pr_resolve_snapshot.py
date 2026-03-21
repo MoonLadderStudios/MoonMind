@@ -574,7 +574,7 @@ def main():
     parser.add_argument("--pr", help="Optional PR selector (number, URL, or branch)")
     parser.add_argument(
         "--snapshot-path",
-        default="var/artifacts/pr_resolver/snapshot.json",
+        default="var/pr_resolver/snapshot.json",
         help="Snapshot path to write",
     )
     args = parser.parse_args()

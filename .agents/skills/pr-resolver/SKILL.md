@@ -33,8 +33,8 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_orchestrate.py \
 ```
 
 This writes:
-- `var/artifacts/pr_resolver/result.json` (terminal orchestration summary)
-- `var/artifacts/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
+- `var/pr_resolver/result.json` (terminal orchestration summary)
+- `var/pr_resolver/attempts/*.json` (per-attempt finalize/full artifacts)
 
 ## Retry Policy
 - Full-remediation escalation reasons:
@@ -51,7 +51,7 @@ This writes:
   - any unknown blocker
 
 ## Manual Remediation Loop (only when needed)
-When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `var/artifacts/pr_resolver/result.json`:
+When orchestration returns `status=blocked` or `status=attempts_exhausted`, inspect `next_step` in `var/pr_resolver/result.json`:
 
 - `run_fix_merge_conflicts_skill`: read `.agents/skills/fix-merge-conflicts/SKILL.md` and execute it.
 - `run_fix_comments_skill`: read `.agents/skills/fix-comments/SKILL.md` and execute it.

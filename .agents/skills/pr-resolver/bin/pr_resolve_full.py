@@ -145,16 +145,16 @@ def main() -> None:
     parser.add_argument(
         "--skip-refresh",
         action="store_true",
-        help="Use existing var/artifacts/pr_resolver/snapshot.json without refreshing",
+        help="Use existing var/pr_resolver/snapshot.json without refreshing",
     )
     parser.add_argument(
         "--snapshot-path",
-        default="var/artifacts/pr_resolver/snapshot.json",
+        default="var/pr_resolver/snapshot.json",
         help="Snapshot path to read/write",
     )
     parser.add_argument(
         "--result-path",
-        default="var/artifacts/pr_resolver/full_result.json",
+        default="var/pr_resolver/full_result.json",
         help="Full remediation result artifact path",
     )
     args = parser.parse_args()

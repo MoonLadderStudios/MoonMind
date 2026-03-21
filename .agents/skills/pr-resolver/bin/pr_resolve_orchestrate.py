@@ -466,17 +466,17 @@ def main() -> None:
     )
     parser.add_argument(
         "--snapshot-path",
-        default="var/artifacts/pr_resolver/snapshot.json",
+        default="var/pr_resolver/snapshot.json",
         help="Snapshot artifact path shared with finalize/full scripts.",
     )
     parser.add_argument(
         "--result-path",
-        default="var/artifacts/pr_resolver/result.json",
+        default="var/pr_resolver/result.json",
         help="Final orchestrated result path.",
     )
     parser.add_argument(
         "--attempt-artifacts-dir",
-        default="var/artifacts/pr_resolver/attempts",
+        default="var/pr_resolver/attempts",
         help="Directory for per-attempt finalize/full result artifacts.",
     )
     parser.add_argument(
