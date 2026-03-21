@@ -13,7 +13,10 @@ with workflow.unsafe.imports_passed_through():
         AgentRunStatus as AgentRunStatusModel,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
-    from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+    from moonmind.workflows.adapters.managed_agent_adapter import (
+        ManagedAgentAdapter,
+        ProfileResolutionError,
+    )
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
     )
@@ -127,7 +130,11 @@ class MoonMindAgentRun:
         self._external_agent_id: str | None = None
 
     async def _ensure_manager_and_signal(
-        self, manager_id: str, runtime_id: str
+        self,
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool = True,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the auth-profile-manager; auto-start it on first failure.
 
@@ -139,6 +146,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if not request_slot:
+            return manager_handle
         try:
             await manager_handle.signal("request_slot", signal_payload)
         except ApplicationError as exc:
@@ -161,6 +170,34 @@ class MoonMindAgentRun:
             manager_handle = workflow.get_external_workflow_handle(manager_id)
             await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
+
+    async def _sync_manager_profiles(
+        self,
+        *,
+        manager_handle: workflow.ExternalWorkflowHandle,
+        runtime_id: str,
+    ) -> None:
+        """Best-effort manager refresh from DB-backed auth_profile.list snapshot."""
+        try:
+            profile_snapshot = await workflow.execute_activity(
+                "auth_profile.list",
+                {"runtime_id": runtime_id},
+                task_queue="mm.activity.artifacts",
+                start_to_close_timeout=timedelta(seconds=30),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            profiles = []
+            if isinstance(profile_snapshot, dict):
+                raw_profiles = profile_snapshot.get("profiles", [])
+                if isinstance(raw_profiles, list):
+                    profiles = raw_profiles
+            await manager_handle.signal("sync_profiles", {"profiles": profiles})
+        except Exception:
+            workflow.logger.warning(
+                "Failed to sync auth profiles for runtime_id=%s; continuing with manager state",
+                runtime_id,
+                exc_info=True,
+            )
 
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
@@ -366,7 +403,20 @@ class MoonMindAgentRun:
 
                     self.slot_assigned_event.clear()
                     manager_handle = await self._ensure_manager_and_signal(
-                        manager_id, runtime_id
+                        manager_id,
+                        runtime_id,
+                        request_slot=False,
+                    )
+                    await self._sync_manager_profiles(
+                        manager_handle=manager_handle,
+                        runtime_id=runtime_id,
+                    )
+                    await manager_handle.signal(
+                        "request_slot",
+                        {
+                            "requester_workflow_id": workflow.info().workflow_id,
+                            "runtime_id": runtime_id,
+                        },
                     )
 
                     # Wait for assigned slot
@@ -442,7 +492,14 @@ class MoonMindAgentRun:
                     )
 
                     # --- Managed agent: launch via adapter ---
-                    handle = await adapter.start(request)
+                    try:
+                        handle = await adapter.start(request)
+                    except ProfileResolutionError as exc:
+                        raise ApplicationError(
+                            str(exc),
+                            type="ProfileResolutionError",
+                            non_retryable=True,
+                        ) from exc
                     self.run_id = handle.run_id
                     self.run_status = handle.status
                     poll_interval = handle.poll_hint_seconds or 10

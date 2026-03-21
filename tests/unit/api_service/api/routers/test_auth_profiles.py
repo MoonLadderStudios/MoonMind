@@ -164,3 +164,50 @@ async def test_delete_profile(client_app: AsyncClient, _module_db):
         # Verify it is gone
         check = await client.get(f"/api/v1/auth-profiles/{sample_profile.profile_id}")
         assert check.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_profile_syncs_auth_profile_manager(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sample_profile = await get_or_create_sample_profile()
+    signals: list[tuple[str, dict]] = []
+    started: list[dict] = []
+
+    class _FakeHandle:
+        async def signal(self, signal_name: str, payload: dict) -> None:
+            signals.append((signal_name, payload))
+
+    class _FakeTemporalClient:
+        async def start_workflow(self, *args, **kwargs):
+            started.append({"args": args, "kwargs": kwargs})
+
+        def get_workflow_handle(self, workflow_id: str):
+            assert workflow_id == f"auth-profile-manager:{sample_profile.runtime_id}"
+            return _FakeHandle()
+
+    class _FakeTemporalAdapter:
+        async def get_client(self):
+            return _FakeTemporalClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _FakeTemporalAdapter,
+    )
+
+    payload = {
+        "enabled": False,
+    }
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/auth-profiles/{sample_profile.profile_id}",
+            json=payload,
+        )
+    assert response.status_code == 200
+    assert started, "Expected manager ensure/start attempt before sync"
+    assert signals, "Expected sync_profiles signal after update"
+    signal_name, signal_payload = signals[-1]
+    assert signal_name == "sync_profiles"
+    assert signal_payload["profiles"] == []
