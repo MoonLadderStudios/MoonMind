@@ -3505,9 +3505,7 @@
     const initialPagination = parseQueuePaginationFromSearch(window.location.search || "");
     const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "").trim().toLowerCase();
     const initialTemporalToken = String(initialQuery.get("nextPageToken") || "").trim() || null;
-    const allowedSources = temporalListEnabled
-      ? ["", "temporal"]
-      : ["", "temporal"];
+    const allowedSources = ["", "temporal"];
     setView(
       "Tasks List",
       "Unified tasks across available execution sources.",
@@ -6847,37 +6845,6 @@
     renderQueueSubmitPage(normalizedRuntime);
   }
 
-  
-
-  function renderArtifactsRows(artifacts, showDownload = false, runId = "") {
-    return artifacts
-      .map((artifact) => {
-        const name = pick(artifact, "name") || pick(artifact, "path") || "artifact";
-        const size = pick(artifact, "sizeBytes") || "-";
-        const type = pick(artifact, "contentType") || pick(artifact, "type") || "-";
-        let action = "-";
-        if (showDownload && pick(artifact, "id")) {
-          action = `<a href="${escapeHtml(
-            endpoint("/api/queue/jobs/{id}/artifacts/{artifactId}/download", {
-              id: runId,
-              artifactId: pick(artifact, "id"),
-            }),
-          )}">Download</a>`;
-        } else if (pick(artifact, "path")) {
-          action = `<span class="inline-code">${escapeHtml(pick(artifact, "path"))}</span>`;
-        }
-
-        return `
-          <tr>
-            <td>${escapeHtml(name)}</td>
-            <td>${escapeHtml(String(size))}</td>
-            <td>${escapeHtml(String(type))}</td>
-            <td>${action}</td>
-          </tr>
-        `;
-      })
-      .join("");
-  }
 
   function buildTemporalTimeline(execution) {
     const entries = [
