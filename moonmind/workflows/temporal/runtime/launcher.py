@@ -395,6 +395,25 @@ class ManagedRuntimeLauncher:
             os.environ
         )
 
+        # Invoke strategy-level workspace preparation hook (e.g. RAG context
+        # injection for Codex, .cursor/ config files for Cursor CLI).
+        if resolved_workspace_path is not None:
+            from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+            strategy = get_strategy(profile.runtime_id)
+            if strategy is not None:
+                try:
+                    await strategy.prepare_workspace(
+                        Path(resolved_workspace_path), request
+                    )
+                except Exception:
+                    logger.warning(
+                        "strategy.prepare_workspace failed for run_id=%s runtime=%s",
+                        run_id,
+                        profile.runtime_id,
+                        exc_info=True,
+                    )
+
         # Ensure runtime-specific home dirs are set so CLIs can find their
         # auth credentials even when env_overrides comes from a different
         # worker (the workflow worker) that may lack these variables.
