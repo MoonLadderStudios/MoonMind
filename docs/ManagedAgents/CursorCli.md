@@ -17,7 +17,7 @@ This document describes how [Cursor CLI](https://cursor.com/docs/cli/overview) c
 - **Permission system** (declarative allow/deny rules for shell, read, write, web fetch, and MCP tools) maps naturally to MoonMind's sandbox and approval policies.
 - **MCP support** allows tools and context servers to be shared between Cursor editor and CLI sessions.
 - **Session management** (`agent ls`, `agent resume`, `--continue`) enables long-running, resumable workflows.
-- **API key authentication** (`CURSOR_API_KEY`) supports CI/headless environments without browser-based OAuth.
+- **Browser OAuth** (credentials under `~/.cursor/`, `agent login`) is the default MoonMind stack strategy; **API key** (`CURSOR_API_KEY`) remains available for CI and key-only setups.
 
 ### Relevant Cursor CLI Documentation
 
@@ -90,19 +90,19 @@ Cursor CLI supports two authentication modes:
 
 ### Mapping to MoonMind Auth Profiles
 
-API key mode is the primary mode for managed runtimes. The mapping extends the existing `ManagedAgentAuthProfile` schema:
+The default managed profile uses **OAuth** with `cursor_auth_volume` mounted at `/home/app/.cursor` (`CURSOR_CONFIG_DIR`). Use **API key** mode when you want `CURSOR_API_KEY` only (no OAuth volume). The mapping extends the existing `ManagedAgentAuthProfile` schema:
 
 | Field | Cursor CLI Value |
 |-------|-----------------|
 | `runtime_id` | `cursor_cli` |
-| `auth_mode` | `api_key` (primary) or `oauth` |
-| `volume_ref` | `cursor_auth_volume` (OAuth mode only) |
-| `volume_mount_path` | `/home/app/.cursor` (OAuth mode only) |
-| `api_key_ref` | `vault://kv/moonmind/runtimes/cursor_cli#api_key` |
+| `auth_mode` | `oauth` (default) or `api_key` |
+| `volume_ref` | `cursor_auth_volume` (OAuth mode) |
+| `volume_mount_path` | `/home/app/.cursor` (OAuth mode) |
+| `api_key_ref` | `vault://kv/moonmind/runtimes/cursor_cli#api_key` (API key mode) |
 
-### OAuth Volume (Optional)
+### OAuth Volume (default stack)
 
-If OAuth mode is used, credentials are stored in `~/.cursor/`. A Docker volume mirrors the existing pattern:
+With the default OAuth profile, credentials live under `~/.cursor/` inside the worker. A Docker volume mirrors the existing pattern:
 
 | Volume | Default Mount Path | Contents |
 |--------|-------------------|----------|
@@ -442,20 +442,21 @@ temporal-worker-sandbox:
 The existing `managed_agent_auth_profiles` table supports Cursor CLI with no schema changes — only new row values:
 
 ```sql
+-- Default seed (OAuth + volume); use api_key mode with api_key_ref when omitting the volume.
 INSERT INTO managed_agent_auth_profiles (
     profile_id, runtime_id, auth_mode,
     volume_ref, volume_mount_path,
     account_label, api_key_ref,
     max_parallel_runs, cooldown_after_429, rate_limit_policy
 ) VALUES (
-    'cursor_default',
+    'cursor-cli-default',
     'cursor_cli',
-    'api_key',
-    NULL,                        -- no volume needed for API key mode
+    'oauth',
+    'cursor_auth_volume',
+    '/home/app/.cursor',
+    'Cursor CLI default (OAuth)',
     NULL,
-    'Cursor CLI Default (API Key)',
-    'vault://kv/moonmind/runtimes/cursor_cli#api_key',
-    2,                           -- Cursor's rate limits TBD
+    1,
     300,
     'backoff'
 );

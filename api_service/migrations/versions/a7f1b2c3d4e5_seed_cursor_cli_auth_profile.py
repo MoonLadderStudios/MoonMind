@@ -21,10 +21,12 @@ def upgrade() -> None:
     op.execute("""
         INSERT INTO managed_agent_auth_profiles (
             profile_id, runtime_id, auth_mode,
+            volume_ref, volume_mount_path,
             max_parallel_runs, cooldown_after_429_seconds,
             rate_limit_policy, enabled
         ) VALUES (
-            'cursor-cli-default', 'cursor_cli', 'api_key',
+            'cursor-cli-default', 'cursor_cli', 'oauth',
+            'cursor_auth_volume', '/home/app/.cursor',
             1, 300,
             'backoff', true
         ) ON CONFLICT (profile_id) DO NOTHING

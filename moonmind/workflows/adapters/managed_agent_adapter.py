@@ -231,7 +231,11 @@ class ManagedAgentAdapter:
             runtime_id=self._runtime_id or request.agent_id,
         )
         profile_id: str = profile["profile_id"]
-        auth_mode: str = profile.get("auth_mode", "api_key")
+        runtime_for_profile = self._runtime_id or request.agent_id
+        default_auth = (
+            "oauth" if runtime_for_profile == "cursor_cli" else "api_key"
+        )
+        auth_mode: str = profile.get("auth_mode", default_auth)
 
         # Shape environment according to auth mode (DOC-REQ-005, DOC-REQ-006).
         base_env = {

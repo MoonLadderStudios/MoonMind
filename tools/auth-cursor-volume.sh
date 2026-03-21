@@ -145,8 +145,13 @@ cmd_check() {
 cmd_register() {
   local API_URL="${MOONMIND_API_URL:-http://localhost:5000}"
   local PROFILE_ID="${CURSOR_PROFILE_ID:-cursor_default}"
+  local AUTH_MODE="${REGISTER_AUTH_MODE:-oauth}"
+  local ACCOUNT_LABEL="Cursor CLI OAuth profile ('"${PROFILE_ID}"')"
+  if [ "$AUTH_MODE" = "api_key" ]; then
+    ACCOUNT_LABEL="Cursor CLI API key profile ('"${PROFILE_ID}"')"
+  fi
 
-  echo "Registering auth profile '${PROFILE_ID}' via ${API_URL}..."
+  echo "Registering auth profile '${PROFILE_ID}' (${AUTH_MODE}) via ${API_URL}..."
 
   local response
   response=$(curl -sS -w "\n%{http_code}" -X POST "${API_URL}/api/v1/auth-profiles" \
@@ -154,10 +159,10 @@ cmd_register() {
     -d '{
       "profile_id": "'"${PROFILE_ID}"'",
       "runtime_id": "cursor_cli",
-      "auth_mode": "api_key",
+      "auth_mode": "'"${AUTH_MODE}"'",
       "volume_ref": "'"${VOLUME_NAME}"'",
       "volume_mount_path": "'"${CURSOR_VOLUME_PATH}"'",
-      "account_label": "Cursor CLI API Key Profile ('"${PROFILE_ID}"')",
+      "account_label": "'"${ACCOUNT_LABEL}"'",
       "max_parallel_runs": 1
     }')
 
@@ -208,7 +213,7 @@ case "$COMMAND" in
     cmd_api_key
     if [ "$DO_REGISTER" -eq 1 ]; then
       echo ""
-      cmd_register
+      REGISTER_AUTH_MODE=api_key cmd_register
     fi
     ;;
   check)
@@ -218,7 +223,7 @@ case "$COMMAND" in
     cmd_login
     if [ "$DO_REGISTER" -eq 1 ]; then
       echo ""
-      cmd_register
+      REGISTER_AUTH_MODE=oauth cmd_register
     fi
     ;;
   register)
