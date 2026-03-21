@@ -53,7 +53,7 @@
 - [ ] T014 [US1] Register both new activities in `moonmind/workflows/temporal/activity_catalog.py` on `mm.activity.integrations` queue (DOC-REQ-011, DOC-REQ-012)
 - [ ] T015 [US1] Add activity handler methods in `moonmind/workflows/temporal/activity_runtime.py` for `integration.jules.list_activities` and `integration.jules.answer_question`
 - [ ] T016 [US1] Add auto-answer sub-flow to `MoonMind.AgentRun` polling loop in `moonmind/workflows/temporal/workflows/agent_run.py` — detect `awaiting_feedback`, call `integration.jules.list_activities`, dispatch to LLM, call `integration.jules.send_message` (DOC-REQ-004, DOC-REQ-005)
-- [ ] T017 [US1] Add auto-answer sub-flow to `MoonMind.Run._run_integration_stage()` integration polling in `moonmind/workflows/temporal/workflows/run.py` (DOC-REQ-005)
+- [x] ~~T017 [US1] Add auto-answer sub-flow to `MoonMind.Run._run_integration_stage()` — SCOPED OUT: `MoonMind.Run` delegates to `AgentRun`; auto-answer lives exclusively in `agent_run.py`~~
 - [ ] T018 [US1] Write unit tests for `JulesClient.list_activities()` transport in `tests/unit/workflows/test_jules_client.py` (DOC-REQ-002 validation)
 - [ ] T019 [US1] Write unit tests for `integration.jules.list_activities` activity in `tests/unit/workflows/test_jules_activities.py` (DOC-REQ-011 validation)
 - [ ] T020 [US1] Write unit tests for `integration.jules.answer_question` activity in `tests/unit/workflows/test_jules_activities.py` (DOC-REQ-012 validation)

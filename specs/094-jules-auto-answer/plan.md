@@ -95,8 +95,7 @@ tests/unit/workflows/test_jules_activities.py  # Activity tests
 ### Phase 4: Workflow Orchestration (FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013)
 
 1. Add `awaiting_feedback` to `_EXTERNAL_STATUS_TO_RUN_STATUS` in `agent_run.py`
-2. Add auto-answer sub-flow in `MoonMind.AgentRun` polling loop (detect → list → LLM → sendMessage)
-3. Add auto-answer sub-flow in `MoonMind.Run._run_integration_stage()` integration polling
+2. Add auto-answer sub-flow in `MoonMind.AgentRun` polling loop (detect → list → LLM → sendMessage). `MoonMind.Run` delegates to `AgentRun` child workflows and does not duplicate this logic.
 4. Implement max-cycle enforcement, deduplication, opt-out, and timeout guardrails
 5. Read config from env vars: `JULES_AUTO_ANSWER_ENABLED`, `JULES_MAX_AUTO_ANSWERS`, `JULES_AUTO_ANSWER_RUNTIME`, `JULES_AUTO_ANSWER_TIMEOUT_SECONDS`
 6. Add unit tests for workflow logic

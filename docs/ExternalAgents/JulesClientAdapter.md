@@ -317,7 +317,7 @@ Final: all steps COMPLETED → mark workflow as succeeded
 | Session reaches `COMPLETED` and more steps remain | Call `sendMessage` with next step's prompt, resume polling |
 | Session reaches `COMPLETED` and no steps remain | Mark workflow as succeeded, extract PR URL |
 | Session reaches `FAILED` at any step | Mark workflow as failed, stop sending steps |
-| Session reaches `AWAITING_USER_FEEDBACK` | Continue polling (maps to `running` in MoonMind) |
+| Session reaches `AWAITING_USER_FEEDBACK` | Auto-answer sub-flow triggers in `MoonMind.AgentRun` (see §10); maps to `awaiting_feedback` |
 
 ### 7.4 Transport Layer
 
@@ -400,7 +400,38 @@ The correct posture is:
 
 `JulesToolRegistry` is therefore an adjunct surface, not the core Jules architecture.
 
-## 10. Implementation Guidance
+## 10. Question Auto-Answer
+
+When Jules enters `AWAITING_USER_FEEDBACK`, the `MoonMind.AgentRun` polling loop detects this via the `awaiting_feedback` normalized status and initiates an automatic question-answer cycle:
+
+1. **Detect** — status normalizer maps `awaiting_user_feedback` → `awaiting_feedback` (distinct from `running`)
+2. **Extract** — calls `GET /sessions/{id}/activities` to find the latest `AgentMessaged` activity with `originator == "agent"`
+3. **Answer** — builds a clarification prompt and sends it back via `POST /sessions/{id}:sendMessage`
+4. **Resume** — sets run status back to `running` and continues polling
+
+### 10.1 Scope
+
+Auto-answer logic lives **exclusively** in `MoonMind.AgentRun` (`agent_run.py`). The parent `MoonMind.Run` workflow does not duplicate this logic — it delegates to `AgentRun` child workflows for all external agent execution.
+
+### 10.2 Guardrails
+
+| Guard | Env Variable | Default | Behavior |
+|-------|-------------|---------|----------|
+| Opt-out | `JULES_AUTO_ANSWER_ENABLED` | `true` | When `false`, maps to `intervention_requested` |
+| Max cycles | `JULES_MAX_AUTO_ANSWERS` | `3` | After N answers, escalates to `intervention_requested` |
+| Deduplication | — | — | Tracks answered activity IDs; skips already-answered questions |
+| Runtime | `JULES_AUTO_ANSWER_RUNTIME` | `llm` | Configures the answer generation backend |
+| Timeout | `JULES_AUTO_ANSWER_TIMEOUT_SECONDS` | `300` | Per-cycle timeout |
+
+### 10.3 Activities
+
+| Activity | Queue | Purpose |
+|----------|-------|---------|
+| `integration.jules.list_activities` | `mm.activity.integrations` | Extract latest question from session activities |
+| `integration.jules.answer_question` | `mm.activity.integrations` | Full question-answer cycle (prompt → sendMessage) |
+| `integration.jules.get_auto_answer_config` | `mm.activity.integrations` | Read env var config (determinism-safe) |
+
+## 11. Implementation Guidance
 
 To align Jules with the shared external-agent design, the practical next steps are:
 
@@ -410,7 +441,7 @@ To align Jules with the shared external-agent design, the practical next steps a
 4. Ensure workflow orchestration remains in `MoonMind.AgentRun`, not in Jules-specific code.
 5. Ensure MCP, dashboard, and REST surfaces consume the same Jules normalization and runtime-gate logic.
 
-## 11. Summary
+## 12. Summary
 
 Jules should no longer be described as a separate "4-layer integration."
 
