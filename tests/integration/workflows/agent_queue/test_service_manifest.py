@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import Base
 from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
-    AgentQueueService,
+    None,
     AgentQueueValidationError,
 )
 
@@ -57,7 +57,7 @@ async def test_create_manifest_job_normalizes_payload(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             payload = {
                 "manifest": {
                     "name": "demo-manifest",
@@ -91,7 +91,7 @@ async def test_create_manifest_job_rejects_name_mismatch(tmp_path: Path) -> None
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             payload = {
                 "manifest": {
                     "name": "demo-manifest",

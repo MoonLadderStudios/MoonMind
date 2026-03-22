@@ -20,7 +20,7 @@ from moonmind.workflows.agent_queue.repositories import (
 )
 from moonmind.workflows.agent_queue.service import (
     AgentQueueJobAuthorizationError,
-    AgentQueueService,
+    None,
     AgentQueueValidationError,
 )
 
@@ -47,10 +47,10 @@ async def queue_db(tmp_path: Path) -> AsyncIterator[sessionmaker[AsyncSession]]:
 
 
 async def _create_task_job(
-    service: AgentQueueService,
+    service: "Any",
     *,
     owner_id: UUID | None = None,
-) -> models.AgentJob:
+) -> models.None:
     return await service.create_job(
         job_type="task",
         payload={
@@ -72,7 +72,7 @@ async def test_update_queued_job_success_updates_and_appends_event(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
             prior_updated_at = job.updated_at
@@ -124,7 +124,7 @@ async def test_update_queued_job_allows_stub_actor_for_unowned_job(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             prior_updated_at = job.updated_at
 
@@ -155,7 +155,7 @@ async def test_update_queued_job_rejects_stub_actor_for_owned_job(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
 
@@ -177,7 +177,7 @@ async def test_update_queued_job_rejects_non_queued_status(tmp_path: Path) -> No
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
             await service.claim_job(
@@ -203,7 +203,7 @@ async def test_update_queued_job_rejects_started_at_not_null(tmp_path: Path) -> 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
             job.started_at = datetime.now(UTC)
@@ -229,7 +229,7 @@ async def test_update_queued_job_rejects_expected_updated_at_mismatch(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
 
@@ -252,7 +252,7 @@ async def test_update_queued_job_rejects_non_owner(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
 
@@ -274,7 +274,7 @@ async def test_update_queued_job_allows_superuser_non_owner(tmp_path: Path) -> N
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
             superuser_id = uuid4()
@@ -306,7 +306,7 @@ async def test_update_queued_job_rejects_attachment_mutation_payload(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner_id = uuid4()
             job = await _create_task_job(service, owner_id=owner_id)
 

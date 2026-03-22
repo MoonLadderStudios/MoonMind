@@ -106,6 +106,7 @@ def test_list_tools_returns_queue_definitions(
     }.issubset(names)
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 def test_call_queue_enqueue_success_returns_wrapped_job(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

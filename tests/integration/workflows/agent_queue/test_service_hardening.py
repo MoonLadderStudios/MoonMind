@@ -19,7 +19,7 @@ from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthenticationError,
     AgentQueueJobAuthorizationError,
-    AgentQueueService,
+    None,
     AgentQueueValidationError,
     QueueSystemMetadata,
     WorkerPauseMetrics,
@@ -54,7 +54,7 @@ async def test_issue_and_resolve_worker_token_policy(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
 
             issued = await service.issue_worker_token(
                 worker_id="executor-01",
@@ -78,7 +78,7 @@ async def test_resolve_worker_token_rejects_inactive_token(tmp_path: Path) -> No
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
 
             issued = await service.issue_worker_token(worker_id="executor-01")
             await service.revoke_worker_token(token_id=issued.token_record.id)
@@ -101,7 +101,7 @@ async def test_claim_job_short_circuits_when_paused() -> None:
         version=3,
     )
     repo.get_pause_state.return_value = paused_state
-    service = AgentQueueService(repo)
+    service = None(repo)
 
     result = await service.claim_job(
         worker_id="executor-01",
@@ -130,7 +130,7 @@ async def test_resume_worker_pause_drops_unknown_actor_user_id() -> None:
     )
     repo.get_pause_state.return_value = pause_state
     repo.user_exists.return_value = False
-    service = AgentQueueService(repo)
+    service = None(repo)
     service._build_worker_pause_metrics = AsyncMock(
         return_value=WorkerPauseMetrics(queued=2, running=1, stale_running=0)
     )
@@ -181,7 +181,7 @@ async def test_resume_worker_pause_preserves_known_actor_user_id() -> None:
     )
     repo.get_pause_state.return_value = pause_state
     repo.user_exists.return_value = True
-    service = AgentQueueService(repo)
+    service = None(repo)
     service._build_worker_pause_metrics = AsyncMock(
         return_value=WorkerPauseMetrics(queued=0, running=0, stale_running=0)
     )
@@ -221,7 +221,7 @@ async def test_fail_job_retry_backoff_and_dead_letter(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(
+            service = None(
                 repo,
                 retry_backoff_base_seconds=5,
                 retry_backoff_max_seconds=60,
@@ -272,7 +272,7 @@ async def test_heartbeat_triggers_runtime_timeout(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(
+            service = None(
                 repo,
                 max_runtime_seconds=1,
                 stale_lease_grace_seconds=60,
@@ -307,7 +307,7 @@ async def test_get_queue_safeguard_snapshot_classifies_jobs(tmp_path: Path) -> N
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(
+            service = None(
                 repo,
                 max_runtime_seconds=5,
                 stale_lease_grace_seconds=5,
@@ -352,7 +352,7 @@ async def test_recover_job_with_clone(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
@@ -385,7 +385,7 @@ async def test_recover_job_requires_owner_or_operator(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             owner = uuid4()
             other_user = uuid4()
             job = await service.create_job(
@@ -423,7 +423,7 @@ async def test_append_and_list_events_with_after_cursor(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
@@ -451,7 +451,7 @@ async def test_list_events_rejects_after_event_id_without_after(tmp_path: Path) 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
@@ -480,7 +480,7 @@ async def test_list_events_rejects_before_event_id_without_before(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
@@ -507,7 +507,7 @@ async def test_list_events_rejects_combined_after_and_before(tmp_path: Path) -> 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_exec",
                 payload={"repository": "Moon/Mind", "instruction": "run"},
@@ -535,7 +535,7 @@ async def test_create_task_job_derives_runtime_capabilities(tmp_path: Path) -> N
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -572,7 +572,7 @@ async def test_create_task_job_applies_settings_defaults_for_missing_fields(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -603,7 +603,7 @@ async def test_create_task_job_uses_configured_default_runtime_when_runtime_omit
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -633,7 +633,7 @@ async def test_create_task_job_uses_default_model_for_configured_runtime(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -664,7 +664,7 @@ async def test_create_task_job_explicit_runtime_overrides_default_runtime(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -692,7 +692,7 @@ async def test_create_task_job_defaults_publish_mode_to_pr_when_omitted(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -717,7 +717,7 @@ async def test_create_task_job_rejects_invalid_repository_format(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             with pytest.raises(
                 AgentQueueValidationError,
                 match="repository must be",
@@ -752,7 +752,7 @@ async def test_create_task_job_accepts_supported_repository_url_formats(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -777,7 +777,7 @@ async def test_create_task_job_rejects_repository_url_with_embedded_credentials(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             with pytest.raises(
                 AgentQueueValidationError,
                 match="must not include embedded credentials",
@@ -802,7 +802,7 @@ async def test_create_task_job_preserves_auth_secret_refs(tmp_path: Path) -> Non
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -834,7 +834,7 @@ async def test_create_task_job_rejects_missing_instructions(tmp_path: Path) -> N
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             with pytest.raises(AgentQueueValidationError, match="task.instructions"):
                 await service.create_job(
                     job_type="task",
@@ -856,7 +856,7 @@ async def test_create_job_rejects_unsupported_job_type(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             with pytest.raises(
                 AgentQueueValidationError,
                 match="type must be one of",
@@ -876,7 +876,7 @@ async def test_create_legacy_exec_job_requires_repository(tmp_path: Path) -> Non
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             with pytest.raises(
                 AgentQueueValidationError,
                 match="repository is required",
@@ -895,7 +895,7 @@ async def test_create_legacy_skill_job_is_enriched_with_task_contract(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_skill",
                 payload={
@@ -918,7 +918,7 @@ async def test_create_legacy_job_records_warning_event(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="codex_exec",
                 payload={
@@ -949,7 +949,7 @@ async def test_migration_telemetry_reports_volume_by_type(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             await service.create_job(
                 job_type="task",
                 payload={
@@ -986,9 +986,9 @@ async def test_migration_telemetry_reports_volume_by_type(
 async def test_extract_publish_mode_defaults_to_pr_when_absent() -> None:
     """Telemetry parser should use the publish default when metadata is missing."""
 
-    assert AgentQueueService._extract_publish_mode({}) == "pr"
+    assert None._extract_publish_mode({}) == "pr"
     assert (
-        AgentQueueService._extract_publish_mode(
+        None._extract_publish_mode(
             {"task": {"publish": {"mode": "branch"}}}
         )
         == "branch"
@@ -1001,7 +1001,7 @@ async def test_load_events_by_job_sets_truncation_flag(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -1041,7 +1041,7 @@ async def test_complete_job_truncates_finish_outcome_fields(tmp_path: Path) -> N
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             await service.create_job(
                 job_type="task",
                 payload={
@@ -1080,7 +1080,7 @@ async def test_ack_cancel_truncates_finish_reason(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -1120,7 +1120,7 @@ async def test_request_cancel_queued_job_adds_terminal_event(tmp_path: Path) -> 
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={
@@ -1157,7 +1157,7 @@ async def test_running_cancellation_is_requested_then_acknowledged(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await service.create_job(
                 job_type="task",
                 payload={

@@ -1,4 +1,4 @@
-"""Attachment-specific tests for AgentQueueService."""
+"""Attachment-specific tests for None."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from moonmind.workflows.agent_queue.service import (
     AgentArtifactNotFoundError,
     AgentQueueAuthorizationError,
     AgentQueueJobAuthorizationError,
-    AgentQueueService,
+    None,
     AgentQueueValidationError,
     AttachmentUpload,
 )
@@ -56,9 +56,9 @@ def _png_bytes() -> bytes:
 async def _create_service(
     session: AsyncSession,
     artifact_root: Path,
-) -> AgentQueueService:
+) -> None:
     repo = AgentQueueRepository(session)
-    return AgentQueueService(
+    return None(
         repo,
         artifact_storage=AgentQueueArtifactStorage(artifact_root),
     )

@@ -78,8 +78,8 @@ class RecurringTaskRunModel(BaseModel):
     outcome: str = Field(..., alias="outcome")
     dispatch_attempts: int = Field(..., alias="dispatchAttempts")
     dispatch_after: Optional[datetime] = Field(None, alias="dispatchAfter")
-    queue_job_id: Optional[UUID] = Field(None, alias="queueJobId")
-    queue_job_type: Optional[str] = Field(None, alias="queueJobType")
+    temporal_workflow_id: Optional[str] = Field(None, alias="temporalWorkflowId")
+    temporal_run_id: Optional[str] = Field(None, alias="temporalRunId")
     message: Optional[str] = Field(None, alias="message")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
@@ -166,8 +166,8 @@ def _serialize_run(run: RecurringTaskRun) -> RecurringTaskRunModel:
         outcome=run.outcome.value,
         dispatch_attempts=run.dispatch_attempts,
         dispatch_after=run.dispatch_after,
-        queue_job_id=run.queue_job_id,
-        queue_job_type=run.queue_job_type,
+        temporal_workflow_id=run.temporal_workflow_id,
+        temporal_run_id=run.temporal_run_id,
         message=run.message,
         created_at=run.created_at,
         updated_at=run.updated_at,

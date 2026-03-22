@@ -66,7 +66,6 @@ class TaskProposal(Base):
         Index("ix_task_proposals_repository", "repository"),
         Index("ix_task_proposals_dedup_hash_status", "dedup_hash", "status"),
         Index("ix_task_proposals_priority_created", "review_priority", "created_at"),
-        UniqueConstraint("promoted_job_id", name="uq_task_proposals_promoted_job_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -127,11 +126,6 @@ class TaskProposal(Base):
     origin_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     origin_metadata: Mapped[dict[str, object]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
-    )
-    promoted_job_id: Mapped[UUID | None] = mapped_column(
-        Uuid,
-        ForeignKey("agent_jobs.id", ondelete="SET NULL"),
-        nullable=True,
     )
     promoted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

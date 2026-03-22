@@ -26,7 +26,6 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.tasks.routing import _coerce_bool
-from moonmind.schemas.agent_queue_models import CreateJobRequest
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,

@@ -23,7 +23,7 @@ from api_service.services.recurring_tasks_service import (
     RecurringTasksService,
     RecurringTaskValidationError,
 )
-from moonmind.workflows.agent_queue import models as queue_models
+from moonmind.workflows.agent_queue import models as None
 from moonmind.workflows.agent_queue.job_types import (
     CANONICAL_TASK_JOB_TYPE,
     MANIFEST_JOB_TYPE,
@@ -331,6 +331,7 @@ async def test_dispatch_pending_runs_applies_zero_misfire_grace(tmp_path: Path) 
             assert run.message == "Skipped due to misfire grace threshold"
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 async def test_dispatch_pending_runs_matches_existing_job_by_type(
     tmp_path: Path,
 ) -> None:
@@ -383,10 +384,10 @@ async def test_dispatch_pending_runs_matches_existing_job_by_type(
                 .one()
             )
 
-            mismatched_job = queue_models.AgentJob(
+            mismatched_job = None # object(
                 id=uuid4(),
                 type=MANIFEST_JOB_TYPE,
-                status=queue_models.AgentJobStatus.QUEUED,
+                status=None.QUEUED,
                 priority=0,
                 payload={"system": {"recurrence": {"runId": str(run.id)}}},
             )
@@ -402,7 +403,7 @@ async def test_dispatch_pending_runs_matches_existing_job_by_type(
             assert run.queue_job_id != mismatched_job.id
             assert run.queue_job_type == CANONICAL_TASK_JOB_TYPE
 
-            queued_job = await session.get(queue_models.AgentJob, run.queue_job_id)
+            queued_job = await session.get(None, run.queue_job_id)
             assert queued_job is not None
             assert queued_job.type == CANONICAL_TASK_JOB_TYPE
 

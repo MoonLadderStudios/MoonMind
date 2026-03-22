@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
-from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.automation.orchestrator import (
     TriggeredWorkflow,
     WorkflowConflictError,
@@ -38,16 +36,12 @@ def get_automation_repository(session: AsyncSession) -> AutomationRepository:
 
 
 
-def get_agent_queue_repository(session: AsyncSession) -> AgentQueueRepository:
     """Factory helper used by queue APIs to access queue persistence."""
 
-    return AgentQueueRepository(session)
 
 
-def get_agent_queue_service(session: AsyncSession) -> AgentQueueService:
     """Factory helper returning the queue service for a DB session."""
 
-    return AgentQueueService(get_agent_queue_repository(session))
 
 
 def get_task_proposal_repository(session: AsyncSession) -> TaskProposalRepository:
@@ -61,7 +55,6 @@ def get_task_proposal_service(session: AsyncSession) -> TaskProposalService:
 
     return TaskProposalService(
         get_task_proposal_repository(session),
-        get_agent_queue_service(session),
     )
 
 
@@ -87,8 +80,6 @@ def get_temporal_artifact_service(session: AsyncSession) -> TemporalArtifactServ
 
 __all__ = sorted(
     [
-        "AgentQueueRepository",
-        "AgentQueueService",
         "AutomationRepository",
         "WorkflowRepository",
         "TaskProposalRepository",
@@ -99,8 +90,6 @@ __all__ = sorted(
         "TriggeredWorkflow",
         "WorkflowConflictError",
         "WorkflowRetryError",
-        "get_agent_queue_repository",
-        "get_agent_queue_service",
         "get_automation_repository",
         "get_workflow_repository",
         "get_task_proposal_repository",

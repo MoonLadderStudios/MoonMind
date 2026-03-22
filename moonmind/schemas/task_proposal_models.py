@@ -8,7 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from moonmind.schemas.agent_queue_models import CreateJobRequest, JobModel
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
     TaskProposalReviewPriority,
@@ -62,7 +61,6 @@ class TaskProposalModel(BaseModel):
     )
     proposed_by_worker_id: Optional[str] = Field(None, alias="proposedByWorkerId")
     proposed_by_user_id: Optional[UUID] = Field(None, alias="proposedByUserId")
-    promoted_job_id: Optional[UUID] = Field(None, alias="promotedJobId")
     promoted_at: Optional[datetime] = Field(None, alias="promotedAt")
     promoted_by_user_id: Optional[UUID] = Field(None, alias="promotedByUserId")
     decided_by_user_id: Optional[UUID] = Field(None, alias="decidedByUserId")
@@ -99,7 +97,7 @@ class TaskProposalCreateRequest(BaseModel):
     category: Optional[str] = Field(None, alias="category")
     tags: Optional[list[str]] = Field(None, alias="tags")
     origin: TaskProposalOriginModel = Field(..., alias="origin")
-    task_create_request: CreateJobRequest = Field(..., alias="taskCreateRequest")
+    task_create_request: dict[str, Any] = Field(..., alias="taskCreateRequest")
     review_priority: Optional[str] = Field(None, alias="reviewPriority")
 
 
@@ -128,7 +126,7 @@ class TaskProposalPromoteRequest(BaseModel):
             "jules, codex). Ignored when taskCreateRequestOverride is provided."
         ),
     )
-    task_create_request_override: Optional[CreateJobRequest] = Field(
+    task_create_request_override: Optional[dict[str, Any]] = Field(
         None, alias="taskCreateRequestOverride"
     )
 
@@ -147,7 +145,6 @@ class TaskProposalPromoteResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     proposal: TaskProposalModel = Field(..., alias="proposal")
-    job: JobModel = Field(..., alias="job")
 
 
 class TaskProposalPriorityRequest(BaseModel):

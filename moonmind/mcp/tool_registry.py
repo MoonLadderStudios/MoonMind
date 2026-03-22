@@ -10,21 +10,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from api_service.api.schemas import QueueSystemMetadataModel
-from moonmind.schemas.agent_queue_models import (
-    ArtifactModel,
-    ClaimJobRequest,
-    ClaimJobResponse,
-    CreateJobRequest,
-    JobListResponse,
-    JobModel,
-)
-from moonmind.workflows.agent_queue import models
-from moonmind.workflows.agent_queue.repositories import AgentJobNotFoundError
-from moonmind.workflows.agent_queue.service import (
-    AgentQueueService,
-    AgentQueueValidationError,
-    QueueSystemMetadata,
-)
 
 
 class ToolRegistryError(RuntimeError):

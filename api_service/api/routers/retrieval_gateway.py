@@ -15,10 +15,6 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.workflows.agent_queue.service import (
-    AgentQueueAuthenticationError,
-    AgentQueueService,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +49,6 @@ def get_retrieval_service(request: Request) -> ContextRetrievalService:
 def get_agent_queue_service(
     session=Depends(get_async_session),
 ) -> AgentQueueService:
-    from moonmind.workflows import get_agent_queue_repository
 
     repository = get_agent_queue_repository(session)
     return AgentQueueService(repository)

@@ -55,7 +55,6 @@ def _build_proposal() -> SimpleNamespace:
         priority_override_reason=None,
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
-        promoted_job_id=None,
         promoted_at=None,
         promoted_by_user_id=None,
         decided_by_user_id=None,

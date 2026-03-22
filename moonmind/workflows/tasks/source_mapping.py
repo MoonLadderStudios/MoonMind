@@ -10,8 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db import models as db_models
-from moonmind.workflows.agent_queue import models as queue_models
-from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 
 TaskSource = Literal["queue", "temporal"]
 
@@ -91,7 +89,7 @@ class TaskSourceMappingService:
 
     async def upsert_queue_job(
         self,
-        job: queue_models.AgentJob,
+        job: "Any",
     ) -> ResolvedTaskSource:
         owner_id = (
             str(getattr(job, "created_by_user_id", None))
@@ -202,7 +200,7 @@ class TaskSourceMappingService:
         if parsed_uuid is None:
             return matches
 
-        queue_job = await self._session.get(queue_models.AgentJob, parsed_uuid)
+        queue_job = await self._session.get("Any", parsed_uuid)
         if queue_job is not None:
             matches["queue"] = await self.upsert_queue_job(queue_job)
 

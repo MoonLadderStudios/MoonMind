@@ -130,6 +130,7 @@ def client() -> Iterator[tuple[TestClient, AsyncMock]]:
     app.dependency_overrides.clear()
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 def test_create_live_session_success(client: tuple[TestClient, AsyncMock]) -> None:
     test_client, service = client
     task_run_id = uuid4()

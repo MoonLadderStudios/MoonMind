@@ -18,7 +18,7 @@ from moonmind.workflows.agent_queue.repositories import (
 )
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthorizationError,
-    AgentQueueService,
+    None,
     AgentQueueValidationError,
 )
 from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
@@ -117,7 +117,7 @@ async def test_service_rejects_oversized_upload(tmp_path: Path) -> None:
             )
             await repo.commit()
 
-            service = AgentQueueService(
+            service = None(
                 repo,
                 artifact_storage=AgentQueueArtifactStorage(artifact_root),
                 artifact_max_bytes=4,
@@ -144,7 +144,7 @@ async def test_service_rejects_traversal_name(tmp_path: Path) -> None:
             )
             await repo.commit()
 
-            service = AgentQueueService(
+            service = None(
                 repo,
                 artifact_storage=AgentQueueArtifactStorage(artifact_root),
                 artifact_max_bytes=1024,
@@ -165,7 +165,7 @@ async def test_service_missing_job_does_not_write_file(tmp_path: Path) -> None:
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(
+            service = None(
                 repo,
                 artifact_storage=AgentQueueArtifactStorage(artifact_root),
                 artifact_max_bytes=1024,
@@ -204,7 +204,7 @@ async def test_service_upload_requires_claimed_worker_ownership(tmp_path: Path) 
             )
             await repo.commit()
 
-            service = AgentQueueService(
+            service = None(
                 repo,
                 artifact_storage=AgentQueueArtifactStorage(artifact_root),
                 artifact_max_bytes=1024,

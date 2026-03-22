@@ -124,6 +124,7 @@ def test_list_artifacts_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert payload["items"][0]["jobId"] == str(job_id)
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 def test_list_artifacts_job_not_found_maps_404(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

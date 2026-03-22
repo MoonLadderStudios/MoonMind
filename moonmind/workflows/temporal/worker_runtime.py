@@ -3,8 +3,6 @@ import contextlib
 def _build_proposal_service_factory():
     from moonmind.workflows.task_proposals.service import TaskProposalService
     from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
-    from moonmind.workflows.agent_queue.service import AgentQueueService
-    from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
     from api_service.db.base import get_async_session_context
     
     @contextlib.asynccontextmanager
@@ -31,8 +29,6 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
-from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
-from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
 from moonmind.workflows.task_proposals.service import TaskProposalService
@@ -73,7 +69,6 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
-from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 
 logger = logging.getLogger(__name__)
 

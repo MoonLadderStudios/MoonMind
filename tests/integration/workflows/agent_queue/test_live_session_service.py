@@ -18,7 +18,7 @@ from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 from moonmind.workflows.agent_queue.service import (
     AgentQueueAuthorizationError,
     AgentQueueJobAuthorizationError,
-    AgentQueueService,
+    None,
     LiveSessionNotFoundError,
     LiveSessionStateError,
 )
@@ -45,7 +45,7 @@ async def queue_db(tmp_path: Path):
         await engine.dispose()
 
 
-async def _create_task_job(service: AgentQueueService) -> models.AgentJob:
+async def _create_task_job(service: "Any") -> models.None:
     """Create one minimal canonical task job for live-session tests."""
 
     owner_user_id = uuid4()
@@ -73,7 +73,7 @@ async def test_create_live_session_is_idempotent_when_already_ready(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"
@@ -117,7 +117,7 @@ async def test_report_live_session_clears_web_links_when_allow_web_disabled(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"
@@ -163,7 +163,7 @@ async def test_grant_live_session_write_hides_web_link_when_allow_web_disabled(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"
@@ -204,7 +204,7 @@ async def test_report_live_session_rejects_non_owner_worker(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"
@@ -228,7 +228,7 @@ async def test_heartbeat_live_session_rejects_non_owner_worker(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"
@@ -256,7 +256,7 @@ async def test_grant_live_session_write_raises_specific_not_found_error(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
 
             with pytest.raises(LiveSessionNotFoundError):
@@ -275,7 +275,7 @@ async def test_grant_live_session_write_raises_specific_state_error(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"
@@ -304,7 +304,7 @@ async def test_live_session_user_operations_reject_non_owner_actor(
     async with queue_db(tmp_path) as session_maker:
         async with session_maker() as session:
             repo = AgentQueueRepository(session)
-            service = AgentQueueService(repo)
+            service = None(repo)
             job = await _create_task_job(service)
             job.status = models.AgentJobStatus.RUNNING
             job.claimed_by = "worker-1"

@@ -192,7 +192,6 @@ class TemporalExecutionService:
 
         Used by API guard to prevent new workflow submissions (DOC-REQ-001/004/005).
         """
-        from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 
         repo = AgentQueueRepository(self._session)
         state = await repo.get_pause_state()

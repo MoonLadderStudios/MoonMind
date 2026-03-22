@@ -330,8 +330,8 @@ class RecurringTaskRun(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    queue_job_id: Mapped[Optional[UUID]] = mapped_column(Uuid, nullable=True)
-    queue_job_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    temporal_workflow_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    temporal_run_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -1912,7 +1912,6 @@ def _register_workflow_model_dependencies() -> None:
         return
 
     import_module("moonmind.workflows.automation.models")
-    import_module("moonmind.workflows.agent_queue.models")
 
 
 _register_workflow_model_dependencies()

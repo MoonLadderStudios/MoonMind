@@ -175,6 +175,7 @@ async def test_queue_claim_forwards_worker_capabilities() -> None:
     assert called["worker_capabilities"] == ["codex", "git"]
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 async def test_queue_heartbeat_returns_system_metadata() -> None:
     """queue.heartbeat should surface system metadata to clients."""
 
@@ -242,6 +243,7 @@ async def test_queue_upload_artifact_decodes_payload_and_dispatches() -> None:
     assert called_kwargs["data"] == b"hello"
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 async def test_queue_cancel_dispatches_to_service() -> None:
     """queue.cancel should forward reason/user and return serialized job."""
 

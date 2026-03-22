@@ -27,13 +27,9 @@ from api_service.db.models import (
 from api_service.services.manifests_service import ManifestsService
 from api_service.services.task_templates.catalog import TaskTemplateCatalogService
 from moonmind.config.settings import settings
-from moonmind.workflows.agent_queue import models as queue_models
-from moonmind.workflows.agent_queue.job_types import (
-    CANONICAL_TASK_JOB_TYPE,
-    MANIFEST_JOB_TYPE,
-)
-from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
-from moonmind.workflows.agent_queue.service import AgentQueueService
+from api_service.db.models import TemporalExecutionRecord, MoonMindWorkflowState, TemporalWorkflowType
+
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.recurring_tasks.cron import (
     compute_next_occurrence,
     parse_cron_expression,
@@ -197,8 +193,8 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(job_payload, Mapping):
             raise RecurringTaskValidationError("target.job is required for queue_task")
         job = dict(job_payload)
-        job_type = str(job.get("type") or "").strip().lower() or CANONICAL_TASK_JOB_TYPE
-        if job_type != CANONICAL_TASK_JOB_TYPE:
+        workflow_type = str(job.get("type") or "").strip().lower() or CANONICAL_TASK_JOB_TYPE
+        if workflow_type != CANONICAL_TASK_JOB_TYPE:
             raise RecurringTaskValidationError(
                 "target.job.type must be 'task' for queue_task"
             )
@@ -263,16 +259,10 @@ def _coerce_utc(value: datetime) -> datetime:
 class RecurringTasksService:
     """CRUD and dispatch helpers for recurring definitions."""
 
-    def __init__(
-        self,
-        session: AsyncSession,
-        *,
-        queue_service: AgentQueueService | None = None,
-    ) -> None:
+    def __init__(self, session: AsyncSession, *, execution_service: TemporalExecutionService | None = None) -> None:
         self._session = session
-        self._queue_repository = AgentQueueRepository(session)
-        self._queue_service = queue_service or AgentQueueService(self._queue_repository)
-        self._manifests_service = ManifestsService(session, self._queue_service)
+        self._execution_service = execution_service
+        self._manifests_service = ManifestsService(session, execution_service=self._execution_service)
         self._template_catalog = TaskTemplateCatalogService(session)
 
     async def list_definitions(
@@ -707,18 +697,18 @@ class RecurringTasksService:
         rows = (await self._session.execute(stmt)).scalars().all()
 
         queued_job_ids = {
-            row.queue_job_id
+            row.temporal_workflow_id
             for row in rows
             if row.outcome is RecurringTaskRunOutcome.ENQUEUED
-            and row.queue_job_id is not None
+            and row.temporal_workflow_id is not None
         }
-        queue_jobs_by_id: dict[UUID, queue_models.AgentJob] = {}
+        temporal_executions_by_id: dict[UUID, TemporalExecutionRecord] = {}
         if queued_job_ids:
-            queue_stmt: Select[tuple[queue_models.AgentJob]] = select(
-                queue_models.AgentJob
-            ).where(queue_models.AgentJob.id.in_(queued_job_ids))
-            queue_rows = (await self._session.execute(queue_stmt)).scalars().all()
-            queue_jobs_by_id = {job.id: job for job in queue_rows}
+            exec_stmt: Select[tuple[TemporalExecutionRecord]] = select(
+                TemporalExecutionRecord
+            ).where(TemporalExecutionRecord.id.in_(queued_job_ids))
+            exec_rows = (await self._session.execute(exec_stmt)).scalars().all()
+            temporal_executions_by_id = {ex.workflow_id: job for ex in exec_rows}
 
         active = 0
         for row in rows:
@@ -729,16 +719,16 @@ class RecurringTasksService:
                 active += 1
                 continue
 
-            if row.queue_job_id is None:
+            if row.temporal_workflow_id is None:
                 active += 1
                 continue
 
-            queue_job = queue_jobs_by_id.get(row.queue_job_id)
-            if queue_job is None:
+            temporal_execution = temporal_executions_by_id.get(row.temporal_workflow_id)
+            if temporal_execution is None:
                 continue
-            if queue_job.status in {
-                queue_models.AgentJobStatus.QUEUED,
-                queue_models.AgentJobStatus.RUNNING,
+            if temporal_execution.status in {
+                MoonMindWorkflowState.SCHEDULED,
+                MoonMindWorkflowState.EXECUTING,
             }:
                 active += 1
         return active
@@ -770,28 +760,29 @@ class RecurringTasksService:
         body["system"] = system
         return body
 
-    async def _find_existing_queue_job_for_run(
+    async def _find_existing_temporal_execution_for_run(
         self,
         *,
         run_id: UUID,
-        job_type: str,
+        workflow_type: TemporalWorkflowType,
         scan_limit: int = 1000,
-    ) -> queue_models.AgentJob | None:
-        return await self._queue_repository.find_job_by_recurrence_run_id(
-            run_id=run_id,
-            job_type=job_type,
-        )
+    ) -> TemporalExecutionRecord | None:
+        stmt = select(TemporalExecutionRecord).where(
+            TemporalExecutionRecord.workflow_type == workflow_type,
+            TemporalExecutionRecord.parameters['system']['recurrence']['runId'].astext == str(run_id)
+        ).order_by(TemporalExecutionRecord.created_at.desc(), TemporalExecutionRecord.workflow_id.desc())
+        return (await self._session.execute(stmt)).scalars().first()
 
     @staticmethod
-    def _expected_job_type_for_target_kind(kind: str) -> str | None:
+    def _expected_workflow_type_for_target_kind(kind: str) -> str | None:
         normalized_kind = str(kind or "").strip().lower()
         if normalized_kind in {"queue_task", "queue_task_template"}:
-            return CANONICAL_TASK_JOB_TYPE
+            return TemporalWorkflowType.RUN
         if normalized_kind == "manifest_run":
-            return MANIFEST_JOB_TYPE
+            return TemporalWorkflowType.MANIFEST_INGEST
         return None
 
-    def _expected_job_type_for_definition(
+    def _expected_workflow_type_for_definition(
         self,
         definition: RecurringTaskDefinition | None,
     ) -> str | None:
@@ -800,7 +791,7 @@ class RecurringTasksService:
         target_payload = definition.target
         target = dict(target_payload) if isinstance(target_payload, Mapping) else {}
         kind = str(target.get("kind") or "").strip().lower()
-        return self._expected_job_type_for_target_kind(kind)
+        return self._expected_workflow_type_for_target_kind(kind)
 
     async def _bulk_fetch_active_counts(
         self,
@@ -825,19 +816,19 @@ class RecurringTasksService:
         )
 
         queued_job_ids = {
-            row.queue_job_id
+            row.temporal_workflow_id
             for row in active_runs_rows
             if row.outcome is RecurringTaskRunOutcome.ENQUEUED
-            and row.queue_job_id is not None
+            and row.temporal_workflow_id is not None
         }
 
-        queue_jobs_by_id: dict[UUID, queue_models.AgentJob] = {}
+        temporal_executions_by_id: dict[UUID, TemporalExecutionRecord] = {}
         if queued_job_ids:
-            queue_stmt = select(queue_models.AgentJob).where(
-                queue_models.AgentJob.id.in_(queued_job_ids)
+            exec_stmt = select(TemporalExecutionRecord).where(
+                TemporalExecutionRecord.id.in_(queued_job_ids)
             )
-            queue_rows = (await self._session.execute(queue_stmt)).scalars().all()
-            queue_jobs_by_id = {job.id: job for job in queue_rows}
+            exec_rows = (await self._session.execute(exec_stmt)).scalars().all()
+            temporal_executions_by_id = {ex.workflow_id: job for ex in exec_rows}
 
         for row in active_runs_rows:
             if row.outcome in {
@@ -846,41 +837,41 @@ class RecurringTasksService:
             }:
                 active_count_by_def_id[row.definition_id] += 1
             elif row.outcome == RecurringTaskRunOutcome.ENQUEUED:
-                if row.queue_job_id is None:
+                if row.temporal_workflow_id is None:
                     active_count_by_def_id[row.definition_id] += 1
                 else:
-                    queue_job = queue_jobs_by_id.get(row.queue_job_id)
-                    if queue_job is not None and queue_job.status in {
-                        queue_models.AgentJobStatus.QUEUED,
-                        queue_models.AgentJobStatus.RUNNING,
+                    temporal_execution = temporal_executions_by_id.get(row.temporal_workflow_id)
+                    if temporal_execution is not None and temporal_execution.status in {
+                        MoonMindWorkflowState.SCHEDULED,
+                        MoonMindWorkflowState.EXECUTING,
                     }:
                         active_count_by_def_id[row.definition_id] += 1
 
         return active_count_by_def_id
 
-    async def _bulk_fetch_existing_jobs(
+    async def _bulk_fetch_existing_executions(
         self,
         pending_runs: Sequence[RecurringTaskRun],
-    ) -> dict[tuple[UUID, str], queue_models.AgentJob]:
+    ) -> dict[tuple[UUID, str], TemporalExecutionRecord]:
         run_ids = [str(run.id) for run in pending_runs]
         if not run_ids:
             return {}
 
-        expected_job_types = sorted(
+        expected_workflow_types = sorted(
             {
-                expected_job_type
+                expected_workflow_type
                 for run in pending_runs
-                for expected_job_type in [
-                    self._expected_job_type_for_definition(run.definition)
+                for expected_workflow_type in [
+                    self._expected_workflow_type_for_definition(run.definition)
                 ]
-                if expected_job_type is not None
+                if expected_workflow_type is not None
             }
         )
-        if not expected_job_types:
+        if not expected_workflow_types:
             return {}
 
-        job_stmt = select(queue_models.AgentJob).where(
-            queue_models.AgentJob.type.in_(expected_job_types)
+        job_stmt = select(TemporalExecutionRecord).where(
+            TemporalExecutionRecord.workflow_type.in_(expected_workflow_types)
         )
 
         bind = self._session.get_bind()
@@ -889,27 +880,27 @@ class RecurringTasksService:
             # Consider adding an expression index on this JSON path for very large
             # agent_jobs tables; keep current semantics unchanged in this patch.
             job_stmt = job_stmt.where(
-                queue_models.AgentJob.payload["system"]["recurrence"][
+                TemporalExecutionRecord.parameters["system"]["recurrence"][
                     "runId"
                 ].astext.in_(run_ids)
             )
         else:
             job_stmt = job_stmt.where(
                 func.json_extract(
-                    queue_models.AgentJob.payload, "$.system.recurrence.runId"
+                    TemporalExecutionRecord.parameters, "$.system.recurrence.runId"
                 ).in_(run_ids)
             )
         job_stmt = job_stmt.order_by(
-            queue_models.AgentJob.created_at.desc(),
-            queue_models.AgentJob.id.desc(),
+            TemporalExecutionRecord.created_at.desc(),
+            TemporalExecutionRecord.id.desc(),
         )
 
         jobs = (await self._session.execute(job_stmt)).scalars().all()
-        existing_jobs_by_run_and_type: dict[tuple[UUID, str], queue_models.AgentJob] = (
+        existing_executions_by_run_and_type: dict[tuple[UUID, str], TemporalExecutionRecord] = (
             {}
         )
-        for job in jobs:
-            payload = dict(job.payload or {})
+        for ex in jobs:
+            payload = dict(ex.parameters or {})
             system_node = payload.get("system")
             if not isinstance(system_node, Mapping):
                 continue
@@ -925,26 +916,29 @@ class RecurringTasksService:
                 logger.debug(
                     "Skipping recurring job with malformed runId in payload",
                     extra={
-                        "job_id": str(job.id),
-                        "job_type": job.type,
+                        "job_id": str(ex.workflow_id),
+                        "workflow_type": ex.workflow_type.value,
                         "run_id": run_value,
                     },
                 )
                 continue
 
-            key = (run_id, job.type)
-            if key not in existing_jobs_by_run_and_type:
-                existing_jobs_by_run_and_type[key] = job
+            key = (run_id, ex.workflow_type.value)
+            if key not in existing_executions_by_run_and_type:
+                existing_executions_by_run_and_type[key] = ex
 
-        return existing_jobs_by_run_and_type
+        return existing_executions_by_run_and_type
 
-    async def _dispatch_queue_task(
+    async def _dispatch_temporal_task(
         self,
         *,
         definition: RecurringTaskDefinition,
         run: RecurringTaskRun,
         target: Mapping[str, Any],
-    ) -> queue_models.AgentJob:
+    ) -> TemporalExecutionRecord:
+        if self._execution_service is None:
+            raise RuntimeError("Temporal execution service is not configured")
+        
         job_payload = dict(target.get("job") or {})
         payload = dict(job_payload.get("payload") or {})
         payload = self._merge_recurrence_system(
@@ -952,40 +946,21 @@ class RecurringTasksService:
             recurrence=self._recurrence_payload(definition=definition, run=run),
         )
 
-        priority_raw = job_payload.get("priority")
-        max_attempts_raw = job_payload.get("maxAttempts")
-        try:
-            priority = int(priority_raw) if priority_raw is not None else 0
-        except (TypeError, ValueError):
-            priority = 0
-        try:
-            max_attempts = int(max_attempts_raw) if max_attempts_raw is not None else 3
-        except (TypeError, ValueError):
-            max_attempts = 3
-
-        affinity_key = job_payload.get("affinityKey")
-        affinity = str(affinity_key).strip() if affinity_key is not None else None
-        if affinity == "":
-            affinity = None
-
-        return await self._queue_service.create_job(
-            job_type=CANONICAL_TASK_JOB_TYPE,
-            payload=payload,
-            priority=priority,
-            created_by_user_id=definition.owner_user_id,
-            requested_by_user_id=definition.owner_user_id,
-            affinity_key=affinity,
-            max_attempts=max(1, max_attempts),
-            commit=False,
+        return await self._execution_service.create_execution(
+            workflow_type=TemporalWorkflowType.RUN,
+            parameters=payload,
+            title=definition.name,
+            owner_user_id=definition.owner_user_id,
+            idempotency_key=str(run.id),
         )
 
-    async def _dispatch_queue_task_template(
+    async def _dispatch_temporal_task_template(
         self,
         *,
         definition: RecurringTaskDefinition,
         run: RecurringTaskRun,
         target: Mapping[str, Any],
-    ) -> queue_models.AgentJob:
+    ) -> TemporalExecutionRecord:
         template = dict(target.get("template") or {})
         slug = str(template.get("slug") or "").strip()
         version = str(template.get("version") or "").strip()
@@ -1083,15 +1058,14 @@ class RecurringTasksService:
         if affinity == "":
             affinity = None
 
-        return await self._queue_service.create_job(
-            job_type=CANONICAL_TASK_JOB_TYPE,
-            payload=payload,
-            priority=priority,
-            created_by_user_id=definition.owner_user_id,
-            requested_by_user_id=definition.owner_user_id,
-            affinity_key=affinity,
-            max_attempts=max(1, max_attempts),
-            commit=False,
+        if self._execution_service is None:
+            raise RuntimeError("Temporal execution service is not configured")
+        return await self._execution_service.create_execution(
+            workflow_type=TemporalWorkflowType.RUN,
+            parameters=payload,
+            title=definition.name,
+            owner_user_id=definition.owner_user_id,
+            idempotency_key=str(run.id),
         )
 
     async def _dispatch_manifest_run(
@@ -1100,7 +1074,7 @@ class RecurringTasksService:
         definition: RecurringTaskDefinition,
         run: RecurringTaskRun,
         target: Mapping[str, Any],
-    ) -> queue_models.AgentJob:
+    ) -> TemporalExecutionRecord:
         name = str(target.get("name") or "").strip()
         action = str(target.get("action") or "run").strip().lower() or "run"
         options_payload = target.get("options")
@@ -1131,7 +1105,7 @@ class RecurringTasksService:
         now: datetime,
         policy: RecurringPolicy,
         active_count: int | None = None,
-        existing_job: queue_models.AgentJob | None = None,
+        existing_job: TemporalExecutionRecord | None = None,
         existing_job_queried: bool = False,
     ) -> int:
         scheduled_for = _coerce_utc(run.scheduled_for)
@@ -1163,8 +1137,8 @@ class RecurringTasksService:
 
         target = dict(definition.target or {})
         kind = str(target.get("kind") or "").strip().lower()
-        expected_job_type = self._expected_job_type_for_target_kind(kind)
-        if expected_job_type is None:
+        expected_workflow_type = self._expected_workflow_type_for_target_kind(kind)
+        if expected_workflow_type is None:
             run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
             run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
             run.dispatch_after = now + timedelta(seconds=60)
@@ -1176,15 +1150,15 @@ class RecurringTasksService:
             return 1
 
         if not existing_job_queried:
-            existing_job = await self._find_existing_queue_job_for_run(
+            existing_job = await self._find_existing_temporal_execution_for_run(
                 run_id=run.id,
-                job_type=expected_job_type,
+                workflow_type=expected_workflow_type,
             )
 
         if existing_job is not None:
             run.outcome = RecurringTaskRunOutcome.ENQUEUED
-            run.queue_job_id = existing_job.id
-            run.queue_job_type = existing_job.type
+            run.temporal_workflow_id = existing_ex.workflow_id
+            run.queue_workflow_type = existing_job.type
             run.message = None
             run.updated_at = now
             definition.last_dispatch_status = "enqueued"
@@ -1200,7 +1174,7 @@ class RecurringTasksService:
                     target=target,
                 )
             elif kind == "queue_task_template":
-                job = await self._dispatch_queue_task_template(
+                job = await self._dispatch_temporal_task_template(
                     definition=definition,
                     run=run,
                     target=target,
@@ -1239,8 +1213,8 @@ class RecurringTasksService:
 
         run.outcome = RecurringTaskRunOutcome.ENQUEUED
         run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
-        run.queue_job_id = job.id
-        run.queue_job_type = job.type
+        run.temporal_workflow_id = ex.workflow_id
+        run.queue_workflow_type = job.type
         run.message = None
         run.updated_at = now
         definition.last_dispatch_status = "enqueued"
@@ -1293,7 +1267,7 @@ class RecurringTasksService:
             {r.definition_id for r in pending_runs if r.definition_id}
         )
         active_count_by_def_id = await self._bulk_fetch_active_counts(definition_ids)
-        existing_jobs_by_run_and_type = await self._bulk_fetch_existing_jobs(
+        existing_executions_by_run_and_type = await self._bulk_fetch_existing_executions(
             pending_runs
         )
 
@@ -1314,10 +1288,10 @@ class RecurringTasksService:
             )
 
             other_active_count = max(0, active_count_by_def_id[definition.id] - 1)
-            expected_job_type = self._expected_job_type_for_definition(definition)
+            expected_workflow_type = self._expected_workflow_type_for_definition(definition)
             existing_job = (
-                existing_jobs_by_run_and_type.get((run.id, expected_job_type))
-                if expected_job_type is not None
+                existing_executions_by_run_and_type.get((run.id, expected_workflow_type))
+                if expected_workflow_type is not None
                 else None
             )
 
@@ -1339,13 +1313,13 @@ class RecurringTasksService:
             }:
                 active_count_by_def_id[definition.id] = other_active_count + 1
             elif run.outcome == RecurringTaskRunOutcome.ENQUEUED:
-                job_status = queue_models.AgentJobStatus.QUEUED
-                if run.queue_job_id:
-                    if existing_job and existing_job.id == run.queue_job_id:
+                job_status = MoonMindWorkflowState.SCHEDULED
+                if run.temporal_workflow_id:
+                    if existing_job and existing_ex.workflow_id == run.temporal_workflow_id:
                         job_status = existing_job.status
                 if job_status in {
-                    queue_models.AgentJobStatus.QUEUED,
-                    queue_models.AgentJobStatus.RUNNING,
+                    MoonMindWorkflowState.SCHEDULED,
+                    MoonMindWorkflowState.EXECUTING,
                 }:
                     active_count_by_def_id[definition.id] = other_active_count + 1
                 else:
