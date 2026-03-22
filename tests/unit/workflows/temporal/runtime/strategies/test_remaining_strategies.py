@@ -283,7 +283,7 @@ class TestCodexCliShapeEnvironment:
 
 class TestCodexCliPrepareWorkspace:
     @pytest.mark.asyncio
-    @patch("moonmind.workflows.temporal.runtime.strategies.codex_cli.ContextInjectionService")
+    @patch("moonmind.rag.context_injection.ContextInjectionService")
     async def test_prepare_workspace_calls_injection(self, mock_service_class, tmp_path) -> None:
         mock_service = mock_service_class.return_value
         mock_service.inject_context = AsyncMock()
