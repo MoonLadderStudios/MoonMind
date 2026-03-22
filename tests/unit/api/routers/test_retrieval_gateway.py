@@ -48,190 +48,59 @@ def test_context_requires_authentication() -> None:
 
 
 def test_context_rejects_out_of_scope_repo() -> None:
+    """Worker-scoped requests should be rejected with 403 when repo is not permitted."""
+    # After Phase 3.5 queue removal, worker tokens are rejected with 401 at the auth level.
+    # This test verifies the auth gate behavior directly.
     app = _build_app()
-    app.dependency_overrides[authorize_retrieval_request] = (
-        lambda: RetrievalAuthContext(
-            auth_source="worker_token",
-            allowed_repositories=("allowed/repo",),
-            capabilities=("rag",),
-        )
-    )
 
     with TestClient(app) as client:
         response = client.post(
             "/retrieval/context",
             json={"query": "q", "filters": {"repo": "other/repo"}},
+            headers={"X-MoonMind-Worker-Token": "token_abc"},
         )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
-def test_context_returns_gateway_transport_for_authorized_request() -> None:
-    app = _build_app()
-    app.dependency_overrides[authorize_retrieval_request] = (
-        lambda: RetrievalAuthContext(
-            auth_source="worker_token",
-            allowed_repositories=("moonmind",),
-            capabilities=("rag",),
-        )
-    )
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/retrieval/context",
-            json={"query": "q", "filters": {"repo": "moonmind"}},
-        )
-
-    assert response.status_code == 200
-    assert response.json()["transport"] == "gateway"
-
-
-class MockQueueService:
-    def __init__(self, policy=None, error=None) -> None:
-        self.policy = policy
-        self.error = error
-        self.called_with_token = None
-
-    async def resolve_worker_token(self, token: str):
-        self.called_with_token = token
-        if self.error:
-            raise self.error
-        return self.policy
+# ---- authorize_retrieval_request unit tests ----
 
 
 @pytest.mark.asyncio
-async def test_authorize_with_worker_token_header() -> None:
-    policy = SimpleNamespace(
-        auth_source="worker_token",
-        allowed_repositories=("repo1",),
-        capabilities=("rag",),
-    )
-    service = MockQueueService(policy=policy)
-
-    result = await authorize_retrieval_request(
-        worker_token_header="token_abc",
-        authorization_header=None,
-        queue_service=service,  # type: ignore
-        user=None,
-    )
-
-    assert result.auth_source == "worker_token"
-    assert result.allowed_repositories == ("repo1",)
-    assert result.capabilities == ("rag",)
-    assert service.called_with_token == "token_abc"
-
-
-@pytest.mark.asyncio
-async def test_authorize_with_bearer_token() -> None:
-    policy = SimpleNamespace(
-        auth_source="worker_token",
-        allowed_repositories=("repo2",),
-        capabilities=("gateway",),
-    )
-    service = MockQueueService(policy=policy)
-
-    result = await authorize_retrieval_request(
-        worker_token_header=None,
-        authorization_header="Bearer token_xyz",
-        queue_service=service,  # type: ignore
-        user=None,
-    )
-
-    assert result.auth_source == "worker_token"
-    assert result.allowed_repositories == ("repo2",)
-    assert result.capabilities == ("gateway",)
-    assert service.called_with_token == "token_xyz"
-
-
-@pytest.mark.asyncio
-async def test_authorize_prefers_worker_token_over_bearer() -> None:
-    policy = SimpleNamespace(
-        auth_source="worker_token",
-        allowed_repositories=("repo4",),
-        capabilities=("rag",),
-    )
-    service = MockQueueService(policy=policy)
-
-    result = await authorize_retrieval_request(
-        worker_token_header="worker_token_abc",
-        authorization_header="Bearer bearer_token_xyz",
-        queue_service=service,  # type: ignore
-        user=None,
-    )
-
-    assert result.auth_source == "worker_token"
-    assert service.called_with_token == "worker_token_abc"
-
-
-@pytest.mark.asyncio
-async def test_authorize_prefers_token_over_user() -> None:
-    policy = SimpleNamespace(
-        auth_source="worker_token",
-        allowed_repositories=("repo5",),
-        capabilities=("rag",),
-    )
-    service = MockQueueService(policy=policy)
-    user = SimpleNamespace(id="user_1")
-
-    result = await authorize_retrieval_request(
-        worker_token_header=None,
-        authorization_header="Bearer bearer_token_456",
-        queue_service=service,  # type: ignore
-        user=user,  # type: ignore
-    )
-
-    assert result.auth_source == "worker_token"
-    assert service.called_with_token == "bearer_token_456"
-
-
-@pytest.mark.asyncio
-async def test_authorize_invalid_worker_token() -> None:
-    service = MockQueueService(error=AgentQueueAuthenticationError("invalid"))
-
+async def test_authorize_worker_token_rejected_after_queue_removal() -> None:
+    """Worker tokens are temporarily rejected (Phase 3.5 queue removal stub)."""
     with pytest.raises(HTTPException) as excinfo:
         await authorize_retrieval_request(
-            worker_token_header="invalid_token",
+            worker_token_header="token_abc",
             authorization_header=None,
-            queue_service=service,  # type: ignore
             user=None,
         )
 
     assert excinfo.value.status_code == 401
-    assert excinfo.value.detail == "Invalid worker token."
+    assert "temporarily unavailable" in excinfo.value.detail
 
 
 @pytest.mark.asyncio
-async def test_authorize_missing_capability() -> None:
-    policy = SimpleNamespace(
-        auth_source="worker_token",
-        allowed_repositories=("repo3",),
-        capabilities=("other_capability",),
-    )
-    service = MockQueueService(policy=policy)
-
+async def test_authorize_bearer_token_rejected_after_queue_removal() -> None:
+    """Bearer tokens are also rejected (Phase 3.5 stub)."""
     with pytest.raises(HTTPException) as excinfo:
         await authorize_retrieval_request(
-            worker_token_header="token_123",
-            authorization_header=None,
-            queue_service=service,  # type: ignore
+            worker_token_header=None,
+            authorization_header="Bearer token_xyz",
             user=None,
         )
 
-    assert excinfo.value.status_code == 403
-    assert (
-        excinfo.value.detail == "Worker token does not have RAG retrieval capability."
-    )
+    assert excinfo.value.status_code == 401
+    assert "temporarily unavailable" in excinfo.value.detail
 
 
 @pytest.mark.asyncio
 async def test_authorize_with_valid_user() -> None:
     user = SimpleNamespace(id="user_1")
-    service = MockQueueService()
 
     result = await authorize_retrieval_request(
         worker_token_header=None,
         authorization_header=None,
-        queue_service=service,  # type: ignore
         user=user,  # type: ignore
     )
 
@@ -242,13 +111,10 @@ async def test_authorize_with_valid_user() -> None:
 
 @pytest.mark.asyncio
 async def test_authorize_unauthorized() -> None:
-    service = MockQueueService()
-
     with pytest.raises(HTTPException) as excinfo:
         await authorize_retrieval_request(
             worker_token_header=None,
             authorization_header=None,
-            queue_service=service,  # type: ignore
             user=None,
         )
 

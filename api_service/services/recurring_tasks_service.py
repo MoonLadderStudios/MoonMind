@@ -263,7 +263,7 @@ class RecurringTasksService:
     def __init__(self, session: AsyncSession, *, execution_service: TemporalExecutionService | None = None) -> None:
         self._session = session
         self._execution_service = execution_service
-        self._manifests_service = ManifestsService(session, execution_service=self._execution_service)
+        self._manifests_service = ManifestsService(session, None, execution_service=self._execution_service)
         self._template_catalog = TaskTemplateCatalogService(session)
 
     async def list_definitions(
@@ -707,7 +707,7 @@ class RecurringTasksService:
         if queued_job_ids:
             exec_stmt: Select[tuple[TemporalExecutionRecord]] = select(
                 TemporalExecutionRecord
-            ).where(TemporalExecutionRecord.id.in_(queued_job_ids))
+            ).where(TemporalExecutionRecord.workflow_id.in_(queued_job_ids))
             exec_rows = (await self._session.execute(exec_stmt)).scalars().all()
             temporal_executions_by_id = {ex.workflow_id: job for ex in exec_rows}
 
@@ -771,7 +771,7 @@ class RecurringTasksService:
         stmt = select(TemporalExecutionRecord).where(
             TemporalExecutionRecord.workflow_type == workflow_type,
             TemporalExecutionRecord.parameters['system']['recurrence']['runId'].astext == str(run_id)
-        ).order_by(TemporalExecutionRecord.created_at.desc(), TemporalExecutionRecord.workflow_id.desc())
+        ).order_by(TemporalExecutionRecord.started_at.desc(), TemporalExecutionRecord.workflow_id.desc())
         return (await self._session.execute(stmt)).scalars().first()
 
     @staticmethod
@@ -826,7 +826,7 @@ class RecurringTasksService:
         temporal_executions_by_id: dict[UUID, TemporalExecutionRecord] = {}
         if queued_job_ids:
             exec_stmt = select(TemporalExecutionRecord).where(
-                TemporalExecutionRecord.id.in_(queued_job_ids)
+                TemporalExecutionRecord.workflow_id.in_(queued_job_ids)
             )
             exec_rows = (await self._session.execute(exec_stmt)).scalars().all()
             temporal_executions_by_id = {ex.workflow_id: job for ex in exec_rows}
@@ -892,8 +892,8 @@ class RecurringTasksService:
                 ).in_(run_ids)
             )
         job_stmt = job_stmt.order_by(
-            TemporalExecutionRecord.created_at.desc(),
-            TemporalExecutionRecord.id.desc(),
+            TemporalExecutionRecord.started_at.desc(),
+            TemporalExecutionRecord.workflow_id.desc(),
         )
 
         jobs = (await self._session.execute(job_stmt)).scalars().all()
@@ -1169,7 +1169,7 @@ class RecurringTasksService:
 
         try:
             if kind == "queue_task":
-                job = await self._dispatch_queue_task(
+                job = await self._dispatch_temporal_task(
                     definition=definition,
                     run=run,
                     target=target,

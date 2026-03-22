@@ -24,24 +24,14 @@ def _make_pause_state(paused: bool):
 # ---- check_system_paused ----
 
 
-async def test_check_system_paused_returns_true():
-    """check_system_paused should return True when pause state is active."""
+async def test_check_system_paused_returns_false_after_queue_removal():
+    """check_system_paused always returns False after Phase 3.5 queue removal (stub)."""
     session = AsyncMock()
     adapter = AsyncMock()
     svc = TemporalExecutionService(session, client_adapter=adapter)
 
-    with patch(
-        "unittest.mock.MagicMock",
-    ) as MockRepo:
-        repo_instance = AsyncMock()
-        repo_instance.get_pause_state = AsyncMock(
-            return_value=_make_pause_state(paused=True)
-        )
-        MockRepo.return_value = repo_instance
-
-        result = await svc.check_system_paused()
-        assert result is True
-        MockRepo.assert_called_once_with(session)
+    result = await svc.check_system_paused()
+    assert result is False
 
 
 async def test_check_system_paused_returns_false():

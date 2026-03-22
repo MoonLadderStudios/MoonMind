@@ -189,16 +189,6 @@ def test_skills_api_returns_available_skill_ids(
     }
 
 
-def test_tasks_api_alias_returns_queue_list_shape(client: TestClient) -> None:
-    response = client.get("/api/tasks?limit=50")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["items"] == []
-    assert body["limit"] == 50
-    assert body["offset"] == 0
-    assert body["page_size"] == 50
-    assert body["next_cursor"] is None
 
 
 def test_task_source_endpoint_returns_resolved_temporal_source(
@@ -243,33 +233,6 @@ def test_task_source_endpoint_returns_404_when_not_found(
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "task_source_not_found"
-
-
-def test_tasks_api_alias_rejects_cursor_with_offset_above_limit() -> None:
-    with _client_with_mock_service() as (test_client, service):
-        response = test_client.get("/api/tasks?limit=999&cursor=opaque123")
-
-    assert response.status_code == 422
-    service.list_jobs.assert_not_awaited()
-    service.list_jobs_page.assert_not_awaited()
-
-
-def test_tasks_api_alias_rejects_cursor_with_offset() -> None:
-    with _client_with_mock_service() as (test_client, service):
-        response = test_client.get("/api/tasks?cursor=opaque&offset=5")
-
-    assert response.status_code == 422
-    service.list_jobs.assert_not_awaited()
-    service.list_jobs_page.assert_not_awaited()
-
-
-def test_tasks_api_alias_rejects_cursor_with_zero_offset() -> None:
-    with _client_with_mock_service() as (test_client, service):
-        response = test_client.get("/api/tasks?cursor=opaque&offset=0")
-
-    assert response.status_code == 422
-    service.list_jobs.assert_not_awaited()
-    service.list_jobs_page.assert_not_awaited()
 
 
 def test_task_resolution_returns_temporal_source_for_workflow_id() -> None:

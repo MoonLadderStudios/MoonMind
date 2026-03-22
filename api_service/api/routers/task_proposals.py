@@ -182,7 +182,7 @@ async def create_proposal(
             summary=payload.summary,
             category=payload.category,
             tags=payload.tags,
-            task_create_request=payload.task_create_request.model_dump(by_alias=True),
+            task_create_request=payload.task_create_request,
             origin_source=payload.origin.source,
             origin_id=payload.origin.id,
             origin_metadata=payload.origin.metadata,
@@ -285,9 +285,7 @@ async def promote_proposal(
         # precedence; runtimeMode is a lightweight shortcut that
         # constructs one on-the-fly when the full override is absent.
         if payload.task_create_request_override is not None:
-            override_payload = payload.task_create_request_override.model_dump(
-                by_alias=True
-            )
+            override_payload = payload.task_create_request_override
         elif payload.runtime_mode:
             runtime_mode = payload.runtime_mode.strip()
             if not runtime_mode:
@@ -340,11 +338,8 @@ async def promote_proposal(
             detail={"code": "proposal_not_found", "message": str(exc)},
         ) from exc
         
-    from api_service.api.routers.executions import _serialize_execution
-    
     return TaskProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
-        execution=_serialize_execution(execution, include_artifact_refs=True),
     )
 
 
