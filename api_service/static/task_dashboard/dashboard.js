@@ -7578,6 +7578,9 @@
         ${pick(execution, "targetRuntime") ? `<div class="card"><strong>Runtime:</strong> ${escapeHtml(formatRuntimeLabel(pick(execution, "targetRuntime")))}</div>` : ""}
         ${pick(execution, "model") ? `<div class="card"><strong>Model:</strong> <code>${escapeHtml(String(pick(execution, "model")))}</code></div>` : ""}
         ${pick(execution, "effort") ? `<div class="card"><strong>Effort:</strong> ${escapeHtml(String(pick(execution, "effort")))}</div>` : ""}
+        ${pick(execution, "startingBranch") ? `<div class="card"><strong>Starting Branch:</strong> <code>${escapeHtml(String(pick(execution, "startingBranch")))}</code></div>` : ""}
+        ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
+        ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
