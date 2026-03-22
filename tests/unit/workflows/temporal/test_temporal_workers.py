@@ -135,7 +135,12 @@ def test_build_worker_activity_bindings_only_registers_selected_fleet(tmp_path: 
 
             assert bindings
             assert {binding.fleet for binding in bindings} == {ARTIFACTS_FLEET}
-            assert "mm.skill.execute" in {binding.activity_type for binding in bindings}
+            activity_types = {binding.activity_type for binding in bindings}
+            assert "mm.skill.execute" in activity_types
+            assert "oauth_session.ensure_volume" in activity_types
+            assert "oauth_session.update_status" in activity_types
+            assert "oauth_session.mark_failed" in activity_types
+            assert "oauth_session.cleanup_stale" in activity_types
             assert {binding.task_queue for binding in bindings} == {
                 settings.temporal.activity_artifacts_task_queue
             }
