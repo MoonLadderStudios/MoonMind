@@ -1634,9 +1634,10 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
 
 async def test_derive_default_pr_body_sanitizes_metadata_values() -> None:
     """Generated handler footer should redact secret-like metadata values."""
+    from moonmind.publish.service import PublishService
 
     job_id = uuid4()
-    body = CodexExecHandler._derive_default_pr_body(
+    body = PublishService._derive_default_pr_body(
         job_id=job_id,
         runtime_mode="codex\nRuntime: forged",
         base_branch="main\nHead: forged",
