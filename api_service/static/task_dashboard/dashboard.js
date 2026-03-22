@@ -1985,7 +1985,7 @@
     syncAutoRefreshControls();
   }
 
-  function renderQueueTable(rows, sortState) {
+  function renderTaskTable(rows, sortState) {
     if (rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
     }
@@ -2018,10 +2018,10 @@
       return `<th class="${thClass(field)}" data-sort-field="${escapeHtml(field)}" aria-sort="${ariaSort(field)}">${escapeHtml(label)}${sortIndicator(field)}</th>`;
     }
 
-    const primaryFields = queueFieldDefinitions.filter(
+    const primaryFields = taskFieldDefinitions.filter(
       (definition) => definition.tableSection !== "timeline",
     );
-    const timelineFields = queueFieldDefinitions.filter(
+    const timelineFields = taskFieldDefinitions.filter(
       (definition) => definition.tableSection === "timeline",
     );
 
@@ -2031,7 +2031,7 @@
     const timelineHeaders = timelineFields.map(renderDefinitionHeader).join("");
 
     const renderDefinitionCell = (row, definition) =>
-      `<td data-field="${escapeHtml(definition.key)}">${renderQueueFieldValue(row, definition)}</td>`;
+      `<td data-field="${escapeHtml(definition.key)}">${renderTaskFieldValue(row, definition)}</td>`;
 
     const body = rows
       .map((row) => {
@@ -2075,21 +2075,21 @@
   }
 
   function renderRowsTable(rows) {
-    return renderQueueTable(rows);
+    return renderTaskTable(rows);
   }
 
-  function renderQueueCards(rows) {
+  function renderTaskCards(rows) {
     if (!rows || rows.length === 0) {
       return "";
     }
     return rows
       .map((row) => {
-        const fieldItems = queueFieldDefinitions
+        const fieldItems = taskFieldDefinitions
           .map(
             (definition) => `
               <div>
                 <dt>${escapeHtml(definition.label)}</dt>
-                <dd>${renderQueueFieldValue(row, definition)}</dd>
+                <dd>${renderTaskFieldValue(row, definition)}</dd>
               </div>
             `,
           )
@@ -2135,7 +2135,7 @@
       .join("");
   }
 
-  function renderQueueLayouts(rows, sortState) {
+  function renderTaskLayouts(rows, sortState) {
     if (!rows || rows.length === 0) {
       return "<p class='small'>No rows available.</p>";
     }
@@ -2144,11 +2144,11 @@
       'class="queue-table-wrapper"',
       'data-layout="table"',
     ].join(" ");
-    const cardsHtml = `<ul class="queue-card-list" data-layout="card" role="list">${renderQueueCards(rows)}</ul>`;
+    const cardsHtml = `<ul class="queue-card-list" data-layout="card" role="list">${renderTaskCards(rows)}</ul>`;
 
     return `
       <div class="queue-layouts">
-        <div ${tableAttributes}>${renderQueueTable(rows, sortState)}</div>
+        <div ${tableAttributes}>${renderTaskTable(rows, sortState)}</div>
         ${cardsHtml}
       </div>
     `;
@@ -2167,7 +2167,7 @@
     const sortedRows = sortState && sortState.field
       ? sortRowsByColumn(normalizedRows, sortState.field, sortState.direction)
       : sortRows(normalizedRows);
-    const layouts = renderQueueLayouts(sortedRows, sortState);
+    const layouts = renderTaskLayouts(sortedRows, sortState);
     return `${notices}${layouts}`;
   }
 
@@ -2197,44 +2197,6 @@
     const lastSpace = truncated.lastIndexOf(" ");
     const safeCut = lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated;
     return `${safeCut.trimEnd()}...`;
-  }
-
-  function toQueueRows(items) {
-    return items.map((item) => {
-      const payload = pick(item, "payload") || {};
-      const task = extractTaskNode(payload);
-      const taskInstructions = task ? pick(task, "instructions") : undefined;
-      const payloadInstruction = pick(payload, "instruction");
-      const rawInstructions =
-        (typeof taskInstructions === "string" && taskInstructions) ||
-        (typeof payloadInstruction === "string" && payloadInstruction) ||
-        "";
-      const summarizedTitle = summarizeInstructionPreview(rawInstructions);
-      return {
-        source: "queue",
-        sourceLabel: "Task",
-        id: pick(item, "id") || "",
-        payload,
-        queueName: defaultQueueName,
-        runtimeMode: extractRuntimeFromPayload(payload),
-        skillId: extractSkillFromPayload(payload),
-        rawStatus: pick(item, "status") || "queued",
-        finishOutcomeCode: pick(item, "finishOutcomeCode") || "",
-        finishOutcomeStage: pick(item, "finishOutcomeStage") || "",
-        finishOutcomeReason: pick(item, "finishOutcomeReason") || "",
-        title: summarizedTitle || pick(item, "type") || "Queue Job",
-        createdAt: pick(item, "createdAt"),
-        startedAt: pick(item, "startedAt"),
-        finishedAt: pick(item, "finishedAt"),
-        updatedAt: pick(item, "updatedAt"),
-        sortTimestamp:
-          pick(item, "updatedAt") ||
-          pick(item, "startedAt") ||
-          pick(item, "createdAt") ||
-          pick(item, "finishedAt"),
-        link: buildUnifiedTaskDetailRoute(pick(item, "id"), "queue"),
-      };
-    });
   }
 
   function filterProposalsByTag(rows, tag) {
@@ -2499,11 +2461,11 @@
   }
 
   // Queue metadata for table columns and card field rows is centralized here.
-  // Card status remains a fixed leading row in renderQueueCards so mobile keeps
-  // status first regardless of future queueFieldDefinitions ordering. When
+  // Card status remains a fixed leading row in renderTaskCards so mobile keeps
+  // status first regardless of future taskFieldDefinitions ordering. When
   // expanding queue metadata, update docs/TaskUiQueue.md ("Extending queue
   // fields") and add tests that exercise the new label/value pairs.
-  const queueFieldDefinitions = [
+  const taskFieldDefinitions = [
     {
       key: "runtimeMode",
       label: "Runtime",
@@ -2536,7 +2498,7 @@
     },
   ];
 
-  function renderQueueFieldValue(row, definition) {
+  function renderTaskFieldValue(row, definition) {
     if (!definition || typeof definition.render !== "function") {
       return "-";
     }
@@ -2793,14 +2755,7 @@
     };
   };
 
-  const normalizeOrchestratorPriority = (value) => {
-    const normalized = String(value || "normal").trim().toLowerCase();
-    return normalized === "high" ? "high" : "normal";
-  };
-
   const resolveQueueSubmitRuntimeUiState = (_runtimeValue) => ({
-    isOrchestratorRuntime: false,
-    showOrchestratorFields: false,
     showWorkerPriorityFields: true,
   });
 
@@ -2855,42 +2810,10 @@
     if (!normalized) {
       return null;
     }
-    if (normalized === "orchestrator") {
-      return null;
-    }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
     }
     return null;
-  };
-
-  const parseQueuePaginationFromSearch = (searchText) => {
-    const query = new URLSearchParams(searchText || "");
-    const requestedLimit = Number(query.get("limit") || DEFAULT_QUEUE_PAGE_SIZE);
-    const resolvedLimit = QUEUE_PAGE_SIZE_OPTIONS.includes(requestedLimit)
-      ? requestedLimit
-      : DEFAULT_QUEUE_PAGE_SIZE;
-    const requestedCursor = String(query.get("cursor") || "").trim();
-    return {
-      limit: resolvedLimit,
-      cursor: requestedCursor || null,
-    };
-  };
-
-  const applyQueuePaginationToSearch = (searchText, limit, cursor) => {
-    const query = new URLSearchParams(searchText || "");
-    const requestedLimit = Number(limit || DEFAULT_QUEUE_PAGE_SIZE);
-    const resolvedLimit = QUEUE_PAGE_SIZE_OPTIONS.includes(requestedLimit)
-      ? requestedLimit
-      : DEFAULT_QUEUE_PAGE_SIZE;
-    query.set("limit", String(resolvedLimit));
-    const cursorToken = String(cursor || "").trim();
-    if (cursorToken) {
-      query.set("cursor", cursorToken);
-    } else {
-      query.delete("cursor");
-    }
-    return query.toString();
   };
 
   const parseRuntimeSearchParam = (searchParams) => {
@@ -3046,7 +2969,6 @@
       resolveQueuePrefillModeFromJob,
       resolveQueueDetailPrefillAction,
       resolveQueuePrefillSubmitTarget,
-      normalizeOrchestratorPriority,
       resolveQueueSubmitRuntimeUiState,
       resolveQueueSubmitPriorityForRuntime,
       validateSubmitRuntime,
@@ -3083,11 +3005,11 @@
       withTemporalSourceFlag,
     };
     window.__queueLayoutTest = {
-      queueFieldDefinitions,
-      renderQueueFieldValue,
-      renderQueueTable,
-      renderQueueCards,
-      renderQueueLayouts,
+      taskFieldDefinitions,
+      renderTaskFieldValue,
+      renderTaskTable,
+      renderTaskCards,
+      renderTaskLayouts,
       renderActivePageContent,
       renderRowsTable,
       filterProposalsByTag,
@@ -3100,10 +3022,10 @@
       rowOrderKey,
       buildRowOrderIndex,
       stabilizeRowsByPreviousOrder,
-      toQueueRows,
+      
       toTemporalRows,
-      parseQueuePaginationFromSearch,
-      applyQueuePaginationToSearch,
+      
+      
     };
     window.__temporalRunHistoryTest = {
       resolveTemporalDetailContext,
@@ -3888,7 +3810,7 @@
       setView(
         "Tasks List",
         subtitle,
-        `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderQueueLayouts(
+        `${telemetryHtml}${renderQueueFilters()}${paginationHtml}${renderTaskLayouts(
           sortedFilteredRows,
           columnSort.field ? columnSort : null,
         )}`,
@@ -4184,12 +4106,10 @@
     );
 
     const load = async () => {
-      const endpoint =
-        manifestsSourceConfig.list ||
-        "/api/queue/jobs?type=manifest&limit=200";
-      const payload = await fetchJson(withQueueSummaryFlag(endpoint));
+      const endpoint = "/api/tasks/list?entry=manifest&limit=200";
+      const payload = await fetchJson(endpoint);
       const rows = sortRows(
-        toQueueRows(payload?.items || []).map((row) => ({
+        toTemporalRows(payload?.items || []).map((row) => ({
           ...row,
           source: "manifests",
           sourceLabel: "Manifest",
@@ -9907,18 +9827,8 @@
         .toLowerCase();
       
       const { source: resolvedSource, resolvedId } = await resolveUnifiedTaskSource(candidateTaskId);
-      
-      if (explicitSource === "queue") {
-        renderNotFound();
-        return;
-      }
       if (explicitSource === "temporal" && temporalDetailEnabled) {
         await renderTemporalDetailPage(resolvedId || candidateTaskId);
-        return;
-      }
-      
-      if (resolvedSource === "queue") {
-        renderNotFound();
         return;
       }
       if (resolvedSource === "temporal" && temporalDetailEnabled) {

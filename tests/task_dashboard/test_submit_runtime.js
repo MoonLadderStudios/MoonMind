@@ -251,12 +251,6 @@ const helpers = loadSubmitRuntimeHelpers();
 
 
 
-(function testResolveQueueSubmitRuntimeUiState() {
-  assert.strictEqual(typeof helpers.resolveQueueSubmitRuntimeUiState, "function");
-  const workerState = helpers.resolveQueueSubmitRuntimeUiState("codex");
-
-})();
-
 (function testExtractRuntimeModelAndEffortFromCanonicalTaskRuntime() {
   assert.strictEqual(typeof helpers.extractRuntimeModelFromPayload, "function");
   assert.strictEqual(typeof helpers.extractRuntimeEffortFromPayload, "function");
