@@ -1589,7 +1589,7 @@ async def test_handler_publish_pr_invokes_gh(tmp_path: Path, monkeypatch) -> Non
             return CommandResult(tuple(command), 0, "diff --git a/a b/a\n", "")
         return CommandResult(tuple(command), 0, "", "")
 
-    monkeypatch.setattr(handlers, "verify_cli_is_executable", lambda _name: "gh")
+    monkeypatch.setattr("moonmind.publish.service.verify_cli_is_executable", lambda _name: "gh")
     handler._run_command = fake_run_command  # type: ignore[method-assign]
 
     result = await handler.handle(
