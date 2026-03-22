@@ -21,7 +21,6 @@ from moonmind.publish.sanitization import (
     sanitize_publish_subject,
 )
 from moonmind.publish.service import PublishService
-from moonmind.utils.cli import verify_cli_is_executable
 from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
