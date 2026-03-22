@@ -16,7 +16,9 @@ const DASHBOARD_JS = path.join(
   "dashboard.js",
 );
 const {
+  baseTaskRow,
   baseQueueRow,
+  createTaskRow,
   createQueueRow,
   createMixedRows,
   createOrchestratorRow,
@@ -419,7 +421,7 @@ function createProposalRow(overrides = {}) {
   ];
   const cardsHtml = renderTaskCards(rows);
   assert(cardsHtml.includes("queue-card"));
-  assert(cardsHtml.includes(baseQueueRow.id));
+  assert(cardsHtml.includes(baseTaskRow.id));
   assert(cardsHtml.includes("job-456"), "Cards should contain non-queue rows");
   taskFieldDefinitions.forEach((definition) => {
     assert(cardsHtml.includes(`<dt>${definition.label}</dt>`), `${definition.label} missing in card`);

@@ -1,60 +1,56 @@
 "use strict";
 
-const baseQueueRow = Object.freeze({
-  source: "queue",
-  sourceLabel: "Task",
-  id: "job-123",
-  queueName: "moonmind.jobs",
+const baseTaskRow = Object.freeze({
+  source: "temporal",
+  sourceLabel: "Temporal",
+  id: "mm:workflow-123",
+  taskId: "mm:workflow-123",
+  workflowId: "mm:workflow-123",
+  temporalRunId: "run-456",
+  namespace: "moonmind",
+  workflowType: "MoonMind.Run",
+  entry: "run",
+  queueName: "-",
   runtimeMode: "codex",
   skillId: "auto",
   rawStatus: "running",
-  title: "Queue Job",
+  rawState: "running",
+  temporalStatus: "running",
+  closeStatus: null,
+  title: "Temporal Task",
   createdAt: "2026-02-23T12:00:00Z",
   startedAt: "2026-02-23T12:05:00Z",
   finishedAt: null,
-  link: "/tasks/job-123?source=queue",
+  updatedAt: "2026-02-23T12:05:00Z",
+  closedAt: null,
+  link: "/tasks/mm:workflow-123?source=temporal",
 });
 
-const baseOrchestratorRow = Object.freeze({
-  source: "orchestrator",
-  sourceLabel: "Orchestrator",
-  id: "run-789",
-  queueName: "moonmind.jobs",
-  runtimeMode: "codex",
-  skillId: "auto",
-  rawStatus: "queued",
-  title: "Orchestrator Run",
-  createdAt: "2026-02-23T12:00:00Z",
-  startedAt: null,
-  finishedAt: null,
-  link: "/tasks/run-789?source=orchestrator",
-});
-
-function createQueueRow(overrides = {}) {
+function createTaskRow(overrides = {}) {
   return {
-    ...baseQueueRow,
-    ...overrides,
-  };
-}
-
-function createOrchestratorRow(overrides = {}) {
-  return {
-    ...baseOrchestratorRow,
+    ...baseTaskRow,
     ...overrides,
   };
 }
 
 function createMixedRows() {
   return [
-    createQueueRow(),
-    createQueueRow({ id: "job-456", skillId: "spec" }),
-    createOrchestratorRow(),
+    createTaskRow(),
+    createTaskRow({ id: "mm:workflow-456", taskId: "mm:workflow-456", workflowId: "mm:workflow-456", skillId: "spec", link: "/tasks/mm:workflow-456?source=temporal" }),
+    createTaskRow({ id: "mm:workflow-789", taskId: "mm:workflow-789", workflowId: "mm:workflow-789", rawStatus: "queued", rawState: "queued", link: "/tasks/mm:workflow-789?source=temporal" }),
   ];
 }
 
+// Legacy aliases – keep exports backward-compatible during transition
+const baseQueueRow = baseTaskRow;
+const createQueueRow = createTaskRow;
+const createOrchestratorRow = (overrides = {}) =>
+  createTaskRow({ id: "mm:workflow-orch-789", taskId: "mm:workflow-orch-789", workflowId: "mm:workflow-orch-789", rawStatus: "queued", rawState: "queued", link: "/tasks/mm:workflow-orch-789?source=temporal", ...overrides });
+
 module.exports = {
+  baseTaskRow,
   baseQueueRow,
-  baseOrchestratorRow,
+  createTaskRow,
   createQueueRow,
   createOrchestratorRow,
   createMixedRows,
