@@ -2,7 +2,7 @@
 
 > **Goal:** Finish the move to Temporal-backed execution as the **only** real substrate. Remove legacy queue and orchestrator paths so MoonMind has one task model, one execution model, one observability model, and one action model.
 >
-> **Last updated:** 2026-03-21
+> **Last updated:** 2026-03-22
 
 ---
 
@@ -35,7 +35,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 #### Python Backend
 | Component | File | Legacy Reference |
 |-----------|------|-----------------|
-| View model | [task_dashboard_view_model.py](../../api_service/api/routers/task_dashboard_view_model.py) | `sources.queue` config block (15+ queue API endpoints), `sources.manifests` pointing at queue, `_STATUS_MAPS` with `queue` and `orchestrator` entries |
+| View model | [task_dashboard_view_model.py](../../api_service/api/routers/task_dashboard_view_model.py) | Residual queue-oriented **system** keys (`defaultQueue`, `queueEnv`, `taskSourceResolver`); imports from `agent_queue.runtime_defaults` for submit defaults |
 | Task compatibility router | [task_compatibility.py](../../api_service/api/routers/task_compatibility.py) | `source` filter accepts `queue` literal, `source_hint` accepts `queue` |
 | Queue router | [agent_queue.py](../../api_service/api/routers/agent_queue.py) | Full queue API: `/api/queue/jobs`, `/api/tasks`, etc. |
 | Agent queue module | [moonmind/workflows/agent_queue/](../../moonmind/workflows/agent_queue/) | `service.py` (112 KB), `repositories.py` (50 KB), `models.py`, `task_contract.py` (48 KB), etc. |
@@ -78,8 +78,8 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 - [ ] **1.1** Audit queue-only features: attachments, live sessions, operator messages, task control, events/SSE, skills list
 - [ ] **1.2** Map each queue feature to its Temporal equivalent or mark as deferred
-- [ ] **1.3** Ensure Temporal submit supports all current submit form fields: runtime, model, effort, repository, publish mode, attachments
-- [ ] **1.4** Redirect manifest submission (`/api/queue/jobs?type=manifest`) to `MoonMind.ManifestIngest` Temporal workflow
+- [x] **1.3** Ensure Temporal submit supports all current submit form fields: runtime, model, effort, repository, publish mode, attachments
+- [x] **1.4** Redirect manifest submission (`/api/queue/jobs?type=manifest`) to `MoonMind.ManifestIngest` Temporal workflow
 - [ ] **1.5** Confirm recurring tasks (`/api/recurring-tasks`) already use Temporal Schedules (check if still queue-backed)
 - [ ] **1.6** Verify step templates work against Temporal execution path
 
@@ -91,16 +91,16 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 **Objective:** Remove `queue` and `orchestrator` as dashboard execution sources. All task list/detail goes through `temporal`.
 
-- [ ] **2.1** Remove `sources.queue` from `build_runtime_config()` in `task_dashboard_view_model.py`
-- [ ] **2.2** Remove `sources.manifests` queue-backed endpoint block (manifests should use Temporal source)
-- [ ] **2.3** Remove `queue` and `orchestrator` from `_STATUS_MAPS` — only `proposals` and `temporal` remain
-- [ ] **2.4** Simplify `normalize_status()` — single mapping for Temporal states
+- [x] **2.1** Remove `sources.queue` from `build_runtime_config()` in `task_dashboard_view_model.py`
+- [x] **2.2** Remove `sources.manifests` queue-backed endpoint block (manifests should use Temporal source)
+- [x] **2.3** Remove `queue` and `orchestrator` from `_STATUS_MAPS` — only `proposals` and `temporal` remain
+- [x] **2.4** Simplify `normalize_status()` — single mapping for Temporal states
 - [ ] **2.5** In `dashboard.js`: remove orchestrator route matching, form validation stubs, priority normalization, UI state branches
 - [ ] **2.6** In `dashboard.js`: remove queue source fetcher/renderer code; point all task list/detail at Temporal endpoints
 - [ ] **2.7** Remove `source` filter from compatibility APIs (always `temporal`) or deprecate the parameter
 - [ ] **2.8** Update test fixtures: remove `createOrchestratorRow()`, `createQueueRow()`, update to Temporal-only rows
 - [ ] **2.9** Update submit runtime tests to remove orchestrator validation/priority tests
-- [ ] **2.10** Update view model tests for single-source config
+- [x] **2.10** Update view model tests for single-source config
 
 > **Gate:** Dashboard renders from Temporal source only. No `queue`/`orchestrator` branching in frontend or view model.
 
@@ -114,7 +114,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [ ] **3.2** Delete `moonmind/workflows/agent_queue/` module (~250 KB of service, repository, model, contract code)
 - [ ] **3.3** Remove queue-related DB models and generate Alembic migration to drop queue tables
 - [ ] **3.4** Remove queue environment variables from settings (`MOONMIND_QUEUE`, `defaultQueue`, `queueEnv`)
-- [ ] **3.5** Remove `moonmind/workflows/orchestrator/` directory (empty except `__pycache__`)
+- [x] **3.5** Remove `moonmind/workflows/orchestrator/` directory (empty except `__pycache__`)
 - [ ] **3.6** Remove `tests/unit/orchestrator_removal/` directory (removal is now complete)
 - [ ] **3.7** Remove queue-related integration tests and contract tests
 - [ ] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/orchestrator exports
