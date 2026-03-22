@@ -2084,3 +2084,59 @@ class TemporalArtifactActivities:
                 runtime_id,
             )
             return {"started": False, "workflow_id": workflow_id}
+
+    async def oauth_session_ensure_volume(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.ensure_volume`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_ensure_volume as _ensure_volume,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _ensure_volume(payload)
+
+    async def oauth_session_update_status(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.update_status`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_update_status as _update_status,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _update_status(payload)
+
+    async def oauth_session_mark_failed(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.mark_failed`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_mark_failed as _mark_failed,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _mark_failed(payload)
+
+    async def oauth_session_cleanup_stale(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.cleanup_stale`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_cleanup import (
+            oauth_session_cleanup_stale as _cleanup_stale,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _cleanup_stale(payload)

@@ -92,6 +92,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.ManifestIngest",
         "MoonMind.AuthProfileManager",
         "MoonMind.AgentRun",
+        "MoonMind.OAuthSession",
     )
 
 

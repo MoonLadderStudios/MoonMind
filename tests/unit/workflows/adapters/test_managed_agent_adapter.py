@@ -437,6 +437,18 @@ async def test_report_429_cooldown_raises_without_active_profile():
 # ---------------------------------------------------------------------------
 
 
+@asynccontextmanager
+async def _patched_session_context(session_factory):
+    """Yield a session from *session_factory* as an async-context-manager.
+
+    Used to monkeypatch ``get_async_session_context`` so that the
+    ``auth_profile_list`` activity method hits the in-memory SQLite DB
+    instead of the real Postgres connection string.
+    """
+    async with session_factory() as session:
+        yield session
+
+
 async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
@@ -467,13 +479,20 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
             )
             await session.commit()
 
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
-            )
-            activities = TemporalArtifactActivities(service)
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
 
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
+        try:
             result = await activities.auth_profile_list(runtime_id="gemini_cli")
+        finally:
+            _db_base_mod.get_async_session_context = orig
 
         assert "profiles" in result
         profiles = result["profiles"]
@@ -486,13 +505,20 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
 
 async def test_auth_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
-        async with session_factory() as session:
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
-            )
-            activities = TemporalArtifactActivities(service)
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session_factory()),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
+        try:
             result = await activities.auth_profile_list(runtime_id="nonexistent_runtime")
+        finally:
+            _db_base_mod.get_async_session_context = orig
 
         assert result == {"profiles": []}
 
@@ -514,12 +540,20 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
                 )
             await session.commit()
 
-            service = TemporalArtifactService(
-                TemporalArtifactRepository(session),
-                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
-            )
-            activities = TemporalArtifactActivities(service)
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(session_factory)
+        try:
             result = await activities.auth_profile_list(runtime_id="claude_code")
+        finally:
+            _db_base_mod.get_async_session_context = orig
 
         profiles = result["profiles"]
         assert len(profiles) == 1

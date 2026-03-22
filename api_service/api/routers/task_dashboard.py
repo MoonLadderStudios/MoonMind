@@ -52,6 +52,7 @@ _STATIC_PATHS = {
     "schedules",
     "schedules/new",
     "settings",
+    "system",
 }
 
 _PATH_ALIASES = {
@@ -271,7 +272,7 @@ async def task_dashboard_route(
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
                     "/tasks/create, /tasks/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/schedules/new, or /tasks/settings."
+                    "/tasks/schedules, /tasks/schedules/new, /tasks/system, or /tasks/settings."
                 ),
             },
         )
