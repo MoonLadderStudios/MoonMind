@@ -298,13 +298,37 @@ def _serialize_execution(
     if not isinstance(publish_payload, dict):
         publish_payload = {}
 
-    starting_branch = str(git_payload.get("startingBranch") or params.get("startingBranch") or "").strip() or None
-    if not starting_branch:
-        default_branch = str(git_payload.get("defaultBranch") or params.get("defaultBranch") or "main").strip()
+    # Precedence: task.git.startingBranch > task.startingBranch > params.startingBranch
+    starting_branch = str(
+        git_payload.get("startingBranch")
+        or task_payload.get("startingBranch")
+        or params.get("startingBranch")
+        or ""
+    ).strip() or None
+    # Only show the "(default)" fallback when git context exists in the payload.
+    has_git_context = bool(git_payload) or any(
+        task_payload.get(k) or params.get(k)
+        for k in ("startingBranch", "newBranch", "defaultBranch", "branch")
+    )
+    if not starting_branch and has_git_context:
+        default_branch = str(
+            git_payload.get("defaultBranch") or params.get("defaultBranch") or "main"
+        ).strip()
         starting_branch = f"{default_branch} (default)"
 
-    target_branch = str(git_payload.get("newBranch") or params.get("newBranch") or "").strip() or None
-    publish_mode = str(params.get("publishMode") or publish_payload.get("mode") or "").strip() or None
+    # Precedence: task.git.newBranch > task.newBranch > params.newBranch
+    target_branch = str(
+        git_payload.get("newBranch")
+        or task_payload.get("newBranch")
+        or params.get("newBranch")
+        or ""
+    ).strip() or None
+
+    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
+    raw_publish_mode = str(
+        params.get("publishMode") or publish_payload.get("mode") or ""
+    ).strip() or None
+    publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
 
     return ExecutionModel(
         task_id=record.workflow_id,
