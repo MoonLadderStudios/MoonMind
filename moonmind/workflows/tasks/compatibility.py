@@ -47,14 +47,7 @@ _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.FAILED: "failed",
     db_models.MoonMindWorkflowState.CANCELED: "cancelled",
 }
-_QUEUE_STATUS_MAP: dict["Any", str] = {
-    "Any": "queued",
-    "Any": "running",
-    "Any": "succeeded",
-    "Any": "failed",
-    "Any": "cancelled",
-    "Any": "failed",
-}
+
 _ALLOWED_SEARCH_ATTRIBUTE_KEYS = {
     "mm_owner_type",
     "mm_owner_id",
@@ -378,7 +371,7 @@ class TaskCompatibilityService:
             entry="manifest" if job.type == MANIFEST_JOB_TYPE else "run",
             title=title,
             summary=instructions or None,
-            status=_QUEUE_STATUS_MAP.get(job.status, "queued"),
+            status="queued",  # legacy queue status mapping removed
             rawState=job.status.value,
             workflowId=None,
             workflowType=None,

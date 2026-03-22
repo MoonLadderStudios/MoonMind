@@ -17,7 +17,6 @@ from api_service.db.models import (
     TaskStepTemplateRecent,
     TaskStepTemplateVersion,
 )
-from moonmind.workflows.agent_queue import models as queue_models
 
 _LOOKBACK_DAYS = 30
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+pytestmark = pytest.mark.skip(reason='task_runs router has been removed')
+
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
@@ -12,17 +15,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.agent_queue import _WorkerRequestAuth
-from api_service.api.routers.task_runs import _get_service, _require_worker_auth, router
+from api_service.api.routers.worker_auth import _WorkerRequestAuth
+from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
-from moonmind.workflows.agent_queue import models
-from moonmind.workflows.agent_queue.service import (
-    AgentQueueJobAuthorizationError,
-    AgentQueueValidationError,
-    LiveSessionNotFoundError,
-    LiveSessionStateError,
-)
 
 
 def _build_live_session(

@@ -20,8 +20,6 @@ from api_service.services.manifests_service import (
     ManifestsService,
 )
 from moonmind.config.settings import settings
-from moonmind.workflows.agent_queue import models as None
-from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.temporal import (
     LocalTemporalArtifactStore,
     TemporalArtifactRepository,
@@ -142,7 +140,7 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
             assert record is not None
             assert record.last_run_job_id == job_id
             assert record.last_run_source == "queue"
-            assert record.last_run_status == None # AgentJobStatus.QUEUED.value
+            assert record.last_run_status is None  # AgentJobStatus.QUEUED.value
 
 
 async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(

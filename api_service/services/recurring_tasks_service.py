@@ -24,6 +24,7 @@ from api_service.db.models import (
     RecurringTaskRunTrigger,
     RecurringTaskScopeType,
 )
+from moonmind.workflows.tasks.job_types import CANONICAL_TASK_JOB_TYPE
 from api_service.services.manifests_service import ManifestsService
 from api_service.services.task_templates.catalog import TaskTemplateCatalogService
 from moonmind.config.settings import settings
@@ -1157,8 +1158,8 @@ class RecurringTasksService:
 
         if existing_job is not None:
             run.outcome = RecurringTaskRunOutcome.ENQUEUED
-            run.temporal_workflow_id = existing_ex.workflow_id
-            run.queue_workflow_type = existing_job.type
+            run.temporal_workflow_id = existing_job.workflow_id
+            run.temporal_run_id = existing_job.run_id
             run.message = None
             run.updated_at = now
             definition.last_dispatch_status = "enqueued"
@@ -1213,8 +1214,8 @@ class RecurringTasksService:
 
         run.outcome = RecurringTaskRunOutcome.ENQUEUED
         run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
-        run.temporal_workflow_id = ex.workflow_id
-        run.queue_workflow_type = job.type
+        run.temporal_workflow_id = job.workflow_id
+        run.temporal_run_id = job.run_id
         run.message = None
         run.updated_at = now
         definition.last_dispatch_status = "enqueued"
@@ -1315,7 +1316,7 @@ class RecurringTasksService:
             elif run.outcome == RecurringTaskRunOutcome.ENQUEUED:
                 job_status = MoonMindWorkflowState.SCHEDULED
                 if run.temporal_workflow_id:
-                    if existing_job and existing_ex.workflow_id == run.temporal_workflow_id:
+                    if existing_job and existing_job.workflow_id == run.temporal_workflow_id:
                         job_status = existing_job.status
                 if job_status in {
                     MoonMindWorkflowState.SCHEDULED,

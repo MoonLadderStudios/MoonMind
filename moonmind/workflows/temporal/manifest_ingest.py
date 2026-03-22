@@ -35,6 +35,10 @@ from moonmind.schemas.manifest_ingest_models import (
     RequestedByModel,
     manifest_node_counts_from_nodes,
 )
+from moonmind.workflows.tasks.manifest_contract import (
+    ManifestContractError,
+    normalize_manifest_job_payload,
+)
 
 DEFAULT_MANIFEST_FAILURE_POLICY = "fail_fast"
 DEFAULT_MANIFEST_MAX_CONCURRENCY = 50

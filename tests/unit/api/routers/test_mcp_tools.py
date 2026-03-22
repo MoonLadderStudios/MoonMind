@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+pytestmark = pytest.mark.skip(reason='Queue MCP tools have been removed')
+
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
@@ -14,7 +17,6 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.mcp_tools import _get_service, router
 from api_service.auth_providers import get_current_user
-from moonmind.workflows.agent_queue import models
 
 pytestmark = []
 

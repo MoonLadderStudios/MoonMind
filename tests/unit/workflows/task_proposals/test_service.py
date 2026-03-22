@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 
 from moonmind.utils.logging import SecretRedactor
-from moonmind.workflows.agent_queue.service import AgentQueueAuthenticationError
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
     TaskProposalReviewPriority,

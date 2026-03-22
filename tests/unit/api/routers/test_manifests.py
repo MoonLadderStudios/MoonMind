@@ -12,10 +12,9 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
 
 from api_service.api.routers import manifests as manifests_router
-from api_service.api.routers.agent_queue import _WorkerRequestAuth
+from api_service.api.routers.worker_auth import _WorkerRequestAuth
+from moonmind.workflows.tasks.manifest_contract import ManifestContractError
 from api_service.services.manifests_service import ManifestRegistryNotFoundError
-from moonmind.workflows.agent_queue.manifest_contract import ManifestContractError
-from moonmind.workflows.agent_queue.service import AgentQueueValidationError
 
 
 def _record(**overrides):
@@ -229,7 +228,7 @@ async def test_create_manifest_run_validation_error() -> None:
     """Queue validation errors should surface as HTTP 422."""
 
     service = AsyncMock()
-    service.submit_manifest_run.side_effect = AgentQueueValidationError("bad job")
+    service.submit_manifest_run.side_effect = ManifestContractError("bad job")
     user = SimpleNamespace(id=uuid4())
 
     with pytest.raises(HTTPException) as exc:

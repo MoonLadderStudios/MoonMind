@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from moonmind.schemas.temporal_models import ExecutionModel
 from moonmind.schemas.task_proposal_models import (
     TaskProposalCreateRequest,
     TaskProposalDismissRequest,

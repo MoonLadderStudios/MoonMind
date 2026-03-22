@@ -1,15 +1,16 @@
-"""Queue MCP tool registry and dispatcher."""
+"""MCP tool registry and dispatcher.
+
+The queue-specific tool implementations have been removed as part of the
+single substrate migration.  The base registry types are kept for consumers.
+"""
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Mapping
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-
-from api_service.api.schemas import QueueSystemMetadataModel
 
 
 class ToolRegistryError(RuntimeError):
@@ -68,85 +69,18 @@ class ToolListResponse(BaseModel):
     tools: list[ToolMetadata] = Field(default_factory=list, alias="tools")
 
 
-class QueueGetRequest(BaseModel):
-    """Tool arguments for queue.get."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    job_id: UUID = Field(..., alias="jobId")
-
-
-class QueueHeartbeatRequest(BaseModel):
-    """Tool arguments for queue.heartbeat."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    job_id: UUID = Field(..., alias="jobId")
-    worker_id: str = Field(..., alias="workerId")
-    lease_seconds: int = Field(..., alias="leaseSeconds", ge=1)
-
-
-class QueueCompleteRequest(BaseModel):
-    """Tool arguments for queue.complete."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    job_id: UUID = Field(..., alias="jobId")
-    worker_id: str = Field(..., alias="workerId")
-    result_summary: str | None = Field(None, alias="resultSummary")
-
-
-class QueueFailRequest(BaseModel):
-    """Tool arguments for queue.fail."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    job_id: UUID = Field(..., alias="jobId")
-    worker_id: str = Field(..., alias="workerId")
-    error_message: str = Field(..., alias="errorMessage")
-    retryable: bool = Field(False, alias="retryable")
-
-
-class QueueCancelRequest(BaseModel):
-    """Tool arguments for queue.cancel."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    job_id: UUID = Field(..., alias="jobId")
-    reason: str | None = Field(None, alias="reason")
-
-
-class QueueListRequest(BaseModel):
-    """Tool arguments for queue.list."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    status_filter: models.AgentJobStatus | None = Field(None, alias="status")
-    type_filter: str | None = Field(None, alias="type")
-    limit: int = Field(50, alias="limit", ge=1, le=200)
-
-
-class QueueUploadArtifactRequest(BaseModel):
-    """Tool arguments for optional queue.upload_artifact."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    job_id: UUID = Field(..., alias="jobId")
-    name: str = Field(..., alias="name")
-    content_base64: str = Field(..., alias="contentBase64")
-    content_type: str | None = Field(None, alias="contentType")
-    digest: str | None = Field(None, alias="digest")
-
-
 @dataclass(frozen=True, slots=True)
 class QueueToolExecutionContext:
-    """Dependencies available to tool handlers."""
+    """Dependencies available to tool handlers.
 
-    service: AgentQueueService
+    Stub retained for compatibility. The queue service has been removed.
+    """
+
+    service: Any
     user_id: UUID | None
 
 
-ToolHandler = Callable[[BaseModel, QueueToolExecutionContext], Awaitable[Any]]
+ToolHandler = Callable[[BaseModel, Any], Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,15 +94,18 @@ class _ToolDefinition:
 
 
 class QueueToolRegistry:
-    """Registry for queue-related MCP tools."""
+    """Registry for MCP tools.
+
+    The legacy queue tool implementations have been removed.
+    This class is kept as a stub for compatibility with test fixtures
+    and consumers that reference it.
+    """
 
     def __init__(self) -> None:
         self._tools: dict[str, _ToolDefinition] = {}
-        self._register_default_tools()
 
     def list_tools(self) -> list[ToolMetadata]:
         """Return registered tools with schemas for discovery endpoint."""
-
         output: list[ToolMetadata] = []
         for definition in sorted(self._tools.values(), key=lambda item: item.name):
             output.append(
@@ -187,10 +124,9 @@ class QueueToolRegistry:
         *,
         tool: str,
         arguments: Mapping[str, Any] | None,
-        context: QueueToolExecutionContext,
+        context: Any,
     ) -> Any:
         """Validate arguments and dispatch a tool call."""
-
         definition = self._tools.get(tool)
         if definition is None:
             raise ToolNotFoundError(tool)
@@ -202,62 +138,6 @@ class QueueToolRegistry:
             raise ToolArgumentsValidationError(tool, detail=str(exc)) from exc
 
         return await definition.handler(parsed_args, context)
-
-    def _register_default_tools(self) -> None:
-        self._register(
-            "queue.enqueue",
-            "Create a new queue job.",
-            CreateJobRequest,
-            self._handle_enqueue,
-        )
-        self._register(
-            "queue.claim",
-            "Claim the next eligible queue job.",
-            ClaimJobRequest,
-            self._handle_claim,
-        )
-        self._register(
-            "queue.heartbeat",
-            "Renew lease for a running queue job.",
-            QueueHeartbeatRequest,
-            self._handle_heartbeat,
-        )
-        self._register(
-            "queue.complete",
-            "Mark a running queue job as succeeded.",
-            QueueCompleteRequest,
-            self._handle_complete,
-        )
-        self._register(
-            "queue.fail",
-            "Mark a running queue job as failed.",
-            QueueFailRequest,
-            self._handle_fail,
-        )
-        self._register(
-            "queue.cancel",
-            "Request cancellation for a queue job.",
-            QueueCancelRequest,
-            self._handle_cancel,
-        )
-        self._register(
-            "queue.get",
-            "Fetch queue job details by id.",
-            QueueGetRequest,
-            self._handle_get,
-        )
-        self._register(
-            "queue.list",
-            "List queue jobs with optional filters.",
-            QueueListRequest,
-            self._handle_list,
-        )
-        self._register(
-            "queue.upload_artifact",
-            "Upload a queue artifact from base64 content.",
-            QueueUploadArtifactRequest,
-            self._handle_upload_artifact,
-        )
 
     def _register(
         self,
@@ -273,205 +153,8 @@ class QueueToolRegistry:
             handler=handler,
         )
 
-    @staticmethod
-    def _build_system_metadata_model(
-        metadata: QueueSystemMetadata | None,
-    ) -> QueueSystemMetadataModel | None:
-        if metadata is None:
-            return None
-        return QueueSystemMetadataModel.from_service_metadata(metadata)
-
-    async def _handle_enqueue(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, CreateJobRequest):
-            raise ToolArgumentsValidationError(
-                "queue.enqueue",
-                detail="Invalid payload type",
-            )
-        payload = args
-        job = await context.service.create_job(
-            job_type=payload.type,
-            payload=payload.payload,
-            priority=payload.priority,
-            created_by_user_id=context.user_id,
-            requested_by_user_id=context.user_id,
-            affinity_key=payload.affinity_key,
-            max_attempts=payload.max_attempts,
-        )
-        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
-
-    async def _handle_claim(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, ClaimJobRequest):
-            raise ToolArgumentsValidationError(
-                "queue.claim",
-                detail="Invalid payload type",
-            )
-        payload = args
-        result = await context.service.claim_job(
-            worker_id=payload.worker_id,
-            lease_seconds=payload.lease_seconds,
-            allowed_types=payload.allowed_types,
-            worker_capabilities=payload.worker_capabilities,
-        )
-        job_model = (
-            JobModel.model_validate(result.job) if result.job is not None else None
-        )
-        system_model = self._build_system_metadata_model(result.system)
-        response = ClaimJobResponse(job=job_model, system=system_model)
-        return response.model_dump(by_alias=True, mode="json")
-
-    async def _handle_heartbeat(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueHeartbeatRequest):
-            raise ToolArgumentsValidationError(
-                "queue.heartbeat",
-                detail="Invalid payload type",
-            )
-        payload = args
-        result = await context.service.heartbeat(
-            job_id=payload.job_id,
-            worker_id=payload.worker_id,
-            lease_seconds=payload.lease_seconds,
-        )
-        job_model = JobModel.model_validate(result.job)
-        job_model.system = self._build_system_metadata_model(result.system)
-        return job_model.model_dump(by_alias=True, mode="json")
-
-    async def _handle_complete(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueCompleteRequest):
-            raise ToolArgumentsValidationError(
-                "queue.complete",
-                detail="Invalid payload type",
-            )
-        payload = args
-        job = await context.service.complete_job(
-            job_id=payload.job_id,
-            worker_id=payload.worker_id,
-            result_summary=payload.result_summary,
-        )
-        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
-
-    async def _handle_fail(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueFailRequest):
-            raise ToolArgumentsValidationError(
-                "queue.fail",
-                detail="Invalid payload type",
-            )
-        payload = args
-        job = await context.service.fail_job(
-            job_id=payload.job_id,
-            worker_id=payload.worker_id,
-            error_message=payload.error_message,
-            retryable=payload.retryable,
-        )
-        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
-
-    async def _handle_get(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueGetRequest):
-            raise ToolArgumentsValidationError(
-                "queue.get",
-                detail="Invalid payload type",
-            )
-        payload = args
-        job = await context.service.get_job(payload.job_id)
-        if job is None:
-            raise AgentJobNotFoundError(payload.job_id)
-        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
-
-    async def _handle_cancel(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueCancelRequest):
-            raise ToolArgumentsValidationError(
-                "queue.cancel",
-                detail="Invalid payload type",
-            )
-        payload = args
-        job = await context.service.request_cancel(
-            job_id=payload.job_id,
-            requested_by_user_id=context.user_id,
-            reason=payload.reason,
-        )
-        return JobModel.model_validate(job).model_dump(by_alias=True, mode="json")
-
-    async def _handle_list(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueListRequest):
-            raise ToolArgumentsValidationError(
-                "queue.list",
-                detail="Invalid payload type",
-            )
-        payload = args
-        jobs = await context.service.list_jobs(
-            status=payload.status_filter,
-            job_type=payload.type_filter,
-            limit=payload.limit,
-        )
-        response = JobListResponse(
-            items=[JobModel.model_validate(item) for item in jobs]
-        )
-        return response.model_dump(by_alias=True, mode="json")
-
-    async def _handle_upload_artifact(
-        self,
-        args: BaseModel,
-        context: QueueToolExecutionContext,
-    ) -> dict[str, Any]:
-        if not isinstance(args, QueueUploadArtifactRequest):
-            raise ToolArgumentsValidationError(
-                "queue.upload_artifact",
-                detail="Invalid payload type",
-            )
-        payload = args
-        try:
-            file_bytes = base64.b64decode(payload.content_base64, validate=True)
-        except ValueError as exc:
-            raise AgentQueueValidationError(
-                "contentBase64 must be valid base64"
-            ) from exc
-
-        artifact = await context.service.upload_artifact(
-            job_id=payload.job_id,
-            name=payload.name,
-            data=file_bytes,
-            content_type=payload.content_type,
-            digest=payload.digest,
-        )
-        return ArtifactModel.model_validate(artifact).model_dump(
-            by_alias=True,
-            mode="json",
-        )
-
 
 __all__ = [
-    "QueueToolExecutionContext",
     "QueueToolRegistry",
     "ToolArgumentsValidationError",
     "ToolCallRequest",

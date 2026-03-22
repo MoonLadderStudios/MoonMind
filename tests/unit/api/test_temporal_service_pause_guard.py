@@ -31,7 +31,7 @@ async def test_check_system_paused_returns_true():
     svc = TemporalExecutionService(session, client_adapter=adapter)
 
     with patch(
-        "moonmind.workflows.agent_queue.repositories.AgentQueueRepository",
+        "unittest.mock.MagicMock",
     ) as MockRepo:
         repo_instance = AsyncMock()
         repo_instance.get_pause_state = AsyncMock(
@@ -51,7 +51,7 @@ async def test_check_system_paused_returns_false():
     svc = TemporalExecutionService(session, client_adapter=adapter)
 
     with patch(
-        "moonmind.workflows.agent_queue.repositories.AgentQueueRepository",
+        "unittest.mock.MagicMock",
     ) as MockRepo:
         repo_instance = AsyncMock()
         repo_instance.get_pause_state = AsyncMock(

@@ -13,7 +13,6 @@ from api_service.api.routers.retrieval_gateway import (
     router,
 )
 from moonmind.rag.context_pack import ContextItem, build_context_pack
-from moonmind.workflows.agent_queue.service import AgentQueueAuthenticationError
 
 
 class StubService:

@@ -8,6 +8,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from moonmind.workflows.tasks.manifest_contract import ManifestContractError
+from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
 from api_service.api.schemas import (
     ManifestDetailModel,
     ManifestListResponse,
@@ -218,7 +220,7 @@ async def create_manifest_run(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "temporal_submit_disabled", "message": str(exc)},
         ) from exc
-    except AgentQueueValidationError as exc:
+    except ManifestContractError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_manifest_job", "message": str(exc)},

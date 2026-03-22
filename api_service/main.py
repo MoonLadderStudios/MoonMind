@@ -44,9 +44,7 @@ from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
 from api_service.api.routers.automation import router as automation_router
-from api_service.api.routers.system_worker_pause import (
-    router as system_worker_pause_router,
-)
+
 from api_service.api.routers.task_compatibility import (
     router as task_compatibility_router,
 )
@@ -322,7 +320,7 @@ app.include_router(oauth_sessions_router, prefix="/api/v1")
 app.include_router(executions_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
-app.include_router(system_worker_pause_router)
+
 app.include_router(task_proposals_router)
 app.include_router(recurring_tasks_router)
 app.include_router(task_dashboard_router)

@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
-    from moonmind.workflows.agent_queue.service import QueueSystemMetadata
-
+    pass
 
 class UserProfileBaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)

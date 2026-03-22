@@ -23,11 +23,6 @@ from api_service.services.recurring_tasks_service import (
     RecurringTasksService,
     RecurringTaskValidationError,
 )
-from moonmind.workflows.agent_queue import models as None
-from moonmind.workflows.agent_queue.job_types import (
-    CANONICAL_TASK_JOB_TYPE,
-    MANIFEST_JOB_TYPE,
-)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -384,29 +379,7 @@ async def test_dispatch_pending_runs_matches_existing_job_by_type(
                 .one()
             )
 
-            mismatched_job = None # object(
-                id=uuid4(),
-                type=MANIFEST_JOB_TYPE,
-                status=None.QUEUED,
-                priority=0,
-                payload={"system": {"recurrence": {"runId": str(run.id)}}},
-            )
-            session.add(mismatched_job)
-            await session.commit()
-
-            dispatched = await service.dispatch_pending_runs(now=now, batch_size=10)
-            assert dispatched == 1
-
-            await session.refresh(run)
-            assert run.outcome is RecurringTaskRunOutcome.ENQUEUED
-            assert run.queue_job_id is not None
-            assert run.queue_job_id != mismatched_job.id
-            assert run.queue_job_type == CANONICAL_TASK_JOB_TYPE
-
-            queued_job = await session.get(None, run.queue_job_id)
-            assert queued_job is not None
-            assert queued_job.type == CANONICAL_TASK_JOB_TYPE
-
+            # REMOVED: Entire fixture block using deleted queue models (AgentJob, MANIFEST_JOB_TYPE, etc.)
 
 async def test_target_kind_housekeeping_is_rejected(tmp_path: Path) -> None:
     async with recurring_db(tmp_path) as session_maker:

@@ -13,14 +13,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.task_dashboard import (
-    _get_service,
     _get_temporal_service,
     _is_allowed_path,
     _resolve_user_dependency_overrides,
     router,
 )
 from api_service.db.base import get_async_session
-from moonmind.workflows.agent_queue.service import QueueJobPage
 
 
 def _build_mock_temporal_service() -> AsyncMock:
@@ -34,14 +32,13 @@ def _client_with_mock_service() -> Iterator[tuple[TestClient, AsyncMock]]:
 
     mock_user = SimpleNamespace(id=uuid4(), email="dashboard@example.com")
     mock_service = AsyncMock()
-    mock_service.list_jobs_page.return_value = QueueJobPage(
+    mock_service.list_jobs_page.return_value = SimpleNamespace(
         items=tuple(),
         page_size=50,
         next_cursor=None,
     )
     for dependency in _resolve_user_dependency_overrides():
         app.dependency_overrides[dependency] = lambda mock_user=mock_user: mock_user
-    app.dependency_overrides[_get_service] = lambda: mock_service
     app.dependency_overrides[_get_temporal_service] = _build_mock_temporal_service
 
     with TestClient(app) as test_client:
