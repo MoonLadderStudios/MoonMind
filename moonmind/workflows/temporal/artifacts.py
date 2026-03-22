@@ -284,7 +284,13 @@ class TemporalArtifactStore:
             "multipart upload is not supported by storage backend"
         )
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ) -> str:
         raise NotImplementedError
 
 
@@ -362,8 +368,14 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
         _ = storage_key, content_type, expires_in_seconds
         return "", {}
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
-        _ = storage_key, expires_in_seconds
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ) -> str:
+        _ = storage_key, expires_in_seconds, download_filename
         return ""
 
 
@@ -565,10 +577,22 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             UploadId=upload_id,
         )
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ) -> str:
+        params = {"Bucket": self._bucket, "Key": storage_key}
+        if download_filename:
+            params["ResponseContentDisposition"] = (
+                f'attachment; filename="{download_filename}"'
+            )
+
         return self._client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self._bucket, "Key": storage_key},
+            Params=params,
             ExpiresIn=expires_in_seconds,
             HttpMethod="GET",
         )
@@ -859,9 +883,7 @@ class TemporalArtifactService:
     def _build_store_from_settings() -> TemporalArtifactStore:
         backend = settings.workflow.temporal_artifact_backend
         if backend == db_models.TemporalArtifactStorageBackend.LOCAL_FS.value:
-            return LocalTemporalArtifactStore(
-                settings.workflow.temporal_artifact_root
-            )
+            return LocalTemporalArtifactStore(settings.workflow.temporal_artifact_root)
         if backend == db_models.TemporalArtifactStorageBackend.S3.value:
             return S3TemporalArtifactStore(
                 endpoint_url=settings.workflow.temporal_artifact_s3_endpoint,
@@ -1476,9 +1498,12 @@ class TemporalArtifactService:
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self._presign_ttl_seconds)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
+            is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
+            download_filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
             url = self._store.presign_download(
                 storage_key=artifact.storage_key,
                 expires_in_seconds=self._presign_ttl_seconds,
+                download_filename=download_filename,
             )
         else:
             url = f"/api/artifacts/{artifact.artifact_id}/download"

@@ -121,8 +121,14 @@ class _MultipartMemoryStore(TemporalArtifactStore):
         _ = storage_key
         self._uploads.pop(upload_id, None)
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int):
-        _ = expires_in_seconds
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ):
+        _ = expires_in_seconds, download_filename
         return f"https://example.test/download/{storage_key}"
 
     def put_part(self, upload_id: str, part_number: int, payload: bytes) -> str:
