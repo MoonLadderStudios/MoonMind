@@ -1241,25 +1241,40 @@ async def list_executions(
 
             query_str = " AND ".join(query_parts) if query_parts else ""
 
-            items = []
-            async for wf in client.list_workflows(query=query_str):
-                payload = await map_temporal_state_to_projection(wf)
-                # We need a record-like object for serialization
-                from types import SimpleNamespace
+            import base64
+            token_bytes = base64.b64decode(next_page_token) if next_page_token else None
 
-                record_obj = SimpleNamespace(**payload)
-                if not hasattr(record_obj, "updated_at"):
-                    record_obj.updated_at = datetime.now(UTC)
-                items.append(
-                    _serialize_execution(record_obj, include_artifact_refs=False)
-                )
-                if len(items) >= page_size:
-                    break
+            count_info = await client.count_workflows(query=query_str)
+
+            iterator = client.list_workflows(
+                query=query_str,
+                page_size=page_size,
+                next_page_token=token_bytes,
+            )
+            await iterator.fetch_next_page()
+
+            items = []
+            if iterator.current_page:
+                for wf in iterator.current_page:
+                    payload = await map_temporal_state_to_projection(wf)
+                    # We need a record-like object for serialization
+                    from types import SimpleNamespace
+
+                    record_obj = SimpleNamespace(**payload)
+                    if not hasattr(record_obj, "updated_at"):
+                        record_obj.updated_at = datetime.now(UTC)
+                    items.append(
+                        _serialize_execution(record_obj, include_artifact_refs=False)
+                    )
+
+            new_token_str = None
+            if iterator.next_page_token:
+                new_token_str = base64.b64encode(iterator.next_page_token).decode("utf-8")
 
             return ExecutionListResponse(
                 items=items,
-                next_page_token=None,
-                count=len(items),
+                next_page_token=new_token_str,
+                count=count_info.count,
                 count_mode="exact",
                 degraded_count=False,
                 refreshed_at=datetime.now(UTC),
