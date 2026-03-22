@@ -17,9 +17,7 @@ const DASHBOARD_JS = path.join(
 );
 const {
   baseTaskRow,
-  baseQueueRow,
   createTaskRow,
-  createQueueRow,
   createMixedRows,
   createOrchestratorRow,
 } = require("./__fixtures__/task_rows");
@@ -176,7 +174,7 @@ function createProposalRow(overrides = {}) {
 })();
 
 (function testRenderQueueTableUsesFieldDefinitions() {
-  const html = renderTaskTable([createQueueRow()]);
+  const html = renderTaskTable([createTaskRow()]);
   assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
   assert(html.includes('data-field="finishedAt"'));
   assert(html.includes("status-running"));
@@ -185,14 +183,14 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueTableEscapesTitleLabel() {
   const html = renderTaskTable([
-    createQueueRow({ title: '<img src=x onerror=alert(1)>' }),
+    createTaskRow({ title: '<img src=x onerror=alert(1)>' }),
   ]);
   assert(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
   assert(!html.includes('<img src=x onerror=alert(1)>'));
 })();
 
 (function testQueueDefinitionOrderMatchesTableHeaders() {
-  const html = renderTaskTable([createQueueRow()]);
+  const html = renderTaskTable([createTaskRow()]);
   // Dynamic definition-driven headers use data-sort-field via sortableTh
   const headerOrder = Array.from(html.matchAll(/data-sort-field="([^"]+)"/g)).map(
     (match) => match[1],
@@ -209,13 +207,13 @@ function createProposalRow(overrides = {}) {
 })();
 
 (function testRenderRowsTableDelegatesToQueueTable() {
-  const html = renderRowsTable([createQueueRow()]);
+  const html = renderRowsTable([createTaskRow()]);
   assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
 })();
 
 (function testRenderQueueTableWithSortStateAddsAriaSort() {
   const sortState = { field: "title", direction: "asc" };
-  const html = renderTaskTable([createQueueRow()], sortState);
+  const html = renderTaskTable([createTaskRow()], sortState);
   assert(html.includes('aria-sort="ascending"'), 'Expected ascending aria-sort on title column');
   assert(html.includes('class="sortable-header sort-asc"'), 'Expected sort-asc class on title column');
   assert(html.includes('\u25b2'), 'Expected ascending indicator \u25b2');
@@ -225,23 +223,23 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueTableWithDescSortStateAddsAriaSortDescending() {
   const sortState = { field: "createdAt", direction: "desc" };
-  const html = renderTaskTable([createQueueRow()], sortState);
+  const html = renderTaskTable([createTaskRow()], sortState);
   assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on createdAt column');
   assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on createdAt column');
   assert(html.includes('\u25bc'), 'Expected descending indicator \u25bc');
 })();
 
 (function testRenderQueueTableWithoutSortStateHasNoActiveClass() {
-  const html = renderTaskTable([createQueueRow()]);
+  const html = renderTaskTable([createTaskRow()]);
   assert(!html.includes('sort-asc'), 'No sort-asc without sortState');
   assert(!html.includes('sort-desc'), 'No sort-desc without sortState');
 })();
 
 (function testSortRowsByColumnSortsTitleAscending() {
   const rows = [
-    createQueueRow({ id: 'job-1', title: 'Zebra task' }),
-    createQueueRow({ id: 'job-2', title: 'Apple task' }),
-    createQueueRow({ id: 'job-3', title: 'Mango task' }),
+    createTaskRow({ id: 'job-1', title: 'Zebra task' }),
+    createTaskRow({ id: 'job-2', title: 'Apple task' }),
+    createTaskRow({ id: 'job-3', title: 'Mango task' }),
   ];
   const sorted = sortRowsByColumn(rows, 'title', 'asc');
   assert.strictEqual(sorted[0].title, 'Apple task');
@@ -251,9 +249,9 @@ function createProposalRow(overrides = {}) {
 
 (function testSortRowsByColumnSortsTitleDescending() {
   const rows = [
-    createQueueRow({ id: 'job-1', title: 'Zebra task' }),
-    createQueueRow({ id: 'job-2', title: 'Apple task' }),
-    createQueueRow({ id: 'job-3', title: 'Mango task' }),
+    createTaskRow({ id: 'job-1', title: 'Zebra task' }),
+    createTaskRow({ id: 'job-2', title: 'Apple task' }),
+    createTaskRow({ id: 'job-3', title: 'Mango task' }),
   ];
   const sorted = sortRowsByColumn(rows, 'title', 'desc');
   assert.strictEqual(sorted[0].title, 'Zebra task');
@@ -263,9 +261,9 @@ function createProposalRow(overrides = {}) {
 
 (function testSortRowsByColumnSortsCreatedAtAscending() {
   const rows = [
-    createQueueRow({ id: 'job-a', createdAt: '2026-03-10T00:00:00Z' }),
-    createQueueRow({ id: 'job-b', createdAt: '2026-03-08T00:00:00Z' }),
-    createQueueRow({ id: 'job-c', createdAt: '2026-03-12T00:00:00Z' }),
+    createTaskRow({ id: 'job-a', createdAt: '2026-03-10T00:00:00Z' }),
+    createTaskRow({ id: 'job-b', createdAt: '2026-03-08T00:00:00Z' }),
+    createTaskRow({ id: 'job-c', createdAt: '2026-03-12T00:00:00Z' }),
   ];
   const sorted = sortRowsByColumn(rows, 'createdAt', 'asc');
   assert.strictEqual(sorted[0].id, 'job-b');
@@ -275,9 +273,9 @@ function createProposalRow(overrides = {}) {
 
 (function testSortRowsByColumnSortsCreatedAtDescending() {
   const rows = [
-    createQueueRow({ id: 'job-a', createdAt: '2026-03-10T00:00:00Z' }),
-    createQueueRow({ id: 'job-b', createdAt: '2026-03-08T00:00:00Z' }),
-    createQueueRow({ id: 'job-c', createdAt: '2026-03-12T00:00:00Z' }),
+    createTaskRow({ id: 'job-a', createdAt: '2026-03-10T00:00:00Z' }),
+    createTaskRow({ id: 'job-b', createdAt: '2026-03-08T00:00:00Z' }),
+    createTaskRow({ id: 'job-c', createdAt: '2026-03-12T00:00:00Z' }),
   ];
   const sorted = sortRowsByColumn(rows, 'createdAt', 'desc');
   assert.strictEqual(sorted[0].id, 'job-c');
@@ -287,9 +285,9 @@ function createProposalRow(overrides = {}) {
 
 (function testSortRowsByColumnSortsByStatus() {
   const rows = [
-    createQueueRow({ id: 'job-1', rawStatus: 'succeeded' }),
-    createQueueRow({ id: 'job-2', rawStatus: 'failed' }),
-    createQueueRow({ id: 'job-3', rawStatus: 'running' }),
+    createTaskRow({ id: 'job-1', rawStatus: 'succeeded' }),
+    createTaskRow({ id: 'job-2', rawStatus: 'failed' }),
+    createTaskRow({ id: 'job-3', rawStatus: 'running' }),
   ];
   const sorted = sortRowsByColumn(rows, 'status', 'asc');
   assert.strictEqual(sorted[0].rawStatus, 'failed');
@@ -299,8 +297,8 @@ function createProposalRow(overrides = {}) {
 
 (function testSortRowsByColumnDoesNotMutateOriginalArray() {
   const rows = [
-    createQueueRow({ id: 'job-1', title: 'Zebra task' }),
-    createQueueRow({ id: 'job-2', title: 'Apple task' }),
+    createTaskRow({ id: 'job-1', title: 'Zebra task' }),
+    createTaskRow({ id: 'job-2', title: 'Apple task' }),
   ];
   const originalOrder = rows.map((r) => r.id).join(',');
   sortRowsByColumn(rows, 'title', 'asc');
@@ -363,15 +361,15 @@ function createProposalRow(overrides = {}) {
 
 (function testStableOrderKeepsExistingRowsInPreviousSequence() {
   const previousRows = [
-    createQueueRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
-    createQueueRow({ id: "job-b", createdAt: "2026-03-09T00:00:00Z" }),
-    createQueueRow({ id: "job-c", createdAt: "2026-03-08T00:00:00Z" }),
+    createTaskRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
+    createTaskRow({ id: "job-b", createdAt: "2026-03-09T00:00:00Z" }),
+    createTaskRow({ id: "job-c", createdAt: "2026-03-08T00:00:00Z" }),
   ];
   const previousIndex = buildRowOrderIndex(previousRows);
   const refreshedRows = [
-    createQueueRow({ id: "job-a", createdAt: "2026-03-08T00:00:00Z" }),
-    createQueueRow({ id: "job-b", createdAt: "2026-03-11T00:00:00Z" }),
-    createQueueRow({ id: "job-c", createdAt: "2026-03-07T00:00:00Z" }),
+    createTaskRow({ id: "job-a", createdAt: "2026-03-08T00:00:00Z" }),
+    createTaskRow({ id: "job-b", createdAt: "2026-03-11T00:00:00Z" }),
+    createTaskRow({ id: "job-c", createdAt: "2026-03-07T00:00:00Z" }),
   ];
 
   const stabilized = stabilizeRowsByPreviousOrder(refreshedRows, previousIndex);
@@ -383,14 +381,14 @@ function createProposalRow(overrides = {}) {
 
 (function testStableOrderSurfacesNewRowsBeforeExistingRows() {
   const previousRows = [
-    createQueueRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
-    createQueueRow({ id: "job-b", createdAt: "2026-03-09T00:00:00Z" }),
+    createTaskRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
+    createTaskRow({ id: "job-b", createdAt: "2026-03-09T00:00:00Z" }),
   ];
   const previousIndex = buildRowOrderIndex(previousRows);
   const refreshedRows = [
-    createQueueRow({ id: "job-a", createdAt: "2026-03-12T00:00:00Z" }),
-    createQueueRow({ id: "job-new", createdAt: "2026-03-11T00:00:00Z" }),
-    createQueueRow({ id: "job-b", createdAt: "2026-03-08T00:00:00Z" }),
+    createTaskRow({ id: "job-a", createdAt: "2026-03-12T00:00:00Z" }),
+    createTaskRow({ id: "job-new", createdAt: "2026-03-11T00:00:00Z" }),
+    createTaskRow({ id: "job-b", createdAt: "2026-03-08T00:00:00Z" }),
   ];
 
   const stabilized = stabilizeRowsByPreviousOrder(refreshedRows, previousIndex);
@@ -403,8 +401,8 @@ function createProposalRow(overrides = {}) {
 
 (function testStableOrderFallsBackToDefaultSortWithoutHistory() {
   const rows = [
-    createQueueRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
-    createQueueRow({ id: "job-b", createdAt: "2026-03-12T00:00:00Z" }),
+    createTaskRow({ id: "job-a", createdAt: "2026-03-10T00:00:00Z" }),
+    createTaskRow({ id: "job-b", createdAt: "2026-03-12T00:00:00Z" }),
   ];
   const stabilized = stabilizeRowsByPreviousOrder(rows, new Map());
   const expected = sortRows(rows);
@@ -416,8 +414,8 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueCardsRendersAllRows() {
   const rows = [
-    createQueueRow(),
-    createQueueRow({ id: "job-456", source: "manifests", sourceLabel: "Manifests" }),
+    createTaskRow(),
+    createTaskRow({ id: "job-456", source: "manifests", sourceLabel: "Manifests" }),
   ];
   const cardsHtml = renderTaskCards(rows);
   assert(cardsHtml.includes("queue-card"));
@@ -430,7 +428,7 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueLayoutsCombinesTableAndCards() {
   const rows = [
-    createQueueRow(),
+    createTaskRow(),
     createOrchestratorRow(),
   ];
   const html = renderTaskLayouts(rows);
@@ -463,8 +461,8 @@ function createProposalRow(overrides = {}) {
   };
   taskFieldDefinitions.push(definition);
   try {
-    const cardsHtml = renderTaskCards([createQueueRow()]);
-    const tableHtml = renderTaskTable([createQueueRow()]);
+    const cardsHtml = renderTaskCards([createTaskRow()]);
+    const tableHtml = renderTaskTable([createTaskRow()]);
     assert(cardsHtml.includes(definition.label));
     assert(cardsHtml.includes("branch"));
     assert(tableHtml.includes('data-field="publishMode"'));
