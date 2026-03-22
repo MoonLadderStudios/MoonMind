@@ -1498,12 +1498,12 @@ class TemporalArtifactService:
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self._presign_ttl_seconds)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
+            is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
+            download_filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
             url = self._store.presign_download(
                 storage_key=artifact.storage_key,
                 expires_in_seconds=self._presign_ttl_seconds,
-                download_filename=f"{artifact.artifact_id}.json"
-                if artifact.content_type == "application/json"
-                else artifact.artifact_id,
+                download_filename=download_filename,
             )
         else:
             url = f"/api/artifacts/{artifact.artifact_id}/download"

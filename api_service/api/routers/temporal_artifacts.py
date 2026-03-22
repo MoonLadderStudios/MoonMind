@@ -340,11 +340,11 @@ async def download_artifact(
             artifact_id=artifact_id,
             principal=principal,
         )
+        is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
+        filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
         return FileResponse(
             path,
-            filename=f"{artifact.artifact_id}.json"
-            if artifact.content_type == "application/json"
-            else artifact.artifact_id,
+            filename=filename,
             media_type=artifact.content_type or "application/octet-stream",
         )
     except TemporalArtifactValidationError:
@@ -362,13 +362,13 @@ async def download_artifact(
         _raise_temporal_artifact_http(exc)
         raise
 
+    is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
+    filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
     return StreamingResponse(
         chunks,
         media_type=artifact.content_type or "application/octet-stream",
         headers={
-            "content-disposition": f'attachment; filename="{artifact.artifact_id}.json"'
-            if artifact.content_type == "application/json"
-            else f'attachment; filename="{artifact.artifact_id}"'
+            "content-disposition": f'attachment; filename="{filename}"'
         },
     )
 
