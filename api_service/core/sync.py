@@ -190,7 +190,7 @@ async def map_temporal_state_to_projection(
         "create_idempotency_key": memo.get("create_idempotency_key"),
         "last_update_idempotency_key": memo.get("last_update_idempotency_key"),
         "last_update_response": _sanitize_for_json(memo.get("last_update_response")),
-        "started_at": desc.start_time,
+        "started_at": desc.execution_time or desc.start_time,
         "updated_at": _utc_now(),
         "closed_at": desc.close_time,
     }
