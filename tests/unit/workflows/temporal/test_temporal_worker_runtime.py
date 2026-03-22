@@ -226,21 +226,19 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         resolve_external_adapter,
         external_adapter_execution_style,
     ]
-    mock_repository_cls.assert_called_once_with("session")
-    mock_service_cls.assert_called_once_with(mock_repository_cls.return_value)
-    mock_artifact_activities_cls.assert_called_once_with(mock_service_cls.return_value)
+    mock_artifact_activities_cls.assert_called_once_with(ANY)
     mock_plan_activities_cls.assert_called_once_with(
-        artifact_service=mock_service_cls.return_value,
+        artifact_service=ANY,
         planner=ANY,
     )
     mock_sandbox_activities_cls.assert_called_once_with(
-        artifact_service=mock_service_cls.return_value
+        artifact_service=ANY
     )
     mock_jules_activities_cls.assert_called_once_with(
-        artifact_service=mock_service_cls.return_value
+        artifact_service=ANY
     )
     mock_agent_runtime_activities_cls.assert_called_once_with(
-        artifact_service=mock_service_cls.return_value,
+        artifact_service=ANY,
         run_store=ANY,
         run_supervisor=ANY,
         run_launcher=ANY,
@@ -249,7 +247,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_dispatcher_cls.assert_called_once_with()
     mock_skill_activities_cls.assert_called_once_with(
         dispatcher=mock_dispatcher_cls.return_value,
-        artifact_service=mock_service_cls.return_value,
+        artifact_service=ANY,
     )
     mock_build_bindings.assert_called_once_with(
         fleet="artifacts",
@@ -263,7 +261,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         review_activities=ANY,
     )
     mock_proposal_activities_cls.assert_called_once_with(
-        artifact_service=mock_service_cls.return_value,
+        artifact_service=ANY,
         proposal_service_factory=ANY,
     )
     proposal_service_factory = mock_proposal_activities_cls.call_args.kwargs[

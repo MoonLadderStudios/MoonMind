@@ -332,9 +332,18 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    class ArtifactServiceProxy:
+        def __getattr__(self, name):
+            async def wrapper(*args, **kwargs):
+                from moonmind.api_service.db.base import get_async_session_context
+                async with get_async_session_context() as session:
+                    service = TemporalArtifactService(TemporalArtifactRepository(session))
+                    func = getattr(service, name)
+                    return await func(*args, **kwargs)
+            return wrapper
+
     try:
-        session = await resources.enter_async_context(get_async_session_context())
-        artifact_service = TemporalArtifactService(TemporalArtifactRepository(session))
+        artifact_service = ArtifactServiceProxy()  # type: ignore
         sandbox_activities = TemporalSandboxActivities(artifact_service=artifact_service)
         planner = _build_runtime_planner()
 
