@@ -76,12 +76,12 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 **Objective:** Ensure every action that currently routes through `/api/queue/jobs` can be performed through the Temporal execution path instead.
 
-- [ ] **1.1** Audit queue-only features: attachments, live sessions, operator messages, task control, events/SSE, skills list
-- [ ] **1.2** Map each queue feature to its Temporal equivalent or mark as deferred
+- [x] **1.1** Audit queue-only features: attachments, live sessions, operator messages, task control, events/SSE, skills list
+- [x] **1.2** Map each queue feature to its Temporal equivalent or mark as deferred
 - [x] **1.3** Ensure Temporal submit supports all current submit form fields: runtime, model, effort, repository, publish mode, attachments
 - [x] **1.4** Redirect manifest submission (`/api/queue/jobs?type=manifest`) to `MoonMind.ManifestIngest` Temporal workflow
-- [ ] **1.5** Confirm recurring tasks (`/api/recurring-tasks`) already use Temporal Schedules (check if still queue-backed)
-- [ ] **1.6** Verify step templates work against Temporal execution path
+- [x] **1.5** Confirm recurring tasks (`/api/recurring-tasks`) already use Temporal Schedules (check if still queue-backed)
+- [x] **1.6** Verify step templates work against Temporal execution path
 
 > **Gate:** No user-facing action requires the queue path. Queue router can be deprecated without feature loss.
 
