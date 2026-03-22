@@ -248,6 +248,7 @@ services:
       - TEMPORAL_WORKFLOW_TASK_QUEUE=${TEMPORAL_WORKFLOW_TASK_QUEUE:-mm.workflow}
       - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m moonmind.workflows.temporal.worker_runtime}
+      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
     env_file:
       - .env
     volumes:
@@ -453,6 +454,7 @@ services:
       - TEMPORAL_WORKER_FLEET=agent_runtime
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
       - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
+      - MOONMIND_URL=${MOONMIND_URL:-http://api:5000}
       - CODEX_VOLUME_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}

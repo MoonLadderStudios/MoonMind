@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -1118,9 +1119,12 @@ class TemporalArtifactService:
                     f"({self._direct_upload_max_bytes}) for direct uploads"
                 )
             mode = db_models.TemporalArtifactUploadMode.MULTIPART
-            upload_id = self._store.create_multipart_upload(
-                storage_key=storage_key,
-                content_type=content_type,
+            upload_id = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._store.create_multipart_upload(
+                    storage_key=storage_key,
+                    content_type=content_type,
+                ),
             )
         else:
             if self._store.backend is db_models.TemporalArtifactStorageBackend.S3:
@@ -1219,10 +1223,13 @@ class TemporalArtifactService:
             await self._repository.commit()
             raise
 
-        self._store.write_bytes(
-            artifact.storage_key,
-            payload,
-            content_type=content_type or artifact.content_type,
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self._store.write_bytes(
+                artifact.storage_key,
+                payload,
+                content_type=content_type or artifact.content_type,
+            ),
         )
         artifact.sha256 = digest
         artifact.size_bytes = actual_size
@@ -1310,19 +1317,26 @@ class TemporalArtifactService:
                     "parts are required for multipart completion"
                 )
             try:
-                self._store.complete_multipart_upload(
-                    storage_key=artifact.storage_key,
-                    upload_id=artifact.upload_id,
-                    parts=normalized_parts,
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._store.complete_multipart_upload(
+                        storage_key=artifact.storage_key,
+                        upload_id=artifact.upload_id,
+                        parts=normalized_parts,
+                    ),
                 )
             except Exception:
                 artifact.status = db_models.TemporalArtifactStatus.FAILED
                 await self._repository.commit()
                 raise
-            payload = self._store.read_bytes(artifact.storage_key)
+            payload = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_bytes, artifact.storage_key
+            )
         else:
             try:
-                payload = self._store.read_bytes(artifact.storage_key)
+                payload = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
             except Exception as exc:
                 raise TemporalArtifactStateError(
                     "artifact upload is not complete"
@@ -1384,7 +1398,9 @@ class TemporalArtifactService:
         if not allow_restricted_raw:
             self._assert_raw_access(artifact, principal=principal)
         try:
-            data = self._store.read_bytes(artifact.storage_key)
+            data = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_bytes, artifact.storage_key
+            )
         except Exception as exc:
             raise TemporalArtifactStateError("artifact bytes are missing") from exc
         logger.info(
@@ -1426,7 +1442,9 @@ class TemporalArtifactService:
         if not allow_restricted_raw:
             self._assert_raw_access(artifact, principal=principal)
         try:
-            path = self._store.read_path(artifact.storage_key)
+            path = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_path, artifact.storage_key
+            )
         except TemporalArtifactValidationError:
             raise
         except Exception as exc:
@@ -1652,7 +1670,9 @@ class TemporalArtifactService:
                 "artifact must be soft-deleted before hard delete"
             )
 
-        self._store.delete(artifact.storage_key)
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._store.delete, artifact.storage_key
+        )
         now = datetime.now(UTC)
         artifact.hard_deleted_at = now
         artifact.tombstoned_at = now
@@ -1689,7 +1709,9 @@ class TemporalArtifactService:
         )
         hard_deleted = 0
         for artifact in hard_candidates:
-            self._store.delete(artifact.storage_key)
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._store.delete, artifact.storage_key
+            )
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
             artifact.last_lifecycle_run_id = lifecycle_run_id
