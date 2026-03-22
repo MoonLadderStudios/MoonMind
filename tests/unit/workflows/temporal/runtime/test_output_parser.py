@@ -189,14 +189,14 @@ class TestDefaultStrategyClassifyExit:
 
 
 class TestDefaultOutputParser:
-    def test_gemini_returns_none(self) -> None:
+    def test_gemini_returns_plain_text(self) -> None:
         s = GeminiCliStrategy()
-        assert s.create_output_parser() is None
+        assert isinstance(s.create_output_parser(), PlainTextOutputParser)
 
-    def test_claude_returns_none(self) -> None:
+    def test_claude_returns_plain_text(self) -> None:
         s = ClaudeCodeStrategy()
-        assert s.create_output_parser() is None
+        assert isinstance(s.create_output_parser(), PlainTextOutputParser)
 
-    def test_codex_returns_none(self) -> None:
+    def test_codex_returns_plain_text(self) -> None:
         s = CodexCliStrategy()
-        assert s.create_output_parser() is None
+        assert isinstance(s.create_output_parser(), PlainTextOutputParser)

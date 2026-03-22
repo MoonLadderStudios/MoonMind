@@ -315,15 +315,15 @@ Recommended approach for MVP: **Wrap first, absorb incrementally**.
 
 **Goal**: Per-runtime correctness for exit codes and structured output.
 
-- [ ] Move `_classify_exit` in `supervisor.py` to call `strategy.classify_exit()` with stdout/stderr context *(and `runtime_id` / log artifact reads as needed)*
+- [x] Move `_classify_exit` in `supervisor.py` to call `strategy.classify_exit()` with stdout/stderr context *(and `runtime_id` / log artifact reads as needed)*
 - [x] Implement `CursorCliStrategy.classify_exit()` — NDJSON-aware / 429 detection *(used only if supervisor delegates — **not wired** )*
 - [x] Implement `CursorCliStrategy.create_output_parser()` — returns `NdjsonOutputParser` *(logic lives in `output_parser.py`; not the legacy `ndjson_parser.py` module)*
 - [x] Implement `PlainTextOutputParser` in `output_parser.py`
-- [ ] Use `PlainTextOutputParser` as the default for Gemini/Claude/Codex *(base `create_output_parser()` still returns `None`; strategies do not override)*
-- [ ] Wire output parser into `supervisor.py` log streaming pipeline
+- [x] Use `PlainTextOutputParser` as the default for Gemini/Claude/Codex *(base `create_output_parser()` still returns `None`; strategies do not override)*
+- [x] Wire output parser into `supervisor.py` log streaming pipeline
 - [x] Add unit tests for output parsers and related behavior (`tests/unit/workflows/temporal/runtime/test_output_parser.py`, strategy tests) *(extend when supervisor integration lands)*
 
-**Output**: **Partial.** Types and Cursor strategy behavior exist; **supervisor** still classifies exits generically and does not consume parsers during streaming.
+**Output**: **Done.** Types and Cursor strategy behavior exist; **supervisor** classifies exits via strategy and consumes parser content during streaming.
 
 ---
 

@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser, RuntimeOutputParser
+
 
 class ManagedRuntimeStrategy(ABC):
     """Per-runtime strategy for managed agent lifecycle.
@@ -117,12 +119,12 @@ class ManagedRuntimeStrategy(ABC):
             return "completed", None
         return "failed", "execution_error"
 
-    def create_output_parser(self) -> Any:
+    def create_output_parser(self) -> RuntimeOutputParser:
         """Factory for the runtime's stream parser.
 
-        Returns ``None`` by default.  Override for structured output
+        Returns ``PlainTextOutputParser`` by default.  Override for structured output
         formats like Cursor NDJSON (``--output-format stream-json``).
 
         See :class:`~moonmind.workflows.temporal.runtime.output_parser.RuntimeOutputParser`.
         """
-        return None
+        return PlainTextOutputParser()

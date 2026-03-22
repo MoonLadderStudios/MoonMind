@@ -23,10 +23,10 @@ class RuntimeLogStreamer:
         *,
         run_id: str,
         stream_name: str,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Read an asyncio.StreamReader in chunks and write to an artifact file.
 
-        Returns the storage-relative artifact reference.
+        Returns the storage-relative artifact reference and the decoded string content.
         """
         chunks: list[bytes] = []
         while True:
@@ -42,7 +42,7 @@ class RuntimeLogStreamer:
             artifact_name=artifact_name,
             data=data,
         )
-        return storage_ref
+        return storage_ref, data.decode("utf-8", errors="replace")
 
     def collect_diagnostics(
         self,
