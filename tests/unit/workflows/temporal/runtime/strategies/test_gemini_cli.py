@@ -169,15 +169,19 @@ class TestGeminiCliBuildCommand:
 class TestGeminiCliShapeEnvironment:
     def test_passes_through_gemini_keys(self) -> None:
         s = GeminiCliStrategy()
-        env = {
+        base_env = {"UNRELATED_KEY": "value"}
+        
+        from unittest.mock import patch
+        with patch("os.environ", {
             "HOME": "/home/user",
             "GEMINI_HOME": "/opt/gemini",
             "GEMINI_CLI_HOME": "/opt/gemini-cli",
-            "UNRELATED_KEY": "value",
             "PATH": "/usr/bin",
-        }
-        result = s.shape_environment(env, None)
+        }):
+            result = s.shape_environment(base_env, None)
+            
         assert result == {
+            "UNRELATED_KEY": "value",
             "HOME": "/home/user",
             "GEMINI_HOME": "/opt/gemini",
             "GEMINI_CLI_HOME": "/opt/gemini-cli",
@@ -185,13 +189,21 @@ class TestGeminiCliShapeEnvironment:
 
     def test_missing_optional_keys(self) -> None:
         s = GeminiCliStrategy()
-        env = {"HOME": "/home/user", "PATH": "/usr/bin"}
-        result = s.shape_environment(env, None)
-        assert result == {"HOME": "/home/user"}
+        base_env = {"PATH": "/usr/bin"}
+        
+        from unittest.mock import patch
+        with patch("os.environ", {"HOME": "/home/user"}):
+            result = s.shape_environment(base_env, None)
+            
+        assert result == {"PATH": "/usr/bin", "HOME": "/home/user"}
 
     def test_empty_env(self) -> None:
         s = GeminiCliStrategy()
-        result = s.shape_environment({}, None)
+        
+        from unittest.mock import patch
+        with patch("os.environ", {"UNRELATED": "value"}):
+            result = s.shape_environment({}, None)
+            
         assert result == {}
 
 

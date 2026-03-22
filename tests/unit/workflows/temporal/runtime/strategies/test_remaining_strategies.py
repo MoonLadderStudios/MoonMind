@@ -259,16 +259,20 @@ class TestCodexCliBuildCommand:
 class TestCodexCliShapeEnvironment:
     def test_passes_through_codex_keys(self) -> None:
         s = CodexCliStrategy()
-        env = {
+        base_env = {"UNRELATED": "value"}
+        
+        from unittest.mock import patch
+        with patch("os.environ", {
             "HOME": "/home/user",
             "CODEX_HOME": "/opt/codex",
             "CODEX_CONFIG_HOME": "/opt/codex-config",
             "CODEX_CONFIG_PATH": "/opt/codex-config/path",
-            "UNRELATED": "value",
             "PATH": "/usr/bin",
-        }
-        result = s.shape_environment(env, None)
+        }):
+            result = s.shape_environment(base_env, None)
+            
         assert result == {
+            "UNRELATED": "value",
             "HOME": "/home/user",
             "CODEX_HOME": "/opt/codex",
             "CODEX_CONFIG_HOME": "/opt/codex-config",
@@ -277,7 +281,9 @@ class TestCodexCliShapeEnvironment:
 
     def test_empty_env(self) -> None:
         s = CodexCliStrategy()
-        result = s.shape_environment({}, None)
+        from unittest.mock import patch
+        with patch("os.environ", {"UNRELATED": "value"}):
+            result = s.shape_environment({}, None)
         assert result == {}
 
 
