@@ -31,6 +31,7 @@ TaskStatusFilter = (
     Literal[
         "queued",
         "running",
+        "waiting",
         "awaiting_action",
         "succeeded",
         "failed",
@@ -714,6 +715,7 @@ class TaskCompatibilityService:
                 db_models.MoonMindWorkflowState.EXECUTING,
                 db_models.MoonMindWorkflowState.FINALIZING,
             ),
+            "waiting": (db_models.MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,),
             "awaiting_action": (db_models.MoonMindWorkflowState.AWAITING_EXTERNAL,),
             "succeeded": (db_models.MoonMindWorkflowState.SUCCEEDED,),
             "failed": (db_models.MoonMindWorkflowState.FAILED,),
