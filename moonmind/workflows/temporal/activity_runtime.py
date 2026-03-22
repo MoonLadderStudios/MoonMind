@@ -2406,10 +2406,10 @@ class TemporalProposalActivities:
         }
 
         candidate: dict[str, Any] = {
-            "title": title,
+            "title": f"[run_quality] {title}",
             "summary": summary,
-            "category": "follow_up",
-            "tags": ["auto-generated", "follow-up"],
+            "category": "run_quality",
+            "tags": ["artifact_gap", "auto-generated", "follow_up"],
             "taskCreateRequest": task_create_request,
         }
 
@@ -2511,6 +2511,8 @@ class TemporalProposalActivities:
                             "workflowId": workflow_id,
                             "temporalRunId": run_id,
                             "triggerRepo": trigger_repo,
+                            "triggerJobId": workflow_id,
+                            "signal": {"severity": "normal", "type": "follow_up"}
                         }
                         await service.create_proposal(
                             title=title,

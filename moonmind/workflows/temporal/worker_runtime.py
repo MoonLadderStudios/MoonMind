@@ -199,6 +199,20 @@ def _build_runtime_planner():
             "runtime": runtime_node,
         }
 
+        step_count = task_payload.get("stepCount") or parameter_payload.get("stepCount")
+        if step_count is not None:
+            try:
+                node_inputs["stepCount"] = int(step_count)
+            except (ValueError, TypeError):
+                pass
+
+        max_attempts = task_payload.get("maxAttempts") or parameter_payload.get("maxAttempts")
+        if max_attempts is not None:
+            try:
+                node_inputs["maxAttempts"] = int(max_attempts)
+            except (ValueError, TypeError):
+                pass
+
         publish_payload = _coerce_mapping(task_payload.get("publish"))
         publish_mode = publish_payload.get(
             "mode", parameter_payload.get("publishMode")

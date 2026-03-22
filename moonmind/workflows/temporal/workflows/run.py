@@ -710,7 +710,7 @@ class MoonMindRunWorkflow:
                 workspace_spec[ws_key] = ws_val
 
         parameters: dict[str, Any] = {}
-        for param_key in ("model", "effort", "publishMode", "allowed_tools"):
+        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts"):
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
