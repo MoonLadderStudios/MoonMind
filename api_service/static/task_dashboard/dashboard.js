@@ -3022,10 +3022,11 @@
       rowOrderKey,
       buildRowOrderIndex,
       stabilizeRowsByPreviousOrder,
-      
+
       toTemporalRows,
-      
-      
+      parseQueuePaginationFromSearch,
+      applyQueuePaginationToSearch,
+      resetQueuePaginationState,
     };
     window.__temporalRunHistoryTest = {
       resolveTemporalDetailContext,
@@ -3415,6 +3416,33 @@
     };
 
     startPolling(loader, pollIntervals.list);
+  }
+
+  function parseQueuePaginationFromSearch(queryString) {
+    const params = new URLSearchParams(queryString || "");
+    const parsedLimit = Number(params.get("limit") || DEFAULT_QUEUE_PAGE_SIZE);
+    return {
+      limit: QUEUE_PAGE_SIZE_OPTIONS.includes(parsedLimit) ? parsedLimit : DEFAULT_QUEUE_PAGE_SIZE,
+      cursor: String(params.get("cursor") || "").trim() || null,
+    };
+  }
+
+  function applyQueuePaginationToSearch(state, params) {
+    params.set("limit", String(state.limit));
+    if (state.cursor) {
+      params.set("cursor", state.cursor);
+    } else {
+      params.delete("cursor");
+    }
+  }
+
+  function resetQueuePaginationState(state) {
+    state.cursor = null;
+    state.cursorStack = [];
+    state.nextCursor = null;
+    state.hasMore = false;
+    state.pageStart = 0;
+    state.pageEnd = 0;
   }
 
   async function renderQueueListPage() {
