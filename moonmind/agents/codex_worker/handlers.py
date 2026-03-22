@@ -20,7 +20,8 @@ from moonmind.publish.sanitization import (
     sanitize_metadata_footer_value,
     sanitize_publish_subject,
 )
-from moonmind.agents.codex_worker.utils import verify_cli_is_executable
+from moonmind.publish.service import PublishService
+from moonmind.utils.cli import verify_cli_is_executable
 from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService
 from moonmind.rag.settings import RagRuntimeSettings
@@ -899,7 +900,6 @@ class CodexExecHandler:
         cancel_event: asyncio.Event | None = None,
         output_chunk_callback: OutputChunkCallback | None = None,
     ) -> str | None:
-        from moonmind.publish.service import PublishService
 
         async def run_command_wrapper(
             command: list[str],

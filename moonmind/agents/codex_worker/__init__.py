@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         WorkspaceReplayError,
         is_failure_retryable,
     )
-    from moonmind.agents.codex_worker.utils import CliVerificationError
+    from moonmind.utils.cli import CliVerificationError
     from moonmind.agents.codex_worker.worker import (
         ClaimedJob,
         CodexWorker,
@@ -78,7 +78,7 @@ _EXPORT_MAP = {
     "StepTimeoutExceeded": "moonmind.agents.codex_worker.self_heal",
     "WorkspaceReplayError": "moonmind.agents.codex_worker.self_heal",
     "is_failure_retryable": "moonmind.agents.codex_worker.self_heal",
-    "CliVerificationError": "moonmind.agents.codex_worker.utils",
+    "CliVerificationError": "moonmind.utils.cli",
     "ClaimedJob": "moonmind.agents.codex_worker.worker",
     "CodexWorker": "moonmind.agents.codex_worker.worker",
     "CodexWorkerConfig": "moonmind.agents.codex_worker.worker",

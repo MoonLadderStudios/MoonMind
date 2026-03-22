@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Protocol
 from uuid import UUID
 
-from moonmind.agents.codex_worker.utils import verify_cli_is_executable
+from moonmind.utils.cli import verify_cli_is_executable
 from moonmind.publish.sanitization import (
     sanitize_metadata_footer_value,
     sanitize_publish_subject,
@@ -19,7 +18,8 @@ class CommandResult(Protocol):
     """Protocol for a command result with stdout."""
 
     @property
-    def stdout(self) -> str: ...
+    def stdout(self) -> str:
+        pass
 
 
 CommandRunner = Callable[
