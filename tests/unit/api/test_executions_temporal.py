@@ -55,26 +55,36 @@ async def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
         mock_client = AsyncMock()
         mock_adapter.get_client = AsyncMock(return_value=mock_client)
 
-        async def mock_list_workflows(query):
-            from datetime import UTC, datetime
-            from types import SimpleNamespace
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
 
-            mock_wf = SimpleNamespace()
-            mock_wf.id = "mm:wf-1"
-            mock_wf.run_id = "run-1"
-            mock_wf.namespace = "moonmind"
-            mock_wf.workflow_type = "MoonMind.Run"
-            mock_wf.status = 1  # RUNNING
-            mock_wf.memo = {"waiting_reason": "external_completion"}
-            mock_wf.search_attributes = {
-                "mm_state": b'"awaiting_external"',
-                "mm_entry": b'["run"]',
-            }
-            mock_wf.start_time = datetime.now(UTC)
-            mock_wf.close_time = None
-            yield mock_wf
+        memo_data = {"waiting_reason": "external_completion"}
 
-        mock_client.list_workflows = mock_list_workflows
+        async def _memo():
+            return memo_data
+
+        mock_wf = SimpleNamespace()
+        mock_wf.id = "mm:wf-1"
+        mock_wf.run_id = "run-1"
+        mock_wf.namespace = "moonmind"
+        mock_wf.workflow_type = "MoonMind.Run"
+        mock_wf.status = 1  # RUNNING
+        mock_wf.memo = _memo
+        mock_wf.search_attributes = {
+            "mm_state": b'"awaiting_external"',
+            "mm_entry": b'["run"]',
+        }
+        mock_wf.start_time = datetime.now(UTC)
+        mock_wf.execution_time = None
+        mock_wf.close_time = None
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [mock_wf]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+
+        mock_count = SimpleNamespace(count=1)
+        mock_client.count_workflows = AsyncMock(return_value=mock_count)
 
         response = test_client.get(
             "/api/executions",
@@ -220,13 +230,17 @@ async def test_temporal_unavailability_returns_503(client) -> None:
         mock_client = AsyncMock()
         mock_adapter.get_client = AsyncMock(return_value=mock_client)
 
-        async def mock_list_workflows(query):
-            from temporalio.service import RPCError, RPCStatusCode
+        from temporalio.service import RPCError, RPCStatusCode
 
-            raise RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
-            yield  # Ensure it's treated as an async generator
+        mock_iterator = AsyncMock()
+        mock_iterator.fetch_next_page = AsyncMock(
+            side_effect=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
+        )
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
 
-        mock_client.list_workflows = mock_list_workflows
+        mock_client.count_workflows = AsyncMock(
+            side_effect=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
+        )
 
         response = test_client.get("/api/executions?source=temporal")
 
