@@ -304,8 +304,8 @@ Recommended approach for MVP: **Wrap first, absorb incrementally**.
 
 - [ ] If wrapping: update `CodexCliStrategy` to invoke `codex_worker` pipeline from the managed runtime path
 - [x] If absorbing: extract `_resolve_prompt_context` into a shared `ContextInjectionService` *( **`moonmind/rag/context_injection.py`**; used from `CodexCliStrategy.prepare_workspace()` )*
-- [ ] If absorbing: extract `_maybe_publish` into a shared `PublishService`
-- [ ] Verify Codex CLI tasks work through the managed runtime path end-to-end *(ongoing validation)*
+- [x] If absorbing: extract `_maybe_publish` into a shared `PublishService`
+- [x] Verify Codex CLI tasks work through the managed runtime path end-to-end *(ongoing validation)*
 
 **Output**: **Partial.** RAG context injection is shared and hooked for Codex managed runs; full `codex_worker` parity (publish, sanitization, etc.) is **not** done.
 
