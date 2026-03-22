@@ -61,6 +61,7 @@ _ALLOWED_OWNER_TYPES = {"user", "system", "service"}
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.SCHEDULED: "queued",
     MoonMindWorkflowState.INITIALIZING: "queued",
+    MoonMindWorkflowState.WAITING_ON_DEPENDENCIES: "waiting",
     MoonMindWorkflowState.PLANNING: "running",
     MoonMindWorkflowState.EXECUTING: "running",
     MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
@@ -460,6 +461,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
 
     state_actions = {
         "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "waiting_on_dependencies": {"can_set_title", "can_update_inputs", "can_cancel"},
         "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
         "executing": {
             "can_set_title",
