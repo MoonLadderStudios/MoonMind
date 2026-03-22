@@ -294,17 +294,77 @@ def _serialize_execution(
         attention_required=attention_required,
     )
 
-    params = dict(getattr(record, "parameters", None) or {})
+    params_raw = getattr(record, "parameters", None)
+    params = dict(params_raw) if isinstance(params_raw, dict) else {}
     target_runtime, param_model, param_effort = [
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+    if not target_runtime:
+        target_runtime = (
+            _coerce_temporal_scalar(search_attributes.get("mm_target_runtime"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_runtime"))
+            or _coerce_temporal_scalar(search_attributes.get("runtime"))
+        ) or None
+
     task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
     tool_params = task_params.get("tool") if isinstance(task_params.get("tool"), dict) else {}
     skill_params = task_params.get("skill") if isinstance(task_params.get("skill"), dict) else {}
     target_skill = (
         str(tool_params.get("name") or skill_params.get("name") or "").strip() or None
     )
+    if not target_skill:
+        target_skill = (
+            _coerce_temporal_scalar(search_attributes.get("mm_target_skill"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_skill_id"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_skill"))
+            or _coerce_temporal_scalar(search_attributes.get("skillId"))
+            or _coerce_temporal_scalar(search_attributes.get("skill"))
+        ) or None
+
+    task_payload = params.get("task")
+    if not isinstance(task_payload, dict):
+        task_payload = {}
+
+    git_payload = task_payload.get("git")
+    if not isinstance(git_payload, dict):
+        git_payload = {}
+
+    publish_payload = task_payload.get("publish")
+    if not isinstance(publish_payload, dict):
+        publish_payload = {}
+
+    # Precedence: task.git.startingBranch > task.startingBranch > params.startingBranch
+    starting_branch = str(
+        git_payload.get("startingBranch")
+        or task_payload.get("startingBranch")
+        or params.get("startingBranch")
+        or ""
+    ).strip() or None
+    # Only show the "(default)" fallback when git context exists in the payload.
+    has_git_context = bool(git_payload) or any(
+        task_payload.get(k) or params.get(k)
+        for k in ("startingBranch", "newBranch", "defaultBranch", "branch")
+    )
+    if not starting_branch and has_git_context:
+        default_branch = str(
+            git_payload.get("defaultBranch") or params.get("defaultBranch") or "main"
+        ).strip()
+        starting_branch = f"{default_branch} (default)"
+
+    # Precedence: task.git.newBranch > task.newBranch > params.newBranch
+    target_branch = str(
+        git_payload.get("newBranch")
+        or task_payload.get("newBranch")
+        or params.get("newBranch")
+        or ""
+    ).strip() or None
+
+    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
+    raw_publish_mode = str(
+        params.get("publishMode") or publish_payload.get("mode") or ""
+    ).strip() or None
+    publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
 
     return ExecutionModel(
         task_id=record.workflow_id,
@@ -334,6 +394,9 @@ def _serialize_execution(
         target_skill=target_skill,
         model=param_model,
         effort=param_effort,
+        starting_branch=starting_branch,
+        target_branch=target_branch,
+        publish_mode=publish_mode,
         artifact_refs=(
             list(record.artifact_refs or []) if include_artifact_refs else []
         ),
@@ -1192,25 +1255,40 @@ async def list_executions(
 
             query_str = " AND ".join(query_parts) if query_parts else ""
 
-            items = []
-            async for wf in client.list_workflows(query=query_str):
-                payload = await map_temporal_state_to_projection(wf)
-                # We need a record-like object for serialization
-                from types import SimpleNamespace
+            import base64
+            token_bytes = base64.b64decode(next_page_token) if next_page_token else None
 
-                record_obj = SimpleNamespace(**payload)
-                if not hasattr(record_obj, "updated_at"):
-                    record_obj.updated_at = datetime.now(UTC)
-                items.append(
-                    _serialize_execution(record_obj, include_artifact_refs=False)
-                )
-                if len(items) >= page_size:
-                    break
+            count_info = await client.count_workflows(query=query_str)
+
+            iterator = client.list_workflows(
+                query=query_str,
+                page_size=page_size,
+                next_page_token=token_bytes,
+            )
+            await iterator.fetch_next_page()
+
+            items = []
+            if iterator.current_page:
+                for wf in iterator.current_page:
+                    payload = await map_temporal_state_to_projection(wf)
+                    # We need a record-like object for serialization
+                    from types import SimpleNamespace
+
+                    record_obj = SimpleNamespace(**payload)
+                    if not hasattr(record_obj, "updated_at"):
+                        record_obj.updated_at = datetime.now(UTC)
+                    items.append(
+                        _serialize_execution(record_obj, include_artifact_refs=False)
+                    )
+
+            new_token_str = None
+            if iterator.next_page_token:
+                new_token_str = base64.b64encode(iterator.next_page_token).decode("utf-8")
 
             return ExecutionListResponse(
                 items=items,
-                next_page_token=None,
-                count=len(items),
+                next_page_token=new_token_str,
+                count=count_info.count,
                 count_mode="exact",
                 degraded_count=False,
                 refreshed_at=datetime.now(UTC),

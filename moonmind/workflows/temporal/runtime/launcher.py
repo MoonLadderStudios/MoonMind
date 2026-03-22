@@ -324,6 +324,7 @@ class ManagedRuntimeLauncher:
         self,
         profile: ManagedRuntimeProfile,
         request: AgentExecutionRequest,
+        strategy: Any = None,
     ) -> list[str]:
         """Construct the CLI command from a runtime profile and request params."""
         cmd = list(profile.command_template)
@@ -332,9 +333,10 @@ class ManagedRuntimeLauncher:
         # Check the strategy registry before falling through to the
         # legacy if/elif block.  Registered runtimes are handled by
         # their strategy; unregistered runtimes use the existing code.
-        from moonmind.workflows.temporal.runtime.strategies import get_strategy
-
-        strategy = get_strategy(profile.runtime_id)
+        if strategy is None:
+            from moonmind.workflows.temporal.runtime.strategies import get_strategy
+            strategy = get_strategy(profile.runtime_id)
+            
         if strategy is not None:
             return strategy.build_command(profile, request)
 
@@ -378,7 +380,10 @@ class ManagedRuntimeLauncher:
                 f"Active run already exists for run_id={run_id}"
             )
 
-        cmd = self.build_command(profile, request)
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        strategy = get_strategy(profile.runtime_id)
+
+        cmd = self.build_command(profile, request, strategy=strategy)
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
@@ -397,43 +402,27 @@ class ManagedRuntimeLauncher:
 
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).
-        if resolved_workspace_path is not None:
-            from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        if resolved_workspace_path is not None and strategy is not None:
+            try:
+                await strategy.prepare_workspace(
+                    Path(resolved_workspace_path), request
+                )
+            except Exception:
+                logger.warning(
+                    "strategy.prepare_workspace failed for run_id=%s runtime=%s",
+                    run_id,
+                    profile.runtime_id,
+                    exc_info=True,
+                )
 
-            strategy = get_strategy(profile.runtime_id)
-            if strategy is not None:
-                try:
-                    await strategy.prepare_workspace(
-                        Path(resolved_workspace_path), request
-                    )
-                except Exception:
-                    logger.warning(
-                        "strategy.prepare_workspace failed for run_id=%s runtime=%s",
-                        run_id,
-                        profile.runtime_id,
-                        exc_info=True,
-                    )
+        if strategy is not None:
+            env_overrides = strategy.shape_environment(env_overrides, profile)
 
-        # Ensure runtime-specific home dirs are set so CLIs can find their
-        # auth credentials even when env_overrides comes from a different
-        # worker (the workflow worker) that may lack these variables.
-        _runtime_env_keys = (
-            "HOME",
-            "GEMINI_HOME",
-            "GEMINI_CLI_HOME",
-            "CODEX_HOME",
-            "CODEX_CONFIG_HOME",
-            "CODEX_CONFIG_PATH",
-        )
-        for key in _runtime_env_keys:
-            if key not in env_overrides and key in os.environ:
-                env_overrides[key] = os.environ[key]
         for key in profile.passthrough_env_keys:
             value = os.environ.get(key)
             if value is None or not str(value).strip():
                 continue
             env_overrides[key] = value
-
         use_tmate = shutil.which("tmate") is not None
         endpoints: dict[str, str] | None = None
 

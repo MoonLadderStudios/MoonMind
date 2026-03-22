@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from moonmind.rag.context_injection import ContextInjectionService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeStrategy,
@@ -60,11 +59,18 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         base_env: dict[str, str],
         profile: Any,
     ) -> dict[str, str]:
-        """Pass through only Codex-relevant environment keys."""
-        return {
-            k: v for k, v in base_env.items()
-            if k in _CODEX_ENV_PASSTHROUGH_KEYS
-        }
+        """Pass through Codex-relevant environment keys.
+        
+        Adds Codex config variables from the worker process environment
+        to base_env when present.
+        """
+        import os
+        
+        env = dict(base_env)
+        for k in _CODEX_ENV_PASSTHROUGH_KEYS:
+            if k not in env and k in os.environ:
+                env[k] = os.environ[k]
+        return env
 
     async def prepare_workspace(
         self,
@@ -72,6 +78,7 @@ class CodexCliStrategy(ManagedRuntimeStrategy):
         request: AgentExecutionRequest,
     ) -> None:
         """Inject RAG context into the instruction before building the command."""
+        from moonmind.rag.context_injection import ContextInjectionService
         service = ContextInjectionService()
         await service.inject_context(
             request=request,

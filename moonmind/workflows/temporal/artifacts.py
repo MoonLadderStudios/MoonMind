@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -284,7 +285,13 @@ class TemporalArtifactStore:
             "multipart upload is not supported by storage backend"
         )
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ) -> str:
         raise NotImplementedError
 
 
@@ -362,8 +369,14 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
         _ = storage_key, content_type, expires_in_seconds
         return "", {}
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
-        _ = storage_key, expires_in_seconds
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ) -> str:
+        _ = storage_key, expires_in_seconds, download_filename
         return ""
 
 
@@ -565,10 +578,22 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
             UploadId=upload_id,
         )
 
-    def presign_download(self, *, storage_key: str, expires_in_seconds: int) -> str:
+    def presign_download(
+        self,
+        *,
+        storage_key: str,
+        expires_in_seconds: int,
+        download_filename: str | None = None,
+    ) -> str:
+        params = {"Bucket": self._bucket, "Key": storage_key}
+        if download_filename:
+            params["ResponseContentDisposition"] = (
+                f'attachment; filename="{download_filename}"'
+            )
+
         return self._client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self._bucket, "Key": storage_key},
+            Params=params,
             ExpiresIn=expires_in_seconds,
             HttpMethod="GET",
         )
@@ -859,9 +884,7 @@ class TemporalArtifactService:
     def _build_store_from_settings() -> TemporalArtifactStore:
         backend = settings.workflow.temporal_artifact_backend
         if backend == db_models.TemporalArtifactStorageBackend.LOCAL_FS.value:
-            return LocalTemporalArtifactStore(
-                settings.workflow.temporal_artifact_root
-            )
+            return LocalTemporalArtifactStore(settings.workflow.temporal_artifact_root)
         if backend == db_models.TemporalArtifactStorageBackend.S3.value:
             return S3TemporalArtifactStore(
                 endpoint_url=settings.workflow.temporal_artifact_s3_endpoint,
@@ -1096,9 +1119,12 @@ class TemporalArtifactService:
                     f"({self._direct_upload_max_bytes}) for direct uploads"
                 )
             mode = db_models.TemporalArtifactUploadMode.MULTIPART
-            upload_id = self._store.create_multipart_upload(
-                storage_key=storage_key,
-                content_type=content_type,
+            upload_id = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._store.create_multipart_upload(
+                    storage_key=storage_key,
+                    content_type=content_type,
+                ),
             )
         else:
             if self._store.backend is db_models.TemporalArtifactStorageBackend.S3:
@@ -1197,10 +1223,13 @@ class TemporalArtifactService:
             await self._repository.commit()
             raise
 
-        self._store.write_bytes(
-            artifact.storage_key,
-            payload,
-            content_type=content_type or artifact.content_type,
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self._store.write_bytes(
+                artifact.storage_key,
+                payload,
+                content_type=content_type or artifact.content_type,
+            ),
         )
         artifact.sha256 = digest
         artifact.size_bytes = actual_size
@@ -1288,19 +1317,26 @@ class TemporalArtifactService:
                     "parts are required for multipart completion"
                 )
             try:
-                self._store.complete_multipart_upload(
-                    storage_key=artifact.storage_key,
-                    upload_id=artifact.upload_id,
-                    parts=normalized_parts,
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._store.complete_multipart_upload(
+                        storage_key=artifact.storage_key,
+                        upload_id=artifact.upload_id,
+                        parts=normalized_parts,
+                    ),
                 )
             except Exception:
                 artifact.status = db_models.TemporalArtifactStatus.FAILED
                 await self._repository.commit()
                 raise
-            payload = self._store.read_bytes(artifact.storage_key)
+            payload = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_bytes, artifact.storage_key
+            )
         else:
             try:
-                payload = self._store.read_bytes(artifact.storage_key)
+                payload = await asyncio.get_running_loop().run_in_executor(
+                    None, self._store.read_bytes, artifact.storage_key
+                )
             except Exception as exc:
                 raise TemporalArtifactStateError(
                     "artifact upload is not complete"
@@ -1362,7 +1398,9 @@ class TemporalArtifactService:
         if not allow_restricted_raw:
             self._assert_raw_access(artifact, principal=principal)
         try:
-            data = self._store.read_bytes(artifact.storage_key)
+            data = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_bytes, artifact.storage_key
+            )
         except Exception as exc:
             raise TemporalArtifactStateError("artifact bytes are missing") from exc
         logger.info(
@@ -1404,7 +1442,9 @@ class TemporalArtifactService:
         if not allow_restricted_raw:
             self._assert_raw_access(artifact, principal=principal)
         try:
-            path = self._store.read_path(artifact.storage_key)
+            path = await asyncio.get_running_loop().run_in_executor(
+                None, self._store.read_path, artifact.storage_key
+            )
         except TemporalArtifactValidationError:
             raise
         except Exception as exc:
@@ -1476,9 +1516,12 @@ class TemporalArtifactService:
 
         expires_at = datetime.now(UTC) + timedelta(seconds=self._presign_ttl_seconds)
         if artifact.storage_backend is db_models.TemporalArtifactStorageBackend.S3:
+            is_json = (artifact.content_type or "").split(";", 1)[0].strip().lower() == "application/json"
+            download_filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
             url = self._store.presign_download(
                 storage_key=artifact.storage_key,
                 expires_in_seconds=self._presign_ttl_seconds,
+                download_filename=download_filename,
             )
         else:
             url = f"/api/artifacts/{artifact.artifact_id}/download"
@@ -1627,7 +1670,9 @@ class TemporalArtifactService:
                 "artifact must be soft-deleted before hard delete"
             )
 
-        self._store.delete(artifact.storage_key)
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._store.delete, artifact.storage_key
+        )
         now = datetime.now(UTC)
         artifact.hard_deleted_at = now
         artifact.tombstoned_at = now
@@ -1664,7 +1709,9 @@ class TemporalArtifactService:
         )
         hard_deleted = 0
         for artifact in hard_candidates:
-            self._store.delete(artifact.storage_key)
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._store.delete, artifact.storage_key
+            )
             artifact.hard_deleted_at = sweep_now
             artifact.tombstoned_at = sweep_now
             artifact.last_lifecycle_run_id = lifecycle_run_id
@@ -2084,3 +2131,59 @@ class TemporalArtifactActivities:
                 runtime_id,
             )
             return {"started": False, "workflow_id": workflow_id}
+
+    async def oauth_session_ensure_volume(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.ensure_volume`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_ensure_volume as _ensure_volume,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _ensure_volume(payload)
+
+    async def oauth_session_update_status(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.update_status`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_update_status as _update_status,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _update_status(payload)
+
+    async def oauth_session_mark_failed(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.mark_failed`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_mark_failed as _mark_failed,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _mark_failed(payload)
+
+    async def oauth_session_cleanup_stale(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.cleanup_stale`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_cleanup import (
+            oauth_session_cleanup_stale as _cleanup_stale,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _cleanup_stale(payload)

@@ -14,6 +14,7 @@ AgentRunState = Literal[
     "launching",
     "running",
     "awaiting_callback",
+    "awaiting_feedback",
     "awaiting_approval",
     "intervention_requested",
     "collecting_results",

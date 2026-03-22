@@ -22,6 +22,7 @@ def test_map_temporal_state_to_projection_success():
     desc.workflow_type = "MoonMind.Run"
     desc.status = WorkflowExecutionStatus.COMPLETED
     desc.start_time = start_time
+    desc.execution_time = start_time
     desc.close_time = start_time
 
     memo_data = {
@@ -75,6 +76,7 @@ def test_map_temporal_state_to_projection_uses_search_attributes_for_owner_field
     desc.workflow_type = "MoonMind.Run"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
+    desc.execution_time = start_time
     desc.close_time = None
 
     memo_data: dict[str, object] = {
@@ -116,6 +118,7 @@ def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
     desc.workflow_type = "MoonMind.Run"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
+    desc.execution_time = start_time
     desc.close_time = None
     desc.search_attributes = {}
 

@@ -7578,6 +7578,9 @@
         ${pick(execution, "targetRuntime") ? `<div class="card"><strong>Runtime:</strong> ${escapeHtml(formatRuntimeLabel(pick(execution, "targetRuntime")))}</div>` : ""}
         ${pick(execution, "model") ? `<div class="card"><strong>Model:</strong> <code>${escapeHtml(String(pick(execution, "model")))}</code></div>` : ""}
         ${pick(execution, "effort") ? `<div class="card"><strong>Effort:</strong> ${escapeHtml(String(pick(execution, "effort")))}</div>` : ""}
+        ${pick(execution, "startingBranch") ? `<div class="card"><strong>Starting Branch:</strong> <code>${escapeHtml(String(pick(execution, "startingBranch")))}</code></div>` : ""}
+        ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
+        ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
@@ -8972,6 +8975,155 @@
         || null,
     };
   }
+  async function renderUserSettingsPage() {
+    const state = {
+      profile: null,
+      notice: null,
+      requestInFlight: false,
+    };
+
+    function setNotice(level, text) {
+      if (!text) {
+        state.notice = null;
+        return;
+      }
+      state.notice = {
+        level: level === "error" ? "error" : "ok",
+        text,
+      };
+    }
+
+    const managedProviders = ["openai", "google", "anthropic"];
+
+    function renderView() {
+      const noticeHtml = state.notice
+        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+        : "";
+
+      let providersMarkup = managedProviders.map(provider => {
+        const isSet = state.profile && state.profile[`${provider}_api_key_set`];
+        const providerLabel = escapeHtml(provider.charAt(0).toUpperCase() + provider.slice(1));
+        const statusHtml = isSet
+          ? `<div class="key-status key-status-set">${providerLabel} API Key is SET.</div>
+             <p class="form-caption"><em>To change it, enter a new key below. Otherwise, leave blank to keep the current key.</em></p>`
+          : `<div class="key-status key-status-not-set">${providerLabel} API Key is NOT SET.</div>`;
+        return `
+          <div class="form-group">
+            <label>
+              ${providerLabel} API Key
+              ${statusHtml}
+              <input type="password" name="${provider}_api_key" placeholder="Enter new ${providerLabel} API Key (optional)">
+            </label>
+          </div>
+        `;
+      }).join("");
+
+      const layout = `
+        <div data-user-settings-notice>${noticeHtml}</div>
+        <div class="system-settings-grid">
+          <section class="card system-settings-forms" style="grid-column: 1 / -1;">
+            <h3>Manage API Keys</h3>
+            <form data-user-settings-form class="stack">
+              <fieldset>
+                <legend>API Keys</legend>
+                ${providersMarkup}
+              </fieldset>
+
+              <button type="submit" class="settings-submit-btn">Save API Keys</button>
+            </form>
+          </section>
+        </div>
+      `;
+
+      setView(
+        "Settings",
+        "Manage your profile settings and API keys.",
+        layout
+      );
+      attachHandlers();
+    }
+
+    function attachHandlers() {
+      const form = document.querySelector('[data-user-settings-form]');
+      if (!form) return;
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (state.requestInFlight) return;
+
+        const formData = new FormData(form);
+        const payload = {};
+        let hasChanges = false;
+
+        managedProviders.forEach(provider => {
+          const val = formData.get(`${provider}_api_key`);
+          if (val && val.trim()) {
+            payload[`${provider}_api_key`] = val.trim();
+            hasChanges = true;
+          }
+        });
+
+        if (!hasChanges) {
+          setNotice("ok", "No changes submitted.");
+          renderView();
+          return;
+        }
+
+        state.requestInFlight = true;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+
+        try {
+          const response = await fetch("/me", {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to update profile: ${response.statusText}`);
+          }
+
+          const updatedProfile = await response.json();
+          state.profile = updatedProfile;
+          setNotice("ok", "API keys updated successfully.");
+        } catch (error) {
+          console.error("Failed to update user settings:", error);
+          setNotice("error", error.message || "Failed to update API keys.");
+        } finally {
+          state.requestInFlight = false;
+          renderView();
+        }
+      });
+    }
+
+    async function loadProfile() {
+      try {
+        const response = await fetch("/me", {
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to fetch profile: ${response.statusText}`);
+        }
+        state.profile = await response.json();
+      } catch (error) {
+        console.error("Failed to load user profile:", error);
+        setNotice("error", "Failed to load profile data.");
+      }
+      renderView();
+    }
+
+    setView(
+      "Settings",
+      "Manage your profile settings and API keys.",
+      "<p class='loading'>Loading profile settings...</p>"
+    );
+    await loadProfile();
+  }
   async function renderSystemSettingsPage() {
     if (!workerPauseTransport) {
       setView(
@@ -9708,8 +9860,13 @@
       await renderProposalsListPage();
       return;
     }
-    if (normalizedRoute === "/tasks/settings") {
+    if (normalizedRoute === "/tasks/system") {
       await renderSystemSettingsPage();
+      return;
+    }
+
+    if (normalizedRoute === "/tasks/settings") {
+      await renderUserSettingsPage();
       return;
     }
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from moonmind.workflows.temporal.runtime.output_parser import (
@@ -80,6 +81,21 @@ class CursorCliStrategy(ManagedRuntimeStrategy):
         if exit_code == 0:
             return "completed", None
         return "failed", "execution_error"
+
+    async def prepare_workspace(
+        self,
+        workspace_path: Path,
+        request: Any,
+    ) -> None:
+        """Write .cursor/rules/moonmind-task.mdc and .cursor/cli.json."""
+        from moonmind.agents.base.cursor_rules import write_task_rule_file
+        from moonmind.agents.base.cursor_config import write_cursor_cli_json
+
+        if getattr(request, "instruction_ref", None):
+            write_task_rule_file(workspace_path, request.instruction_ref)
+
+        approval_policy = getattr(request, "approval_policy", None) or {"level": "full_autonomy"}
+        write_cursor_cli_json(workspace_path, approval_policy)
 
     def create_output_parser(self) -> RuntimeOutputParser:
         """Cursor CLI produces NDJSON via ``--output-format stream-json``."""

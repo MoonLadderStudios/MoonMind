@@ -38,6 +38,8 @@ class UserProfileReadSanitized(BaseModel):
 
     id: int
     user_id: uuid.UUID
+    google_api_key_set: bool = False
+    openai_api_key_set: bool = False
     # Exclude sensitive fields by not including them in the schema
 
 
