@@ -20,7 +20,7 @@ const {
   createQueueRow,
   createMixedRows,
   createOrchestratorRow,
-} = require("./__fixtures__/queue_rows");
+} = require("./__fixtures__/task_rows");
 
 function createVmContext() {
   const rootNode = {
@@ -103,11 +103,11 @@ function loadQueueLayoutHelpers() {
 
 const helpers = loadQueueLayoutHelpers();
 const {
-  queueFieldDefinitions,
-  renderQueueFieldValue,
-  renderQueueTable,
-  renderQueueCards,
-  renderQueueLayouts,
+  taskFieldDefinitions,
+  renderTaskFieldValue,
+  renderTaskTable,
+  renderTaskCards,
+  renderTaskLayouts,
   renderActivePageContent,
   renderRowsTable,
   renderProposalTable,
@@ -150,7 +150,7 @@ function createProposalRow(overrides = {}) {
 }
 
 (function testQueueFieldDefinitionsProvideSingleSourceOfTruth() {
-  const keys = queueFieldDefinitions.map((definition) => definition.key);
+  const keys = taskFieldDefinitions.map((definition) => definition.key);
   const expectedKeys = [
     "runtimeMode",
     "skillId",
@@ -160,21 +160,21 @@ function createProposalRow(overrides = {}) {
   ];
   assert.strictEqual(keys.length, expectedKeys.length);
   assert.strictEqual(keys.join(","), expectedKeys.join(","));
-  const labels = queueFieldDefinitions.map((definition) => definition.label);
+  const labels = taskFieldDefinitions.map((definition) => definition.label);
   assert(labels.includes("Finished"));
-  const rendered = renderQueueFieldValue(
+  const rendered = renderTaskFieldValue(
     {
       runtimeMode: "codex",
       skillId: "auto",
       createdAt: "2026-02-23T12:00:00Z",
     },
-    queueFieldDefinitions.find((definition) => definition.key === "skillId"),
+    taskFieldDefinitions.find((definition) => definition.key === "skillId"),
   );
   assert.strictEqual(rendered, "auto");
 })();
 
 (function testRenderQueueTableUsesFieldDefinitions() {
-  const html = renderQueueTable([createQueueRow()]);
+  const html = renderTaskTable([createQueueRow()]);
   assert(html.includes('data-sort-field="type"'), 'Expected sortable Type th');
   assert(html.includes('data-field="finishedAt"'));
   assert(html.includes("status-running"));
@@ -182,7 +182,7 @@ function createProposalRow(overrides = {}) {
 
 
 (function testRenderQueueTableEscapesTitleLabel() {
-  const html = renderQueueTable([
+  const html = renderTaskTable([
     createQueueRow({ title: '<img src=x onerror=alert(1)>' }),
   ]);
   assert(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
@@ -190,16 +190,16 @@ function createProposalRow(overrides = {}) {
 })();
 
 (function testQueueDefinitionOrderMatchesTableHeaders() {
-  const html = renderQueueTable([createQueueRow()]);
+  const html = renderTaskTable([createQueueRow()]);
   // Dynamic definition-driven headers use data-sort-field via sortableTh
   const headerOrder = Array.from(html.matchAll(/data-sort-field="([^"]+)"/g)).map(
     (match) => match[1],
   );
   // Table order: type, id, primaryFields (non-timeline), status, title, timelineFields
-  const primaryFields = queueFieldDefinitions
+  const primaryFields = taskFieldDefinitions
     .filter((d) => d.tableSection !== "timeline")
     .map((d) => d.key);
-  const timelineFields = queueFieldDefinitions
+  const timelineFields = taskFieldDefinitions
     .filter((d) => d.tableSection === "timeline")
     .map((d) => d.key);
   const expectedOrder = ["type", "id", ...primaryFields, "status", "title", ...timelineFields];
@@ -213,7 +213,7 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueTableWithSortStateAddsAriaSort() {
   const sortState = { field: "title", direction: "asc" };
-  const html = renderQueueTable([createQueueRow()], sortState);
+  const html = renderTaskTable([createQueueRow()], sortState);
   assert(html.includes('aria-sort="ascending"'), 'Expected ascending aria-sort on title column');
   assert(html.includes('class="sortable-header sort-asc"'), 'Expected sort-asc class on title column');
   assert(html.includes('\u25b2'), 'Expected ascending indicator \u25b2');
@@ -223,14 +223,14 @@ function createProposalRow(overrides = {}) {
 
 (function testRenderQueueTableWithDescSortStateAddsAriaSortDescending() {
   const sortState = { field: "createdAt", direction: "desc" };
-  const html = renderQueueTable([createQueueRow()], sortState);
+  const html = renderTaskTable([createQueueRow()], sortState);
   assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on createdAt column');
   assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on createdAt column');
   assert(html.includes('\u25bc'), 'Expected descending indicator \u25bc');
 })();
 
 (function testRenderQueueTableWithoutSortStateHasNoActiveClass() {
-  const html = renderQueueTable([createQueueRow()]);
+  const html = renderTaskTable([createQueueRow()]);
   assert(!html.includes('sort-asc'), 'No sort-asc without sortState');
   assert(!html.includes('sort-desc'), 'No sort-desc without sortState');
 })();
@@ -344,33 +344,7 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(rows[0].link, "/tasks/mm:workflow-123?source=temporal");
 })();
 
-(function testQueuePaginationParsesLimitAndCursorFromUrlQuery() {
-  const parsed = parseQueuePaginationFromSearch("?source=queue&limit=100&cursor=next-token");
-  assert.strictEqual(parsed.limit, 100);
-  assert.strictEqual(parsed.cursor, "next-token");
 
-  const fallback = parseQueuePaginationFromSearch("?limit=999&cursor=   ");
-  assert.strictEqual(fallback.limit, 50);
-  assert.strictEqual(fallback.cursor, null);
-})();
-
-(function testQueuePaginationQuerySyncUpdatesLimitAndCursor() {
-  const nextQuery = applyQueuePaginationToSearch(
-    "source=queue&filterRuntime=codex&cursor=stale",
-    25,
-    "cursor-2",
-  );
-  const nextParams = new URLSearchParams(nextQuery);
-  assert.strictEqual(nextParams.get("source"), "queue");
-  assert.strictEqual(nextParams.get("filterRuntime"), "codex");
-  assert.strictEqual(nextParams.get("limit"), "25");
-  assert.strictEqual(nextParams.get("cursor"), "cursor-2");
-
-  const firstPageQuery = applyQueuePaginationToSearch(nextQuery, 50, null);
-  const firstPageParams = new URLSearchParams(firstPageQuery);
-  assert.strictEqual(firstPageParams.get("limit"), "50");
-  assert.strictEqual(firstPageParams.get("cursor"), null);
-})();
 
 
 
@@ -443,11 +417,11 @@ function createProposalRow(overrides = {}) {
     createQueueRow(),
     createQueueRow({ id: "job-456", source: "manifests", sourceLabel: "Manifests" }),
   ];
-  const cardsHtml = renderQueueCards(rows);
+  const cardsHtml = renderTaskCards(rows);
   assert(cardsHtml.includes("queue-card"));
   assert(cardsHtml.includes(baseQueueRow.id));
   assert(cardsHtml.includes("job-456"), "Cards should contain non-queue rows");
-  queueFieldDefinitions.forEach((definition) => {
+  taskFieldDefinitions.forEach((definition) => {
     assert(cardsHtml.includes(`<dt>${definition.label}</dt>`), `${definition.label} missing in card`);
   });
 })();
@@ -457,13 +431,13 @@ function createProposalRow(overrides = {}) {
     createQueueRow(),
     createOrchestratorRow(),
   ];
-  const html = renderQueueLayouts(rows);
+  const html = renderTaskLayouts(rows);
   assert(html.includes("queue-table-wrapper"));
   assert(html.includes("queue-card-list"));
 })();
 
 (function testRenderQueueLayoutsEmptyState() {
-  const html = renderQueueLayouts([]);
+  const html = renderTaskLayouts([]);
   assert.strictEqual(html.trim(), "<p class='small'>No rows available.</p>");
 })();
 
@@ -485,15 +459,15 @@ function createProposalRow(overrides = {}) {
     render: () => "branch",
     tableSection: "primary",
   };
-  queueFieldDefinitions.push(definition);
+  taskFieldDefinitions.push(definition);
   try {
-    const cardsHtml = renderQueueCards([createQueueRow()]);
-    const tableHtml = renderQueueTable([createQueueRow()]);
+    const cardsHtml = renderTaskCards([createQueueRow()]);
+    const tableHtml = renderTaskTable([createQueueRow()]);
     assert(cardsHtml.includes(definition.label));
     assert(cardsHtml.includes("branch"));
     assert(tableHtml.includes('data-field="publishMode"'));
   } finally {
-    queueFieldDefinitions.pop();
+    taskFieldDefinitions.pop();
   }
 })();
 

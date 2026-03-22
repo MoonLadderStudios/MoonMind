@@ -79,7 +79,7 @@ async def list_compatibility_tasks(
     try:
         return await service.list_tasks(
             user=user,
-            source=source,
+            source="temporal",
             entry=entry,
             workflow_type=workflow_type,
             status_filter=status_filter,
@@ -109,7 +109,7 @@ async def get_compatibility_task_detail(
     try:
         return await service.get_task_detail(
             task_id=task_id,
-            source_hint=source_hint,
+            source_hint="temporal",
             user=user,
         )
     except (TaskResolutionAmbiguousError, TaskResolutionNotFoundError) as exc:

@@ -95,11 +95,11 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [x] **2.2** Remove `sources.manifests` queue-backed endpoint block (manifests should use Temporal source)
 - [x] **2.3** Remove `queue` and `orchestrator` from `_STATUS_MAPS` — only `proposals` and `temporal` remain
 - [x] **2.4** Simplify `normalize_status()` — single mapping for Temporal states
-- [ ] **2.5** In `dashboard.js`: remove orchestrator route matching, form validation stubs, priority normalization, UI state branches
-- [ ] **2.6** In `dashboard.js`: remove queue source fetcher/renderer code; point all task list/detail at Temporal endpoints
-- [ ] **2.7** Remove `source` filter from compatibility APIs (always `temporal`) or deprecate the parameter
-- [ ] **2.8** Update test fixtures: remove `createOrchestratorRow()`, `createQueueRow()`, update to Temporal-only rows
-- [ ] **2.9** Update submit runtime tests to remove orchestrator validation/priority tests
+- [x] **2.5** In `dashboard.js`: remove orchestrator route matching, form validation stubs, priority normalization, UI state branches
+- [x] **2.6** In `dashboard.js`: remove queue source fetcher/renderer code; point all task list/detail at Temporal endpoints
+- [x] **2.7** Remove `source` filter from compatibility APIs (always `temporal`) or deprecate the parameter
+- [x] **2.8** Update test fixtures: remove `createOrchestratorRow()`, `createQueueRow()`, update to Temporal-only rows
+- [x] **2.9** Update submit runtime tests to remove orchestrator validation/priority tests
 - [x] **2.10** Update view model tests for single-source config
 
 > **Gate:** Dashboard renders from Temporal source only. No `queue`/`orchestrator` branching in frontend or view model.
