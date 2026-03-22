@@ -21,7 +21,7 @@ from moonmind.agents.codex_worker.runtime_mode import (
     resolve_gemini_cli_auth_mode,
 )
 from moonmind.agents.codex_worker.handlers import CodexExecHandler
-from moonmind.agents.codex_worker.utils import (
+from moonmind.utils.cli import (
     CliVerificationError,
     verify_cli_is_executable,
 )

@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 from moonmind.agents.codex_worker import cli
-from moonmind.agents.codex_worker.utils import CliVerificationError
+from moonmind.utils.cli import CliVerificationError
 
 
 @pytest.fixture(autouse=True)

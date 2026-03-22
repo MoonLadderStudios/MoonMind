@@ -1,0 +1,36 @@
+"""CLI verification utilities for codex worker runtime."""
+
+from __future__ import annotations
+
+import os
+import shutil
+
+
+class CliVerificationError(RuntimeError):
+    """Raised when a required command-line tool cannot be executed."""
+
+    def __init__(self, message: str, *, cli_path: str | None = None) -> None:
+        super().__init__(message)
+        self.cli_path = cli_path
+
+
+def verify_cli_is_executable(cli_name: str) -> str:
+    """Ensure a CLI exists on PATH and is executable."""
+
+    cli_path = shutil.which(cli_name)
+    if not cli_path:
+        raise CliVerificationError(
+            f"The '{cli_name}' CLI is not available on PATH.",
+            cli_path=None,
+        )
+
+    if not os.access(cli_path, os.X_OK):
+        raise CliVerificationError(
+            f"The '{cli_name}' CLI was found at '{cli_path}' but is not executable.",
+            cli_path=cli_path,
+        )
+
+    return cli_path
+
+
+__all__ = ["CliVerificationError", "verify_cli_is_executable"]
