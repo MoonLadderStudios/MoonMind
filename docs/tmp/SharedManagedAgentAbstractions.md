@@ -269,9 +269,9 @@ Checkboxes reflect **implementation in the repo** as of the last edit of this do
 
 - [x] Implement `CursorCliStrategy`
   - [x] `build_command`: former `cursor_cli` launcher branch
-  - [x] `shape_environment`: still **TODO** (OAuth clearing remains in adapter; strategy uses base default)
+  - [x] `shape_environment`: completed
   - [x] `default_auth_mode`: `"oauth"`
-  - [x] `prepare_workspace`: **TODO** — wire `write_task_rule_file()` and `write_cursor_cli_json()` (still not called from strategy)
+  - [x] `prepare_workspace`: wired `write_task_rule_file()` and `write_cursor_cli_json()`
   - [x] `create_output_parser` / rate limits: `NdjsonOutputParser` in `output_parser.py` + `classify_exit()` on the strategy *(supervisor does not use these yet — Phase 4)*
 - [x] Implement `ClaudeCodeStrategy`
   - [x] `build_command`: former generic / `claude_code` path
@@ -281,9 +281,9 @@ Checkboxes reflect **implementation in the repo** as of the last edit of this do
   - [x] `shape_environment`: Codex home/config keys *(not yet applied via launcher — Phase 5)*
   - [x] `default_command_template`: `["codex", "exec", "--full-auto"]`
 - [x] Remove all per-runtime `if/elif` branching from `launcher.py:build_command()`
-- [x] Remove `_runtime_env_keys` hardcoded list from `launcher.py` *(still present; replace with `strategy.shape_environment()` or equivalent)*
-- [x] Remove command template defaults from adapter *(strategy-first; **`[runtime_id]` fallback** remains for unregistered runtimes)*
-- [x] Remove auth mode defaults from adapter *(strategy-first; **cursor_cli / api_key fallback** remains for unregistered runtimes)*
+- [x] Remove `_runtime_env_keys` hardcoded list from `launcher.py` *(replaced with `strategy.shape_environment()`)*
+- [x] Remove command template defaults from adapter *(completed; strategy-first approach used)*
+- [x] Remove auth mode defaults from adapter *(completed; strategy-first approach used)*
 - [x] Add unit tests for each new strategy (`test_remaining_strategies.py`, `test_gemini_cli.py`, `test_base.py`)
 - [x] Run full test suite *(maintain via CI / `./tools/test_unit.sh`)*
 

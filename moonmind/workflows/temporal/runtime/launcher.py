@@ -324,6 +324,7 @@ class ManagedRuntimeLauncher:
         self,
         profile: ManagedRuntimeProfile,
         request: AgentExecutionRequest,
+        strategy: Any = None,
     ) -> list[str]:
         """Construct the CLI command from a runtime profile and request params."""
         cmd = list(profile.command_template)
@@ -332,9 +333,10 @@ class ManagedRuntimeLauncher:
         # Check the strategy registry before falling through to the
         # legacy if/elif block.  Registered runtimes are handled by
         # their strategy; unregistered runtimes use the existing code.
-        from moonmind.workflows.temporal.runtime.strategies import get_strategy
-
-        strategy = get_strategy(profile.runtime_id)
+        if strategy is None:
+            from moonmind.workflows.temporal.runtime.strategies import get_strategy
+            strategy = get_strategy(profile.runtime_id)
+            
         if strategy is not None:
             return strategy.build_command(profile, request)
 
@@ -378,7 +380,10 @@ class ManagedRuntimeLauncher:
                 f"Active run already exists for run_id={run_id}"
             )
 
-        cmd = self.build_command(profile, request)
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        strategy = get_strategy(profile.runtime_id)
+
+        cmd = self.build_command(profile, request, strategy=strategy)
         resolved_workspace_path = await self._prepare_workspace_path(
             run_id=run_id,
             request=request,
@@ -394,9 +399,6 @@ class ManagedRuntimeLauncher:
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(
             os.environ
         )
-
-        from moonmind.workflows.temporal.runtime.strategies import get_strategy
-        strategy = get_strategy(profile.runtime_id)
 
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).
