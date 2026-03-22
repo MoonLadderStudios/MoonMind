@@ -26,6 +26,7 @@ from moonmind.schemas.agent_runtime_models import (
 
 from .log_streamer import RuntimeLogStreamer
 from .store import ManagedRunStore
+from .strategies import get_strategy
 
 HEARTBEAT_INTERVAL = 30  # seconds
 GRACEFUL_TERMINATE_WAIT_SECONDS = (
@@ -110,12 +111,16 @@ class ManagedRunSupervisor:
                 timed_out = True
                 await self._terminate_process(process)
 
-            # Collect log refs
+            # Collect log refs and content
             log_refs: dict[str, str] = {}
+            stdout_content = ""
+            stderr_content = ""
             if stdout_task:
-                log_refs["stdout"] = await stdout_task
+                ref, stdout_content = await stdout_task
+                log_refs["stdout"] = ref
             if stderr_task:
-                log_refs["stderr"] = await stderr_task
+                ref, stderr_content = await stderr_task
+                log_refs["stderr"] = ref
 
             duration = (datetime.now(tz=UTC) - start_time).total_seconds()
 
@@ -126,9 +131,16 @@ class ManagedRunSupervisor:
                 log_refs=log_refs,
             )
 
+            record = self._store.load(run_id)
+            runtime_id = record.runtime_id if record else None
+
             # Classify exit
             status, failure_class = self._classify_exit(
-                exit_code=exit_code, timed_out=timed_out
+                runtime_id=runtime_id,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                stdout=stdout_content,
+                stderr=stderr_content,
             )
 
             error_message = None
@@ -244,11 +256,29 @@ class ManagedRunSupervisor:
 
     @staticmethod
     def _classify_exit(
-        *, exit_code: int | None, timed_out: bool
+        *,
+        runtime_id: str | None,
+        exit_code: int | None,
+        timed_out: bool,
+        stdout: str,
+        stderr: str,
     ) -> tuple[AgentRunState, FailureClass | None]:
         """Classify process exit into a run state and optional failure class."""
         if timed_out:
             return "timed_out", "execution_error"
+
+        if runtime_id:
+            strategy = get_strategy(runtime_id)
+            if strategy:
+                # strategy.classify_exit returns (status, failure_class)
+                status, failure_class = strategy.classify_exit(
+                    exit_code=exit_code,
+                    stdout=stdout,
+                    stderr=stderr,
+                )
+                # Map to AgentRunState if needed, or assume strategy returns one
+                return status, failure_class
+
         if exit_code == 0:
             return "completed", None
         return "failed", "execution_error"

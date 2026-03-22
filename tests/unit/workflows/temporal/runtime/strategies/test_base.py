@@ -58,6 +58,8 @@ class TestConcreteDefaults:
         assert status == "failed"
         assert failure_class == "execution_error"
 
-    def test_create_output_parser_returns_none(self) -> None:
+    def test_create_output_parser_returns_plain_text(self) -> None:
         s = self._MinimalStrategy()
-        assert s.create_output_parser() is None
+        parser = s.create_output_parser()
+        from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser
+        assert isinstance(parser, PlainTextOutputParser)
