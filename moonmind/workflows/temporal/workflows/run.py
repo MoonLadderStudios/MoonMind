@@ -55,6 +55,7 @@ class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
 
 WORKFLOW_NAME = "MoonMind.Run"
 STATE_INITIALIZING = "initializing"
+STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
 STATE_PLANNING = "planning"
 STATE_EXECUTING = "executing"
 STATE_PROPOSALS = "proposals"

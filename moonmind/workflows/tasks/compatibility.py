@@ -41,6 +41,7 @@ TaskStatusFilter = (
 
 _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.INITIALIZING: "queued",
+    db_models.MoonMindWorkflowState.WAITING_ON_DEPENDENCIES: "waiting",
     db_models.MoonMindWorkflowState.PLANNING: "running",
     db_models.MoonMindWorkflowState.EXECUTING: "running",
     db_models.MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
