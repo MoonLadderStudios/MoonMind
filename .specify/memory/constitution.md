@@ -165,6 +165,10 @@ Non-negotiable rules:
   - deterministic “needs human” terminal states when not recoverable,
   - error summaries that tell an operator what happened and what to do next.
 - Health checks MUST exist for runtime-critical services and worker processes (startup checks + dependency checks).
+- Changes to workflow/activity/update/signal contracts MUST be safe for in-flight executions:
+  - preserve compatibility for persisted payloads and worker-bound invocation shapes where feasible, or
+  - use an explicit versioned cutover/migration plan when compatibility cannot be preserved.
+- Compatibility-sensitive orchestration changes MUST ship with boundary-level regression coverage (for example worker-binding, Temporal activity invocation, replay-style, or in-flight payload compatibility tests), not only isolated unit tests.
 
 Rationale: Resiliency is what makes unattended execution possible. The system must withstand infrastructure failures, agent failures, and runaway costs.
 

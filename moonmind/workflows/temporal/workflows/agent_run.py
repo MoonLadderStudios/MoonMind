@@ -13,7 +13,10 @@ with workflow.unsafe.imports_passed_through():
         AgentRunStatus as AgentRunStatusModel,
     )
     from moonmind.workflows.adapters.agent_adapter import AgentAdapter
-    from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
+    from moonmind.workflows.adapters.managed_agent_adapter import (
+        ManagedAgentAdapter,
+        ProfileResolutionError,
+    )
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
     )
@@ -27,6 +30,7 @@ class RunStatus:
     launching = "launching"
     running = "running"
     awaiting_callback = "awaiting_callback"
+    awaiting_feedback = "awaiting_feedback"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -34,7 +38,7 @@ class RunStatus:
 
 
 _TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out}
+    {RunStatus.completed, RunStatus.failed, RunStatus.cancelled, RunStatus.timed_out, "intervention_requested"}
 )
 
 _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
@@ -45,6 +49,7 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "in-progress": RunStatus.running,
     "processing": RunStatus.running,
     "awaiting_callback": RunStatus.awaiting_callback,
+    "awaiting_feedback": RunStatus.awaiting_feedback,
     "awaiting_approval": "awaiting_approval",
     "intervention_requested": "intervention_requested",
     "collecting_results": "collecting_results",
@@ -125,9 +130,16 @@ class MoonMindAgentRun:
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
         self._external_agent_id: str | None = None
+        # Auto-answer state (Jules question auto-answer, spec 094)
+        self._answered_activity_ids: set[str] = set()
+        self._auto_answer_count: int = 0
 
     async def _ensure_manager_and_signal(
-        self, manager_id: str, runtime_id: str
+        self,
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool = True,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the auth-profile-manager; auto-start it on first failure.
 
@@ -139,6 +151,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if not request_slot:
+            return manager_handle
         try:
             await manager_handle.signal("request_slot", signal_payload)
         except ApplicationError as exc:
@@ -161,6 +175,34 @@ class MoonMindAgentRun:
             manager_handle = workflow.get_external_workflow_handle(manager_id)
             await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
+
+    async def _sync_manager_profiles(
+        self,
+        *,
+        manager_handle: workflow.ExternalWorkflowHandle,
+        runtime_id: str,
+    ) -> None:
+        """Best-effort manager refresh from DB-backed auth_profile.list snapshot."""
+        try:
+            profile_snapshot = await workflow.execute_activity(
+                "auth_profile.list",
+                {"runtime_id": runtime_id},
+                task_queue="mm.activity.artifacts",
+                start_to_close_timeout=timedelta(seconds=30),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            profiles = []
+            if isinstance(profile_snapshot, dict):
+                raw_profiles = profile_snapshot.get("profiles", [])
+                if isinstance(raw_profiles, list):
+                    profiles = raw_profiles
+            await manager_handle.signal("sync_profiles", {"profiles": profiles})
+        except Exception:
+            workflow.logger.warning(
+                "Failed to sync auth profiles for runtime_id=%s; continuing with manager state",
+                runtime_id,
+                exc_info=True,
+            )
 
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
@@ -307,6 +349,43 @@ class MoonMindAgentRun:
         )
 
     @staticmethod
+    def _coerce_external_start_status(
+        handle_payload: dict[str, object],
+    ) -> tuple[str, str]:
+        """Map integration-start payload status fields into canonical run states."""
+        normalized_token = str(
+            handle_payload.get("normalized_status")
+            or handle_payload.get("normalizedStatus")
+            or ""
+        ).strip().lower() or None
+        run_status = MoonMindAgentRun._normalize_external_status(
+            normalized_status=normalized_token,
+            raw_status=handle_payload.get("status"),
+            provider_status=str(
+                handle_payload.get("provider_status")
+                or handle_payload.get("providerStatus")
+                or ""
+            ).strip() or None,
+        )
+        valid_statuses = {
+            "queued",
+            "launching",
+            "running",
+            "awaiting_callback",
+            "awaiting_feedback",
+            "awaiting_approval",
+            "intervention_requested",
+            "collecting_results",
+            "completed",
+            "failed",
+            "cancelled",
+            "timed_out",
+        }
+        if run_status not in valid_statuses:
+            raise ValueError(f"Unsupported run status from integration start: {run_status!r}")
+        return run_status, (normalized_token or run_status)
+
+    @staticmethod
     def _coerce_managed_status_payload(
         *,
         status_payload: object,
@@ -366,14 +445,36 @@ class MoonMindAgentRun:
 
                     self.slot_assigned_event.clear()
                     manager_handle = await self._ensure_manager_and_signal(
-                        manager_id, runtime_id
+                        manager_id,
+                        runtime_id,
+                        request_slot=False,
+                    )
+                    await self._sync_manager_profiles(
+                        manager_handle=manager_handle,
+                        runtime_id=runtime_id,
+                    )
+                    await manager_handle.signal(
+                        "request_slot",
+                        {
+                            "requester_workflow_id": workflow.info().workflow_id,
+                            "runtime_id": runtime_id,
+                        },
                     )
 
-                    # Wait for assigned slot
+                    # Wait for assigned slot, but never beyond the run's
+                    # remaining timeout budget.
+                    slot_wait_elapsed = (
+                        workflow.now() - overall_start
+                    ).total_seconds()
+                    slot_wait_seconds = timeout_seconds - slot_wait_elapsed
+                    if slot_wait_seconds <= 0:
+                        self.run_status = RunStatus.timed_out
+                        return AgentRunResult(failure_class="execution_error")
+
                     try:
                         await workflow.wait_condition(
                             lambda: self.slot_assigned_event.is_set(),
-                            timeout=timedelta(minutes=5)
+                            timeout=timedelta(seconds=slot_wait_seconds),
                         )
                     except asyncio.TimeoutError:
                         workflow.logger.error("Timed out waiting for auth profile slot.")
@@ -442,7 +543,14 @@ class MoonMindAgentRun:
                     )
 
                     # --- Managed agent: launch via adapter ---
-                    handle = await adapter.start(request)
+                    try:
+                        handle = await adapter.start(request)
+                    except ProfileResolutionError as exc:
+                        raise ApplicationError(
+                            str(exc),
+                            type="ProfileResolutionError",
+                            non_retryable=True,
+                        ) from exc
                     self.run_id = handle.run_id
                     self.run_status = handle.status
                     poll_interval = handle.poll_hint_seconds or 10
@@ -526,9 +634,17 @@ class MoonMindAgentRun:
                             )
 
                             if isinstance(handle_dict, dict) and "external_id" in handle_dict:
-                                status = handle_dict.get("normalized_status", "unknown")
-                                if status not in {"queued", "launching", "running", "awaiting_callback", "awaiting_approval", "intervention_requested", "collecting_results", "completed", "failed", "cancelled", "timed_out"}:
-                                    status = "running"
+                                try:
+                                    status, normalized_for_metadata = self._coerce_external_start_status(
+                                        handle_dict
+                                    )
+                                except ValueError as exc:
+                                    workflow.logger.warning(str(exc))
+                                    raise ApplicationError(
+                                        str(exc),
+                                        type="UnsupportedStatus",
+                                        non_retryable=True,
+                                    ) from exc
                                 handle = AgentRunHandle(
                                     runId=handle_dict["external_id"],
                                     agentKind="external",
@@ -536,8 +652,8 @@ class MoonMindAgentRun:
                                     status=status,
                                     startedAt=workflow.now(),
                                     metadata={
-                                        "providerStatus": handle_dict.get("provider_status", "unknown"),
-                                        "normalizedStatus": status,
+                                        "providerStatus": handle_dict.get("provider_status", handle_dict.get("status", "unknown")),
+                                        "normalizedStatus": normalized_for_metadata,
                                         "externalUrl": handle_dict.get("url"),
                                         "callbackSupported": handle_dict.get("callback_supported", False),
                                     }
@@ -610,6 +726,87 @@ class MoonMindAgentRun:
                                     )
 
                             self.run_status = status_obj.status
+
+                            # --- Jules auto-answer sub-flow (spec 094) ---
+                            if (
+                                status_obj.status == RunStatus.awaiting_feedback
+                                and request.agent_kind == "external"
+                                and self._external_agent_id == "jules"
+                            ):
+                                # Read config via activity (determinism-safe)
+                                auto_answer_config = await workflow.execute_activity(
+                                    "integration.jules.get_auto_answer_config",
+                                    [],
+                                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                                    start_to_close_timeout=timedelta(seconds=10),
+                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                )
+                                aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
+                                aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
+
+                                if not aa_enabled or self._auto_answer_count >= aa_max:
+                                    # Opt-out or max cycles exhausted → escalate
+                                    self.run_status = "intervention_requested"
+                                    workflow.logger.warning(
+                                        "Jules auto-answer %s for session %s (count=%d, max=%d)",
+                                        "disabled" if not aa_enabled else "exhausted",
+                                        self.run_id,
+                                        self._auto_answer_count,
+                                        aa_max,
+                                    )
+                                    break
+
+                                # Extract the question
+                                activities_result = await workflow.execute_activity(
+                                    "integration.jules.list_activities",
+                                    {"session_id": self.run_id},
+                                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                                    start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
+                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                )
+
+                                act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
+                                question = activities_result.get("latestAgentQuestion") if isinstance(activities_result, dict) else None
+
+                                if question and act_id and act_id not in self._answered_activity_ids:
+                                    # Dispatch question-answer cycle
+                                    task_context = request.instruction_ref or request.agent_id or ""
+                                    answer_result = await workflow.execute_activity(
+                                        "integration.jules.answer_question",
+                                        {
+                                            "session_id": self.run_id,
+                                            "question": question,
+                                            "task_context": task_context,
+                                        },
+                                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                                        start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                    )
+                                    if isinstance(answer_result, dict) and answer_result.get("answered"):
+                                        self._answered_activity_ids.add(act_id)
+                                        self._auto_answer_count += 1
+                                        workflow.logger.info(
+                                            "Jules auto-answer #%d sent for session %s (activity %s)",
+                                            self._auto_answer_count,
+                                            self.run_id,
+                                            act_id,
+                                        )
+                                    else:
+                                        workflow.logger.warning(
+                                            "Jules auto-answer failed for session %s: %s",
+                                            self.run_id,
+                                            answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
+                                        )
+                                else:
+                                    # No new question or already answered this one;
+                                    # wait for Jules to transition on its own.
+                                    pass
+
+                                # Continue polling regardless of answer success
+                                self.run_status = RunStatus.running
+                                continue
+                            # --- end auto-answer sub-flow ---
+
                             if status_obj.status in _TERMINAL_RUN_STATUSES:
                                 break
 

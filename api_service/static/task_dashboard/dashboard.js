@@ -2505,18 +2505,6 @@
   // fields") and add tests that exercise the new label/value pairs.
   const queueFieldDefinitions = [
     {
-      key: "finishOutcome",
-      label: "Outcome",
-      render: (row) => {
-        const stage = String(row.finishOutcomeStage || "").trim();
-        const reason = String(row.finishOutcomeReason || "").trim();
-        const tooltipParts = [stage, reason].filter(Boolean);
-        const title = tooltipParts.length ? ` title="${escapeHtml(tooltipParts.join(" | "))}"` : "";
-        return `<span${title}>${finishOutcomeBadge(row.finishOutcomeCode)}</span>`;
-      },
-      tableSection: "primary",
-    },
-    {
       key: "runtimeMode",
       label: "Runtime",
       render: (row) => renderRuntime(row.runtimeMode),
@@ -2627,9 +2615,6 @@
     if (!temporalSubmitEnabled) {
       return false;
     }
-    if (normalizedMode === "orchestrator") {
-      return false;
-    }
     if (isEditMode) {
       return false;
     }
@@ -2648,10 +2633,6 @@
     return { mode: "worker", endpoint: queueEndpoint };
   };
 
-  const validateOrchestratorSubmission = (_draft = {}) => ({
-    ok: false,
-    error: "Orchestrator tasks are no longer supported.",
-  });
 
   const hasExplicitSkillSelection = (skillId) => {
     const normalized = String(skillId || "").trim().toLowerCase();
@@ -2863,9 +2844,6 @@
     if (!normalized) {
       return fallback;
     }
-    if (normalized === "orchestrator") {
-      return fallback;
-    }
     if (supportedTaskRuntimes.includes(normalized)) {
       return normalized;
     }
@@ -2913,18 +2891,6 @@
       query.delete("cursor");
     }
     return query.toString();
-  };
-
-  const resetQueuePaginationState = (paginationState) => {
-    if (!paginationState || typeof paginationState !== "object") {
-      return;
-    }
-    paginationState.cursor = null;
-    paginationState.cursorStack = [];
-    paginationState.nextCursor = null;
-    paginationState.hasMore = false;
-    paginationState.pageStart = 0;
-    paginationState.pageEnd = 0;
   };
 
   const parseRuntimeSearchParam = (searchParams) => {
@@ -3064,7 +3030,6 @@
       createSubmitDraftController,
       determineSubmitDestination,
       shouldUseTemporalSubmit,
-      validateOrchestratorSubmission,
       validatePrimaryStepSubmission,
       hasExplicitSkillSelection,
       extractRuntimeModelFromPayload,
@@ -3139,7 +3104,6 @@
       toTemporalRows,
       parseQueuePaginationFromSearch,
       applyQueuePaginationToSearch,
-      resetQueuePaginationState,
     };
     window.__temporalRunHistoryTest = {
       resolveTemporalDetailContext,
@@ -3320,8 +3284,16 @@
           "",
         ).trim(),
         queueName: "-",
-        runtimeMode: pick(item, "targetRuntime", "target_runtime") || null,
-        skillId: null,
+        runtimeMode: String([
+          pick(item, "targetRuntime", "target_runtime", "runtime"),
+          pick(searchAttributes, "mm_target_runtime", "mm_runtime", "runtime"),
+          pick(memo, "targetRuntime", "runtime"),
+        ].find(v => v != null) || "").trim() || null,
+        skillId: String([
+          pick(item, "targetSkill", "target_skill", "skillId", "skill_id", "skill"),
+          pick(searchAttributes, "mm_target_skill", "mm_skill_id", "mm_skill", "skillId", "skill"),
+          pick(memo, "targetSkill", "skillId", "skill"),
+        ].find(v => v != null) || "").trim() || null,
         rawStatus: rawState,
         rawState,
         temporalStatus: pick(item, "temporalStatus") || "",
@@ -3529,9 +3501,7 @@
     const initialPagination = parseQueuePaginationFromSearch(window.location.search || "");
     const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "").trim().toLowerCase();
     const initialTemporalToken = String(initialQuery.get("nextPageToken") || "").trim() || null;
-    const allowedSources = temporalListEnabled
-      ? ["", "queue", "temporal"]
-      : ["", "queue"];
+    const allowedSources = ["", "temporal"];
     setView(
       "Tasks List",
       "Unified tasks across available execution sources.",
@@ -4281,7 +4251,10 @@
           </label>
         </div>
         <label>Queue Priority
-          <input type="number" name="priority" value="0" />
+          <div class="priority-slider-container">
+            <input type="range" name="priority" min="-10" max="10" value="0" oninput="this.parentElement.querySelector('output').value = this.value" />
+            <output>0</output>
+          </div>
         </label>
         <div class="actions">
           <button type="submit" class="queue-submit-primary">Create Manifest Job</button>
@@ -4862,7 +4835,7 @@
     const queueDraftPriority = Number.isInteger(
       Number(sanitizedWorkerDraft.priority),
     )
-      ? Number(sanitizedWorkerDraft.priority)
+      ? Math.max(-10, Math.min(10, Number(sanitizedWorkerDraft.priority)))
       : 0;
     const queueDraftMaxAttempts = Number.isInteger(
       Number(sanitizedWorkerDraft.maxAttempts),
@@ -5015,7 +4988,10 @@
         ${attachmentSectionHtml}
         <div class="grid-2" data-runtime-visibility="worker">
           <label>Priority
-            <input type="number" name="priority" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" />
+            <div class="priority-slider-container">
+              <input type="range" name="priority" min="-10" max="10" value="${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}" oninput="this.parentElement.querySelector('output').value = this.value" />
+              <output>${Number.isFinite(queueDraftPriority) ? queueDraftPriority : 0}</output>
+            </div>
           </label>
           <label>Max Attempts
             <input type="number" min="1" name="maxAttempts" value="${Number.isFinite(queueDraftMaxAttempts) ? queueDraftMaxAttempts : 3}" />
@@ -5033,12 +5009,18 @@
             <select name="scheduleMode" id="schedule-mode-select">
               <option value="immediate" selected>Immediate</option>
               <option value="once">Deferred (run once at a specific time)</option>
+              <option value="deferred_minutes">Deferred (run in N minutes)</option>
               <option value="recurring">Recurring (create a cron schedule)</option>
             </select>
           </label>
           <div id="schedule-once-fields" class="hidden">
             <label>Scheduled For
               <input type="datetime-local" name="scheduledFor" id="schedule-datetime" />
+            </label>
+          </div>
+          <div id="schedule-deferred-minutes-fields" class="hidden">
+            <label>Minutes from now
+              <input type="number" name="scheduleDeferredMinutes" min="1" max="525600" step="1" placeholder="e.g. 15" />
             </label>
           </div>
           <div id="schedule-recurring-fields" class="hidden">
@@ -5281,7 +5263,6 @@
           applyElementVisibility(node, isVisible);
         });
       };
-      updateVisibility("orchestrator", uiState.showOrchestratorFields);
       updateVisibility("worker", uiState.showWorkerPriorityFields);
     };
     const applyRuntimeDefaults = (runtime) => {
@@ -5657,7 +5638,7 @@
     let templateItems = [];
     const templateInputMemory = {};
     const preferredTemplateSlug = "speckit-orchestrate";
-    const templateScopeLoadOrder = ["global", "team", "personal"];
+    const templateScopeLoadOrder = ["global", "personal"];
 
     const setTemplateMessage = (text, isError = false) => {
       if (!templateMessage) {
@@ -5742,9 +5723,6 @@
       const scope = String(item?.scope || "").trim().toLowerCase();
       if (scope === "personal") {
         return "Personal";
-      }
-      if (scope === "team") {
-        return "Team";
       }
       return "Global";
     };
@@ -6100,21 +6078,9 @@
         return;
       }
       const description = window.prompt("Preset description", `Saved from queue draft: ${title}`) || "";
-      const scope = (window.prompt("Scope (personal/team)", "personal") || "personal")
-        .trim()
-        .toLowerCase();
-      if (!["personal", "team"].includes(scope)) {
-        setTemplateMessage("Scope must be personal or team.", true);
-        return;
-      }
-      const scopeRef =
-        scope === "team"
-          ? String(window.prompt("Team scopeRef (required for team)", "") || "").trim()
-          : "";
-      if (scope === "team" && !scopeRef) {
-        setTemplateMessage("Team scopeRef is required for team presets.", true);
-        return;
-      }
+      // For saving from a task, scope is always personal.
+      const scope = "personal";
+      const scopeRef = "";
 
       const steps = stepState
         .map((step) => {
@@ -6214,12 +6180,16 @@
     // --- Schedule panel toggle ---
     const scheduleModeSelect = form.querySelector("#schedule-mode-select");
     const scheduleOnceFields = form.querySelector("#schedule-once-fields");
+    const scheduleDeferredMinutesFields = form.querySelector("#schedule-deferred-minutes-fields");
     const scheduleRecurringFields = form.querySelector("#schedule-recurring-fields");
     if (scheduleModeSelect) {
       scheduleModeSelect.addEventListener("change", () => {
         const mode = String(scheduleModeSelect.value || "immediate").trim();
         if (scheduleOnceFields) {
           scheduleOnceFields.classList.toggle("hidden", mode !== "once");
+        }
+        if (scheduleDeferredMinutesFields) {
+          scheduleDeferredMinutesFields.classList.toggle("hidden", mode !== "deferred_minutes");
         }
         if (scheduleRecurringFields) {
           scheduleRecurringFields.classList.toggle("hidden", mode !== "recurring");
@@ -6547,6 +6517,30 @@
             mode: "once",
             scheduledFor: scheduledForDate.toISOString(),
           };
+        } else if (scheduleMode === "deferred_minutes") {
+          const scheduleDeferredMinutesRaw = String(formData.get("scheduleDeferredMinutes") || "").trim();
+          const scheduleDeferredMinutes = Number(scheduleDeferredMinutesRaw);
+          if (!Number.isFinite(scheduleDeferredMinutes) || !Number.isInteger(scheduleDeferredMinutes) || scheduleDeferredMinutes <= 0) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "A valid positive whole number of minutes is required for deferred scheduling.";
+            return;
+          }
+          if (scheduleDeferredMinutes > 525600) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Deferred minutes cannot exceed 525 600 (one year).";
+            return;
+          }
+          const scheduledForMs = Date.now() + scheduleDeferredMinutes * 60000;
+          const scheduledForDate = new Date(scheduledForMs);
+          if (!Number.isFinite(scheduledForDate.getTime())) {
+            message.className = "notice error queue-submit-message";
+            message.textContent = "Unable to compute a valid schedule date from the provided minutes.";
+            return;
+          }
+          requestBody.payload.schedule = {
+            mode: "once",
+            scheduledFor: scheduledForDate.toISOString(),
+          };
         } else if (scheduleMode === "recurring") {
           const scheduleCron = String(formData.get("scheduleCron") || "").trim();
           if (!scheduleCron) {
@@ -6847,1415 +6841,6 @@
     renderQueueSubmitPage(normalizedRuntime);
   }
 
-  async function renderQueueDetailPage(jobId) {
-    setView(
-      "Queue Job Detail",
-      `Job ${jobId}`,
-      `
-        <div id="queue-detail-page">
-          <div id="queue-detail-notice"></div>
-          <div id="queue-cancel-notice"></div>
-          <div id="queue-cancel-actions"></div>
-          <div id="queue-job-summary"></div>
-          <div class="stack">
-            <section id="queue-live-output-section"></section>
-            <section id="queue-live-session-section"></section>
-            <section>
-              <h3>Events</h3>
-              <p class="small" id="queue-events-summary">Loading events...</p>
-              <div class="queue-events-table-wrap">
-                <table>
-                  <thead><tr><th>Time</th><th>Stage</th><th>Level</th><th>Message</th></tr></thead>
-                  <tbody id="queue-events-body"><tr><td colspan="4" class="small">Loading events...</td></tr></tbody>
-                </table>
-              </div>
-              <div class="actions">
-                <button type="button" id="queue-load-older-events" class="secondary" disabled>Load Older Events</button>
-                <span class="small" id="queue-load-older-status"></span>
-              </div>
-            </section>
-            <section>
-              <div class="actions queue-live-output-toolbar">
-                <label class="queue-inline-toggle">
-                  <input type="checkbox" id="queue-follow-output" checked />
-                  Follow output
-                </label>
-                <label class="queue-inline-filter">
-                  Filter
-                  <select id="queue-output-filter">
-                    <option value="all" selected>All</option>
-                    <option value="stages">Stages</option>
-                    <option value="logs">Logs</option>
-                    <option value="warnings">Warnings/Errors</option>
-                  </select>
-                </label>
-                <button type="button" class="secondary" id="queue-copy-output">Copy</button>
-                <span id="queue-full-log-action" class="small">Download full logs unavailable.</span>
-                <span class="small" id="queue-live-transport-status">Live transport: Polling (idle)</span>
-              </div>
-              <pre id="queue-live-output" class="queue-live-output"></pre>
-            </section>
-            <section>
-              <h3>Artifacts</h3>
-              <table>
-                <thead><tr><th>Name</th><th>Stage</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
-                <tbody id="queue-artifacts-body"><tr><td colspan="5" class="small">Loading artifacts...</td></tr></tbody>
-              </table>
-            </section>
-            <section>
-              <h3>Input Attachments</h3>
-              <table>
-                <thead><tr><th>Preview</th><th>Name</th><th>Size</th><th>Content Type</th><th>Action</th></tr></thead>
-                <tbody id="queue-attachments-body"><tr><td colspan="5" class="small">Loading attachments...</td></tr></tbody>
-              </table>
-            </section>
-          </div>
-        </div>
-      `,
-      { showAutoRefreshControls: true },
-    );
-
-    const state = {
-      job: null,
-      artifacts: [],
-      attachments: [],
-      events: [],
-      liveSession: null,
-      liveSessionError: null,
-      liveSessionRouteMissing: false,
-      liveSessionRwAttach: "",
-      liveSessionRwWeb: "",
-      liveSessionRwGrantedUntil: "",
-      liveActionNotice: "",
-      liveActionNoticeIsError: false,
-      liveOutputPanelOpen: false,
-      eventIds: new Set(),
-      after: null,
-      afterEventId: null,
-      oldest: null,
-      oldestEventId: null,
-      hasOlderEvents: false,
-      loadingOlderEvents: false,
-      outputFilter: "all",
-      followOutput: true,
-      eventsTransport: "polling",
-      eventsTransportStatus: "idle",
-      eventsPollingStarted: false,
-      eventsRenderTimer: null,
-      eventsRenderIntervalMs: 120,
-      maxEvents: 20000,
-      maxVisibleEventRows: 100,
-      maxEventMessageChars: 320,
-      maxLiveOutputLines: 1500,
-      liveOutputLines: [],
-      liveOutputRenderedEventCount: 0,
-      liveOutputRenderedFilter: "all",
-      forceLiveOutputRebuild: true,
-      pendingLiveControlAction: "",
-    };
-
-    const detailPage = document.getElementById("queue-detail-page");
-    if (!detailPage) {
-      return;
-    }
-
-    const toSortableTimestamp = (value) => Date.parse(String(value || "")) || 0;
-    const compareEventsAsc = (left, right) => {
-      const leftTs = toSortableTimestamp(pick(left, "createdAt"));
-      const rightTs = toSortableTimestamp(pick(right, "createdAt"));
-      if (leftTs !== rightTs) {
-        return leftTs - rightTs;
-      }
-      return String(pick(left, "id") || "").localeCompare(String(pick(right, "id") || ""));
-    };
-
-    const normalizeIncomingEventsAsc = (incomingEvents) =>
-      (incomingEvents || []).slice().sort(compareEventsAsc);
-
-    const setDetailNotice = (message, isError = true) => {
-      const noticeNode = document.getElementById("queue-detail-notice");
-      if (!noticeNode) {
-        return;
-      }
-      if (!message) {
-        noticeNode.innerHTML = "";
-        return;
-      }
-      noticeNode.innerHTML = `<div class="notice ${isError ? "error" : ""}">${escapeHtml(
-        message,
-      )}</div>`;
-    };
-
-    const setCancelNotice = (message, isError = false) => {
-      const noticeNode = document.getElementById("queue-cancel-notice");
-      if (!noticeNode) {
-        return;
-      }
-      if (!message) {
-        noticeNode.innerHTML = "";
-        return;
-      }
-      noticeNode.innerHTML = `<div class="notice ${isError ? "error" : ""}">${escapeHtml(
-        message,
-      )}</div>`;
-    };
-
-    const setLiveNotice = (message, isError = false) => {
-      state.liveActionNotice = String(message || "");
-      state.liveActionNoticeIsError = Boolean(isError);
-      renderLiveSession();
-    };
-
-    const refreshEventCursors = () => {
-      const oldestEvent = state.events.length > 0 ? state.events[0] : null;
-      const newestEvent =
-        state.events.length > 0 ? state.events[state.events.length - 1] : null;
-      state.oldest = oldestEvent ? pick(oldestEvent, "createdAt") || null : null;
-      state.oldestEventId = oldestEvent ? String(pick(oldestEvent, "id") || "") || null : null;
-      state.after = newestEvent ? pick(newestEvent, "createdAt") || null : null;
-      state.afterEventId = newestEvent ? String(pick(newestEvent, "id") || "") || null : null;
-    };
-
-    const trimEventsToLimit = () => {
-      if (state.events.length <= state.maxEvents) {
-        return;
-      }
-      const overflow = state.events.length - state.maxEvents;
-      const removed = state.events.splice(0, overflow);
-      removed.forEach((event) => {
-        const eventId = String(pick(event, "id") || "");
-        if (eventId) {
-          state.eventIds.delete(eventId);
-        }
-      });
-      state.forceLiveOutputRebuild = true;
-      state.hasOlderEvents = true;
-    };
-
-    const resolveFullLogArtifact = (artifacts) => {
-      const allArtifacts = Array.isArray(artifacts) ? artifacts : [];
-      const byPriority = [
-        "logs/execute.log",
-        "logs/codex_exec.log",
-        "logs/steps/step-0000.log",
-      ];
-      for (const name of byPriority) {
-        const exact = allArtifacts.find((artifact) => pick(artifact, "name") === name);
-        if (exact) {
-          return exact;
-        }
-      }
-      return (
-        allArtifacts.find((artifact) => String(pick(artifact, "name") || "").startsWith("logs/")) ||
-        null
-      );
-    };
-
-    const renderTransportStatus = () => {
-      const transportNode = document.getElementById("queue-live-transport-status");
-      if (!transportNode) {
-        return;
-      }
-      const transportLabel = state.eventsTransport === "sse" ? "SSE" : "Polling";
-      transportNode.textContent = `Live transport: ${transportLabel} (${state.eventsTransportStatus})`;
-    };
-
-    const renderLoadOlderControls = () => {
-      const button = document.getElementById("queue-load-older-events");
-      const status = document.getElementById("queue-load-older-status");
-      if (!button || !status) {
-        return;
-      }
-      const canLoadOlder = Boolean(
-        state.oldest &&
-        state.oldestEventId &&
-        state.hasOlderEvents &&
-        !state.loadingOlderEvents,
-      );
-      button.disabled = !canLoadOlder;
-      if (state.loadingOlderEvents) {
-        status.textContent = "Loading older events...";
-        return;
-      }
-      if (!state.hasOlderEvents && state.events.length > 0) {
-        status.textContent = "No older events available.";
-        return;
-      }
-      status.textContent = "";
-    };
-
-    const renderArtifacts = () => {
-      const bodyNode = document.getElementById("queue-artifacts-body");
-      const fullLogNode = document.getElementById("queue-full-log-action");
-      if (!bodyNode || !fullLogNode) {
-        return;
-      }
-      const artifacts = Array.isArray(state.artifacts) ? state.artifacts : [];
-      const rows = artifacts
-        .map((artifact) => {
-          const downloadUrl = endpoint(
-            "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
-            {
-              id: jobId,
-              artifactId: pick(artifact, "id"),
-            },
-          );
-          return `
-            <tr>
-              <td>${escapeHtml(pick(artifact, "name") || "")}</td>
-              <td>${escapeHtml(deriveStageFromArtifactName(pick(artifact, "name") || ""))}</td>
-              <td>${escapeHtml(String(pick(artifact, "sizeBytes") || "-"))}</td>
-              <td>${escapeHtml(pick(artifact, "contentType") || "-")}</td>
-              <td><a href="${escapeHtml(downloadUrl)}">Download</a></td>
-            </tr>
-          `;
-        })
-        .join("");
-      bodyNode.innerHTML =
-        rows || "<tr><td colspan='5' class='small'>No artifacts.</td></tr>";
-
-      const fullLogArtifact = resolveFullLogArtifact(artifacts);
-      if (fullLogArtifact) {
-        const fullLogDownloadUrl = endpoint(
-          "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
-          {
-            id: jobId,
-            artifactId: pick(fullLogArtifact, "id"),
-          },
-        );
-        fullLogNode.innerHTML = `<a href="${escapeHtml(fullLogDownloadUrl)}"><button type="button" class="secondary">Download Full Logs</button></a>`;
-      } else {
-        fullLogNode.textContent = "Download full logs unavailable.";
-      }
-    };
-
-    const renderAttachments = () => {
-      const bodyNode = document.getElementById("queue-attachments-body");
-      if (!bodyNode) {
-        return;
-      }
-      const attachments = Array.isArray(state.attachments) ? state.attachments : [];
-      if (!attachments.length) {
-        bodyNode.innerHTML = "<tr><td colspan='5' class='small'>No input attachments.</td></tr>";
-        return;
-      }
-      bodyNode.innerHTML = attachments
-        .map((attachment) => {
-          const attachmentId = pick(attachment, "id");
-          const downloadUrl = endpoint(
-            queueSourceConfig.attachmentDownload ||
-            "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
-            {
-              id: jobId,
-              attachmentId,
-            },
-          );
-          const contentType = String(pick(attachment, "contentType") || "").trim();
-          const isImage = contentType.startsWith("image/");
-          const previewHtml = isImage
-            ? `<img src="${escapeHtml(downloadUrl)}" alt="${escapeHtml(
-              pick(attachment, "name") || "attachment",
-            )}" style="max-width:96px;max-height:64px;border-radius:6px;" loading="lazy" />`
-            : "-";
-          return `
-            <tr>
-              <td>${previewHtml}</td>
-              <td>${escapeHtml(pick(attachment, "name") || "")}</td>
-              <td>${escapeHtml(String(pick(attachment, "sizeBytes") || "-"))}</td>
-              <td>${escapeHtml(contentType || "-")}</td>
-              <td><a href="${escapeHtml(downloadUrl)}">Download</a></td>
-            </tr>
-          `;
-        })
-        .join("");
-    };
-
-    const renderJobSummary = () => {
-      const summaryNode = document.getElementById("queue-job-summary");
-      const cancelActionsNode = document.getElementById("queue-cancel-actions");
-      if (!summaryNode || !cancelActionsNode) {
-        return;
-      }
-      const job = state.job;
-      if (!job) {
-        cancelActionsNode.innerHTML = "";
-        summaryNode.innerHTML = "<div class='notice error'>Queue job not found.</div>";
-        return;
-      }
-
-      const normalizedStatus = normalizeStatus("queue", pick(job, "status"));
-      const cancelRequestedAt = pick(job, "cancelRequestedAt");
-      const cancelPending = Boolean(cancelRequestedAt) && normalizedStatus === "running";
-      const canCancel = normalizedStatus === "queued" || normalizedStatus === "running";
-      const cancelButtonDisabled = !canCancel || cancelPending;
-      const cancelButtonLabel = cancelPending ? "Cancellation Requested" : "Cancel Job";
-      const editJobId = normalizeDashboardDetailSegment(pick(job, "id"));
-      const canEdit = isEditableQueuedTaskJob(job) && Boolean(editJobId);
-      const editRoute = canEdit
-        ? `/tasks/queue/new?editJobId=${encodeURIComponent(editJobId)}`
-        : "";
-      cancelActionsNode.innerHTML = `<div class="actions">${canEdit
-        ? `<a href="${escapeHtml(editRoute)}"><button type="button" class="secondary">Edit</button></a>`
-        : ""
-        }<button type="button" id="queue-cancel-button" ${cancelButtonDisabled ? "disabled" : ""
-        }>${escapeHtml(cancelButtonLabel)}</button></div>`;
-
-      const payload = pick(job, "payload") || {};
-      const runtimeTarget = extractRuntimeFromPayload(payload) || "any";
-      const runtimeModel = extractRuntimeModelFromPayload(payload) || "default";
-      const runtimeEffort = extractRuntimeEffortFromPayload(payload) || "default";
-      const selectedSkill = extractSkillFromPayload(payload) || "auto";
-      const finishSummaryNode = pick(job, "finishSummary");
-      const finishSummary =
-        finishSummaryNode &&
-          typeof finishSummaryNode === "object" &&
-          !Array.isArray(finishSummaryNode)
-          ? finishSummaryNode
-          : {};
-      const finishOutcomeNode = pick(finishSummary, "finishOutcome");
-      const finishOutcome =
-        finishOutcomeNode &&
-          typeof finishOutcomeNode === "object" &&
-          !Array.isArray(finishOutcomeNode)
-          ? finishOutcomeNode
-          : {};
-      const finishOutcomeCode =
-        pick(job, "finishOutcomeCode") || pick(finishOutcome, "code") || "";
-      const finishOutcomeStage =
-        pick(job, "finishOutcomeStage") || pick(finishOutcome, "stage") || "-";
-      const finishOutcomeReason =
-        pick(job, "finishOutcomeReason") || pick(finishOutcome, "reason") || "-";
-      const publishSummaryNode = pick(finishSummary, "publish");
-      const publishSummary =
-        publishSummaryNode &&
-          typeof publishSummaryNode === "object" &&
-          !Array.isArray(publishSummaryNode)
-          ? publishSummaryNode
-          : {};
-      const publishStatus = String(pick(publishSummary, "status") || "-");
-      const publishReason = String(pick(publishSummary, "reason") || "-");
-      const publishBranch = String(pick(publishSummary, "workingBranch") || "-");
-      const publishPrUrl = sanitizeExternalHttpUrl(pick(publishSummary, "prUrl"));
-      const proposalsSummaryNode = pick(finishSummary, "proposals");
-      const proposalsSummary =
-        proposalsSummaryNode &&
-          typeof proposalsSummaryNode === "object" &&
-          !Array.isArray(proposalsSummaryNode)
-          ? proposalsSummaryNode
-          : {};
-      const proposalsSubmitted = Number(pick(proposalsSummary, "submittedCount") || 0);
-      const proposalsGenerated = Number(pick(proposalsSummary, "generatedCount") || 0);
-      const proposalsLink = `/tasks/proposals?originSource=queue&originId=${encodeURIComponent(
-        String(pick(job, "id") || ""),
-      )}`;
-      summaryNode.innerHTML = `
-        <p class="small">Effective queue: <span class="inline-code">${escapeHtml(
-        pick(job, "queueName") || defaultQueueName,
-      )}</span></p>
-        <div class="grid-2">
-          <div class="card"><strong>Status:</strong> ${statusBadge("queue", pick(job, "status"))}</div>
-          <div class="card"><strong>Type:</strong> ${escapeHtml(pick(job, "type") || "")}</div>
-          <div class="card"><strong>Created:</strong> ${formatTimestamp(pick(job, "createdAt"))}</div>
-          <div class="card"><strong>Started:</strong> ${formatTimestamp(pick(job, "startedAt"))}</div>
-          <div class="card"><strong>Runtime Target:</strong> ${escapeHtml(runtimeTarget)}</div>
-          <div class="card"><strong>Runtime Model:</strong> ${escapeHtml(runtimeModel)}</div>
-          <div class="card"><strong>Runtime Effort:</strong> ${escapeHtml(runtimeEffort)}</div>
-          <div class="card"><strong>Skill:</strong> ${escapeHtml(selectedSkill)}</div>
-          <div class="card"><strong>Cancel Requested:</strong> ${formatTimestamp(
-        pick(job, "cancelRequestedAt"),
-      )}</div>
-          <div class="card"><strong>Cancel Reason:</strong> ${escapeHtml(
-        pick(job, "cancelReason") || "-",
-      )}</div>
-          <div class="card"><strong>Lease Expires:</strong> ${formatTimestamp(
-        pick(job, "leaseExpiresAt"),
-      )}</div>
-          <div class="card"><strong>Outcome:</strong> ${finishOutcomeBadge(
-        finishOutcomeCode,
-      )}<br/><span class="small">${escapeHtml(
-        `${finishOutcomeStage}: ${finishOutcomeReason}`,
-      )}</span></div>
-        </div>
-        <section>
-          <h3>Finish Summary</h3>
-          <div class="grid-2">
-            <div class="card"><strong>Publish Status:</strong> ${escapeHtml(publishStatus)}</div>
-            <div class="card"><strong>Publish Reason:</strong> ${escapeHtml(publishReason)}</div>
-            <div class="card"><strong>Working Branch:</strong> ${escapeHtml(publishBranch)}</div>
-            <div class="card"><strong>Pull Request:</strong> ${publishPrUrl
-          ? `<a href="${escapeHtml(publishPrUrl)}" target="_blank" rel="noreferrer">${escapeHtml(
-            publishPrUrl,
-          )}</a>`
-          : "-"
-        }</div>
-            <div class="card"><strong>Proposals:</strong> ${escapeHtml(
-          `${proposalsSubmitted} submitted / ${proposalsGenerated} generated`,
-        )}</div>
-            <div class="card"><strong>Proposal Link:</strong> <a href="${escapeHtml(
-          proposalsLink,
-        )}">View run proposals</a></div>
-          </div>
-        </section>
-      `;
-    };
-
-    const renderLiveOutputPanel = () => {
-      const node = document.getElementById("queue-live-output-section");
-      if (!node) {
-        return;
-      }
-      const logTailingEnabled = Boolean(featuresConfig.logTailingEnabled);
-      if (!logTailingEnabled) {
-        node.innerHTML = "";
-        return;
-      }
-      const liveSession = state.liveSession;
-      const liveSessionRouteMissing = Boolean(state.liveSessionRouteMissing);
-      const liveSessionStatus = liveSession
-        ? String(pick(liveSession, "status") || "disabled")
-        : liveSessionRouteMissing
-          ? "unavailable"
-          : "disabled";
-      const webRoUrl = liveSession
-        ? sanitizeExternalHttpUrl(pick(liveSession, "webRo"))
-        : "";
-      const panelOpen = state.liveOutputPanelOpen;
-
-      let panelBody = "";
-      if (!panelOpen) {
-        panelBody = "";
-      } else if (liveSessionStatus === "ready" && webRoUrl) {
-        panelBody = `<iframe
-          id="queue-live-output-iframe"
-          src="${escapeHtml(webRoUrl)}"
-          style="width:100%;height:420px;border:1px solid var(--border-color, #333);border-radius:6px;background:#1a1a2e;"
-          sandbox="allow-scripts allow-same-origin"
-          title="Live terminal output"
-        ></iframe>`;
-      } else if (liveSessionStatus === "starting") {
-        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">⏳ Live session is starting&hellip;</div>`;
-      } else if (liveSessionStatus === "ended" || liveSessionStatus === "revoked") {
-        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Session ended.</div>`;
-      } else if (liveSessionStatus === "error") {
-        panelBody = `<div class="notice error" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
-      } else {
-        panelBody = `<div class="notice" style="text-align:center;padding:2rem;">Live output is not available for this task.</div>`;
-      }
-
-      node.innerHTML = `
-        <div style="border:1px solid var(--border-color, #333);border-radius:8px;overflow:hidden;">
-          <button
-            type="button"
-            id="queue-live-output-toggle"
-            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:0.6rem 1rem;background:var(--card-bg, #16213e);border:none;color:inherit;cursor:pointer;font-size:0.95rem;font-weight:600;"
-          >
-            <span>▶ Live Output</span>
-            <span style="font-size:0.8rem;opacity:0.7;">${panelOpen ? "▼ collapse" : "▶ expand"}</span>
-          </button>
-          ${panelOpen ? `<div id="queue-live-output-body" style="padding:0;">${panelBody}</div>` : ""}
-        </div>
-      `;
-
-      const toggleButton = document.getElementById("queue-live-output-toggle");
-      if (toggleButton) {
-        toggleButton.addEventListener("click", () => {
-          state.liveOutputPanelOpen = !state.liveOutputPanelOpen;
-          renderLiveOutputPanel();
-        });
-      }
-    };
-
-    // Disconnect live output iframe when tab is hidden, reconnect when visible.
-    const handleVisibilityChange = () => {
-      if (document.hidden && state.liveOutputPanelOpen) {
-        // Remove iframe to stop streaming while tab is hidden.
-        const iframe = document.getElementById("queue-live-output-iframe");
-        if (iframe) {
-          iframe.remove();
-        }
-      } else if (!document.hidden && state.liveOutputPanelOpen) {
-        // Re-render to recreate iframe when tab becomes visible.
-        renderLiveOutputPanel();
-      }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    registerDisposer(() => document.removeEventListener("visibilitychange", handleVisibilityChange));
-
-    const renderLiveSession = () => {
-      const node = document.getElementById("queue-live-session-section");
-      if (!node) {
-        return;
-      }
-      const job = state.job;
-      if (!job) {
-        node.innerHTML = "";
-        return;
-      }
-
-      const jobPayload =
-        typeof pick(job, "payload") === "object" && !Array.isArray(pick(job, "payload"))
-          ? pick(job, "payload")
-          : {};
-      const liveControl =
-        jobPayload &&
-          typeof pick(jobPayload, "liveControl") === "object" &&
-          !Array.isArray(pick(jobPayload, "liveControl"))
-          ? pick(jobPayload, "liveControl")
-          : {};
-      const pauseActive = Boolean(pick(liveControl, "paused"));
-      const liveSession = state.liveSession;
-      const liveSessionRouteMissing = Boolean(state.liveSessionRouteMissing);
-      const liveSessionStatus = liveSession
-        ? String(pick(liveSession, "status") || "disabled")
-        : liveSessionRouteMissing
-          ? "unavailable"
-          : "disabled";
-      const liveSessionCreated = Boolean(liveSession);
-      const liveSessionReady = liveSessionStatus === "ready";
-      const liveSessionActionsDisabled = liveSessionRouteMissing;
-      const showGrantDetails = Boolean(state.liveSessionRwAttach);
-      const liveSessionRwWebUrl = sanitizeExternalHttpUrl(state.liveSessionRwWeb);
-
-      node.innerHTML = `
-        <h3>Live Session</h3>
-        ${state.liveSessionError
-          ? `<div class="notice error">${escapeHtml(state.liveSessionError)}</div>`
-          : ""
-        }
-        ${state.liveActionNotice
-          ? `<div class="notice ${state.liveActionNoticeIsError ? "error" : ""}">${escapeHtml(
-            state.liveActionNotice,
-          )}</div>`
-          : ""
-        }
-        <div class="grid-2">
-          <div class="card"><strong>Status:</strong> ${escapeHtml(liveSessionStatus)}</div>
-          <div class="card"><strong>Provider:</strong> ${escapeHtml(
-          String(pick(liveSession || {}, "provider") || "tmate"),
-        )}</div>
-          <div class="card"><strong>Ready:</strong> ${formatTimestamp(
-          pick(liveSession || {}, "readyAt"),
-        )}</div>
-          <div class="card"><strong>Expires:</strong> ${formatTimestamp(
-          pick(liveSession || {}, "expiresAt"),
-        )}</div>
-          <div class="card"><strong>RO Attach:</strong> ${escapeHtml(
-          String(pick(liveSession || {}, "attachRo") || "-"),
-        )}</div>
-          <div class="card"><strong>RW Granted Until:</strong> ${formatTimestamp(
-          state.liveSessionRwGrantedUntil || pick(liveSession || {}, "rwGrantedUntil"),
-        )}</div>
-        </div>
-        ${showGrantDetails
-          ? `<p class="small">RW attach: <span class="inline-code">${escapeHtml(
-            state.liveSessionRwAttach,
-          )}</span>${liveSessionRwWebUrl
-            ? ` | Web: <a href="${escapeHtml(liveSessionRwWebUrl)}" target="_blank" rel="noreferrer">open</a>`
-            : ""
-          }</p>`
-          : ""
-        }
-        <div class="actions">
-          <button type="button" id="queue-live-enable" ${state.pendingLiveControlAction === "enable"
-          ? "disabled"
-          : liveSessionActionsDisabled
-            ? "disabled"
-            : liveSessionCreated && ["starting", "ready"].includes(liveSessionStatus)
-              ? "disabled"
-              : ""
-        }>Enable Live Session</button>
-          <button type="button" id="queue-live-grant" ${state.pendingLiveControlAction === "grant"
-          ? "disabled"
-          : liveSessionReady && !liveSessionActionsDisabled
-            ? ""
-            : "disabled"
-        }>Grant Write (15m)</button>
-          <button type="button" id="queue-live-revoke" ${state.pendingLiveControlAction === "revoke"
-          ? "disabled"
-          : liveSessionCreated && !liveSessionActionsDisabled
-            ? ""
-            : "disabled"
-        }>Revoke Session</button>
-          <button type="button" id="queue-live-pause" ${state.pendingLiveControlAction === "pause" ? "disabled" : ""
-        }>${pauseActive ? "Resume" : "Pause"}</button>
-          <button type="button" id="queue-live-takeover" ${state.pendingLiveControlAction === "takeover" ? "disabled" : ""
-        }>Takeover</button>
-        </div>
-        <div class="actions">
-          <input id="queue-operator-message" placeholder="Send operator message..." />
-          <button type="button" id="queue-operator-send" ${state.pendingLiveControlAction === "operator-message" ? "disabled" : ""
-        }>Send</button>
-        </div>
-      `;
-    };
-
-    const renderEventsTable = () => {
-      const bodyNode = document.getElementById("queue-events-body");
-      const summaryNode = document.getElementById("queue-events-summary");
-      if (!bodyNode || !summaryNode) {
-        return;
-      }
-      if (state.events.length === 0) {
-        bodyNode.innerHTML = "<tr><td colspan='4' class='small'>No events.</td></tr>";
-        summaryNode.textContent = "No events loaded.";
-        return;
-      }
-
-      const visibleEvents = state.hasOlderEvents
-        ? state.events.slice(0, state.maxVisibleEventRows)
-        : state.events.slice(-state.maxVisibleEventRows);
-      const hiddenCount = Math.max(0, state.events.length - visibleEvents.length);
-      const rows = visibleEvents
-        .map((event) => {
-          const rawMessage = String(pick(event, "message") || "").replaceAll("\r", "");
-          const singleLine = rawMessage.replaceAll("\n", " ");
-          const truncated =
-            singleLine.length > state.maxEventMessageChars
-              ? `${singleLine.slice(0, state.maxEventMessageChars - 1)}...`
-              : singleLine;
-          const titleText = rawMessage.length > 2048 ? `${rawMessage.slice(0, 2048)}...` : rawMessage;
-          return `
-            <tr>
-              <td>${formatTimestamp(pick(event, "createdAt"))}</td>
-              <td>${escapeHtml(deriveStageFromEvent(event))}</td>
-              <td>${escapeHtml(pick(event, "level") || "info")}</td>
-              <td class="queue-event-message" title="${escapeHtml(titleText)}">${escapeHtml(
-            truncated,
-          )}</td>
-            </tr>
-          `;
-        })
-        .join("");
-      bodyNode.innerHTML = rows;
-      summaryNode.textContent =
-        hiddenCount > 0
-          ? `Showing latest ${visibleEvents.length} rows of ${state.events.length} loaded events.`
-          : `Showing ${state.events.length} loaded events.`;
-    };
-
-    const updateLiveOutputLines = () => {
-      const shouldRebuild =
-        state.forceLiveOutputRebuild ||
-        state.liveOutputRenderedFilter !== state.outputFilter ||
-        state.liveOutputRenderedEventCount > state.events.length;
-
-      if (shouldRebuild) {
-        const lines = [];
-        state.events.forEach((event) => {
-          if (eventMatchesOutputFilter(event, state.outputFilter)) {
-            lines.push(formatLiveOutputLine(event));
-          }
-        });
-        if (lines.length > state.maxLiveOutputLines) {
-          lines.splice(0, lines.length - state.maxLiveOutputLines);
-        }
-        state.liveOutputLines = lines;
-        state.liveOutputRenderedEventCount = state.events.length;
-        state.liveOutputRenderedFilter = state.outputFilter;
-        state.forceLiveOutputRebuild = false;
-        return;
-      }
-
-      if (state.liveOutputRenderedEventCount < state.events.length) {
-        for (
-          let index = state.liveOutputRenderedEventCount;
-          index < state.events.length;
-          index += 1
-        ) {
-          const event = state.events[index];
-          if (eventMatchesOutputFilter(event, state.outputFilter)) {
-            state.liveOutputLines.push(formatLiveOutputLine(event));
-          }
-        }
-        if (state.liveOutputLines.length > state.maxLiveOutputLines) {
-          state.liveOutputLines.splice(
-            0,
-            state.liveOutputLines.length - state.maxLiveOutputLines,
-          );
-        }
-        state.liveOutputRenderedEventCount = state.events.length;
-      }
-    };
-
-    const renderLiveOutput = () => {
-      const outputNode = document.getElementById("queue-live-output");
-      if (!outputNode) {
-        return;
-      }
-      updateLiveOutputLines();
-      outputNode.textContent = state.liveOutputLines.join("\n");
-      if (state.followOutput) {
-        outputNode.scrollTop = outputNode.scrollHeight;
-      }
-    };
-
-    const flushEventPanelsRender = () => {
-      renderEventsTable();
-      renderLiveOutput();
-      renderLoadOlderControls();
-    };
-
-    const scheduleEventPanelsRender = ({ forceLiveOutputRebuild = false } = {}) => {
-      if (forceLiveOutputRebuild) {
-        state.forceLiveOutputRebuild = true;
-      }
-      if (state.eventsRenderTimer !== null) {
-        return;
-      }
-      state.eventsRenderTimer = window.setTimeout(() => {
-        state.eventsRenderTimer = null;
-        flushEventPanelsRender();
-      }, state.eventsRenderIntervalMs);
-    };
-
-    registerDisposer(() => {
-      if (state.eventsRenderTimer !== null) {
-        clearTimeout(state.eventsRenderTimer);
-        state.eventsRenderTimer = null;
-      }
-    });
-
-    const appendIncomingEvents = (incomingEvents) => {
-      let changed = false;
-      const ordered = normalizeIncomingEventsAsc(incomingEvents);
-      ordered.forEach((event) => {
-        const eventId = String(pick(event, "id") || "");
-        if (!eventId || state.eventIds.has(eventId)) {
-          return;
-        }
-        state.eventIds.add(eventId);
-        state.events.push(event);
-        changed = true;
-      });
-      if (!changed) {
-        return false;
-      }
-      trimEventsToLimit();
-      refreshEventCursors();
-      scheduleEventPanelsRender();
-      return true;
-    };
-
-    const prependOlderEvents = (incomingEvents) => {
-      const ordered = normalizeIncomingEventsAsc(incomingEvents);
-      const toPrepend = [];
-      ordered.forEach((event) => {
-        const eventId = String(pick(event, "id") || "");
-        if (!eventId || state.eventIds.has(eventId)) {
-          return;
-        }
-        state.eventIds.add(eventId);
-        toPrepend.push(event);
-      });
-      if (toPrepend.length === 0) {
-        return false;
-      }
-      state.events = [...toPrepend, ...state.events];
-      trimEventsToLimit();
-      refreshEventCursors();
-      scheduleEventPanelsRender({ forceLiveOutputRebuild: true });
-      return true;
-    };
-
-    const buildEventsQuery = ({
-      limit = 200,
-      after = null,
-      afterEventId = null,
-      before = null,
-      beforeEventId = null,
-      sort = "asc",
-    }) => {
-      const queryParams = [`limit=${encodeURIComponent(String(limit))}`];
-      if (after) {
-        queryParams.push(`after=${encodeURIComponent(String(after))}`);
-      }
-      if (afterEventId) {
-        queryParams.push(`afterEventId=${encodeURIComponent(String(afterEventId))}`);
-      }
-      if (before) {
-        queryParams.push(`before=${encodeURIComponent(String(before))}`);
-      }
-      if (beforeEventId) {
-        queryParams.push(`beforeEventId=${encodeURIComponent(String(beforeEventId))}`);
-      }
-      if (sort && sort !== "asc") {
-        queryParams.push(`sort=${encodeURIComponent(String(sort))}`);
-      }
-      return `?${queryParams.join("&")}`;
-    };
-
-    const loadDetail = async () => {
-      try {
-        const detailResults = await Promise.allSettled([
-          fetchJson(endpoint("/api/queue/jobs/{id}", { id: jobId })),
-          fetchJson(endpoint("/api/queue/jobs/{id}/artifacts", { id: jobId })),
-          fetchJson(
-            endpoint(
-              queueSourceConfig.attachments || "/api/queue/jobs/{id}/attachments",
-              { id: jobId },
-            ),
-          ),
-        ]);
-        const [jobResult, artifactsResult, attachmentsResult] = detailResults;
-        if (jobResult.status === "rejected" || artifactsResult.status === "rejected") {
-          const error =
-            jobResult.status === "rejected"
-              ? jobResult.reason
-              : artifactsResult.reason;
-          throw error;
-        }
-
-        const jobPayload = jobResult.value;
-        const artifactsPayload = artifactsResult.value;
-        let liveSession = null;
-        let liveSessionError = null;
-        let liveSessionRouteMissing = false;
-        try {
-          const livePayload = await fetchJson(
-            endpoint(
-              queueSourceConfig.liveSession || "/api/queue/jobs/{id}/live-session",
-              { id: jobId },
-            ),
-          );
-          liveSession = pick(livePayload || {}, "session") || null;
-        } catch (error) {
-          const classification = classifyLiveSessionError(error);
-          if (classification === "route_missing") {
-            liveSessionRouteMissing = true;
-            liveSessionError =
-              "Live session API is unavailable on this deployment. Verify queue live-session routes are exposed.";
-          } else if (classification === "other") {
-            const message = String(error?.message || "");
-            liveSessionError = message || "Live session unavailable.";
-          }
-        }
-        state.job = jobPayload;
-        state.artifacts = artifactsPayload?.items || [];
-        if (attachmentsResult.status === "fulfilled") {
-          state.attachments = attachmentsResult.value?.items || [];
-          setDetailNotice("");
-        } else {
-          state.attachments = [];
-          const attachmentError =
-            String(attachmentsResult.reason?.message || "").trim() ||
-            "Unknown attachment load failure";
-          setDetailNotice(`Attachments failed to load: ${attachmentError}`, false);
-          console.warn("queue attachments load failed", attachmentsResult.reason);
-        }
-        state.liveSession = liveSession;
-        state.liveSessionError = liveSessionError;
-        state.liveSessionRouteMissing = liveSessionRouteMissing;
-        renderJobSummary();
-        renderLiveOutputPanel();
-        renderLiveSession();
-        renderArtifacts();
-        renderAttachments();
-      } catch (error) {
-        console.error("queue detail load failed", error);
-        state.job = null;
-        state.artifacts = [];
-        state.attachments = [];
-        state.liveSession = null;
-        state.liveSessionError = null;
-        state.liveSessionRouteMissing = false;
-        setDetailNotice("Failed to load queue detail.");
-        renderJobSummary();
-        renderLiveOutputPanel();
-        renderLiveSession();
-        renderArtifacts();
-        renderAttachments();
-      }
-    };
-
-    const loadLatestEvents = async () => {
-      const query = buildEventsQuery({ limit: 200, sort: "desc" });
-      try {
-        const payload = await fetchJson(
-          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
-          query,
-        );
-        state.events = [];
-        state.eventIds.clear();
-        const newestFirst = Array.isArray(payload?.items) ? payload.items : [];
-        const newestFirstCount = newestFirst.length;
-        const orderedAsc = normalizeIncomingEventsAsc(newestFirst);
-        orderedAsc.forEach((event) => {
-          const eventId = String(pick(event, "id") || "");
-          if (!eventId || state.eventIds.has(eventId)) {
-            return;
-          }
-          state.eventIds.add(eventId);
-          state.events.push(event);
-        });
-        refreshEventCursors();
-        state.hasOlderEvents = newestFirstCount >= 200;
-        scheduleEventPanelsRender({ forceLiveOutputRebuild: true });
-      } catch (error) {
-        console.error("queue initial event load failed", error);
-      }
-    };
-
-    const loadNewEvents = async () => {
-      const query = buildEventsQuery({
-        limit: 200,
-        after: state.after,
-        afterEventId: state.afterEventId,
-      });
-      try {
-        const payload = await fetchJson(
-          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
-          query,
-        );
-        appendIncomingEvents(payload?.items || []);
-      } catch (error) {
-        console.error("queue event poll failed", error);
-      }
-    };
-
-    const loadOlderEvents = async () => {
-      if (state.loadingOlderEvents || !state.oldest || !state.oldestEventId) {
-        return;
-      }
-      state.loadingOlderEvents = true;
-      renderLoadOlderControls();
-      const query = buildEventsQuery({
-        limit: 200,
-        before: state.oldest,
-        beforeEventId: state.oldestEventId,
-        sort: "desc",
-      });
-      try {
-        const payload = await fetchJson(
-          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: jobId }) +
-          query,
-        );
-        const older = Array.isArray(payload?.items) ? payload.items : [];
-        const added = prependOlderEvents(older);
-        state.hasOlderEvents = older.length >= 200;
-        if (!added && older.length === 0) {
-          state.hasOlderEvents = false;
-        }
-      } catch (error) {
-        console.error("queue load older events failed", error);
-      } finally {
-        state.loadingOlderEvents = false;
-        renderLoadOlderControls();
-      }
-    };
-
-    let eventSource = null;
-
-    const stopEventStream = () => {
-      if (!eventSource) {
-        return;
-      }
-      eventSource.onmessage = null;
-      eventSource.onerror = null;
-      eventSource.close();
-      eventSource = null;
-    };
-
-    registerDisposer(() => stopEventStream());
-
-    const beginPollingEvents = () => {
-      if (state.eventsPollingStarted) {
-        return;
-      }
-      state.eventsPollingStarted = true;
-      state.eventsTransport = "polling";
-      state.eventsTransportStatus = isAutoRefreshActive() ? "active" : "paused";
-      renderTransportStatus();
-      startPolling(loadNewEvents, pollIntervals.events, {
-        runImmediately: isAutoRefreshActive(),
-      });
-    };
-
-    const startEventStream = () => {
-      if (!isAutoRefreshActive()) {
-        state.eventsTransport = "sse";
-        state.eventsTransportStatus = "paused";
-        renderTransportStatus();
-        return;
-      }
-      if (eventSource || state.eventsPollingStarted) {
-        return;
-      }
-      const streamTemplate =
-        queueSourceConfig.eventsStream || "/api/queue/jobs/{id}/events/stream";
-      if (typeof window.EventSource !== "function") {
-        state.eventsTransport = "polling";
-        state.eventsTransportStatus = "unsupported";
-        renderTransportStatus();
-        beginPollingEvents();
-        return;
-      }
-
-      const query = buildEventsQuery({
-        limit: 200,
-        after: state.after,
-        afterEventId: state.afterEventId,
-      });
-      const streamUrl = endpoint(streamTemplate, { id: jobId }) + query;
-      state.eventsTransport = "sse";
-      state.eventsTransportStatus = "connecting";
-      renderTransportStatus();
-
-      eventSource = new window.EventSource(streamUrl);
-
-      const handleMessage = (rawData) => {
-        if (!rawData || !isAutoRefreshActive()) {
-          return;
-        }
-        try {
-          const parsed = JSON.parse(rawData);
-          appendIncomingEvents([parsed]);
-        } catch (error) {
-          console.error("queue event stream parse failed", error);
-        }
-      };
-
-      eventSource.addEventListener("open", () => {
-        state.eventsTransport = "sse";
-        state.eventsTransportStatus = "active";
-        renderTransportStatus();
-      });
-
-      eventSource.addEventListener("queue_event", (event) => {
-        if (state.eventsTransportStatus !== "active") {
-          state.eventsTransport = "sse";
-          state.eventsTransportStatus = "active";
-          renderTransportStatus();
-        }
-        handleMessage(event.data);
-      });
-
-      eventSource.onmessage = (event) => {
-        if (state.eventsTransportStatus !== "active") {
-          state.eventsTransport = "sse";
-          state.eventsTransportStatus = "active";
-          renderTransportStatus();
-        }
-        handleMessage(event.data);
-      };
-
-      eventSource.onerror = (error) => {
-        console.error("queue event stream failed; switching to polling", error);
-        state.eventsTransport = "polling";
-        state.eventsTransportStatus = "error";
-        renderTransportStatus();
-        stopEventStream();
-        beginPollingEvents();
-      };
-    };
-
-    const onDetailClick = async (event) => {
-      const button = event.target instanceof HTMLElement ? event.target.closest("button") : null;
-      if (!(button instanceof HTMLButtonElement)) {
-        return;
-      }
-
-      if (button.id === "queue-cancel-button") {
-        button.disabled = true;
-        setCancelNotice("Submitting cancellation request...");
-        try {
-          await fetchJson(
-            endpoint(queueSourceConfig.cancel || "/api/queue/jobs/{id}/cancel", { id: jobId }),
-            {
-              method: "POST",
-              body: JSON.stringify({ reason: "Cancellation requested from dashboard" }),
-            },
-          );
-          setCancelNotice("Cancellation request submitted.");
-          await Promise.all([loadNewEvents(), loadDetail()]);
-        } catch (error) {
-          console.error("queue cancellation request failed", error);
-          setCancelNotice("Failed to cancel queue job.", true);
-          button.disabled = false;
-        }
-        return;
-      }
-
-      if (button.id === "queue-load-older-events") {
-        await loadOlderEvents();
-        return;
-      }
-
-      const runLiveAction = async (actionKey, action) => {
-        state.pendingLiveControlAction = actionKey;
-        renderLiveOutputPanel();
-        renderLiveSession();
-        try {
-          await action();
-        } finally {
-          state.pendingLiveControlAction = "";
-          renderLiveOutputPanel();
-          renderLiveSession();
-        }
-      };
-
-      if (button.id === "queue-live-enable") {
-        await runLiveAction("enable", async () => {
-          setLiveNotice("Enabling live session...");
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.liveSession || "/api/queue/jobs/{id}/live-session",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({}),
-              },
-            );
-            state.liveSessionRwAttach = "";
-            state.liveSessionRwWeb = "";
-            state.liveSessionRwGrantedUntil = "";
-            await Promise.all([loadDetail(), loadNewEvents()]);
-            setLiveNotice("Live session enabled.");
-          } catch (error) {
-            console.error("live session enable failed", error);
-            setLiveNotice("Failed to enable live session.", true);
-          }
-        });
-        return;
-      }
-
-      if (button.id === "queue-live-grant") {
-        await runLiveAction("grant", async () => {
-          setLiveNotice("Requesting temporary write access...");
-          try {
-            const grant = await fetchJson(
-              endpoint(
-                queueSourceConfig.liveSessionGrantWrite ||
-                "/api/queue/jobs/{id}/live-session/grant-write",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ ttlMinutes: 15 }),
-              },
-            );
-            state.liveSessionRwAttach = String(pick(grant, "attachRw") || "");
-            state.liveSessionRwWeb = String(pick(grant, "webRw") || "");
-            state.liveSessionRwGrantedUntil = String(pick(grant, "grantedUntil") || "");
-            await Promise.all([loadDetail(), loadNewEvents()]);
-            setLiveNotice("RW access granted.");
-          } catch (error) {
-            console.error("live session grant failed", error);
-            setLiveNotice("Failed to grant write access.", true);
-          }
-        });
-        return;
-      }
-
-      if (button.id === "queue-live-revoke") {
-        await runLiveAction("revoke", async () => {
-          setLiveNotice("Revoking live session...");
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.liveSessionRevoke ||
-                "/api/queue/jobs/{id}/live-session/revoke",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ reason: "Revoked from dashboard" }),
-              },
-            );
-            state.liveSessionRwAttach = "";
-            state.liveSessionRwWeb = "";
-            state.liveSessionRwGrantedUntil = "";
-            await Promise.all([loadDetail(), loadNewEvents()]);
-            setLiveNotice("Live session revoked.");
-          } catch (error) {
-            console.error("live session revoke failed", error);
-            setLiveNotice("Failed to revoke live session.", true);
-          }
-        });
-        return;
-      }
-
-      if (button.id === "queue-live-pause") {
-        await runLiveAction("pause", async () => {
-          const action = button.textContent === "Resume" ? "resume" : "pause";
-          setLiveNotice(action === "pause" ? "Pausing worker..." : "Resuming worker...");
-          try {
-            await fetchJson(
-              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
-                id: jobId,
-              }),
-              {
-                method: "POST",
-                body: JSON.stringify({ action }),
-              },
-            );
-            await Promise.all([loadDetail(), loadNewEvents()]);
-            setLiveNotice(action === "pause" ? "Pause requested." : "Resume requested.");
-          } catch (error) {
-            console.error("task control action failed", error);
-            setLiveNotice("Failed to apply control action.", true);
-          }
-        });
-        return;
-      }
-
-      if (button.id === "queue-live-takeover") {
-        await runLiveAction("takeover", async () => {
-          setLiveNotice("Requesting takeover...");
-          try {
-            await fetchJson(
-              endpoint(queueSourceConfig.taskControl || "/api/queue/jobs/{id}/control", {
-                id: jobId,
-              }),
-              {
-                method: "POST",
-                body: JSON.stringify({ action: "takeover" }),
-              },
-            );
-            await Promise.all([loadDetail(), loadNewEvents()]);
-            setLiveNotice("Takeover requested.");
-          } catch (error) {
-            console.error("task takeover action failed", error);
-            setLiveNotice("Failed to request takeover.", true);
-          }
-        });
-        return;
-      }
-
-      if (button.id === "queue-operator-send") {
-        const input = document.getElementById("queue-operator-message");
-        const messageText =
-          input instanceof HTMLInputElement ? String(input.value || "").trim() : "";
-        if (!messageText) {
-          return;
-        }
-        await runLiveAction("operator-message", async () => {
-          setLiveNotice("Sending operator message...");
-          try {
-            await fetchJson(
-              endpoint(
-                queueSourceConfig.operatorMessages ||
-                "/api/queue/jobs/{id}/operator-messages",
-                { id: jobId },
-              ),
-              {
-                method: "POST",
-                body: JSON.stringify({ message: messageText }),
-              },
-            );
-            if (input instanceof HTMLInputElement) {
-              input.value = "";
-            }
-            await loadNewEvents();
-            setLiveNotice("Operator message sent.");
-          } catch (error) {
-            console.error("operator message failed", error);
-            setLiveNotice("Failed to send operator message.", true);
-          }
-        });
-      }
-    };
-
-    detailPage.addEventListener("click", onDetailClick);
-    registerDisposer(() => detailPage.removeEventListener("click", onDetailClick));
-
-    const followOutput = document.getElementById("queue-follow-output");
-    if (followOutput instanceof HTMLInputElement) {
-      followOutput.addEventListener("change", () => {
-        state.followOutput = Boolean(followOutput.checked);
-        if (state.followOutput) {
-          const outputNode = document.getElementById("queue-live-output");
-          if (outputNode) {
-            outputNode.scrollTop = outputNode.scrollHeight;
-          }
-        }
-      });
-    }
-
-    const outputFilter = document.getElementById("queue-output-filter");
-    if (outputFilter instanceof HTMLSelectElement) {
-      outputFilter.addEventListener("change", () => {
-        state.outputFilter = String(outputFilter.value || "all");
-        scheduleEventPanelsRender({ forceLiveOutputRebuild: true });
-      });
-    }
-
-    const copyOutput = document.getElementById("queue-copy-output");
-    if (copyOutput) {
-      copyOutput.addEventListener("click", async () => {
-        const outputNode = document.getElementById("queue-live-output");
-        const content = outputNode ? String(outputNode.textContent || "") : "";
-        if (!content) {
-          return;
-        }
-        try {
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            await navigator.clipboard.writeText(content);
-          }
-        } catch (error) {
-          console.error("copy live output failed", error);
-        }
-      });
-    }
-
-    registerDisposer(
-      onAutoRefreshChange((enabled) => {
-        if (!enabled) {
-          stopEventStream();
-          state.eventsTransportStatus = "paused";
-          renderTransportStatus();
-          return;
-        }
-        if (state.eventsPollingStarted) {
-          state.eventsTransport = "polling";
-          state.eventsTransportStatus = "active";
-          renderTransportStatus();
-        } else {
-          startEventStream();
-        }
-        loadDetail();
-        loadNewEvents();
-      }),
-    );
-
-    renderTransportStatus();
-    renderLoadOlderControls();
-    await loadDetail();
-    await loadLatestEvents();
-    startPolling(loadDetail, pollIntervals.detail);
-    startEventStream();
-  }
-
-  function renderArtifactsRows(artifacts, showDownload = false, runId = "") {
-    return artifacts
-      .map((artifact) => {
-        const name = pick(artifact, "name") || pick(artifact, "path") || "artifact";
-        const size = pick(artifact, "sizeBytes") || "-";
-        const type = pick(artifact, "contentType") || pick(artifact, "type") || "-";
-        let action = "-";
-        if (showDownload && pick(artifact, "id")) {
-          action = `<a href="${escapeHtml(
-            endpoint("/api/queue/jobs/{id}/artifacts/{artifactId}/download", {
-              id: runId,
-              artifactId: pick(artifact, "id"),
-            }),
-          )}">Download</a>`;
-        } else if (pick(artifact, "path")) {
-          action = `<span class="inline-code">${escapeHtml(pick(artifact, "path"))}</span>`;
-        }
-
-        return `
-          <tr>
-            <td>${escapeHtml(name)}</td>
-            <td>${escapeHtml(String(size))}</td>
-            <td>${escapeHtml(String(type))}</td>
-            <td>${action}</td>
-          </tr>
-        `;
-      })
-      .join("");
-  }
 
   function buildTemporalTimeline(execution) {
     const entries = [
@@ -10675,6 +9260,19 @@
           <div data-auth-profiles-table>
             <p class="loading">Loading profiles...</p>
           </div>
+          <dialog id="oauth-session-modal">
+            <form method="dialog">
+              <h3>Connect with OAuth</h3>
+              <p>Runtime: <span id="oauth-modal-runtime"></span></p>
+              <p>Profile: <span id="oauth-modal-profile"></span></p>
+              <div id="oauth-modal-status" style="margin: 1rem 0;"></div>
+              <menu>
+                <button type="button" id="oauth-modal-start" class="btn">Start Session</button>
+                <button type="button" id="oauth-modal-cancel" class="btn" style="display:none;">Cancel Session</button>
+                <button value="close" class="btn-cancel">Close</button>
+              </menu>
+            </form>
+          </dialog>
           <details class="auth-profile-create-toggle">
             <summary>Create New Profile</summary>
             <form data-auth-profile-form="create" class="stack">
@@ -10925,6 +9523,9 @@
                 <td>${p.cooldown_after_429_seconds ?? "-"}s</td>
                 <td>${p.enabled ? "✅" : "❌"}</td>
                 <td>
+                  <button class="btn-small" data-profile-oauth="${escapeHtml(p.profile_id)}" data-runtime="${escapeHtml(p.runtime_id || "")}" data-volume="${escapeHtml(p.volume_ref || "")}">
+                    Connect with OAuth
+                  </button>
                   <button class="btn-small" data-profile-toggle="${escapeHtml(p.profile_id)}">
                     ${p.enabled ? "Disable" : "Enable"}
                   </button>
@@ -10966,6 +9567,102 @@
     }
 
     function attachProfileHandlers() {
+      document.querySelectorAll("[data-profile-oauth]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const profileId = btn.dataset.profileOauth;
+          const runtimeId = btn.dataset.runtime;
+          const volumeRef = btn.dataset.volume;
+          const modal = document.getElementById("oauth-session-modal");
+          const statusDiv = document.getElementById("oauth-modal-status");
+          
+          document.getElementById("oauth-modal-profile").textContent = profileId;
+          document.getElementById("oauth-modal-runtime").textContent = runtimeId;
+          statusDiv.innerHTML = "";
+          
+          const startBtn = document.getElementById("oauth-modal-start");
+          const cancelBtn = document.getElementById("oauth-modal-cancel");
+          
+          startBtn.style.display = "inline-block";
+          cancelBtn.style.display = "none";
+          
+          let currentSessionId = null;
+          
+          startBtn.onclick = async () => {
+            startBtn.disabled = true;
+            statusDiv.textContent = "Starting session...";
+            try {
+              const res = await fetch("/api/v1/oauth-sessions", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  profile_id: profileId,
+                  runtime_id: runtimeId,
+                  volume_ref: volumeRef,
+                  account_label: profileId,
+                }),
+              });
+              if (!res.ok) {
+                const err = await res.json();
+                statusDiv.textContent = "Error: " + (err.detail || res.statusText);
+                startBtn.disabled = false;
+                return;
+              }
+              const data = await res.json();
+              currentSessionId = data.session_id;
+              startBtn.style.display = "none";
+              cancelBtn.style.display = "inline-block";
+              
+              // Poll for status
+              const pollInterval = setInterval(async () => {
+                const pollRes = await fetch(`/api/v1/oauth-sessions/${currentSessionId}`, {
+                  credentials: "include"
+                });
+                if (pollRes.ok) {
+                  const pollData = await pollRes.json();
+                  statusDiv.textContent = `Status: `;
+                  const strong = document.createElement("strong");
+                  strong.textContent = pollData.status;
+                  statusDiv.appendChild(strong);
+                  if (pollData.tmate_web_url) {
+                    statusDiv.appendChild(document.createElement("br"));
+                    const a = document.createElement("a");
+                    a.href = pollData.tmate_web_url;
+                    a.target = "_blank";
+                    a.textContent = "Open Tmate Web Terminal";
+                    statusDiv.appendChild(a);
+                  }
+                  if (["succeeded", "failed", "cancelled", "expired"].includes(pollData.status)) {
+                    clearInterval(pollInterval);
+                    cancelBtn.style.display = "none";
+                  }
+                }
+              }, 2000);
+              
+              registerDisposer(() => clearInterval(pollInterval));
+              modal.addEventListener("close", () => clearInterval(pollInterval), { once: true });
+              
+            } catch (e) {
+              statusDiv.textContent = "Error: " + e.message;
+              startBtn.disabled = false;
+            }
+          };
+          
+          cancelBtn.onclick = async () => {
+            if (currentSessionId) {
+              await fetch(`/api/v1/oauth-sessions/${currentSessionId}/cancel`, {
+                method: "POST",
+                credentials: "include"
+              });
+              statusDiv.appendChild(document.createElement("br"));
+              statusDiv.appendChild(document.createTextNode("Cancel requested."));
+            }
+          };
+          
+          modal.showModal();
+        });
+      });
+
       document.querySelectorAll("[data-profile-toggle]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const profileId = btn.dataset.profileToggle;
@@ -11135,11 +9832,6 @@
       await renderQueueListPage();
       return;
     }
-    if (normalizedRoute === "/tasks/orchestrator") {
-      window.history.replaceState({}, "", "/tasks/list?source=temporal");
-      await renderQueueListPage();
-      return;
-    }
     if (normalizedRoute === "/tasks/temporal") {
       window.history.replaceState({}, "", "/tasks/list?source=temporal");
       await renderQueueListPage();
@@ -11189,18 +9881,12 @@
       await renderSubmitWorkPage(runtimeParam.runtime);
       return;
     }
-    if (normalizedRoute === "/tasks/queue/new" || normalizedRoute === "/tasks/orchestrator/new") {
+    if (normalizedRoute === "/tasks/queue/new") {
       window.history.replaceState({}, "", "/tasks/new");
       await renderSubmitWorkPage(undefined);
       return;
     }
 
-    if (orchestratorDetailMatch) {
-      window.location.replace(
-        `/tasks/${encodeURIComponent(orchestratorDetailMatch[1])}`,
-      );
-      return;
-    }
     if (temporalDetailMatch) {
       window.location.replace(
         `/tasks/${encodeURIComponent(temporalDetailMatch[1])}?source=temporal`,
@@ -11223,20 +9909,12 @@
         renderNotFound();
         return;
       }
-      if (explicitSource === "orchestrator") {
-        renderNotFound();
-        return;
-      }
       if (explicitSource === "temporal" && temporalDetailEnabled) {
         await renderTemporalDetailPage(resolvedId || candidateTaskId);
         return;
       }
       
       if (resolvedSource === "queue") {
-        renderNotFound();
-        return;
-      }
-      if (resolvedSource === "orchestrator") {
         renderNotFound();
         return;
       }

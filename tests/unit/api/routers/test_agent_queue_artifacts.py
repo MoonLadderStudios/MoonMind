@@ -48,7 +48,7 @@ def _build_artifact(job_id=None):
 @pytest.fixture
 def client(monkeypatch) -> Iterator[tuple[TestClient, AsyncMock]]:
     """Provide a TestClient with queue service dependency overridden."""
-    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", False)
+    monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
 
     app = FastAPI()
     app.include_router(router)
@@ -231,7 +231,7 @@ def test_upload_artifact_rejects_reserved_inputs_namespace(
 def test_create_job_with_attachments_rejects_caption_hints(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
-    """Caption hints should fail fast until caption persistence is implemented."""
+    """Legacy attachment submission is rejected since routing is Temporal-only."""
 
     test_client, service = client
 
@@ -254,8 +254,10 @@ def test_create_job_with_attachments_rejects_caption_hints(
         files=files,
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "attachment_captions_not_supported"
+    # With Temporal-only routing, legacy attachment submission is rejected
+    # before caption validation is reached.
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_routing_target"
     service.create_job_with_attachments.assert_not_awaited()
 
 

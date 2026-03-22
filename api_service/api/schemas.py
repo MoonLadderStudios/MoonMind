@@ -372,7 +372,7 @@ class TaskTemplateSummarySchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     slug: str
-    scope: Literal["global", "team", "personal"]
+    scope: Literal["global", "personal"]
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     title: str
     description: str
@@ -413,7 +413,7 @@ class TaskTemplateCreateRequestSchema(BaseModel):
     slug: Optional[str] = None
     title: str
     description: str
-    scope: Literal["team", "personal", "global"] = "personal"
+    scope: Literal["personal", "global"] = "personal"
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     tags: list[str] = Field(default_factory=list)
     inputs: list[TaskTemplateInputSchema] = Field(default_factory=list)
@@ -475,7 +475,7 @@ class TaskTemplateSaveFromTaskRequestSchema(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    scope: Literal["personal", "team"] = "personal"
+    scope: Literal["personal"] = "personal"
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     slug: Optional[str] = None
     title: str
@@ -503,7 +503,7 @@ class TaskTemplateFavoriteRequestSchema(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    scope: Literal["global", "team", "personal"]
+    scope: Literal["global", "personal"]
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
 
 

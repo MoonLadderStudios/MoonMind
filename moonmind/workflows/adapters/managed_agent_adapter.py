@@ -55,6 +55,8 @@ _OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "CODEX_API_KEY",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
     }
 )
 _BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
@@ -65,9 +67,10 @@ _BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
     "api_key",
     "private_key",
 )
-# GitHub CLI authentication is required for skill workflows like pr-resolver.
-# Keep these pass-through tokens available to managed runtimes.
-_BASE_ENV_TOKEN_ALLOWLIST: frozenset[str] = frozenset({"GITHUB_TOKEN", "GH_TOKEN"})
+# GitHub CLI authentication is required for workflows like pr-resolver.
+# Only the *key names* are propagated through workflow/activity payloads; the
+# values are injected at launch time by the agent-runtime activity worker.
+_SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
 
 _PR_RESOLVER_RESULT_PATH = Path("artifacts/pr_resolver_result.json")
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
@@ -85,8 +88,6 @@ RunLauncherFunc = Callable[..., Awaitable[Any]]
 def _should_filter_base_env_var(key: str) -> bool:
     normalized_key = str(key or "").strip()
     if not normalized_key:
-        return False
-    if normalized_key.upper() in _BASE_ENV_TOKEN_ALLOWLIST:
         return False
     lowered = normalized_key.lower()
     return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
@@ -232,8 +233,16 @@ class ManagedAgentAdapter:
         )
         profile_id: str = profile["profile_id"]
         runtime_for_profile = self._runtime_id or request.agent_id
+
+        # --- Strategy delegation for defaults (Phase 1) ---
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+
+        _strategy = get_strategy(runtime_for_profile)
+
         default_auth = (
-            "oauth" if runtime_for_profile == "cursor_cli" else "api_key"
+            _strategy.default_auth_mode
+            if _strategy is not None
+            else ("oauth" if runtime_for_profile == "cursor_cli" else "api_key")
         )
         auth_mode: str = profile.get("auth_mode", default_auth)
 
@@ -253,6 +262,11 @@ class ManagedAgentAdapter:
                 api_key_ref=profile.get("api_key_ref"),
                 account_label=profile.get("account_label"),
             )
+        passthrough_env_keys = [
+            key
+            for key in _SECRET_ENV_PASSTHROUGH_KEYS
+            if str(os.environ.get(key, "")).strip()
+        ]
 
         # Persist only the profile_id reference — never raw credentials
         # (DOC-REQ-008 / constitution security rule).
@@ -277,12 +291,8 @@ class ManagedAgentAdapter:
             runtime_id_for_profile = self._runtime_id or request.agent_id
             cmd_template = profile.get("command_template")
             if not cmd_template:
-                if runtime_id_for_profile == "gemini_cli":
-                    cmd_template = ["gemini"]
-                elif runtime_id_for_profile == "claude_code":
-                    cmd_template = ["claude"]
-                elif runtime_id_for_profile == "codex_cli":
-                    cmd_template = ["codex", "exec", "--full-auto"]
+                if _strategy is not None:
+                    cmd_template = list(_strategy.default_command_template)
                 else:
                     cmd_template = [runtime_id_for_profile]
 
@@ -291,6 +301,7 @@ class ManagedAgentAdapter:
                 runtime_id=runtime_id_for_profile,
                 auth_mode=auth_mode,
                 env_overrides=shaped_env,
+                passthrough_env_keys=passthrough_env_keys,
                 command_template=cmd_template,
             )
             

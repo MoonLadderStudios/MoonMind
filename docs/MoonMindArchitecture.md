@@ -1,252 +1,312 @@
 # MoonMind Architecture
 
-MoonMind is a self-hostable AI “hub” that combines:
+MoonMind is a self-hostable platform that orchestrates state-of-the-art AI agents — Claude Code, Gemini CLI, Codex CLI, Cursor CLI, and more — with durable execution, secure sandboxing, and managed context built in.
 
-* A web UI (Open-WebUI) configured to talk to a local OpenAI-style API base
-* A FastAPI-based API service that brokers model calls and exposes a **Model Context Protocol** endpoint (`/context`)
-* A **task/agent queue** where runtime-specific workers (Codex/Gemini/Claude) claim and execute jobs
-* A **RAG + memory** subsystem built around **LlamaIndex** and **Qdrant**
-* A **self-hosted Temporal foundation** for durable workflow execution and scheduling
-* Optional local model backends (Ollama, vLLM) and OpenHands integration
-
-This overview is written from the project’s compose files, architecture docs, and dependency manifests. ([GitHub][1])
-
-
+This document is the top-level architectural overview. It covers the major subsystems, how they connect, and where to find deeper documentation. It reflects the **current and intended near-term** state of the project.
 
 ---
 
-## Architecture at a glance
+## Architecture at a Glance
 
 ```mermaid
 flowchart LR
-  U[Browser] --> UI[Open-WebUI container]
-  UI -->|OpenAI API base| API[MoonMind API (FastAPI)]
+  subgraph Control Plane
+    U[Browser] --> MC[Mission Control Dashboard]
+    MC --> API[MoonMind API - FastAPI]
+  end
+
   API --> PG[(Postgres)]
   API --> QD[(Qdrant)]
-  API -->|workflow control| TMP[Temporal]
-  TMP -->|task queues| W1[Codex worker]
-  TMP -->|task queues| W2[Gemini worker]
-  TMP -->|task queues| W3[Claude worker]
-  W1 -->|docker API (restricted)| DP[docker-socket-proxy]
-  W2 -->|docker API (restricted)| DP
-  W3 -->|docker API (restricted)| DP
+  API -->|workflow start / signal / query| TMP[Temporal Server]
+  API --> MN[(MinIO - S3 Artifacts)]
 
-  OH[OpenHands] -->|MCP /context| API
-
-  subgraph Temporal Foundation
-    TDB[(Temporal Postgres)]
-    TMP --> TDB
+  subgraph Execution Plane - Temporal Workers
+    TMP -->|mm.workflow| W_WF[Workflow Worker]
+    TMP -->|mm.activity.artifacts| W_ART[Artifacts Worker]
+    TMP -->|mm.activity.llm| W_LLM[LLM Worker]
+    TMP -->|mm.activity.sandbox| W_SB[Sandbox Worker]
+    TMP -->|mm.activity.agent_runtime| W_AR[Agent Runtime Worker]
+    TMP -->|mm.activity.integrations| W_INT[Integrations Worker]
   end
+
+  W_SB & W_AR -->|restricted Docker API| DP[Docker Socket Proxy]
+  W_ART --> MN
+  TMP --> PG
 ```
 
-Key points:
+Key layers:
 
-* **FastAPI API container** is the system’s “control plane”: it starts Temporal workflows, indexes/retrieves vectors via Qdrant, and exposes the MCP `/context` endpoint used by OpenHands and similar agents. ([GitHub][2])
-* **Workers** are “execution plane”: Temporal workers run deterministic orchestration workflows and execute side-effecting activities under capability boundaries. ([GitHub][2])
-* **Temporal foundation** is the primary durable engine for workflow executions, task scheduling, and background job fan-out. ([GitHub][1])
-
----
-
-## Docker deployment: compose files and container roles
-
-MoonMind uses multiple compose files for different operational modes:
-
-* `docker-compose.yaml`: primary runtime stack (UI + API + DB + Qdrant + workers + Temporal foundation + optional auth/model backends) ([GitHub][3])
-* `docker-compose.downloader.yaml`: one-off downloader (e.g., pulling Qwen artifacts into `model_data`) ([GitHub][5])
-* `docker-compose.test.yaml`: test harness containers (pytest + smoke checks) ([GitHub][6])
-
-### `docker-compose.yaml` — Core runtime stack
-
-The table below focuses on **what each container does** in the running system.
-
-| Service                 | What it is                                                                        | Purpose in MoonMind                                                                | Notes / why it exists                                                                                                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ui`                    | `ghcr.io/open-webui/open-webui:main`                                              | User-facing chat UI                                                                | Open-WebUI is configured to treat MoonMind as an OpenAI-compatible “API base” (typical Open-WebUI pattern). Persistent state stored in `open-webui` volume. ([GitHub][3])               |
-| `api`                   | `ghcr.io/moonladderstudios/moonmind:latest` (built from `api_service/Dockerfile`) | Main API: chat/model routing, Temporal workflow APIs, RAG retrieval, `/context` MCP | Runs the API entrypoint script from the image. It is explicitly configured to expose MCP `/context` and route to providers based on requested model. ([GitHub][7])                      |
-| `api-db`                | Postgres                                                                          | Durable application state                                                          | Stores job/run state (queue jobs, workflow runs), user/auth state, etc. The “durable execution state” part of the system. ([GitHub][1])                                                 |
-| `qdrant`                | `qdrant/qdrant`                                                                   | Vector store for embeddings / retrieval                                            | Primary vector DB backing LlamaIndex retrieval for chat and `/context`. ([GitHub][1])                                                                                                   |
-| `init-db`               | MoonMind image                                                                    | One-shot initializer                                                               | Bootstraps/initializes the DB + Qdrant index (ingestion bootstrap) then exits. Useful for first-run setup and repeatable environment bring-up. ([GitHub][3])                            |
-| `agent-workspaces-init` | Alpine                                                                            | One-shot volume prep                                                               | Creates/fixes permissions for the `agent_workspaces` volume used by workers. Prevents “root-owned volume” pain and makes worker runs more deterministic. ([GitHub][3])     |
-| `codex-auth-init`       | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the persistent volume used to store Codex/CLI auth material so worker containers can reuse tokens across restarts. ([GitHub][3])                                            |
-| `gemini-auth-init`      | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the Gemini CLI auth volume (OAuth/token material) for the Gemini runtime worker(s). ([GitHub][3])                                                                           |
-| `claude-auth-init`      | Alpine                                                                            | One-shot auth volume prep                                                          | Initializes the Claude auth volume for Claude runtime worker(s). ([GitHub][3])                                                                                                          |
-| `codex-worker`          | MoonMind image                                                                    | Runtime worker (Codex)                                                             | Runs Temporal activities using the Codex runtime & tooling installed in the image. ([GitHub][2])                                                                                        |
-| `gemini-worker`         | MoonMind image                                                                    | Runtime worker (Gemini)                                                            | Same worker pattern, configured for Gemini runtime; uses a persistent Gemini auth volume and Temporal task queue routing/capabilities for Gemini execution. ([GitHub][2])               |
-| `claude-worker`         | MoonMind image                                                                    | Runtime worker (Claude)                                                            | Optional Temporal activity worker for Claude; typically enabled via a compose profile. ([GitHub][2])                                                                                    |
-| `temporal-db`           | Postgres                                                                          | Temporal persistence + SQL visibility backend                                      | Stores Temporal workflow state/history metadata and advanced visibility data for all managed flows. ([GitHub][3])                                                                       |
-| `temporal`              | `temporalio/auto-setup`                                                           | Temporal server                                                                    | Provides workflow orchestration, timers, retries, schedules, and visibility for Temporal-managed executions. ([GitHub][3])                                                              |
-| `temporal-namespace-init` | MoonMind/bootstrap helper                                                       | Namespace bootstrap                                                                | Applies MoonMind namespace and retention defaults idempotently during environment bring-up. ([GitHub][3])                                                                               |
-| `docker-proxy`          | `tecnativa/docker-socket-proxy`                                                   | Restricted Docker API for workers                                                  | Provides “docker-outside-of-docker” access while limiting which Docker endpoints are reachable (safer than exposing raw `/var/run/docker.sock` directly to every worker). ([GitHub][3]) |
-| `keycloak-db`           | Postgres                                                                          | Optional auth DB (Keycloak)                                                        | Stores Keycloak state when running OIDC auth. Enabled via a profile. ([GitHub][3])                                                                                                      |
-| `keycloak`              | Keycloak                                                                          | Optional OIDC provider                                                             | Provides OIDC login/identity for MoonMind services. Enabled via a profile. ([GitHub][3])                                                                                                |
-| `ollama`                | `ollama/ollama`                                                                   | Optional local model provider                                                      | Runs a local Ollama server for inference and/or embeddings. Enabled via a profile. ([GitHub][3])                                                                                        |
-| `vllm`                  | `vllm/vllm-openai`                                                                | Optional local model provider (OpenAI-style)                                       | Runs a local OpenAI-compatible inference server (vLLM), typically for hosting local models with an OpenAI API surface. Enabled via a profile. ([GitHub][3])                             |
-| `openhands`             | OpenHands                                                                         | Optional agent UI/runtime that can call MoonMind MCP                               | Runs OpenHands; MoonMind’s MCP `/context` endpoint is intended to be consumed by OpenHands and other agents. Enabled via a profile. ([GitHub][7])                                       |
-
-**Why there are “init” containers:**
-MoonMind explicitly separates **persistent volume/bootstrap concerns** (permissions, OAuth token volume existence) from the long-running workers. This reduces first-run friction and makes “docker compose up” far more reliable across clean environments. ([GitHub][3])
-
-
-
-### `docker-compose.downloader.yaml` — Model downloader
-
-| Service      | Purpose                                                                                                                                                                                                   |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `downloader` | Runs a scripted entrypoint (e.g., `/app/tools/get-qwen.sh`) to populate `model_data/` with required model artifacts. Useful for air-gapped-ish workflows or reproducible local model setup. ([GitHub][5]) |
+* **Control Plane** — API + Mission Control. Authenticates callers, starts workflows, exposes task-oriented surfaces, and serves the operator dashboard.
+* **Execution Plane** — Temporal workers grouped by capability, not by agent brand. Workflows orchestrate; Activities execute side effects.
+* **Data Layer** — A single consolidated Postgres instance, Qdrant for vector retrieval, and MinIO for S3-compatible artifact storage.
 
 ---
 
-### `docker-compose.test.yaml` — Test harness
+## Control Plane
 
-| Service              | Purpose                                                                                                                                        |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pytest`             | Runs unit tests inside the project image with test dependencies enabled. ([GitHub][6])                                                         |
-| `cli-tooling-smoke`  | Verifies CLI tooling is present (`codex --version`, `agentkit --version`), which is important because workers rely on these CLIs. ([GitHub][6]) |
+### API Service
 
----
+The FastAPI-based [API service](../api_service/) is MoonMind's central control plane:
 
-## Task execution model
+* **Workflow management** — starts Temporal workflows, sends signals/updates/cancellations, queries execution state.
+* **Task compatibility APIs** — exposes `/tasks/*` endpoints that map the user-facing "task" concept onto Temporal workflow executions.
+* **Artifact APIs** — manages artifact metadata, presigned upload/download grants, and artifact-to-execution linkage.
+* **RAG retrieval** — indexes and retrieves vectors via Qdrant for chat and the `/context` MCP endpoint.
+* **Task Proposals** — stores and surfaces agent-generated task proposals for human review before promotion to executing workflows.
+* **Auth** — optional OIDC via Keycloak, or disabled-auth mode for local development.
 
-MoonMind implements a durable execution model using **Temporal Workflows** and **Activities**:
+### Mission Control
 
-*   **Workflow Executions** are the durable orchestration primitive coordinating complex flows like data ingestion or spec fulfillment.
-*   **Activities** execute all side-effects (e.g., LLM calls, shell commands, and filesystem ops) within specialized capability boundaries.
-*   Activities communicate via **ArtifactRef** values, securely reading external artifacts and writing outputs without storing large payloads in the workflow history.
+Mission Control is MoonMind's purpose-built operator dashboard — a thin, server-hosted web app served directly by the API service.
 
-This design gives you:
+* **Task list** — unified view of workflow executions across sources, with filtering, sorting, and pagination via Temporal Visibility.
+* **Task detail** — execution state, artifact browsing, timeline, and operator actions (pause, resume, cancel, approve, rerun).
+* **Task submission** — form wizard for creating new tasks with runtime/model selection, scheduling, and artifact upload.
+* **Proposals** — triage queue for reviewing, promoting, or dismissing agent-generated task proposals.
 
-*   Horizontal scaling of specialized activity workers by extending task queues (e.g. `mm.activity.llm` or `mm.activity.sandbox`)
-*   Runtime specialization (a Gemini worker handles specific Temporal tasks advertising Gemini capabilities)
-*   Better operational controls via Temporal Visibility for lists/queries, and Temporal Schedules for recurring workflows.
+> **Vocabulary rule:** The UI uses **task** as the primary term. "Workflow execution" is reserved for implementation docs and debug views. Temporal Task Queues are never presented as a user-facing queue product.
 
----
-
-## Memory & RAG architecture
-
-MoonMind’s memory architecture doc frames “memory” as an accelerator that is never a hard dependency (“fail-open”), while remaining audit-friendly and repo-scoped. ([GitHub][1])
-
-### Baseline primitives (current foundations)
-
-The “current state” called out in the memory doc includes:
-
-* **Document retrieval (RAG)**: **LlamaIndex + Qdrant** powering chat and `/context` ([GitHub][1])
-* **Durable execution state**: Postgres tables for workflows/runs/jobs ([GitHub][1])
-* **Durable artifacts**: filesystem artifact roots (logs, patches, outputs) ([GitHub][1])
-* **Background jobs**: Temporal Workflows for async orchestration ([GitHub][1])
-
-### “Context pack” concept
-
-The desired “context pack” read path composes:
-
-1. Planning memory (repo-scoped planning substrate)
-2. Task history memory (run digests, fix patterns)
-3. Long-term memory (curated knowledge, with provenance)
-4. Documents (RAG via LlamaIndex + Qdrant)
-
-…and then applies token budgeting and provenance tracking. ([GitHub][1])
-
-### LlamaIndex Manifest System
-
-MoonMind includes a detailed spec for a **declarative ingestion/index/retrieval manifest** for LlamaIndex usage (draft v0), covering ingestion → transforms → indexing → retrieval → optional evaluation. ([GitHub][10])
-
-This is especially valuable when you want:
-
-* Repeatable indexing pipelines across environments
-* “Configuration as data” for RAG systems
-* Easier ops/debugging (manifests can be reviewed and versioned)
+See: [Mission Control Architecture](UI/MissionControlArchitecture.md) · [Mission Control Style Guide](UI/MissionControlStyleGuide.md)
 
 ---
 
-## Model Context Protocol support
+## Execution Plane
 
-MoonMind implements the **Model Context Protocol** as a server endpoint at:
+### Temporal Foundation
 
-* `POST /context` — accepts message payloads and routes to the appropriate provider by model name ([GitHub][7])
+[Temporal](https://temporal.io/) is MoonMind's primary durable execution engine. It provides:
 
-The MCP doc explicitly calls out **OpenHands** as a client and provides an example client under `examples/`. ([GitHub][7])
+* **Workflow Executions** as the durable orchestration primitive for all managed automation.
+* **Activities** for all side-effecting work (LLM calls, sandbox commands, artifact I/O, integrations).
+* **Visibility** as the list/query/count source of truth for the dashboard.
+* **Schedules** for recurring and deferred task starts.
+* **Timers, retries, signals, updates** for resilient fire-and-forget execution.
 
-Why this matters:
+The Temporal server runs self-hosted in Docker Compose with PostgreSQL persistence and visibility. It is private-network only — no ports are exposed to the host by default.
 
-* It gives agent runtimes (OpenHands or others) a standardized interface to MoonMind’s routing, RAG, and policy layers.
-* It decouples agent UX/runtime from specific model vendors, since routing happens inside MoonMind. ([GitHub][7])
+See: [Temporal Architecture](Temporal/TemporalArchitecture.md) · [Temporal Platform Foundation](Temporal/TemporalPlatformFoundation.md)
 
----
+### Workflow Types
 
-## Key libraries and why they matter in MoonMind
+MoonMind keeps a small workflow type catalog:
 
-MoonMind’s dependency set (Poetry) is a strong signal of its architectural choices. ([GitHub][8])
+| Workflow | Purpose |
+|---|---|
+| `MoonMind.Run` | Root workflow for all task execution — direct commands, plan-driven execution, and external integrations. |
+| `MoonMind.AgentRun` | Child workflow for true agent-runtime execution (managed and external agents). Started per-step by `MoonMind.Run`. |
+| `MoonMind.ManifestIngest` | Manifest-driven ingestion with graph compilation, fan-out/fan-in, and aggregation. |
+| `MoonMindAuthProfileManagerWorkflow` | Manages auth-profile slot acquisition and release for managed runtimes. |
 
-### API & service framework
+See: [Workflow Type Catalog](Temporal/WorkflowTypeCatalogAndLifecycle.md)
 
-* **FastAPI + Starlette + Uvicorn**: high-performance ASGI API server foundation, async-friendly for streaming, webhooks, and integrating external providers. ([GitHub][8])
-* **Pydantic + pydantic-settings**: typed request/response models, config validation, and “schema-first” API ergonomics. Crucial for complex systems like queue job payloads, runtime policies, and manifest-driven RAG. ([GitHub][8])
-* **orjson**: fast JSON serialization/deserialization for high-throughput endpoints (chat, queue events, task status). ([GitHub][8])
-* **structlog**: structured logs that can be enriched with job IDs, run IDs, worker IDs—vital for debugging agent systems. ([GitHub][8])
+### Tool & Plan System
 
-### Task execution & orchestration
+MoonMind's execution model is built on three domain concepts that Temporal does not provide directly:
 
-* **Temporalio (Python SDK)**: durable execution framework powering workflows and activities in MoonMind. It replaces older queue systems by offering first-class primitives for retries, signal-based event handling, and scheduled tasks. ([GitHub][1])
+* **Tool** — a named capability with input/output schemas, execution binding, and policies. Two subtypes:
+  * `skill` — dispatched as a Temporal Activity (`mm.tool.execute`).
+  * `agent_runtime` — dispatched as a child `MoonMind.AgentRun` workflow.
+* **Plan** — a DAG of tool invocations (Steps) with explicit dependencies, concurrency policy, and failure mode (`FAIL_FAST` or `CONTINUE`).
+* **Artifact** — large inputs/outputs stored outside workflow history, referenced by `ArtifactRef`.
 
-Why Temporal is valuable here (practically):
+Plans are data, not code. They are validated, stored as artifacts, and interpreted deterministically by the plan interpreter inside `MoonMind.Run`. Planning itself is "just a tool" — an LLM activity that produces a plan artifact.
 
-* Separates **slow/long-running** or **batch** workflows (indexing, spec workflows, orchestration plans) from the latency-sensitive API surface
-* Guarantees code-level determinism and resilient retries for flaky external dependencies (LLMs, GitHub, Jira, Confluence, etc.)
-* Enforces separation between deterministic orchestration code and side-effecting activity workers
-
-### Retrieval, indexing, and “memory”
-
-* **LlamaIndex**: MoonMind’s main RAG composition layer; used with multiple readers (Confluence, GitHub, Google, Jira, files) and multiple embeddings backends. ([GitHub][8])
-* **Qdrant + llama-index-vector-stores-qdrant + qdrant-client**: scalable vector storage and retrieval for embeddings; explicitly called out as powering chat and `/context`. ([GitHub][1])
-
-Why LlamaIndex is valuable here:
-
-* Treats ingestion + transformation + indexing + retrieval as composable primitives
-* Lets MoonMind “standardize” RAG across multiple data sources via readers
-* Supports a manifest-driven operational model (MoonMind’s spec doc) ([GitHub][10])
-
-### Model/provider clients
-
-* **openai**, **google-generativeai**, **anthropic**: provider SDKs enabling MoonMind to route calls based on requested model. ([GitHub][7])
-* **ollama**: Python client to integrate with the optional Ollama runtime. ([GitHub][8])
-
-### Data layer & auth
-
-* **SQLAlchemy + Alembic + asyncpg/psycopg2**: robust Postgres persistence with migrations. Fits the “durable execution state” requirement for runs/jobs/workflows. ([GitHub][1])
-* **fastapi-users + PyJWT + cryptography**: ready-made user/auth plumbing; pairs with optional OIDC (Keycloak) deployments. ([GitHub][8])
-
-### Docker + CLI tooling as part of runtime
-
-MoonMind’s main image can optionally install Node-based CLIs:
-
-* `@openai/codex` (Codex CLI)
-* `@githubnext/spec-kit` (workflow)
-* `@google/gemini-cli`
-* `@anthropic-ai/claude-code`
-
-The Dockerfile includes explicit build args to enable/disable these installs and provides “stub” fallbacks when packages aren’t available in build context. ([GitHub][11])
-
-Why this matters:
-
-* Workers depend on stable CLI tooling to execute tasks reproducibly.
-* Stub fallback prevents “image build breaks everything” when optional tooling isn’t configured, enabling progressive adoption.
+See: [Tool and Plan Contracts](Tasks/SkillAndPlanContracts.md) · [Skill and Plan Evolution](Tasks/SkillAndPlanEvolution.md)
 
 ---
 
-## Operational notes and “how things fit together”
+## Worker Fleet
 
-### Startup / bootstrap (typical flow)
+All workers share the same application image (`ghcr.io/moonladderstudios/moonmind:latest`) and differ only in the `TEMPORAL_WORKER_FLEET` environment variable and the task queue they poll. Workers are segmented by **capability and security boundary**, not by agent brand or runtime.
 
-1. Bring up Postgres + Qdrant + API
-2. Run `init-db` (or equivalent initialization path) to bootstrap DB schema and/or indices
-3. Start workers; they register/claim jobs via the queue system
-4. Optionally enable Keycloak, Ollama, vLLM, OpenHands profiles depending on your deployment needs ([GitHub][3])
+| Fleet | Task Queue | Default Concurrency | Role |
+|---|---|---|---|
+| **Workflow** | `mm.workflow` | 8 | Deterministic workflow orchestration. No side effects. |
+| **Artifacts** | `mm.activity.artifacts` | 8 | Artifact lifecycle: upload, download, list, delete, retention sweep against MinIO. |
+| **LLM** | `mm.activity.llm` | 4 | LLM API calls (OpenAI, Gemini, Anthropic). Holds API keys. |
+| **Sandbox** | `mm.activity.sandbox` | 2 | Shell commands, repo checkouts, CLI invocations. Holds auth volumes. |
+| **Agent Runtime** | `mm.activity.agent_runtime` | 4 | Agent orchestration: task dispatch, status polling, result collection. Holds auth volumes. |
+| **Integrations** | `mm.activity.integrations` | 4 | External service activities (Jules, GitHub, webhooks). Holds provider tokens. |
 
-### Scaling strategy
+Each worker exposes an HTTP health endpoint at `:8080/healthz`. Startup order is managed through Docker Compose `depends_on` with health and completion conditions.
 
-* **Scale workers horizontally** by capability boundary (e.g., `mm.activity.llm`, `mm.activity.sandbox`) according to demand; task queues naturally distribute load to eligible workers. ([GitHub][2])
+> **Routing model:** Provider-specific sub-queues (e.g., `mm.activity.llm.codex`) are not configured by default. Add them only when operational isolation or independent scaling demands it.
 
-### Security posture highlights
+See: [Activity Catalog and Worker Topology](Temporal/ActivityCatalogAndWorkerTopology.md) · [Source of Truth and Projection Model](Temporal/SourceOfTruthAndProjectionModel.md)
 
-* Task queue design includes explicit rules to prevent leaking secrets into payloads and to avoid confusing user inputs with worker outputs. ([GitHub][2])
-* Workers that need Docker use a restricted `docker-socket-proxy`; direct host-socket exposure should be avoided. ([GitHub][3])
-* Optional OIDC via Keycloak exists for stronger identity management. ([GitHub][3])
+---
+
+## Agent Runtimes
+
+MoonMind supports two categories of agent execution, unified under the `MoonMind.AgentRun` child workflow:
+
+### Managed Agents
+
+MoonMind launches and supervises these runtimes directly. It owns the runtime envelope (lifecycle, auth, workspace, logs) but not the agent's internal reasoning.
+
+| Runtime | Auth Mode | CLI |
+|---|---|---|
+| Codex CLI | OAuth / API key | `@openai/codex` |
+| Gemini CLI | OAuth | `@google/gemini-cli` |
+| Claude Code | API key / OAuth | `@anthropic-ai/claude-code` |
+| Cursor CLI | OAuth / API key | Cursor CLI |
+
+Managed agent runs use:
+
+* `ManagedAgentAdapter` → `ManagedRuntimeLauncher` → `ManagedRunSupervisor` for async launch and supervision.
+* Persistent auth volumes per runtime for credential reuse across restarts.
+* `AuthProfileManager` workflow for concurrency enforcement and 429 cooldown per auth profile.
+
+See: [Managed and External Agent Execution Model](Temporal/ManagedAndExternalAgentExecutionModel.md) · [Managed Agents Authentication](ManagedAgents/ManagedAgentsAuthentication.md) · [Docker-out-of-Docker](ManagedAgents/DockerOutOfDocker.md)
+
+### External Agents
+
+MoonMind delegates work to external agent systems it does not run, tracking status and closing the feedback loop.
+
+* **Jules** — full external agent adapter with start/status/fetch_result lifecycle, callback-first integration, and Temporal event bridging.
+* **OpenClaw** — external agent adapter.
+* **OpenHands** — optional containerized agent that consumes MoonMind's MCP `/context` endpoint.
+
+See: [External Agent Integration System](ExternalAgents/ExternalAgentIntegrationSystem.md) · [Jules Client Adapter](ExternalAgents/JulesClientAdapter.md) · [Adding an External Provider](ExternalAgents/AddingExternalProvider.md)
+
+---
+
+## Artifact System
+
+MoonMind uses an artifact-first model: large inputs and outputs are stored outside Temporal workflow history and referenced by `ArtifactRef` values.
+
+* **Storage backend:** MinIO (S3-compatible), running as a Docker Compose service. The `TemporalArtifactStore` adapter interface allows alternative backends.
+* **Two-phase upload:** `artifact.create` registers metadata → client uploads content → `artifact.write_complete` finalizes with integrity verification.
+* **Retention classes:** `ephemeral` (7d), `standard` (30d), `long` (180d), `pinned` (no auto-delete). Derived from artifact link type.
+* **Redaction levels:** `none`, `preview_only` (16 KB truncated preview), `restricted` (owner/service-principal only).
+* **Execution linkage:** Artifacts are linked to workflow executions via `ExecutionRef`. Link types include `input.instructions`, `output.primary`, `output.patch`, `output.logs`, `debug.trace`, etc.
+
+See: [Workflow Artifact System Design](Temporal/WorkflowArtifactSystemDesign.md) · [Artifact Presentation Contract](Temporal/ArtifactPresentationContract.md)
+
+---
+
+## Memory & RAG
+
+MoonMind's memory architecture uses three orthogonal planes to make agent runs faster, safer, and more repeatable:
+
+| Plane | Question It Answers | Storage |
+|---|---|---|
+| **A — Planning (Beads)** | "What should we do next?" | Git-native, repo-scoped |
+| **B — Task History** | "What happened last time?" | Run digests + fix patterns in Qdrant |
+| **C — Long-Term (Mem0)** | "What do we know / how do we do this here?" | Curated knowledge in Mem0 |
+
+A **context pack** is assembled per request by composing relevant items from all planes plus document RAG (LlamaIndex + Qdrant), with token budgeting and provenance tracking. Memory is fail-open: if any subsystem is unavailable, the request still runs.
+
+The RAG subsystem is backed by **LlamaIndex** for ingestion/retrieval composition and **Qdrant** for vector storage. A declarative manifest system is specified for repeatable indexing pipelines.
+
+> **Status:** The three-plane model is the desired architecture. Plane B (run digests, fix patterns) and Plane C (Mem0) are defined but still evolving in implementation.
+
+See: [Memory Architecture](Memory/MemoryArchitecture.md) · [Memory Research](Memory/MemoryResearch.md) · [LlamaIndex Manifest System](Rag/LlamaIndexManifestSystem.md) · [Manifest Ingest Design](Rag/ManifestIngestDesign.md)
+
+---
+
+## Model Context Protocol
+
+MoonMind implements an MCP server endpoint at `POST /context`. This gives agent runtimes (OpenHands or others) a standardized interface to MoonMind's model routing, RAG, and policy layers — decoupling agent UX from specific model vendors.
+
+See: [Model Context Protocol](model_context_protocol.md)
+
+---
+
+## Data Layer
+
+### Consolidated PostgreSQL
+
+A single Postgres 17 instance hosts all durable state through logical database separation:
+
+| Database | Purpose |
+|---|---|
+| `moonmind` | API tables, Alembic migrations, task/run state |
+| `temporal` | Temporal workflow persistence (history, shards) |
+| `temporal_visibility` | Temporal visibility store (search attributes, list/count) |
+| `keycloak` | Keycloak IdP state (when `keycloak` profile is active) |
+
+Databases are provisioned by `init_db_scripts/` on first start. Network aliases (`moonmind-api-db`, `temporal-db`) maintain backward compatibility.
+
+### Qdrant
+
+Vector database backing document retrieval for chat, `/context`, and memory planes B/C.
+
+### MinIO
+
+S3-compatible object store for workflow artifacts. The artifacts worker connects on the internal Docker network. The MinIO Console is optionally available on host port 9001 for debugging.
+
+---
+
+## Deployment
+
+MoonMind deploys as a set of decoupled containers from a single `docker-compose.yaml`:
+
+### Core Services (always on)
+
+| Service | Image | Purpose |
+|---|---|---|
+| `api` | `moonmind` (app image) | FastAPI API + Mission Control dashboard |
+| `postgres` | `postgres:17` | Consolidated database |
+| `temporal` | `temporalio/auto-setup` | Temporal server |
+| `minio` | `minio/minio` | S3-compatible artifact store |
+| `qdrant` | `qdrant/qdrant` | Vector database |
+| `docker-proxy` | `tecnativa/docker-socket-proxy` | Restricted Docker API for workers |
+| `temporal-worker-*` (×6) | `moonmind` (app image) | Worker fleet (workflow, artifacts, llm, sandbox, agent_runtime, integrations) |
+
+### Init Containers (run-once)
+
+| Service | Purpose |
+|---|---|
+| `init-db` | Bootstrap DB schema, Qdrant indexes |
+| `temporal-namespace-init` | Create `moonmind` namespace, register search attributes |
+| `agent-workspaces-init` | Fix volume permissions for `/work/agent_jobs` |
+| `codex-auth-init`, `gemini-auth-init`, `claude-auth-init`, `cursor-auth-init` | Initialize auth volumes |
+
+### Optional Profiles
+
+| Profile | Service | Purpose |
+|---|---|---|
+| `keycloak` | `keycloak` | OIDC identity provider |
+| `ollama` | `ollama` | Local model inference |
+| `vllm` | `vllm` | OpenAI-compatible local inference |
+| `openhands` | `openhands` | Agent runtime consuming MCP `/context` |
+| `temporal-ui` | `temporal-ui` | Temporal Web dashboard (port 8088) |
+| `temporal-tools` | `temporal-admin-tools`, `temporal-visibility-rehearsal` | Ad-hoc Temporal CLI and schema tooling |
+
+### Startup Flow
+
+1. Postgres starts and becomes healthy.
+2. `init-db` bootstraps the API schema and Qdrant indexes, then exits.
+3. Temporal server starts and auto-creates persistence databases.
+4. `temporal-namespace-init` registers the `moonmind` namespace and search attributes, then exits.
+5. Auth-init and workspace-init containers prepare volumes, then exit.
+6. API and all worker containers start.
+
+---
+
+## Security
+
+* **Fleet isolation** — Workers are segmented by capability. Sandbox workers never hold provider API keys. Integration workers never run arbitrary shell commands.
+* **Docker socket proxy** — Workers that need Docker API access use `tecnativa/docker-socket-proxy` with strict endpoint allowlisting. Direct host socket exposure is avoided.
+* **Secret hygiene** — Secrets never appear in artifacts, logs, workflow history, or PR text. Raw credentials are passed via environment variables and secret stores only.
+* **Auth profiles** — Managed agent credentials are stored in persistent Docker volumes and referenced indirectly. Runtime-specific environment shaping prevents credential mode conflicts.
+* **OIDC** — Optional Keycloak profile provides full OIDC login/identity management.
+
+---
+
+## Documentation Index
+
+The `docs/` tree is organized by topic area:
+
+| Directory | Contents |
+|---|---|
+| [Tasks/](Tasks/) | Task architecture, skill/plan contracts, proposals, presets, cancellation, runs API |
+| [Temporal/](Temporal/) | Temporal architecture, worker topology, workflow catalog, artifact system, scheduling, visibility, routing, ops runbook |
+| [UI/](UI/) | Mission Control architecture and style guide |
+| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, Git integration, secret store |
+| [ExternalAgents/](ExternalAgents/) | Jules adapter, OpenClaw adapter, external agent integration system, adding providers |
+| [Memory/](Memory/) | Memory architecture and research |
+| [Rag/](Rag/) | LlamaIndex manifest system, manifest ingest design, workflow RAG |
+| [Api/](Api/) | API-specific documentation |
+| [Troubleshooting/](Troubleshooting/) | Debugging guides |

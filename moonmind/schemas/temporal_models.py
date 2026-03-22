@@ -339,6 +339,7 @@ class ExecutionModel(BaseModel):
     )
     memo: dict[str, Any] = Field(default_factory=dict, alias="memo")
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
+    target_skill: Optional[str] = Field(None, alias="targetSkill")
     model: Optional[str] = Field(None, alias="model")
     effort: Optional[str] = Field(None, alias="effort")
     artifact_refs: list[str] = Field(default_factory=list, alias="artifactRefs")

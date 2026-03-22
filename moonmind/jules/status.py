@@ -12,6 +12,7 @@ JulesNormalizedStatus = Literal[
     "failed",
     "canceled",
     "unknown",
+    "awaiting_feedback",
 ]
 
 JULES_DEFAULT_PROVIDER_STATUS = "pending"
@@ -32,6 +33,9 @@ JULES_TERMINAL_FAILURE_PROVIDER_STATUSES = frozenset(
 _JULES_QUEUED_PROVIDER_STATUSES = frozenset({"pending", "queued"})
 _JULES_RUNNING_PROVIDER_STATUSES = frozenset(
     {"running", "in_progress", "in-progress", "processing"}
+)
+_JULES_AWAITING_FEEDBACK_PROVIDER_STATUSES = frozenset(
+    {"awaiting_user_feedback"}
 )
 
 
@@ -64,6 +68,8 @@ def normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
         normalized_status = "queued"
     elif provider_status_token in _JULES_RUNNING_PROVIDER_STATUSES:
         normalized_status = "running"
+    elif provider_status_token in _JULES_AWAITING_FEEDBACK_PROVIDER_STATUSES:
+        normalized_status = "awaiting_feedback"
     else:
         normalized_status = "unknown"
 

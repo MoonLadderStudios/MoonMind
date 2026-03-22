@@ -193,6 +193,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "auth_profile.list": ("artifacts", "auth_profile_list"),
     "auth_profile.ensure_manager": ("artifacts", "auth_profile_ensure_manager"),
+    "oauth_session.ensure_volume": ("artifacts", "oauth_session_ensure_volume"),
+    "oauth_session.update_status": ("artifacts", "oauth_session_update_status"),
+    "oauth_session.mark_failed": ("artifacts", "oauth_session_mark_failed"),
+    "oauth_session.cleanup_stale": ("artifacts", "oauth_session_cleanup_stale"),
     "integration.jules.start": ("integrations", "integration_jules_start"),
     "integration.jules.status": ("integrations", "integration_jules_status"),
     "integration.jules.fetch_result": (
@@ -202,6 +206,9 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
     "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
+    "integration.jules.list_activities": ("integrations", "integration_jules_list_activities"),
+    "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
+    "integration.jules.get_auto_answer_config": ("integrations", "integration_jules_get_auto_answer_config"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
@@ -1617,12 +1624,47 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_status(
         self,
+        request: Mapping[str, Any] | str | None = None,
+        /,
         *,
-        external_id: str,
+        external_id: str | None = None,
         principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
-        status = await self._adapter.status(external_id)
+        request_payload: dict[str, Any] = {}
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.jules.status"
+            )
+        elif request is not None and not isinstance(request, str):
+            raise TemporalActivityRuntimeError(
+                "integration.jules.status payload must be a JSON object or string external_id"
+            )
+
+        if request_payload:
+            if external_id is None:
+                external_id = (
+                    request_payload.get("external_id")
+                    or request_payload.get("externalId")
+                    or request_payload.get("run_id")
+                    or request_payload.get("runId")
+                )
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref") or request_payload.get(
+                    "executionRef"
+                )
+        if external_id is None and isinstance(request, str):
+            external_id = request
+
+        resolved_external_id = str(external_id or "").strip()
+        if not resolved_external_id:
+            raise TemporalActivityRuntimeError(
+                "integration.jules.status requires a non-empty external_id"
+            )
+
+        status = await self._adapter.status(resolved_external_id)
         provider_status = str(status.metadata.get("providerStatus") or "unknown")
         external_url = (
             str(
@@ -1911,6 +1953,104 @@ class TemporalIntegrationActivities:
             normalized_status=status_snapshot.normalized_status,
             provider_status=status_snapshot.provider_status,
         )
+
+    async def integration_jules_list_activities(
+        self,
+        *,
+        session_id: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Fetch session activities and extract the latest agent question."""
+        client = self._client_factory()
+        try:
+            result = await client.list_activities(session_id)
+            return result.model_dump(by_alias=True)
+        finally:
+            await client.aclose()
+
+    async def integration_jules_answer_question(
+        self,
+        *,
+        session_id: str,
+        question: str,
+        task_context: str = "",
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Orchestrate a full question-answer cycle for Jules."""
+        from moonmind.schemas.jules_models import JulesSendMessageRequest
+        from moonmind.workflows.temporal.activities.jules_activities import _generate_llm_answer
+
+        if not session_id or not question:
+            return {"answered": False, "answer": "", "error": "Missing session_id or question"}
+
+        prompt_parts = [
+            "You are answering a clarification question from Jules (an AI coding agent).",
+        ]
+        if task_context:
+            prompt_parts.append(f"Task context: {task_context}")
+        prompt_parts.extend([
+            "",
+            f"Jules's question:\n{question}",
+            "",
+            "Provide a concise, actionable answer. If the question asks about a preference or",
+            "choice, choose the most reasonable default and explain your reasoning briefly.",
+            "Do not ask follow-up questions.",
+        ])
+        clarification_prompt = "\n".join(prompt_parts)
+
+        # Dispatch to an LLM to generate the actual answer.
+        answer = await _generate_llm_answer(clarification_prompt)
+
+        client = self._client_factory()
+        try:
+            await client.send_message(
+                JulesSendMessageRequest(session_id=session_id, prompt=answer)
+            )
+            return {"answered": True, "answer": answer, "error": None}
+        except Exception as exc:
+            logger.error(
+                "Failed to send auto-answer to Jules session %s: %s",
+                session_id, exc, exc_info=True,
+            )
+            return {"answered": False, "answer": answer, "error": str(exc)}
+        finally:
+            await client.aclose()
+
+    async def integration_jules_get_auto_answer_config(
+        self,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Read auto-answer configuration from environment variables.
+
+        Raises ``ValueError`` if integer env vars contain non-integer values.
+        """
+        enabled_raw = os.environ.get("JULES_AUTO_ANSWER_ENABLED", "true").strip().lower()
+        enabled = enabled_raw not in ("false", "0", "no", "off")
+
+        max_answers_raw = os.environ.get("JULES_MAX_AUTO_ANSWERS", "3")
+        try:
+            max_answers = int(max_answers_raw)
+        except ValueError:
+            raise ValueError(
+                f"JULES_MAX_AUTO_ANSWERS must be an integer, got: {max_answers_raw!r}"
+            )
+
+        runtime = os.environ.get("JULES_AUTO_ANSWER_RUNTIME", "llm").strip() or "llm"
+
+        timeout_raw = os.environ.get("JULES_AUTO_ANSWER_TIMEOUT_SECONDS", "300")
+        try:
+            timeout = int(timeout_raw)
+        except ValueError:
+            raise ValueError(
+                f"JULES_AUTO_ANSWER_TIMEOUT_SECONDS must be an integer, got: {timeout_raw!r}"
+            )
+
+        return {
+            "enabled": enabled,
+            "max_answers": max_answers,
+            "runtime": runtime,
+            "timeout_seconds": timeout,
+        }
 
     # ---- Codex Cloud integration handlers ----
 
@@ -2202,14 +2342,78 @@ class TemporalProposalActivities:
         request: Mapping[str, Any] | None = None,
         /,
     ) -> list[dict[str, Any]]:
-        """Analyze execution artifacts and produce candidate proposals.
+        """Analyze execution context and produce candidate follow-up proposals.
 
-        Currently a stub returning an empty candidate array.
-        Future implementation will use LLM activities to analyze
-        step-level ``AgentRunResult`` data, execution artifacts,
-        and run diagnostics to produce structured proposals.
+        Generates structured proposal candidates from the workflow's
+        ``initialParameters`` (passed via the *request* payload by
+        ``_run_proposals_stage``).  Each candidate matches the schema
+        consumed by ``proposal_submit``: ``title``, ``summary``,
+        ``category``, ``tags``, and ``taskCreateRequest``.
+
+        Returns an empty list when insufficient context is available to
+        produce a meaningful proposal (e.g. missing instructions).
         """
-        return []
+        payload = dict(request or {})
+        parameters: dict[str, Any] = payload.get("parameters") or {}
+        repo = str(payload.get("repo") or parameters.get("repository") or "").strip()
+        workflow_id = str(payload.get("workflow_id") or "").strip()
+
+        # Extract instructions from the task payload or top-level parameters.
+        task_node = parameters.get("task")
+        task = dict(task_node) if isinstance(task_node, Mapping) else {}
+        instructions = str(
+            task.get("instructions") or parameters.get("instructions") or ""
+        ).strip()
+
+        if not instructions:
+            # Without instructions there is not enough context to derive a
+            # meaningful follow-up proposal.
+            return []
+
+        # Derive a concise title from the first line of instructions.
+        first_line = instructions.splitlines()[0].strip()
+        title_prefix = "Follow-up: "
+        max_title_len = 200
+        title_body = first_line[: max_title_len - len(title_prefix)]
+        title = f"{title_prefix}{title_body}"
+
+        summary = (
+            f"Automatic follow-up proposal generated from workflow {workflow_id}. "
+            f"Original instructions: {instructions[:500]}"
+        )
+
+        # Reconstruct a task-create request envelope from the original
+        # execution context so that the proposal can be promoted to a
+        # queued task with one click.
+        runtime_node = task.get("runtime")
+        runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
+        git_node = task.get("git")
+        git = dict(git_node) if isinstance(git_node, Mapping) else {}
+        publish_node = task.get("publish")
+        publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
+
+        task_create_request: dict[str, Any] = {
+            "type": "task",
+            "payload": {
+                "repository": repo,
+                "task": {
+                    "instructions": instructions,
+                    "runtime": runtime,
+                    "git": git,
+                    "publish": publish,
+                },
+            },
+        }
+
+        candidate: dict[str, Any] = {
+            "title": title,
+            "summary": summary,
+            "category": "follow_up",
+            "tags": ["auto-generated", "follow-up"],
+            "taskCreateRequest": task_create_request,
+        }
+
+        return [candidate]
 
     async def proposal_submit(
         self,
@@ -2243,10 +2447,10 @@ class TemporalProposalActivities:
                 "errors": [],
             }
 
-        service = None
+        service_or_ctx = None
         if self._proposal_service_factory is not None:
             try:
-                service = self._proposal_service_factory()
+                service_or_ctx = self._proposal_service_factory()
             except Exception as exc:
                 logger.warning(
                     "proposal.submit: failed to create proposal service: %s", exc
@@ -2257,76 +2461,86 @@ class TemporalProposalActivities:
                     "errors": ["proposal service unavailable"],
                 }
 
-        for candidate in candidates[:max_items]:
-            if not isinstance(candidate, Mapping):
-                errors.append("skipped non-object candidate")
-                continue
-            title = str(candidate.get("title") or "").strip()
-            summary = str(candidate.get("summary") or "").strip()
-            task_create_request = candidate.get("taskCreateRequest")
-            if not title or not summary or not isinstance(task_create_request, Mapping):
-                errors.append(f"skipped malformed candidate: {title!r}")
-                continue
+        import contextlib
+        if hasattr(service_or_ctx, "__aenter__"):
+            ctx = service_or_ctx
+        else:
+            @contextlib.asynccontextmanager
+            async def _wrap():
+                yield service_or_ctx
+            ctx = _wrap()
 
-            # Stamp default runtime into taskCreateRequest if not already set
-            stamped_request = dict(task_create_request)
-            if default_runtime and isinstance(default_runtime, str):
-                payload_node = stamped_request.get("payload")
-                if isinstance(payload_node, dict):
-                    task_node = payload_node.get("task")
-                    if isinstance(task_node, dict):
-                        runtime_node = task_node.get("runtime")
-                        if isinstance(runtime_node, dict):
-                            if not runtime_node.get("mode"):
-                                runtime_node["mode"] = default_runtime
+        async with ctx as service:
+            for candidate in candidates[:max_items]:
+                if not isinstance(candidate, Mapping):
+                    errors.append("skipped non-object candidate")
+                    continue
+                title = str(candidate.get("title") or "").strip()
+                summary = str(candidate.get("summary") or "").strip()
+                task_create_request = candidate.get("taskCreateRequest")
+                if not title or not summary or not isinstance(task_create_request, Mapping):
+                    errors.append(f"skipped malformed candidate: {title!r}")
+                    continue
+
+                # Stamp default runtime into taskCreateRequest if not already set
+                stamped_request = dict(task_create_request)
+                if default_runtime and isinstance(default_runtime, str):
+                    payload_node = stamped_request.get("payload")
+                    if isinstance(payload_node, dict):
+                        task_node = payload_node.get("task")
+                        if isinstance(task_node, dict):
+                            runtime_node = task_node.get("runtime")
+                            if isinstance(runtime_node, dict):
+                                if not runtime_node.get("mode"):
+                                    runtime_node["mode"] = default_runtime
+                            else:
+                                task_node["runtime"] = {"mode": default_runtime}
                         else:
-                            task_node["runtime"] = {"mode": default_runtime}
-                    else:
-                        payload_node["task"] = {
-                            "runtime": {"mode": default_runtime}
+                            payload_node["task"] = {
+                                "runtime": {"mode": default_runtime}
+                            }
+
+                try:
+                    if service is not None:
+                        from moonmind.workflows.task_proposals.models import (
+                            TaskProposalOriginSource,
+                        )
+
+                        origin_source = TaskProposalOriginSource.WORKFLOW
+                        origin_metadata = {
+                            "workflowId": workflow_id,
+                            "temporalRunId": run_id,
+                            "triggerRepo": trigger_repo,
                         }
-
-            try:
-                if service is not None:
-                    from moonmind.workflows.task_proposals.models import (
-                        TaskProposalOriginSource,
-                    )
-
-                    origin_source = TaskProposalOriginSource.WORKFLOW
-                    origin_metadata = {
-                        "workflowId": workflow_id,
-                        "temporalRunId": run_id,
-                        "triggerRepo": trigger_repo,
-                    }
-                    await service.create_proposal(
-                        title=title,
-                        summary=summary,
-                        category=candidate.get("category"),
-                        tags=candidate.get("tags"),
-                        task_create_request=stamped_request,
-                        origin_source=origin_source,
-                        origin_id=None,
-                        origin_metadata=origin_metadata,
-                        proposed_by_worker_id=f"temporal:{workflow_id}",
-                        proposed_by_user_id=None,
-                    )
-                    submitted_count += 1
-                else:
-                    # No service available — log and count as submitted for
-                    # structural verification in tests.
-                    logger.info(
-                        "proposal.submit: would submit proposal %r (no service wired)",
+                        await service.create_proposal(
+                            title=title,
+                            summary=summary,
+                            category=candidate.get("category"),
+                            tags=candidate.get("tags"),
+                            task_create_request=stamped_request,
+                            origin_source=origin_source,
+                            origin_id=None,
+                            origin_metadata=origin_metadata,
+                            proposed_by_worker_id=f"temporal:{workflow_id}",
+                            proposed_by_user_id=None,
+                        )
+                        submitted_count += 1
+                    else:
+                        # No service available — log and count as submitted for
+                        # structural verification in tests.
+                        logger.info(
+                            "proposal.submit: would submit proposal %r (no service wired)",
+                            title,
+                        )
+                        submitted_count += 1
+                except Exception as exc:
+                    redacted_error = str(exc)[:200]
+                    errors.append(f"submission failed for {title!r}: {redacted_error}")
+                    logger.warning(
+                        "proposal.submit: failed to submit proposal %r: %s",
                         title,
+                        redacted_error,
                     )
-                    submitted_count += 1
-            except Exception as exc:
-                redacted_error = str(exc)[:200]
-                errors.append(f"submission failed for {title!r}: {redacted_error}")
-                logger.warning(
-                    "proposal.submit: failed to submit proposal %r: %s",
-                    title,
-                    redacted_error,
-                )
 
         return {
             "generated_count": generated_count,
@@ -2621,7 +2835,93 @@ class TemporalAgentRuntimeActivities:
             run_store=self._run_store,
         )
         result = await adapter.fetch_result(run_id)
-        return result.model_dump(mode="json", by_alias=True)
+        result_dict = result.model_dump(mode="json", by_alias=True)
+
+        # Enrich result with pull_request_url detected from workspace git
+        # state.  Managed agents run inside tmate so their stdout doesn't
+        # capture CLI output; we check for PRs from the workspace branch
+        # after the run completes instead.
+        if result.failure_class is None:
+            pr_url = self._detect_pr_url_from_workspace(run_id)
+            if pr_url:
+                meta = dict(result_dict.get("metadata") or {})
+                meta["pull_request_url"] = pr_url
+                result_dict["metadata"] = meta
+
+        return result_dict
+
+    def _detect_pr_url_from_workspace(self, run_id: str) -> str | None:
+        """Best-effort detection of a PR URL from the workspace git state."""
+        import re
+        import subprocess
+
+        if self._run_store is None:
+            return None
+        record = self._run_store.load(run_id)
+        if record is None or not record.workspace_path:
+            return None
+
+        workspace = record.workspace_path
+        try:
+            # Get the current branch in the workspace
+            branch_result = subprocess.run(
+                ["git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if branch_result.returncode != 0:
+                return None
+            branch = branch_result.stdout.strip()
+            if not branch or branch in ("main", "master", "HEAD"):
+                return None
+
+            # Check for an open PR from this branch
+            pr_result = subprocess.run(
+                [
+                    "gh", "pr", "list",
+                    "--repo", self._detect_repo_from_workspace(workspace),
+                    "--head", branch,
+                    "--json", "url",
+                    "--limit", "1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=workspace,
+            )
+            if pr_result.returncode != 0:
+                return None
+            import json as _json
+            prs = _json.loads(pr_result.stdout.strip() or "[]")
+            if prs and isinstance(prs, list) and prs[0].get("url"):
+                return str(prs[0]["url"])
+        except Exception:
+            logger.debug(
+                "Failed to detect PR URL from workspace for run %s",
+                run_id,
+                exc_info=True,
+            )
+        return None
+
+    @staticmethod
+    def _detect_repo_from_workspace(workspace: str) -> str:
+        """Extract the GitHub owner/repo from the workspace remote URL."""
+        import re
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "-C", workspace, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return ""
+        url = result.stdout.strip()
+        # Match github.com/owner/repo or github.com:owner/repo
+        match = re.search(r"github\.com[:/]([^/]+/[^/.]+?)(?:\.git)?$", url)
+        return match.group(1) if match else ""
 
     async def agent_runtime_cancel(
         self,

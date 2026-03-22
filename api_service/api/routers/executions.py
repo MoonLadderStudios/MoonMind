@@ -219,6 +219,22 @@ def _ensure_actions_enabled() -> None:
             },
         )
 
+def _ensure_submit_enabled() -> None:
+    """FastAPI dependency: raise 503 when Temporal execution submission is disabled."""
+    if not settings.temporal_dashboard.submit_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_submit_disabled",
+                "message": (
+                    "Temporal task submission is disabled "
+                    "(temporal_dashboard.submit_enabled=False). "
+                    "The legacy queue execution substrate is no longer supported. "
+                    "Enable Temporal submission to proceed."
+                ),
+            },
+        )
+
 
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True
@@ -284,6 +300,12 @@ def _serialize_execution(
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+    task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
+    tool_params = task_params.get("tool") if isinstance(task_params.get("tool"), dict) else {}
+    skill_params = task_params.get("skill") if isinstance(task_params.get("skill"), dict) else {}
+    target_skill = (
+        str(tool_params.get("name") or skill_params.get("name") or "").strip() or None
+    )
 
     return ExecutionModel(
         task_id=record.workflow_id,
@@ -310,6 +332,7 @@ def _serialize_execution(
         search_attributes=search_attributes,
         memo=memo,
         target_runtime=target_runtime,
+        target_skill=target_skill,
         model=param_model,
         effort=param_effort,
         artifact_refs=(
@@ -334,6 +357,7 @@ def _serialize_execution(
         paused=_manifest_attr(manifest_status, "paused"),
         counts=_manifest_attr(manifest_status, "counts"),
         artifacts_count=len(record.artifact_refs or []),
+        scheduled_for=getattr(record, "scheduled_for", None),
         created_at=record.started_at,
         actions=actions,
         debug_fields=debug_fields,
@@ -1003,7 +1027,7 @@ async def _resolve_schedule_routing(
         return _ScheduleRouteResult(recurring_response=response)
 
     if schedule.mode == "once":
-        if schedule.scheduledFor is None:
+        if schedule.scheduled_for is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
@@ -1011,7 +1035,7 @@ async def _resolve_schedule_routing(
                     "message": "scheduledFor is required when schedule.mode is 'once'.",
                 },
             )
-        scheduled_for_dt = schedule.scheduledFor
+        scheduled_for_dt = schedule.scheduled_for
         delay = _compute_schedule_delay(scheduled_for_dt)
         return _ScheduleRouteResult(
             start_delay=delay,
@@ -1027,7 +1051,21 @@ async def create_execution(
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> ExecutionModel | ScheduleCreatedResponse:
+    from moonmind.config.settings import settings
+
+    if not settings.temporal_dashboard.submit_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "temporal_submit_disabled",
+                "message": "Temporal task submission is disabled (temporal_dashboard.submit_enabled=False). "
+                "The legacy queue execution substrate is no longer supported. "
+                "Enable Temporal submission to proceed.",
+            },
+        )
+
     try:
         if "type" in payload and "payload" in payload:
             request = CreateJobRequest.model_validate(payload)

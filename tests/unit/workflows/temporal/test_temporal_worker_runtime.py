@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
+from moonmind.workflows.task_proposals.service import TaskProposalService
 
 
 def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
@@ -263,5 +264,12 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     )
     mock_proposal_activities_cls.assert_called_once_with(
         artifact_service=mock_service_cls.return_value,
+        proposal_service_factory=ANY,
     )
+    proposal_service_factory = mock_proposal_activities_cls.call_args.kwargs[
+        "proposal_service_factory"
+    ]
+    assert callable(proposal_service_factory)
+    import typing
+    assert isinstance(proposal_service_factory(), typing.AsyncContextManager)
     await resources.aclose()

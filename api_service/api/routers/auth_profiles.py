@@ -142,27 +142,7 @@ async def create_profile(
     await session.commit()
     await session.refresh(profile)
 
-    # Ensure the AuthProfileManager workflow is running for this runtime_id
-    try:
-        from moonmind.workflows.temporal.client import TemporalClientAdapter
-        from moonmind.workflows.temporal.workflows.auth_profile_manager import WORKFLOW_NAME, AuthProfileManagerInput
-        from temporalio.exceptions import WorkflowAlreadyStartedError
-
-        temporal_adapter = TemporalClientAdapter()
-        temporal_client = await temporal_adapter.get_client()
-        workflow_id = f"auth-profile-manager:{body.runtime_id}"
-        
-        await temporal_client.start_workflow(
-            WORKFLOW_NAME,
-            AuthProfileManagerInput(runtime_id=body.runtime_id),
-            id=workflow_id,
-            task_queue="mm.workflow",
-        )
-        logger.info(f"Started AuthProfileManager for runtime: {body.runtime_id}")
-    except WorkflowAlreadyStartedError:
-        logger.debug(f"AuthProfileManager already running for runtime: {body.runtime_id}")
-    except Exception as e:
-        logger.error(f"Failed to start AuthProfileManager for {body.runtime_id}: {e}", exc_info=True)
+    await sync_auth_profile_manager(session=session, runtime_id=body.runtime_id)
 
     return _row_to_dict(profile)
 
@@ -185,6 +165,7 @@ async def update_profile(
 
     await session.commit()
     await session.refresh(profile)
+    await sync_auth_profile_manager(session=session, runtime_id=profile.runtime_id)
     return _row_to_dict(profile)
 
 
@@ -196,8 +177,10 @@ async def delete_profile(
     profile = await session.get(ManagedAgentAuthProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+    runtime_id = profile.runtime_id
     await session.delete(profile)
     await session.commit()
+    await sync_auth_profile_manager(session=session, runtime_id=runtime_id)
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +205,6 @@ def _row_to_dict(row: ManagedAgentAuthProfile) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
+
+
+from api_service.services.auth_profile_service import sync_auth_profile_manager

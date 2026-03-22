@@ -22,26 +22,6 @@ _POLL_INTERVALS_MS = {
 _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini_cli", "claude", "jules", "universal")
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
-    "queue": {
-        "queued": "queued",
-        "pending": "queued",
-        "running": "running",
-        "succeeded": "succeeded",
-        "success": "succeeded",
-        "completed": "succeeded",
-        "failed": "failed",
-        "error": "failed",
-        "cancelled": "cancelled",
-        "dead_letter": "failed",
-    },
-    "orchestrator": {
-        "pending": "queued",
-        "running": "running",
-        "awaiting_approval": "awaiting_action",
-        "succeeded": "succeeded",
-        "rolled_back": "succeeded",
-        "failed": "failed",
-    },
     "proposals": {
         "open": "queued",
         "promoted": "succeeded",
@@ -75,11 +55,11 @@ def normalize_status(source: str, raw_status: str | None) -> str:
     source_key = source.strip().lower()
     status_key = (raw_status or "").strip().lower()
 
-    mapping = _STATUS_MAPS.get(source_key)
-    if mapping is None:
-        return "queued"
-
-    if status_key in mapping:
+    # Prioritize Temporal states, allowing proposals to use their local mapping.
+    map_key = "proposals" if source_key == "proposals" else "temporal"
+    mapping = _STATUS_MAPS.get(map_key)
+    
+    if mapping and status_key in mapping:
         return mapping[status_key]
 
     # Fallback for unexpected values so the dashboard remains renderable.
@@ -177,46 +157,12 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         },
         "statusMaps": status_maps(),
         "sources": {
-            "queue": {
-                "list": "/api/tasks",
-                "create": "/api/queue/jobs",
-                "createWithAttachments": "/api/queue/jobs/with-attachments",
-                "update": "/api/queue/jobs/{id}",
-                "resubmit": "/api/queue/jobs/{id}/resubmit",
-                "detail": "/api/queue/jobs/{id}",
-                "cancel": "/api/queue/jobs/{id}/cancel",
-                "events": "/api/queue/jobs/{id}/events",
-                "eventsStream": "/api/queue/jobs/{id}/events/stream",
-                "artifacts": "/api/queue/jobs/{id}/artifacts",
-                "artifactDownload": "/api/queue/jobs/{id}/artifacts/{artifactId}/download",
-                "attachments": "/api/queue/jobs/{id}/attachments",
-                "attachmentDownload": "/api/queue/jobs/{id}/attachments/{attachmentId}/download",
-                "migrationTelemetry": "/api/queue/telemetry/migration",
-                "skills": "/api/tasks/skills",
-                "runtimeCapabilities": "/api/queue/workers/runtime-capabilities",
-                "liveSession": "/api/queue/jobs/{id}/live-session",
-                "liveSessionGrantWrite": "/api/queue/jobs/{id}/live-session/grant-write",
-                "liveSessionRevoke": "/api/queue/jobs/{id}/live-session/revoke",
-                "taskControl": "/api/queue/jobs/{id}/control",
-                "operatorMessages": "/api/queue/jobs/{id}/operator-messages",
-                "taskStepTemplates": "/api/task-step-templates",
-                "taskStepTemplateDetail": "/api/task-step-templates/{slug}",
-                "taskStepTemplateExpand": "/api/task-step-templates/{slug}:expand",
-                "taskStepTemplateSave": "/api/task-step-templates/save-from-task",
-                "taskStepTemplateFavorite": "/api/task-step-templates/{slug}:favorite",
-            },
             "proposals": {
                 "list": "/api/proposals",
                 "detail": "/api/proposals/{id}",
                 "promote": "/api/proposals/{id}/promote",
                 "dismiss": "/api/proposals/{id}/dismiss",
                 "priority": "/api/proposals/{id}/priority",
-            },
-            "manifests": {
-                "list": "/api/queue/jobs?type=manifest&limit=200",
-                "create": "/api/queue/jobs",
-                "registry": "/api/manifests",
-                "registryRun": "/api/manifests/{name}/runs",
             },
             "schedules": {
                 "list": "/api/recurring-tasks?scope=personal",
@@ -246,11 +192,11 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
         },
         "features": {
             "temporalDashboard": {
-                "enabled": True,
-                "listEnabled": True,
-                "detailEnabled": True,
-                "actionsEnabled": True,
-                "submitEnabled": True,
+                "enabled": bool(temporal_dashboard.enabled),
+                "listEnabled": bool(temporal_dashboard.list_enabled),
+                "detailEnabled": bool(temporal_dashboard.detail_enabled),
+                "actionsEnabled": bool(temporal_dashboard.actions_enabled),
+                "submitEnabled": bool(temporal_dashboard.submit_enabled),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
             },
             "logTailingEnabled": bool(

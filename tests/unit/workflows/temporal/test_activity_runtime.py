@@ -884,6 +884,26 @@ async def test_jules_status_unknown_provider_state_is_non_terminal(tmp_path: Pat
             assert status.terminal is False
 
 
+async def test_jules_status_accepts_legacy_positional_external_id(tmp_path: Path):
+    fake_client = _FakeJulesClient(get_status="completed")
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalIntegrationActivities(
+                artifact_service=service,
+                client_factory=lambda: fake_client,
+            )
+
+            status = await activities.integration_jules_status("task-001")
+            assert status.external_id == "task-001"
+            assert status.provider_status == "completed"
+            assert status.normalized_status == "succeeded"
+
+
 async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch):
     monkeypatch.delenv("JULES_ENABLED", raising=False)
     monkeypatch.delenv("JULES_API_URL", raising=False)

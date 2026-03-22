@@ -1,3 +1,21 @@
+import contextlib
+
+def _build_proposal_service_factory():
+    from moonmind.workflows.task_proposals.service import TaskProposalService
+    from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
+    from moonmind.workflows.agent_queue.service import AgentQueueService
+    from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+    from api_service.db.base import get_async_session_context
+    
+    @contextlib.asynccontextmanager
+    async def factory():
+        async with get_async_session_context() as db_session:
+            yield TaskProposalService(
+                TaskProposalRepository(db_session),
+                AgentQueueService(AgentQueueRepository(db_session)),
+            )
+    return factory
+
 """Temporal worker runtime entrypoint."""
 
 import asyncio
@@ -13,7 +31,11 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
+from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
+from moonmind.workflows.agent_queue.service import AgentQueueService
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
+from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
+from moonmind.workflows.task_proposals.service import TaskProposalService
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
@@ -237,19 +259,15 @@ def _build_runtime_planner():
         ]
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-            pr_node_inputs = dict(node_inputs)
-            pr_node_inputs["instructions"] = "Create a GitHub pull request with the changes."
-            nodes.append(
-                {
-                    "id": f"{node_id}-publish-pr",
-                    "tool": {
-                        "type": "agent_runtime",
-                        "name": runtime_mode,
-                        "version": "1.0",
-                    },
-                    "inputs": pr_node_inputs,
-                }
+            # Append PR creation instructions to the primary node so the
+            # agent creates the PR in the same workspace where the changes
+            # were made.  A separate node would run in a fresh checkout with
+            # no changes to publish.
+            pr_suffix = (
+                "\n\nAfter completing the changes above, create a GitHub "
+                "pull request with the changes using `gh pr create`."
             )
+            node_inputs["instructions"] = instructions + pr_suffix
 
         return {
             "plan_version": "1.0",
@@ -338,12 +356,9 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
             ),
-            # TODO: wire proposal_service_factory once full proposal
-            # generation is implemented.  While the generator stub returns
-            # an empty candidate list, proposal_submit is never invoked
-            # with real data and the factory is not required.
             proposal_activities=TemporalProposalActivities(
                 artifact_service=artifact_service,
+                proposal_service_factory=_build_proposal_service_factory(),
             ),
             review_activities=TemporalReviewActivities(),
         )

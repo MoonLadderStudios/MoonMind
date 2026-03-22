@@ -399,7 +399,15 @@ class TemporalExecutionService:
                 "Failed to start Temporal workflow for execution %s", record.workflow_id
             )
 
-        return await self._sync_projection_best_effort(record)
+        synced_record = await self._sync_projection_best_effort(record)
+        if (
+            scheduled_for is not None
+            and isinstance(synced_record, TemporalExecutionRecord)
+        ):
+            synced_record.scheduled_for = scheduled_for
+            await self._session.commit()
+            await self._session.refresh(synced_record)
+        return synced_record
 
     async def list_executions(
         self,
