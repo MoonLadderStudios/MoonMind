@@ -395,45 +395,32 @@ class ManagedRuntimeLauncher:
             os.environ
         )
 
+        from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        strategy = get_strategy(profile.runtime_id)
+
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).
-        if resolved_workspace_path is not None:
-            from moonmind.workflows.temporal.runtime.strategies import get_strategy
+        if resolved_workspace_path is not None and strategy is not None:
+            try:
+                await strategy.prepare_workspace(
+                    Path(resolved_workspace_path), request
+                )
+            except Exception:
+                logger.warning(
+                    "strategy.prepare_workspace failed for run_id=%s runtime=%s",
+                    run_id,
+                    profile.runtime_id,
+                    exc_info=True,
+                )
 
-            strategy = get_strategy(profile.runtime_id)
-            if strategy is not None:
-                try:
-                    await strategy.prepare_workspace(
-                        Path(resolved_workspace_path), request
-                    )
-                except Exception:
-                    logger.warning(
-                        "strategy.prepare_workspace failed for run_id=%s runtime=%s",
-                        run_id,
-                        profile.runtime_id,
-                        exc_info=True,
-                    )
+        if strategy is not None:
+            env_overrides = strategy.shape_environment(env_overrides, profile)
 
-        # Ensure runtime-specific home dirs are set so CLIs can find their
-        # auth credentials even when env_overrides comes from a different
-        # worker (the workflow worker) that may lack these variables.
-        _runtime_env_keys = (
-            "HOME",
-            "GEMINI_HOME",
-            "GEMINI_CLI_HOME",
-            "CODEX_HOME",
-            "CODEX_CONFIG_HOME",
-            "CODEX_CONFIG_PATH",
-        )
-        for key in _runtime_env_keys:
-            if key not in env_overrides and key in os.environ:
-                env_overrides[key] = os.environ[key]
         for key in profile.passthrough_env_keys:
             value = os.environ.get(key)
             if value is None or not str(value).strip():
                 continue
             env_overrides[key] = value
-
         use_tmate = shutil.which("tmate") is not None
         endpoints: dict[str, str] | None = None
 

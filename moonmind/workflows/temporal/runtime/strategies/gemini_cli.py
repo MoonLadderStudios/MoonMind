@@ -61,12 +61,15 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
         base_env: dict[str, str],
         profile: Any,
     ) -> dict[str, str]:
-        """Pass through only Gemini-relevant environment keys.
+        """Pass through Gemini-relevant environment keys.
 
         Picks ``HOME``, ``GEMINI_HOME``, and ``GEMINI_CLI_HOME`` from the
-        worker process environment when present.
+        worker process environment when present, adding them to base_env.
         """
-        return {
-            k: v for k, v in base_env.items()
-            if k in _GEMINI_ENV_PASSTHROUGH_KEYS
-        }
+        import os
+        
+        env = dict(base_env)
+        for k in _GEMINI_ENV_PASSTHROUGH_KEYS:
+            if k not in env and k in os.environ:
+                env[k] = os.environ[k]
+        return env
