@@ -3274,10 +3274,9 @@
       let leftVal;
       let rightVal;
       if (TIMESTAMP_SORT_FIELDS.has(field)) {
-        const leftRaw = field === "scheduledFor" ? (left[field] || left.createdAt) : left[field];
-        const rightRaw = field === "scheduledFor" ? (right[field] || right.createdAt) : right[field];
-        leftVal = Date.parse(leftRaw || 0) || 0;
-        rightVal = Date.parse(rightRaw || 0) || 0;
+        const getRawTimestamp = (row) => field === "scheduledFor" ? (row[field] || row.createdAt) : row[field];
+        leftVal = Date.parse(getRawTimestamp(left) || 0) || 0;
+        rightVal = Date.parse(getRawTimestamp(right) || 0) || 0;
         if (leftVal !== rightVal) {
           return dir * (leftVal - rightVal);
         }
