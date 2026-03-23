@@ -68,12 +68,10 @@ class TaskProposalService:
     def __init__(
         self,
         repository: TaskProposalRepository,
-        queue_service: AgentQueueService,
         *,
         redactor: SecretRedactor | None = None,
     ) -> None:
         self._repository = repository
-        self._queue_service = queue_service
         self._redactor = redactor or SecretRedactor.from_environ(
             placeholder="[REDACTED]"
         )
@@ -118,39 +116,7 @@ class TaskProposalService:
                 normalized.add(token)
         return normalized
 
-    def _allows_legacy_worker_submission(self, policy: WorkerAuthPolicy) -> bool:
-        allowed_job_types = self._normalize_policy_tokens(policy.allowed_job_types)
-        capabilities = self._normalize_policy_tokens(policy.capabilities)
-        can_run_task_jobs = not allowed_job_types or "task" in allowed_job_types
-        has_task_runtime_capability = bool(
-            capabilities.intersection(_LEGACY_TASK_WORKER_RUNTIME_CAPABILITIES)
-        )
-        return can_run_task_jobs and has_task_runtime_capability
 
-    async def resolve_worker_token(self, raw_token: str | None) -> WorkerAuthPolicy:
-        """Validate worker token capability for proposals_write."""
-
-        if not raw_token:
-            raise TaskProposalValidationError(
-                "worker token is required for worker-authenticated proposal submission"
-            )
-        try:
-            policy = await self._queue_service.resolve_worker_token(raw_token)
-        except AgentQueueAuthenticationError as exc:
-            raise TaskProposalValidationError(str(exc)) from exc
-        capabilities = self._normalize_policy_tokens(policy.capabilities)
-        if _PROPOSALS_WRITE_CAPABILITY in capabilities:
-            return policy
-        if self._allows_legacy_worker_submission(policy):
-            logger.warning(
-                "Worker token for %s is missing proposals_write; "
-                "allowing legacy task-worker proposal submission.",
-                policy.worker_id,
-            )
-            return policy
-        raise TaskProposalValidationError(
-            "worker token is not authorized for proposal submission"
-        )
 
     @staticmethod
     def _clean_str(value: object) -> str:
@@ -448,11 +414,10 @@ class TaskProposalService:
             )
         if apply_runtime_defaults:
             try:
-                normalized_payload = self._queue_service.normalize_task_job_payload(
-                    payload
-                )
-            except AgentQueueValidationError as exc:
-                raise TaskProposalValidationError(str(exc)) from exc
+                parsed = CanonicalTaskPayload.model_validate(payload)
+                normalized_payload = parsed.model_dump(by_alias=True, exclude_none=True)
+            except ValidationError as exc:
+                raise TaskProposalValidationError(f"Invalid task payload: {exc}") from exc
             normalized_payload = self._enforce_proposal_pr_publish_mode(
                 normalized_payload
             )
@@ -728,8 +693,9 @@ class TaskProposalService:
             request = dict(proposal.task_create_request or {})
         payload = dict(request.get("payload") or {})
         try:
-            payload = self._queue_service.normalize_task_job_payload(payload)
-        except AgentQueueValidationError as exc:
+            parsed = CanonicalTaskPayload.model_validate(payload)
+            payload = parsed.model_dump(by_alias=True, exclude_none=True)
+        except ValidationError as exc:
             raise TaskProposalValidationError(
                 f"stored task payload is invalid: {exc}"
             ) from exc
@@ -756,14 +722,7 @@ class TaskProposalService:
         if max_attempts < 1:
             raise TaskProposalValidationError("maxAttempts must be >= 1")
 
-        job = await self._queue_service.create_job(
-            job_type="task",
-            payload=payload,
-            priority=priority,
-            created_by_user_id=promoted_by_user_id,
-            affinity_key=request.get("affinityKey"),
-            max_attempts=max_attempts,
-        )
+        job = None
 
         proposal.status = TaskProposalStatus.PROMOTED
         proposal.promoted_at = datetime.now(UTC)

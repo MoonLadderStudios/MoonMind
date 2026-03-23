@@ -20,7 +20,6 @@ from moonmind.workflows.task_proposals.service import (
 @pytest.mark.asyncio
 async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None:
     repo = AsyncMock()
-    queue = SimpleNamespace()
     record = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -43,7 +42,7 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
         task_create_request={},
     )
     repo.create_proposal.return_value = record
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
     service._emit_notification = AsyncMock()
 
     proposal = await service.create_proposal(
@@ -83,7 +82,6 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
 @pytest.mark.asyncio
 async def test_create_proposal_accepts_enum_origin_source() -> None:
     repo = AsyncMock()
-    queue = SimpleNamespace()
     record = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -106,7 +104,7 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
         task_create_request={},
     )
     repo.create_proposal.return_value = record
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
     service._emit_notification = AsyncMock()
 
     await service.create_proposal(
@@ -135,8 +133,7 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
 @pytest.mark.asyncio
 async def test_create_proposal_enforces_moonmind_metadata() -> None:
     repo = AsyncMock()
-    queue = SimpleNamespace()
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
 
     with pytest.raises(TaskProposalValidationError):
         await service.create_proposal(
@@ -183,8 +180,7 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
         task_create_request={},
     )
     repo.create_proposal.return_value = record
-    queue = SimpleNamespace()
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
     service._emit_notification = AsyncMock()
 
     await service.create_proposal(
@@ -217,7 +213,6 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
 @pytest.mark.asyncio
 async def test_create_proposal_honors_requested_priority_when_higher() -> None:
     repo = AsyncMock()
-    queue = SimpleNamespace()
     record = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -240,7 +235,7 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
         task_create_request={},
     )
     repo.create_proposal.return_value = record
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
     service._emit_notification = AsyncMock()
 
     await service.create_proposal(
@@ -278,7 +273,6 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
 @pytest.mark.asyncio
 async def test_dismiss_proposal_updates_status() -> None:
     repo = AsyncMock()
-    queue = SimpleNamespace()
     proposal = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -286,7 +280,7 @@ async def test_dismiss_proposal_updates_status() -> None:
         decided_by_user_id=None,
     )
     repo.get_proposal_for_update.return_value = proposal
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
 
     dismissed = await service.dismiss_proposal(
         proposal_id=proposal.id,
@@ -306,7 +300,6 @@ async def test_dismiss_proposal_updates_status() -> None:
 @pytest.mark.asyncio
 async def test_update_review_priority_persists_value() -> None:
     repo = AsyncMock()
-    queue = SimpleNamespace()
     proposal = SimpleNamespace(
         id=uuid4(),
         status=TaskProposalStatus.OPEN,
@@ -320,7 +313,7 @@ async def test_update_review_priority_persists_value() -> None:
         return proposal
 
     repo.update_priority.side_effect = _update_priority
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
+    service = TaskProposalService(repo, redactor=SecretRedactor([], "***"))
 
     updated = await service.update_review_priority(
         proposal_id=proposal.id,
@@ -334,50 +327,7 @@ async def test_update_review_priority_persists_value() -> None:
     assert updated.review_priority is TaskProposalReviewPriority.URGENT
 
 
-@pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_resolve_worker_token_allows_legacy_task_worker() -> None:
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    queue.resolve_worker_token = AsyncMock(
-        return_value=SimpleNamespace(
-            worker_id="codex-worker-1",
-            auth_source="worker_token",
-            token_id=uuid4(),
-            allowed_repositories=(),
-            allowed_job_types=("task", "codex_exec", "codex_skill"),
-            capabilities=("codex", "git", "gh", "docker"),
-        )
-    )
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
 
-    policy = await service.resolve_worker_token("mmwt_legacy")
-
-    assert policy.worker_id == "codex-worker-1"
-    queue.resolve_worker_token.assert_awaited_once_with("mmwt_legacy")
-
-
-@pytest.mark.asyncio
-async def test_resolve_worker_token_rejects_without_required_capability() -> None:
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    queue.resolve_worker_token = AsyncMock(
-        return_value=SimpleNamespace(
-            worker_id="restricted-worker",
-            auth_source="worker_token",
-            token_id=uuid4(),
-            allowed_repositories=(),
-            allowed_job_types=("task",),
-            capabilities=("git", "docker"),
-        )
-    )
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
-
-    with pytest.raises(
-        TaskProposalValidationError,
-        match="worker token is not authorized for proposal submission",
-    ):
-        await service.resolve_worker_token("mmwt_restricted")
 
 
 

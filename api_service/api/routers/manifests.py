@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> ManifestsService:
-    queue_service = get_agent_queue_service(session)
+    queue_service = None
     execution_service = TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
