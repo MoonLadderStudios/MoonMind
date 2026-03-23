@@ -28,7 +28,7 @@ Based on direct inspection of repository source files and configuration (Docker 
 - A hybrid of:
   - **Interactive chat** (OpenAI-style `/v1/chat/completions`) with optional retrieval injection from a vector index.
   - **Document ingestion** into the vector store from sources such as entity["company","GitHub","code hosting platform"], Confluence, and Google Drive (via LlamaIndex readers).
-  - **Workflow automation** using Celery queues and durable run records (including workflow and a separate orchestrator service that produces step artifacts and persists identity/configuration snapshots).
+  - **Workflow automation** using Celery queues and durable run records (including workflow and a separate system service that produces step artifacts and persists identity/configuration snapshots).
 
 Even without assuming any specific production scale (repo does not specify user counts, request rates, latency SLOs, or corpus size), the architecture implies MoonMind will benefit from memory that is:
 - **Durable across sessions and runs** (project memory that survives restarts and supports “what did we decide last sprint?” queries).
@@ -44,7 +44,7 @@ The table below maps major MoonMind components (as reflected in code and configu
 |---|---|---|---|---|
 | Chat API router and model routing | User↔LLM chat, tool routing, RAG injection | Uses a vector retriever to fetch relevant nodes and inject context; model routing is provider-aware | Thread continuity across multi-day features; user preference memory; safe tool-use traces | Working + summary memory; long-term user/app memory store; episodic ledger |
 | Document ingestion (GitHub/Confluence/Drive indexers) | Build/update knowledge base | Ingests documents into embeddings and vector index | Mixed corpora retrieval for code, docs, design specs, tickets; provenance + freshness control | Hybrid retrieval and reranking; hierarchical indexes; doc metadata and ACLs |
-| Workflow automation (spec workflow, PR generation, orchestrator runs) | Agentic execution + artifacts | Persists run/task state and writes logs/patches as artifacts | Episodic memory of “what happened” (attempts, failures, fixes), reusable across runs | Event-sourced episodic store + embedding; run summarization into semantic memory |
+| Workflow automation (spec workflow, PR generation, system runs) | Agentic execution + artifacts | Persists run/task state and writes logs/patches as artifacts | Episodic memory of “what happened” (attempts, failures, fixes), reusable across runs | Event-sourced episodic store + embedding; run summarization into semantic memory |
 | DB models for users and profiles | User identity and secrets | Encrypted API keys; structured run records | Personalization without leaking secrets; policy enforcement by user/team | “Memory namespaces” with RBAC; secret redaction; audit trails |
 | MCP integration docs/config | Connect agents to tools/data | MCP is positioned as standardized tool/data connector | Safe tool execution, controlled “write” operations, reproducible runs | Tool/state management; governance layer around memory writes |
 

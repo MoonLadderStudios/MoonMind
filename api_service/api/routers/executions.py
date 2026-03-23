@@ -63,6 +63,7 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.INITIALIZING: "queued",
     MoonMindWorkflowState.WAITING_ON_DEPENDENCIES: "waiting",
     MoonMindWorkflowState.PLANNING: "running",
+    MoonMindWorkflowState.AWAITING: "queued",
     MoonMindWorkflowState.EXECUTING: "running",
     MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
     MoonMindWorkflowState.FINALIZING: "running",

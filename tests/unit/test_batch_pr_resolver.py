@@ -239,9 +239,11 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     assert runtime.effort == "high"
 
 
-def test_resolve_runtime_selection_defaults_to_gemini_without_inheritance():
+def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
+    
+    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
 
     args = type(
         "Args",
@@ -255,7 +257,7 @@ def test_resolve_runtime_selection_defaults_to_gemini_without_inheritance():
     )()
 
     runtime = resolve_runtime_selection(args)
-    assert runtime.mode == "gemini"
+    assert runtime.mode is None
     assert runtime.model is None
     assert runtime.effort is None
 

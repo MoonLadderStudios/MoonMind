@@ -53,7 +53,7 @@ class SecretRedactor:
     """Utility to scrub sensitive values from log output.
 
     The redactor performs straightforward string replacement against known secret
-    values; it is intentionally lightweight so it can be applied to orchestrator
+    values; it is intentionally lightweight so it can be applied to temporal worker workflows
     artifacts without adding heavy dependencies.
     """
 

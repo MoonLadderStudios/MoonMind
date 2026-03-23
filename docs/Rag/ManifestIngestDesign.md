@@ -47,7 +47,7 @@ Temporal is the primary workflow manager and scheduler, so manifest ingest shoul
 ## 3. Non-goals
 
 * Preserving old Celery/“Agent Queue” naming or semantics inside the Temporal-native implementation.
-* Maintaining legacy naming like “worker task / orchestrator task / manifest job” inside the new system.
+* Maintaining legacy naming like “worker task / system task / manifest job” inside the new system.
 * Implementing a custom queue semantics layer on top of Temporal Task Queues (Temporal Task Queues are FIFO polling queues used for dispatch/routing). ([Temporal Docs][1])
 * Claiming that every current manifest submission path in MoonMind already runs through `MoonMind.ManifestIngest` or that queue-backed manifest flows disappear immediately on adoption of this design.
 
@@ -427,7 +427,7 @@ Temporal glossary: **Parent Close Policy** determines what happens to a Child Wo
   * If user cancels the ingest, children receive cancellation requests.
   * If ingest completes normally, children should already be done; if not, treat as an invariant violation.
 
-(If you need “fire-and-forget runs”, use `ABANDON`, but that is usually the wrong default for a manifest-driven orchestrator.)
+(If you need “fire-and-forget runs”, use `ABANDON`, but that is usually the wrong default for a manifest-driven system.)
 
 ---
 

@@ -9759,9 +9759,6 @@
     stopPolling();
     activateNav(normalizedRoute);
 
-    const orchestratorDetailMatch = normalizedRoute.match(
-      /^\/tasks\/orchestrator\/([^/]+)$/,
-    );
     const temporalDetailMatch = normalizedRoute.match(/^\/tasks\/temporal\/([^/]+)$/);
     const unifiedDetailMatch = normalizedRoute.match(/^\/tasks\/([^/]+)$/);
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);
