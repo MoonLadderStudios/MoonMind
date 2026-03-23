@@ -465,7 +465,7 @@ async def _submit_jobs_via_http(
                 "maxAttempts": int(request.get("maxAttempts", 3)),
             }
             try:
-                response = await client.post("/api/queue/jobs", json=body)
+                response = await client.post("/api/executions", json=body)
                 response.raise_for_status()
                 data = response.json()
                 job_id = str(data.get("id", "")) or "(unknown)"
