@@ -307,7 +307,7 @@ def _make_submission(module: dict[str, Any]) -> Any:
 
 
 def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
-    """When MOONMIND_URL is set, _submit_jobs should POST to /api/queue/jobs."""
+    """When MOONMIND_URL is set, _submit_jobs should POST to /api/executions."""
     module = _load_module()
     submit_jobs_via_http = module["_submit_jobs_via_http"]
     _read_worker_token = module["_read_worker_token"]
@@ -351,7 +351,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     assert created[0]["pr"] == 42
     mock_post.assert_awaited_once()
     call_path = mock_post.await_args[0][0]
-    assert call_path == "/api/queue/jobs"
+    assert call_path == "/api/executions"
 
 
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:
