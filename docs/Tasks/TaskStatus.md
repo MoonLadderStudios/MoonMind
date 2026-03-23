@@ -41,10 +41,10 @@ Eliminate the normalization layer entirely. Internal workflow phases (`planning`
 | `QUEUED` | queued | Absorbs current `SCHEDULED`, `INITIALIZING`, and `AWAITING` |
 | `WAITING` | waiting | Replaces `WAITING_ON_DEPENDENCIES` |
 | `RUNNING` | running | Absorbs `PLANNING`, `EXECUTING`, `FINALIZING` |
-| `AWAITING_EXTERNAL` | awaiting_action | Blocked on external provider |
-| `SUCCEEDED` | succeeded | Terminal |
+| `AWAITING_ACTION` | awaiting_action | Blocked on external provider |
+| `COMPLETED` | completed | Terminal |
 | `FAILED` | failed | Terminal |
-| `CANCELED` | cancelled | Terminal |
+| `CANCELED` | canceled | Terminal |
 
 Phase detail (planning/executing/finalizing) would be tracked via:
 - **Temporal search attribute** `mm_phase` for queryability
