@@ -6791,7 +6791,15 @@
 
 
   function buildTemporalTimeline(execution) {
-    const entries = [
+    const entries = [];
+    if (pick(execution, "scheduledFor")) {
+      entries.push({
+        label: "Scheduled",
+        value: pick(execution, "scheduledFor"),
+        detail: "Execution scheduled.",
+      });
+    }
+    entries.push(
       {
         label: "Started",
         value: pick(execution, "startedAt"),
@@ -6802,7 +6810,7 @@
         value: pick(execution, "updatedAt"),
         detail: String(pick(pick(execution, "memo") || {}, "summary") || "").trim() || "-",
       },
-    ];
+    );
     if (pick(execution, "closedAt")) {
       entries.push({
         label: "Closed",
@@ -7529,6 +7537,7 @@
         ${pick(execution, "startingBranch") ? `<div class="card"><strong>Starting Branch:</strong> <code>${escapeHtml(String(pick(execution, "startingBranch")))}</code></div>` : ""}
         ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
         ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
+        ${pick(execution, "scheduledFor") ? `<div class="card"><strong>Scheduled For:</strong> ${escapeHtml(formatTimestamp(pick(execution, "scheduledFor")))}</div>` : ""}
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
