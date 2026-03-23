@@ -370,7 +370,7 @@ class ExecutionModel(BaseModel):
     integration: Optional[IntegrationStateModel] = Field(None, alias="integration")
     latest_run_view: bool = Field(True, alias="latestRunView")
     continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
-    started_at: datetime = Field(..., alias="startedAt")
+    started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime = Field(..., alias="updatedAt")
     closed_at: datetime | None = Field(None, alias="closedAt")
     detail_href: str = Field(..., alias="detailHref")
