@@ -2,8 +2,8 @@ import logging
 
 import pytest
 import requests
-from langchain_community.document_loaders import ConfluenceLoader
 from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.readers.confluence import ConfluenceReader
 
 from moonmind.config.settings import settings
 from moonmind.factories.embed_model_factory import build_embed_model
@@ -111,21 +111,21 @@ def test_ollama_embeddings_instance_creation(ollama_embeddings_instance):
 
 def test_ollama_embeddings_confluence_document(ollama_embeddings_instance):
     """Test embedding a Confluence document."""
-    loader = ConfluenceLoader(
-        url=settings.confluence.confluence_url,
-        api_key=settings.confluence.confluence_api_key,
-        username=settings.confluence.confluence_username,
-        space_key=settings.confluence.confluence_default_space_key,
-        include_attachments=False,
-        limit=50,
+    reader = ConfluenceReader(
+        base_url=settings.atlassian.atlassian_url,
+        user_name=settings.atlassian.atlassian_username,
+        password=settings.atlassian.atlassian_api_key,
     )
-    documents = loader.load()
+    documents = reader.load_data(
+        space_key=settings.atlassian.confluence.confluence_space_keys,
+        max_num_results=50,
+    )
     logger.info(
         f"Loaded {len(documents)} documents from Confluence."
     )  # Should now see this log
 
     embeddings = ollama_embeddings_instance.get_text_embedding_batch(
-        [doc.page_content for doc in documents]
+        [doc.text for doc in documents]
     )
     assert isinstance(embeddings, list)
     assert len(embeddings) == len(documents)
