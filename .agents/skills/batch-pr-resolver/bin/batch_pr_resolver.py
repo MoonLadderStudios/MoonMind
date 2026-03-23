@@ -21,6 +21,8 @@ from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skil
 
 logger = logging.getLogger(__name__)
 
+API_EXECUTIONS_ENDPOINT = "/api/executions"
+
 
 @dataclass
 class JobSubmission:
@@ -465,7 +467,7 @@ async def _submit_jobs_via_http(
                 "maxAttempts": int(request.get("maxAttempts", 3)),
             }
             try:
-                response = await client.post("/api/queue/jobs", json=body)
+                response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
                 job_id = str(data.get("id", "")) or "(unknown)"
