@@ -57,6 +57,7 @@ WORKFLOW_NAME = "MoonMind.Run"
 STATE_INITIALIZING = "initializing"
 STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
 STATE_PLANNING = "planning"
+STATE_AWAITING = "awaiting"
 STATE_EXECUTING = "executing"
 STATE_PROPOSALS = "proposals"
 STATE_AWAITING_EXTERNAL = "awaiting_external"
@@ -1222,6 +1223,15 @@ class MoonMindRunWorkflow:
                 "Failed to upsert memo",
                 extra={"error": str(exc)},
             )
+
+    @workflow.signal
+    def child_state_changed(self, new_state: str, reason: str) -> None:
+        if new_state == "awaiting":
+            self._set_state(STATE_AWAITING, summary=reason)
+        elif new_state == "launching":
+            self._set_state(STATE_EXECUTING, summary="Launching agent...")
+        elif new_state == "running":
+            self._set_state(STATE_EXECUTING, summary="Agent is running.")
 
     @workflow.signal
     def pause(self) -> None:
