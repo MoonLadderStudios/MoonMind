@@ -471,16 +471,9 @@ class MoonMindAgentRun:
                         },
                     )
 
-                    # Wait for assigned slot, but never beyond the run's
-                    # remaining timeout budget.
-                    slot_wait_elapsed = (
-                        workflow.now() - overall_start
-                    ).total_seconds()
-                    slot_wait_seconds = timeout_seconds - slot_wait_elapsed
-                    if slot_wait_seconds <= 0:
-                        self.run_status = RunStatus.timed_out
-                        return AgentRunResult(failure_class="execution_error")
-
+                    # Wait indefinitely for an auth profile slot.
+                    # Awaiting time does not count against the execution timeout;
+                    # overall_start is reset once the slot is acquired.
                     self.run_status = RunStatus.awaiting
                     parent_info = workflow.info().parent
                     if parent_info:
@@ -492,15 +485,13 @@ class MoonMindAgentRun:
                             args=["awaiting", f"Waiting for auth profile slot on {runtime_id}"]
                         )
 
-                    try:
-                        await workflow.wait_condition(
-                            lambda: self.slot_assigned_event.is_set(),
-                            timeout=timedelta(seconds=slot_wait_seconds),
-                        )
-                    except asyncio.TimeoutError:
-                        workflow.logger.error("Timed out waiting for auth profile slot.")
-                        self.run_status = RunStatus.timed_out
-                        return AgentRunResult(failure_class="execution_error")
+                    await workflow.wait_condition(
+                        lambda: self.slot_assigned_event.is_set(),
+                    )
+
+                    # Reset the execution clock so the timeout budget starts
+                    # from slot acquisition, not from workflow start.
+                    overall_start = workflow.now()
                     
                     self.run_status = RunStatus.launching
                     if parent_info:

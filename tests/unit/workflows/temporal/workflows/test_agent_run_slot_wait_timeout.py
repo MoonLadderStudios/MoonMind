@@ -1,97 +1,83 @@
+"""Tests for auth profile slot waiting behavior in MoonMind.AgentRun.
+
+The awaiting state (waiting for an auth profile slot) must not consume the
+execution timeout budget.  ``overall_start`` is reset after slot acquisition
+so the full timeout is available for actual execution.
+"""
+
+import inspect
+import textwrap
+
 import pytest
 
-from temporalio import activity, workflow
-from temporalio.worker import Worker, UnsandboxedWorkflowRunner
-from temporalio.testing import WorkflowEnvironment
-
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
-@activity.defn(name="auth_profile.list")
-async def _mock_auth_profile_list(_payload: dict) -> dict:
-    return {
-        "profiles": [
-            {
-                "profile_id": "default-managed",
-                "runtime_id": "gemini_cli",
-                "auth_mode": "oauth",
-                "enabled": True,
-                "max_parallel_runs": 1,
-            }
-        ]
-    }
+class TestSlotWaitDoesNotConsumeTimeoutBudget:
+    """Verify that the slot-wait code path resets ``overall_start``."""
 
+    def test_wait_condition_has_no_timeout(self):
+        """The ``wait_condition`` call for slot assignment must not pass a
+        timeout argument, so that workflows wait indefinitely for a slot."""
+        import ast
 
-@workflow.defn(name="MoonMind.AuthProfileManager")
-class _NoAssignAuthProfileManager:
-    def __init__(self) -> None:
-        self.pending_requests: list[dict] = []
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        tree = ast.parse(source)
 
-    @workflow.signal
-    def request_slot(self, payload: dict) -> None:
-        self.pending_requests.append(payload)
+        # Find all calls to workflow.wait_condition where the lambda checks
+        # slot_assigned_event.is_set.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            # Match workflow.wait_condition(...)
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "wait_condition"
+            ):
+                continue
+            # Check if first arg is a lambda referencing slot_assigned_event
+            if not node.args:
+                continue
+            first_arg = node.args[0]
+            if not isinstance(first_arg, ast.Lambda):
+                continue
+            source_segment = ast.dump(first_arg)
+            if "slot_assigned_event" not in source_segment:
+                continue
 
-    @workflow.signal
-    def sync_profiles(self, payload: dict) -> None:
-        # No-op for workflow tests.
-        return None
-
-    @workflow.run
-    async def run(self, _input_payload: dict) -> dict:
-        # Never signal slot assignment. AgentRun must timeout on its own.
-        while True:
-            await workflow.wait_condition(lambda: len(self.pending_requests) > 0)
-            self.pending_requests.clear()
-
-
-@pytest.mark.asyncio
-async def test_managed_slot_wait_timeout_respects_request_timeout_budget() -> None:
-    async with await WorkflowEnvironment.start_time_skipping() as env:
-        async with (
-            Worker(
-                env.client,
-                task_queue="mm.activity.artifacts",
-                activities=[_mock_auth_profile_list],
-            ),
-            Worker(
-                env.client,
-                task_queue="agent-run-slot-timeout-tests",
-                workflows=[MoonMindAgentRun, _NoAssignAuthProfileManager],
-                # This path exits before publish/cancel activities are used.
-                activities=[],
-                workflow_runner=UnsandboxedWorkflowRunner(),
-            ),
-        ):
-            request = AgentExecutionRequest(
-                agent_kind="managed",
-                agent_id="gemini_cli",
-                execution_profile_ref="default-managed",
-                correlation_id="corr-slot-timeout-1",
-                idempotency_key="idem-slot-timeout-1",
-                timeout_policy={"timeout_seconds": 30},
+            # This is the slot-wait call.  It must NOT have a timeout kwarg.
+            timeout_kwargs = [
+                kw for kw in node.keywords if kw.arg == "timeout"
+            ]
+            assert len(timeout_kwargs) == 0, (
+                "wait_condition for slot_assigned_event must not have a "
+                "timeout — awaiting should wait indefinitely"
             )
 
-            manager_id = "auth-profile-manager:gemini_cli"
-            await env.client.start_workflow(
-                _NoAssignAuthProfileManager.run,
-                {"runtime_id": "gemini_cli"},
-                id=manager_id,
-                task_queue="agent-run-slot-timeout-tests",
-            )
+    def test_overall_start_reset_after_slot_acquisition(self):
+        """After the slot-wait ``wait_condition``, the code must reset
+        ``overall_start`` so that execution timeout starts fresh."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+        lines = source.splitlines()
 
-            handle = await env.client.start_workflow(
-                MoonMindAgentRun.run,
-                request,
-                id="test-slot-timeout-budget",
-                task_queue="agent-run-slot-timeout-tests",
-            )
+        # Find the slot_assigned_event wait_condition region.
+        # The wait_condition call and the lambda may span multiple lines.
+        wait_idx = None
+        for i, line in enumerate(lines):
+            if "slot_assigned_event" in line and "is_set" in line:
+                wait_idx = i
+                break
+        assert wait_idx is not None, "Could not find slot_assigned_event is_set"
 
-            result = await handle.result()
-            assert isinstance(result, AgentRunResult)
-            assert result.failure_class == "execution_error"
-
-            desc = await handle.describe()
-            assert desc.close_time is not None
-            elapsed_seconds = (desc.close_time - desc.start_time).total_seconds()
-            assert elapsed_seconds <= 45
+        # Look for overall_start reset within the next 10 lines
+        reset_found = False
+        for line in lines[wait_idx + 1 : wait_idx + 11]:
+            if "overall_start" in line and "workflow.now()" in line:
+                reset_found = True
+                break
+        assert reset_found, (
+            "overall_start must be reset to workflow.now() shortly after "
+            "the slot_assigned_event wait_condition so that awaiting time "
+            "does not count against the execution timeout"
+        )
