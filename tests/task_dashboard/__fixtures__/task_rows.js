@@ -44,14 +44,11 @@ function createMixedRows() {
 // Legacy aliases – keep exports backward-compatible during transition
 const baseQueueRow = baseTaskRow;
 const createQueueRow = createTaskRow;
-const createOrchestratorRow = (overrides = {}) =>
-  createTaskRow({ id: "mm:workflow-orch-789", taskId: "mm:workflow-orch-789", workflowId: "mm:workflow-orch-789", rawStatus: "queued", rawState: "queued", link: "/tasks/mm:workflow-orch-789?source=temporal", ...overrides });
 
 module.exports = {
   baseTaskRow,
   baseQueueRow,
   createTaskRow,
   createQueueRow,
-  createOrchestratorRow,
   createMixedRows,
 };

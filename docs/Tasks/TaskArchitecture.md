@@ -17,7 +17,7 @@ Detailed backend workflow execution logic (how the workers execute code safely) 
 
 ## 2. Current System Snapshot
 
-MoonMind has transitioned from a raw queue/orchestrator dispatcher into a workflow-orchestrated system backed by **Temporal**. The Mission Control dashboard operates as the **Control Plane**, surfacing workflows to the user as "Tasks".
+MoonMind has transitioned from a raw queue/system dispatcher into a workflow-orchestrated system backed by **Temporal**. The Mission Control dashboard operates as the **Control Plane**, surfacing workflows to the user as "Tasks".
 
 The current dashboard and backend API support:
 - Workflow Executions for single commands (`MoonMind.Run`) and manifest graphs (`MoonMind.ManifestIngest`).

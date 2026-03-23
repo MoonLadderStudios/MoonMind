@@ -49,7 +49,7 @@ def get_routing_target_for_task(
 ) -> TaskTarget:
     """Determine the deterministic backend execution target for a task.
 
-    All tasks now route to Temporal. The legacy queue and orchestrator
+    All tasks now route to Temporal. The legacy task system
     execution substrates are deprecated and no longer supported.
 
     ``task_payload`` is accepted for API stability; run routing does not branch on it.

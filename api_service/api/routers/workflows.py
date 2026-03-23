@@ -31,12 +31,8 @@ from moonmind.schemas.workflow_models import (
     WorkflowTaskStateListResponse,
 )
 from moonmind.workflows import (
-    TriggeredWorkflow,
-    WorkflowConflictError,
-    WorkflowRetryError,
-    get_workflow_repository,
-    retry_workflow_run,
-    trigger_workflow_run,
+    AutomationRepository,
+    WorkflowRepository,
 )
 from moonmind.workflows.automation.repositories import WorkflowRepository
 from moonmind.workflows.automation import models
@@ -338,55 +334,6 @@ async def trigger_codex_preflight(
     )
 
 
-@canonical_router.post(
-    "/runs",
-    response_model=WorkflowRunModel,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-@legacy_router.post(
-    "/runs",
-    response_model=WorkflowRunModel,
-    status_code=status.HTTP_202_ACCEPTED,
-    deprecated=True,
-    dependencies=[Depends(_mark_legacy_route_usage)],
-)
-async def create_workflow_run(
-    payload: CreateWorkflowRunRequest,
-    repo: WorkflowRepository = Depends(_get_repository),
-    _user: User = Depends(get_current_user()),
-) -> WorkflowRunModel:
-    """Trigger a new workflow run for the requested feature."""
-
-    feature_key = (payload.feature_key or "").strip() or None
-    repository = payload.repository.strip() or None
-    authenticated_user_id = _user.id if _user else None
-    created_by = authenticated_user_id if authenticated_user_id else payload.created_by
-    requested_by_user_id = authenticated_user_id
-
-    try:
-        triggered: TriggeredWorkflow = await trigger_workflow_run(
-            feature_key=feature_key,
-            created_by=created_by,
-            requested_by_user_id=requested_by_user_id,
-            force_phase=payload.force_phase,
-            repository=repository,
-        )
-    except WorkflowConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "workflow_conflict",
-                "message": str(exc),
-                "runId": str(exc.run_id),
-            },
-        ) from exc
-
-    refreshed = await repo.get_run(triggered.run_id, with_relations=True)
-    run = refreshed or triggered.run
-
-    return _serialize_run_model(run)
-
-
 @canonical_router.get("/runs", response_model=WorkflowRunCollectionResponse)
 @legacy_router.get(
     "/runs",
@@ -608,7 +555,6 @@ async def retry_workflow_run(
 
 
 router.include_router(canonical_router)
-
 
 
 __all__ = ["router"]

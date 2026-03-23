@@ -24,10 +24,12 @@ class JulesSettings(BaseSettings):
         None,
         validation_alias=AliasChoices("jules_api_key", "JULES_API_KEY"),
     )
-    jules_enabled: Optional[bool] = Field(None, validation_alias=AliasChoices("jules_enabled", "JULES_ENABLED"))
-    jules_timeout_seconds: float = Field(30.0, env="JULES_TIMEOUT_SECONDS")
-    jules_retry_attempts: int = Field(3, env="JULES_RETRY_ATTEMPTS")
-    jules_retry_delay_seconds: float = Field(1.0, env="JULES_RETRY_DELAY_SECONDS")
+    jules_enabled: Optional[bool] = Field(
+        None, validation_alias=AliasChoices("jules_enabled", "JULES_ENABLED")
+    )
+    jules_timeout_seconds: float = Field(30.0, alias="JULES_TIMEOUT_SECONDS")
+    jules_retry_attempts: int = Field(3, alias="JULES_RETRY_ATTEMPTS")
+    jules_retry_delay_seconds: float = Field(1.0, alias="JULES_RETRY_DELAY_SECONDS")
     jules_callback_token: Optional[str] = Field(
         None,
         validation_alias=AliasChoices(
@@ -91,6 +93,7 @@ class JulesSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="",
         env_file=str(ENV_FILE),
         extra="ignore",

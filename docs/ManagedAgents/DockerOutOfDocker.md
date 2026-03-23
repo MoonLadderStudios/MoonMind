@@ -149,7 +149,7 @@ Optional:
 
 #### Update `temporal-worker-sandbox`
 
-* Add `DOCKER_HOST=${ORCHESTRATOR_DOCKER_HOST:-tcp://docker-proxy:2375}`
+* Add `DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}`
 * Add `depends_on: docker-proxy`
 * Ensure `agent_workspaces` volume is accurately mounted.
 
