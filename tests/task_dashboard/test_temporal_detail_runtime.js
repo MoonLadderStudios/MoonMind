@@ -201,6 +201,21 @@ const { context, helpers } = loadTemporalHelpers();
   );
 })();
 
+(function testResolveTemporalActionSurfaceReturnsCancelAndRenameForQueued() {
+  const actions = helpers.resolveTemporalActionSurface(
+    { state: "queued" },
+    { actionsEnabled: true },
+  );
+
+  assert.strictEqual(
+    JSON.stringify(actions),
+    JSON.stringify([
+      { actionKey: "rename", label: "Rename task" },
+      { actionKey: "cancel", label: "Cancel task" },
+    ]),
+  );
+})();
+
 (function testBuildTemporalActionRequestMapsApproveRerunAndCancel() {
   const approve = helpers.buildTemporalActionRequest("mm:workflow-123", "approve");
   assert.strictEqual(approve.request.url, "/api/executions/mm%3Aworkflow-123/signal");

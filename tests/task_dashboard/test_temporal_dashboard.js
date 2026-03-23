@@ -183,6 +183,14 @@ const helpers = loadTemporalHelpers();
   assert(!terminalHtml.includes('data-temporal-action="cancel"'));
 })();
 
+(function testRenderTemporalActionButtonsIncludesCancelAndSetTitleForQueued() {
+  const queuedHtml = helpers.renderTemporalActionButtons({ state: "queued" });
+  assert(queuedHtml.includes('data-temporal-action="cancel"'), "Queued state must show cancel button");
+  assert(queuedHtml.includes('data-temporal-action="set-title"'), "Queued state must show set-title button");
+  assert(!queuedHtml.includes('data-temporal-action="rerun"'), "Queued state must not show rerun");
+  assert(!queuedHtml.includes('data-temporal-action="resume"'), "Queued state must not show resume");
+})();
+
 (function testTemporalRowsKeepTaskAndRunIdentifiersDistinct() {
   const rows = helpers.toTemporalRows([
     {

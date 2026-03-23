@@ -463,6 +463,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     state_actions = {
         "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
         "waiting_on_dependencies": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "queued": {"can_set_title", "can_update_inputs", "can_cancel"},
         "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
         "executing": {
             "can_set_title",

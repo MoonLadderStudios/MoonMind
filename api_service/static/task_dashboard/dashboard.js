@@ -6981,6 +6981,7 @@
     finalizing: ["cancel"],
     initializing: ["rename", "cancel"],
     planning: ["rename", "cancel"],
+    queued: ["rename", "cancel"],
     running: ["pause", "rename", "cancel"],
     succeeded: ["rerun"],
   };
@@ -7436,7 +7437,7 @@
     if (
       capabilityNode
         ? Boolean(pick(capabilityNode, "canSetTitle"))
-        : ["initializing", "planning", "executing", "awaiting_external"].includes(rawState)
+        : ["initializing", "planning", "executing", "awaiting_external", "queued"].includes(rawState)
     ) {
       buttons.push('<button type="button" data-temporal-action="set-title">Set Title</button>');
     }
