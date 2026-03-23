@@ -11,7 +11,7 @@ Keys for model providers (e.g. Google and OpenAI) are injected from this user's 
 
 ## Temporal Workflow Operations
 
-- **Services to run**: `docker compose up temporal api temporal-worker-sandbox temporal-worker-sandbox` (Temporal Server, API service, Agent Sandbox, and system worker). Ensure PostgreSQL is reachable as the persistent store for the Temporal cluster.
+- **Services to run**: `docker compose up temporal api temporal-worker-sandbox system` (Temporal Server, API service, Agent Sandbox, and system worker). Ensure PostgreSQL is reachable as the persistent store for the Temporal cluster.
 - **Task Queues**: Confirm that the appropriate workers are bound to their intended Temporal Task Queues.
 - **Metrics**: The Temporal Server and Workers emit Prometheus metrics. Point `PROMETHEUS_ENDPOINT` to your collector before triggering runs to capture observability data.
 - **Log review / UI**: Navigate to the **Temporal UI** (e.g., `http://localhost:8233`) to find `Workflow Execution` entries. You can confirm each Activity transitions through `Started`, `Completed`, or `Failed` with summarized payloads.

@@ -90,7 +90,7 @@ Run IDs are Temporal-generated identifiers for each run of the execution.
 | `MoonMind.Run`            | Execute a user-requested run: acquire/compute a Plan, execute Skills, integrate external actions, produce artifacts | `input_artifact_ref`, optional `plan_artifact_ref`, parameters | output artifacts, status, summary               | seconds → hours   |
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a Plan (graph), orchestrate execution (inline or via child runs)   | `manifest_artifact_ref`, policy params                         | aggregated output artifact(s), per-node results | seconds → hours   |
 
-> Note: We intentionally do **not** model “worker/system/manifest” as a taxonomy. A workflow is an system; activities are execution steps. Manifest ingest exists as a separate Workflow Type only because it has materially different orchestration behavior (graph + aggregation).
+> Note: We intentionally do **not** model “worker/system/manifest” as a taxonomy. A workflow is a system; activities are execution steps. Manifest ingest exists as a separate Workflow Type only because it has materially different orchestration behavior (graph + aggregation).
 
 ---
 

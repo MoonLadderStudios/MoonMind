@@ -316,11 +316,11 @@ This is the key missing abstraction that makes the UI and backend manageable.
    * profile id is valid
    * no conflicting active session for same profile
 4. Backend creates DB row with `pending`
-5. system starts
+5. Orchestrator starts
 
 ## 9.2 Provision auth runner
 
-The system:
+The orchestrator:
 
 1. ensures target Docker volume exists
 2. picks the auth runner image/service
@@ -349,7 +349,7 @@ After the user finishes login, the provider stores credentials in the mounted vo
 
 ## 9.4 Verification
 
-The system either polls or is manually nudged by UI refresh.
+The orchestrator either polls or is manually nudged by UI refresh.
 
 Verification step:
 

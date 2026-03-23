@@ -269,7 +269,7 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 }
 ```
 
-Log tailing should ship first as it requires only the RO endpoint and no new backend infrastructure beyond the existing live session orchestrator.
+Log tailing should ship first as it requires only the RO endpoint and no new backend infrastructure beyond the existing live session system.
 
 ---
 
