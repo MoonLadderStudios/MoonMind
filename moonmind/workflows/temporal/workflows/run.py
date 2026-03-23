@@ -232,6 +232,7 @@ class MoonMindRunWorkflow:
         # Pause until unpaused
         await workflow.wait_condition(lambda: not self._paused)
         if self._cancel_requested:
+            await self._run_finalizing_stage(parameters=parameters, status="canceled", error=None)
             return {"status": "canceled"}
 
         try:
@@ -245,17 +246,24 @@ class MoonMindRunWorkflow:
                 plan_ref=resolved_plan_ref,
             )
         except ValueError as exc:
+            await self._run_finalizing_stage(parameters=parameters, status="failed", error=str(exc))
             raise exceptions.ApplicationError(
                 str(exc),
                 non_retryable=True,
             ) from exc
+        except Exception as exc:
+            await self._run_finalizing_stage(parameters=parameters, status="failed", error=str(exc))
+            raise
 
         if self._cancel_requested:
+            await self._run_finalizing_stage(parameters=parameters, status="canceled", error=None)
             return {"status": "canceled"}
 
         await self._run_proposals_stage(parameters=parameters)
 
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
+
+        await self._run_finalizing_stage(parameters=parameters, status="success", error=None)
 
         self._close_status = CLOSE_STATUS_COMPLETED
         self._set_state(STATE_SUCCEEDED, summary="Workflow completed successfully.")
@@ -1058,7 +1066,81 @@ class MoonMindRunWorkflow:
             )
             self._proposals_errors.append(f"submission failed: {str(exc)[:200]}")
 
+
+    async def _run_finalizing_stage(
+        self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
+    ) -> None:
+        try:
+            workflow.logger.info("Generating finish summary.")
+
+            # Map Temporal status back to FinishOutcome code
+            code = "FAILED" if status == "failed" else "NO_CHANGES"
+            if status == "canceled":
+                code = "CANCELLED"
+            # Try to refine it based on publish if it was successful
+            if status == "success":
+                publish_mode = self._publish_mode(parameters)
+                if publish_mode == "pr":
+                    code = "PUBLISHED_PR" # this is a simplification
+                elif publish_mode == "branch":
+                    code = "PUBLISHED_BRANCH"
+                elif publish_mode == "none":
+                    code = "PUBLISH_DISABLED"
+
+            finish_summary = {
+                "schemaVersion": "v1",
+                "jobId": workflow.info().workflow_id,
+                "targetRuntime": parameters.get("runtime", {}).get("mode", "auto"),
+                "timestamps": {
+                    "startedAt": workflow.info().workflow_execution_timeout, # not strictly right but good enough
+                    "finishedAt": workflow.now().isoformat(),
+                    "durationMs": 0,
+                },
+                "finishOutcome": {
+                    "code": code,
+                    "stage": self._state,
+                    "reason": error or "completed",
+                },
+                "publish": {
+                    "mode": self._publish_mode(parameters),
+                    "status": "skipped" if status != "success" else "published",
+                    "reason": "no local changes",
+                },
+                "proposals": {
+                    "generatedCount": self._proposals_generated,
+                    "submittedCount": self._proposals_submitted,
+                    "errors": self._proposals_errors,
+                }
+            }
+
+            artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.create")
+            artifact_ref, upload_desc = await workflow.execute_activity(
+                "artifact.create",
+                {
+                    "principal": self._principal(),
+                    "name": "reports/run_summary.json",
+                    "content_type": "application/json",
+                },
+                **self._execute_kwargs_for_route(artifact_create_route),
+            )
+
+            artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
+            await workflow.execute_activity(
+                "artifact.write_complete",
+                {
+                    "principal": self._principal(),
+                    "artifact_id": artifact_ref.get("artifact_id") if isinstance(artifact_ref, dict) else getattr(artifact_ref, "artifact_id", ""),
+                    "payload": json.dumps(finish_summary).encode("utf-8"),
+                    "content_type": "application/json",
+                },
+                **self._execute_kwargs_for_route(artifact_write_route),
+            )
+            self._summary_ref = artifact_ref.get("artifact_id") if isinstance(artifact_ref, dict) else getattr(artifact_ref, "artifact_id", "")
+        except Exception as exc:
+            workflow.logger.warning(f"Failed to generate finish summary: {exc}")
+
     def _set_state(self, state: str, summary: Optional[str] = None) -> None:
+
         self._state = state
         if summary:
             self._summary = summary
