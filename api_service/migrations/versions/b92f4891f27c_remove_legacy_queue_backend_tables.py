@@ -37,7 +37,6 @@ def upgrade() -> None:
     op.drop_index(op.f('ix_agent_jobs_status_created_at_id'), table_name='agent_jobs')
     op.drop_index(op.f('ix_agent_jobs_status_priority_created_at'), table_name='agent_jobs')
     op.drop_index(op.f('ix_agent_jobs_type_status_created_at'), table_name='agent_jobs')
-    op.drop_table('agent_jobs')
     op.drop_index(op.f('ix_agent_job_artifacts_job_id_created_at'), table_name='agent_job_artifacts')
     op.drop_index(op.f('ix_agent_job_artifacts_job_id_name'), table_name='agent_job_artifacts')
     op.drop_table('agent_job_artifacts')
@@ -56,6 +55,7 @@ def upgrade() -> None:
     op.drop_column('task_proposals', 'promoted_job_id')
     op.create_foreign_key('fk_task_template_latest_version', 'task_step_templates', 'task_step_template_versions', ['latest_version_id'], ['id'], ondelete='SET NULL', use_alter=True)
     op.drop_column('temporal_execution_sources', 'scheduled_for')
+    op.drop_table('agent_jobs')
     # ### end Alembic commands ###
 
 

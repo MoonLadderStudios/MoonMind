@@ -299,6 +299,23 @@ def _build_runtime_planner():
 def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, ManagedRuntimeLauncher]:
     """Build shared store, supervisor, and launcher for the agent_runtime fleet."""
     import os
+    from pathlib import Path
+
+    class LocalRuntimeArtifactStorage:
+        def __init__(self, root: str) -> None:
+            self._root = Path(root)
+
+        def write_artifact(
+            self, *, job_id: str, artifact_name: str, data: bytes
+        ) -> tuple[Path, str]:
+            target_dir = self._root / job_id
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / artifact_name
+            target.write_bytes(data)
+            return target, f"{job_id}/{artifact_name}"
+
+        def resolve_storage_path(self, ref: str) -> Path:
+            return self._root / ref
 
     store_root = os.path.join(
         os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs"),
@@ -312,7 +329,7 @@ def _build_agent_runtime_deps() -> tuple[ManagedRunStore, ManagedRunSupervisor, 
     os.makedirs(artifact_root, exist_ok=True)
 
     store = ManagedRunStore(store_root)
-    artifact_storage = AgentQueueArtifactStorage(artifact_root)
+    artifact_storage = LocalRuntimeArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
     launcher = ManagedRuntimeLauncher(store)
