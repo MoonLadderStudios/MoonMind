@@ -27,7 +27,7 @@ with workflow.unsafe.imports_passed_through():
 # imported in activity code.
 class RunStatus:
     queued = "queued"
-    awaiting = "awaiting"
+    awaiting_slot = "awaiting_slot"
     launching = "launching"
     running = "running"
     awaiting_callback = "awaiting_callback"
@@ -474,7 +474,7 @@ class MoonMindAgentRun:
                     # Wait indefinitely for an auth profile slot.
                     # Awaiting time does not count against the execution timeout;
                     # overall_start is reset once the slot is acquired.
-                    self.run_status = RunStatus.awaiting
+                    self.run_status = RunStatus.awaiting_slot
                     parent_info = workflow.info().parent
                     if parent_info:
                         parent_handle = workflow.get_external_workflow_handle(
@@ -482,7 +482,7 @@ class MoonMindAgentRun:
                         )
                         await parent_handle.signal(
                             "child_state_changed",
-                            args=["awaiting", f"Waiting for auth profile slot on {runtime_id}"]
+                            args=["awaiting_slot", f"Waiting for auth profile slot on {runtime_id}"]
                         )
 
                     await workflow.wait_condition(

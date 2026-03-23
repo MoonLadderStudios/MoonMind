@@ -340,3 +340,14 @@ def test_runtime_config_temporal_update_endpoint_for_manifest_updates() -> None:
         == "/api/executions/{workflowId}/update"
     )
 
+
+def test_normalize_status_maps_temporal_awaiting_slot_to_queued() -> None:
+    """awaiting_slot (auth-slot wait) should map to queued on the dashboard."""
+    assert normalize_status("temporal", "awaiting_slot") == "queued"
+
+
+def test_normalize_status_maps_temporal_waiting_on_dependencies_to_waiting() -> None:
+    """waiting_on_dependencies should map to waiting on the dashboard."""
+    assert normalize_status("temporal", "waiting_on_dependencies") == "waiting"
+
+

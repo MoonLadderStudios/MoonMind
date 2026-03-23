@@ -24,9 +24,9 @@ _SUPPORTED_WORKER_RUNTIMES = ("codex", "gemini_cli", "claude", "jules", "univers
 _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
         "open": "queued",
-        "promoted": "succeeded",
+        "promoted": "completed",
         "dismissed": "cancelled",
-        "accepted": "succeeded",
+        "accepted": "completed",
         "rejected": "failed",
     },
     "temporal": {
@@ -34,10 +34,12 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "planning": "running",
         "executing": "running",
         "awaiting_external": "awaiting_action",
+        "awaiting_slot": "queued",
+        "waiting_on_dependencies": "waiting",
         "finalizing": "running",
         "running": "running",
-        "succeeded": "succeeded",
-        "completed": "succeeded",
+        "succeeded": "completed",
+        "completed": "completed",
         "failed": "failed",
         # Accept both Temporal's raw status spelling and the normalized dashboard value.
         "canceled": "cancelled",

@@ -49,7 +49,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
 )
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
-    MoonMindWorkflowState.SUCCEEDED,
+    MoonMindWorkflowState.COMPLETED,
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
 }
@@ -70,7 +70,7 @@ NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
 TERMINAL_STATE_TO_CLOSE_STATUS: dict[
     MoonMindWorkflowState, TemporalExecutionCloseStatus
 ] = {
-    MoonMindWorkflowState.SUCCEEDED: TemporalExecutionCloseStatus.COMPLETED,
+    MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
     MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
 }
@@ -1120,7 +1120,7 @@ class TemporalExecutionService:
         self._set_state(record, MoonMindWorkflowState.FINALIZING)
         self._set_state(
             record,
-            MoonMindWorkflowState.SUCCEEDED,
+            MoonMindWorkflowState.COMPLETED,
             close_status=TemporalExecutionCloseStatus.COMPLETED,
         )
         if summary:
@@ -1910,8 +1910,8 @@ class TemporalExecutionService:
             return "canceled"
         if record.state is MoonMindWorkflowState.FAILED:
             return "failed"
-        if record.state is MoonMindWorkflowState.SUCCEEDED:
-            return "succeeded"
+        if record.state is MoonMindWorkflowState.COMPLETED:
+            return "completed"
         normalized_status = self._parse_integration_status(
             state.get("normalized_status", "unknown")
         )

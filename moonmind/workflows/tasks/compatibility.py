@@ -45,7 +45,7 @@ _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.EXECUTING: "running",
     db_models.MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
     db_models.MoonMindWorkflowState.FINALIZING: "running",
-    db_models.MoonMindWorkflowState.SUCCEEDED: "succeeded",
+    db_models.MoonMindWorkflowState.COMPLETED: "completed",
     db_models.MoonMindWorkflowState.FAILED: "failed",
     db_models.MoonMindWorkflowState.CANCELED: "cancelled",
 }
@@ -708,7 +708,7 @@ class TaskCompatibilityService:
             ),
             "waiting": (db_models.MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,),
             "awaiting_action": (db_models.MoonMindWorkflowState.AWAITING_EXTERNAL,),
-            "succeeded": (db_models.MoonMindWorkflowState.SUCCEEDED,),
+            "completed": (db_models.MoonMindWorkflowState.COMPLETED,),
             "failed": (db_models.MoonMindWorkflowState.FAILED,),
             "cancelled": (db_models.MoonMindWorkflowState.CANCELED,),
         }

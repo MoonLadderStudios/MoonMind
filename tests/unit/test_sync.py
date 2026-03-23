@@ -57,7 +57,7 @@ def test_map_temporal_state_to_projection_success():
     assert result["workflow_type"] == TemporalWorkflowType.RUN
     assert result["owner_id"] == "owner-1"
     assert result["owner_type"] == TemporalExecutionOwnerType.USER
-    assert result["state"] == MoonMindWorkflowState.SUCCEEDED
+    assert result["state"] == MoonMindWorkflowState.COMPLETED
     assert result["close_status"] == TemporalExecutionCloseStatus.COMPLETED
     assert result["entry"] == "run"
     assert result["input_ref"] == "input-1"

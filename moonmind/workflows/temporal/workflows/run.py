@@ -57,12 +57,12 @@ WORKFLOW_NAME = "MoonMind.Run"
 STATE_INITIALIZING = "initializing"
 STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
 STATE_PLANNING = "planning"
-STATE_AWAITING = "awaiting"
+STATE_AWAITING_SLOT = "awaiting_slot"
 STATE_EXECUTING = "executing"
 STATE_PROPOSALS = "proposals"
 STATE_AWAITING_EXTERNAL = "awaiting_external"
 STATE_FINALIZING = "finalizing"
-STATE_SUCCEEDED = "succeeded"
+STATE_COMPLETED = "completed"
 STATE_CANCELED = "canceled"
 STATE_FAILED = "failed"
 CLOSE_STATUS_COMPLETED = "completed"
@@ -271,7 +271,7 @@ class MoonMindRunWorkflow:
         await self._run_finalizing_stage(parameters=parameters, status="success", error=None)
 
         self._close_status = CLOSE_STATUS_COMPLETED
-        self._set_state(STATE_SUCCEEDED, summary="Workflow completed successfully.")
+        self._set_state(STATE_COMPLETED, summary="Workflow completed successfully.")
 
         output: RunWorkflowOutput = {
             "status": "success",
@@ -899,7 +899,7 @@ class MoonMindRunWorkflow:
                     self._update_memo()
 
                 status = self._get_from_result(poll_result, "normalized_status")
-                if status in ("succeeded", "failed", "canceled"):
+                if status in ("completed", "failed", "canceled"):
                     self._resume_requested = True
                     if status == "failed":
                         workflow.logger.warning(f"Integration failed: {poll_result}")
@@ -927,7 +927,7 @@ class MoonMindRunWorkflow:
             publish_mode == "branch"
             and self._integration == "jules"
             and not self._cancel_requested
-            and status == "succeeded"
+            and status == "completed"
         ):
             workflow.logger.info("Jules branch-publish: fetching result for PR merge")
             try:
@@ -1340,8 +1340,8 @@ class MoonMindRunWorkflow:
 
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
-        if new_state == "awaiting":
-            self._set_state(STATE_AWAITING, summary=reason)
+        if new_state == "awaiting_slot":
+            self._set_state(STATE_AWAITING_SLOT, summary=reason)
         elif new_state == "launching":
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
@@ -1389,7 +1389,7 @@ class MoonMindRunWorkflow:
         normalized_status = payload.get("normalized_status")
 
         if event_type == "completed" or normalized_status in (
-            "succeeded",
+            "completed",
             "failed",
             "canceled",
         ):

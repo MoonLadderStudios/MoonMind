@@ -599,7 +599,7 @@ def _default_phase(record: TemporalExecutionRecord) -> str:
     if state == MoonMindWorkflowState.FINALIZING.value:
         return "finalizing"
     if state in {
-        MoonMindWorkflowState.SUCCEEDED.value,
+        MoonMindWorkflowState.COMPLETED.value,
         MoonMindWorkflowState.FAILED.value,
         MoonMindWorkflowState.CANCELED.value,
     }:
