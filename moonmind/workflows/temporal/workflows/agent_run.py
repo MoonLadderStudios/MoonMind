@@ -27,6 +27,7 @@ with workflow.unsafe.imports_passed_through():
 # imported in activity code.
 class RunStatus:
     queued = "queued"
+    awaiting = "awaiting"
     launching = "launching"
     running = "running"
     awaiting_callback = "awaiting_callback"
@@ -181,7 +182,7 @@ class MoonMindAgentRun:
         *,
         manager_handle: workflow.ExternalWorkflowHandle,
         runtime_id: str,
-    ) -> None:
+    ) -> int:
         """Best-effort manager refresh from DB-backed auth_profile.list snapshot."""
         try:
             profile_snapshot = await workflow.execute_activity(
@@ -197,12 +198,14 @@ class MoonMindAgentRun:
                 if isinstance(raw_profiles, list):
                     profiles = raw_profiles
             await manager_handle.signal("sync_profiles", {"profiles": profiles})
+            return len(profiles)
         except Exception:
             workflow.logger.warning(
                 "Failed to sync auth profiles for runtime_id=%s; continuing with manager state",
                 runtime_id,
                 exc_info=True,
             )
+            return -1
 
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
@@ -449,10 +452,17 @@ class MoonMindAgentRun:
                         runtime_id,
                         request_slot=False,
                     )
-                    await self._sync_manager_profiles(
+                    profile_count = await self._sync_manager_profiles(
                         manager_handle=manager_handle,
                         runtime_id=runtime_id,
                     )
+                    if profile_count == 0:
+                        raise ApplicationError(
+                            f"No enabled auth profiles found for runtime_id='{runtime_id}'",
+                            type="ProfileResolutionError",
+                            non_retryable=True,
+                        )
+
                     await manager_handle.signal(
                         "request_slot",
                         {
@@ -471,6 +481,17 @@ class MoonMindAgentRun:
                         self.run_status = RunStatus.timed_out
                         return AgentRunResult(failure_class="execution_error")
 
+                    self.run_status = RunStatus.awaiting
+                    parent_info = workflow.info().parent
+                    if parent_info:
+                        parent_handle = workflow.get_external_workflow_handle(
+                            parent_info.workflow_id, run_id=parent_info.run_id
+                        )
+                        await parent_handle.signal(
+                            "child_state_changed",
+                            args=["awaiting", f"Waiting for auth profile slot on {runtime_id}"]
+                        )
+
                     try:
                         await workflow.wait_condition(
                             lambda: self.slot_assigned_event.is_set(),
@@ -480,6 +501,16 @@ class MoonMindAgentRun:
                         workflow.logger.error("Timed out waiting for auth profile slot.")
                         self.run_status = RunStatus.timed_out
                         return AgentRunResult(failure_class="execution_error")
+                    
+                    self.run_status = RunStatus.launching
+                    if parent_info:
+                        parent_handle = workflow.get_external_workflow_handle(
+                            parent_info.workflow_id, run_id=parent_info.run_id
+                        )
+                        await parent_handle.signal(
+                            "child_state_changed",
+                            args=["launching", f"Slot acquired for {runtime_id}"]
+                        )
                     request.execution_profile_ref = self._assigned_profile_id
 
                     # Wire ManagedAgentAdapter with real DI callables.

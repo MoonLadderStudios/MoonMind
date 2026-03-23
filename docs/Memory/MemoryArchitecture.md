@@ -2,7 +2,7 @@
 
 Status: Proposed
 Last Updated: 2026-02-16
-Scope: Chat, RAG, Mission Control (agent queue), Spec workflow, orchestrator
+Scope: Chat, RAG, Mission Control (agent queue), Spec workflow, system
 
 ## 1) Goals
 
@@ -26,7 +26,7 @@ Non-goals:
 MoonMind already has the core primitives we will extend:
 
 - **Document retrieval (RAG)**: LlamaIndex + Qdrant powering chat and `/context`.
-- **Durable execution state**: Postgres tables for spec workflows, orchestrator runs, and agent queue jobs.
+- **Durable execution state**: Postgres tables for spec workflows, system runs, and agent queue jobs.
 - **Durable artifacts**: filesystem artifact roots for workflow runs and agent jobs.
 - **Background jobs**: Celery + RabbitMQ for orchestration and asynchronous processing.
 
@@ -141,7 +141,7 @@ Writeback is automatic, async-first, and idempotent by run/job ID.
 ## 6) Storage Contracts
 
 ### 6.1 Sources of truth
-- **Postgres**: workflow runs, task states, orchestrator runs, agent queue jobs, event logs.
+- **Postgres**: workflow runs, task states, system runs, agent queue jobs, event logs.
 - **Artifact store**:
   - workflow artifacts under `var/artifacts/workflow_runs/<run_id>/`
   - agent job artifacts under `var/artifacts/agent_jobs/<job_id>/`

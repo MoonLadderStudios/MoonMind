@@ -49,7 +49,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 ### 3.2 Out of scope
 
 - full replacement of `/tasks/*` with a Temporal-native operator UI
-- redesign of queue, orchestrator, proposal, or schedule product modules
+- redesign of queue, system, proposal, or schedule product modules
 - exposing Temporal task queues as a user-facing queue model
 - collapsing every execution source into a single physical database table
 - deciding all long-term post-migration public API names
@@ -61,7 +61,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 MoonMind is in an explicit transition state:
 
 - the current dashboard remains **task-oriented** and source-oriented
-- the current runtime config still centers on **queue**, **orchestrator**, **proposals**, **manifests**, and **schedules**
+- the current runtime config still centers on **queue**, **system**, **proposals**, **manifests**, and **schedules**
 - Temporal-backed lifecycle APIs already exist under `/api/executions`
 - a `TemporalExecutionRecord` projection already exists for lifecycle APIs, filtering, and compatibility behavior
 
@@ -109,7 +109,7 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 For task list/detail purposes, the execution sources are:
 
 - `queue`
-- `orchestrator`
+- `system`
 - `temporal`
 
 ### 6.2 What is **not** an execution source in this document
@@ -150,7 +150,7 @@ Manifest flows remain source-specific during migration:
 | --- | --- | --- |
 | Current product UI | `task` | Current dashboard contract |
 | Temporal runtime | `workflow execution` | Canonical runtime term |
-| Legacy orchestrator compatibility | `run` | Transitional only |
+| Legacy system compatibility | `run` | Transitional only |
 
 ### 7.2 Identifier fields
 
@@ -159,14 +159,14 @@ Manifest flows remain source-specific during migration:
 | `taskId` | Product-facing handle used by `/tasks/*` | Must equal `workflowId` for Temporal-backed rows |
 | `workflowId` | Canonical Temporal durable execution identifier | Required for Temporal-backed rows |
 | `temporalRunId` | Current Temporal run instance identifier | Detail/debug only |
-| `runId` | Legacy orchestrator compatibility identifier | Must **not** be reused to mean Temporal run ID in task-facing compatibility payloads |
+| `runId` | Legacy system compatibility identifier | Must **not** be reused to mean Temporal run ID in task-facing compatibility payloads |
 
 ### 7.3 Rules
 
 - For `source=temporal`, **`taskId == workflowId`**.
 - `workflowId` is the durable handle that survives Continue-As-New.
 - `temporalRunId` may change during rerun or Continue-As-New and must never be used as the primary task route key.
-- `runId` remains reserved for legacy orchestrator compatibility and should not be overloaded.
+- `runId` remains reserved for legacy system compatibility and should not be overloaded.
 - Clients must treat all IDs as opaque strings.
 - Path routing may use explicit `source` or a persisted source mapping; ID shape may be used as an optimization, but not as the compatibility contract.
 
@@ -176,7 +176,7 @@ For unified task detail routing, MoonMind should use a **persisted source mappin
 
 Rules:
 
-- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing queue, orchestrator, and Temporal backends heuristically
+- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing queue, system, and Temporal backends heuristically
 - Temporal-backed rows must resolve through the durable `workflowId` because `taskId == workflowId`
 - legacy source-specific routes may redirect into `/tasks/{taskId}`, but the server must preserve canonical source resolution metadata
 - ID text shape must not be the contract for backend selection
@@ -546,7 +546,7 @@ However, operator/debug views should be able to display:
 Active product flows may continue to use:
 
 - `/tasks/*`
-- active orchestrator compatibility routes where still required
+- active system compatibility routes where still required
 
 ### 14.2 Execution adapter posture
 
@@ -606,7 +606,7 @@ This document is considered successfully implemented for a Temporal-backed flow 
 3. task edit and rerun controls surface `accepted/applied/message` semantics honestly
 4. dashboard filters and sorting can include Temporal-backed rows without leaking raw Temporal cursor semantics into mixed-source pagination
 5. operators can see raw execution identifiers and status data when needed
-6. the compatibility layer does not overload legacy orchestrator `runId` to mean Temporal run ID
+6. the compatibility layer does not overload legacy system `runId` to mean Temporal run ID
 
 ---
 

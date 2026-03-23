@@ -58,7 +58,6 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert not _is_allowed_path("queue")
     assert not _is_allowed_path("queue/new")
     assert not _is_allowed_path("queue/123")
-    assert not _is_allowed_path("orchestrator/run-1")
     assert _is_allowed_path("mm:123")
     assert _is_allowed_path("123e4567-e89b-12d3-a456-426614174000")
     assert _is_allowed_path("mm:123e4567-e89b-12d3-a456-426614174000")
@@ -180,7 +179,6 @@ def test_skills_api_returns_available_skill_ids(
     assert response.json() == {
         "items": {
             "worker": ["speckit", "speckit-orchestrate"],
-            "orchestrator": [],
         },
         "legacyItems": [
             {"id": "speckit"},

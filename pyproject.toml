@@ -40,7 +40,7 @@ llama-index-llms-anthropic = "~=0.10.10"
 httpx = "~=0.28.1"
 atlassian-python-api = "~=4.0.7"
 requests = "~=2.32.4"
-boto3 = "~=1.42.62"
+boto3 = "~=1.42.73"
 # Temporary pin until a patched NLTK release is published for CVE/Zip Slip in downloader.
 PyYAML = ">=6.0.2"
 asyncpg = "~=0.31.0"
@@ -86,7 +86,7 @@ extend-ignore = ["E402", "E722", "F841"]
 
 [tool.pytest.ini_options]
 markers = [
-    "integration: marks integration tests that exercise orchestrator workflows.",
+    "integration: marks integration tests that exercise workflows.",
 ]
 
 [tool.pre-commit]

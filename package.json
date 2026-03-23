@@ -1,7 +1,7 @@
 {
   "name": "moonmind",
   "version": "1.0.0",
-  "description": "**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Temporal-based orchestrator that can run skills-based workflows across your code and infrastructure.**",
+  "description": "**MoonMind is a self-hosted AI orchestration hub for chat, memory, and automation. It combines multi-provider LLM routing, retrieval-augmented generation, and a Temporal-based task execution system that can run skills-based workflows across your code and infrastructure.**",
   "main": "index.js",
   "directories": {
     "doc": "docs",

@@ -3,7 +3,7 @@ ARG CODEX_CLI_VERSION=0.104.0
 ARG AGENT_KIT_VERSION=0.4.0
 ARG CLAUDE_CLI_VERSION=2.1.50
 # Build the shared runtime image with Codex/Spec Kit/Gemini/Claude/Cursor CLIs
-# by default so the API, orchestrator, and Temporal workers can run from the
+# by default so the API and Temporal workers can run from the
 # same image tag. Disable selectively in test-only or constrained builds.
 ARG INSTALL_CODEX_CLI=true
 ARG INSTALL_GEMINI_CLI=true

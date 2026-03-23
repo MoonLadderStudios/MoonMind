@@ -194,6 +194,7 @@
       ? systemConfig.temporalCompatibility
       : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
+  const WORKFLOWS_WITHOUT_LIVE_LOGS = ["MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"];
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
   );
@@ -6791,7 +6792,15 @@
 
 
   function buildTemporalTimeline(execution) {
-    const entries = [
+    const entries = [];
+    if (pick(execution, "scheduledFor")) {
+      entries.push({
+        label: "Scheduled",
+        value: pick(execution, "scheduledFor"),
+        detail: "Execution scheduled.",
+      });
+    }
+    entries.push(
       {
         label: "Started",
         value: pick(execution, "startedAt"),
@@ -6802,7 +6811,7 @@
         value: pick(execution, "updatedAt"),
         detail: String(pick(pick(execution, "memo") || {}, "summary") || "").trim() || "-",
       },
-    ];
+    );
     if (pick(execution, "closedAt")) {
       entries.push({
         label: "Closed",
@@ -7529,6 +7538,7 @@
         ${pick(execution, "startingBranch") ? `<div class="card"><strong>Starting Branch:</strong> <code>${escapeHtml(String(pick(execution, "startingBranch")))}</code></div>` : ""}
         ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
         ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
+        ${pick(execution, "scheduledFor") ? `<div class="card"><strong>Scheduled For:</strong> ${escapeHtml(formatTimestamp(pick(execution, "scheduledFor")))}</div>` : ""}
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
@@ -7564,7 +7574,7 @@
       }</tbody>
         </table>
       </section>
-      ${["MoonMind.Run", "MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"].includes(String(pick(execution, "workflowType") || "")) ? "" : `
+      ${WORKFLOWS_WITHOUT_LIVE_LOGS.includes(String(pick(execution, "workflowType") || "")) ? "" : `
       <section id="temporal-live-logs-section">
         <h3>Live Logs</h3>
         <div id="temporal-live-logs-inactive">
@@ -9073,15 +9083,6 @@
     await loadProfile();
   }
   async function renderSystemSettingsPage() {
-    if (!workerPauseTransport) {
-      setView(
-        "System Settings",
-        "Pause or resume worker processing.",
-        "<div class='notice error'>Worker pause controls are not configured for this deployment.</div>",
-      );
-      return;
-    }
-
     const numberFormatter = new Intl.NumberFormat();
     const state = {
       snapshot: null,
@@ -9282,9 +9283,7 @@
           </details>
         </section>
       ` : "";
-      const layout = `
-        <div data-system-settings-notice>${noticeHtml}</div>
-        <div class="system-settings">
+      const workerPauseMarkup = workerPauseTransport ? `
           <section class="card">
             <div data-system-settings-summary></div>
           </section>
@@ -9295,6 +9294,12 @@
               <div data-system-settings-audit></div>
             </section>
           </div>
+      ` : `<div class='notice error'>Worker pause controls are not configured for this deployment.</div>`;
+
+      const layout = `
+        <div data-system-settings-notice>${noticeHtml}</div>
+        <div class="system-settings">
+          ${workerPauseMarkup}
           ${authProfilesMarkup}
         </div>
       `;
@@ -9310,10 +9315,16 @@
     }
 
     function syncDynamicView() {
+      const noticeNode = document.querySelector("[data-system-settings-notice]");
+      if (noticeNode) {
+        noticeNode.innerHTML = state.notice
+          ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+          : "";
+      }
+
       const summaryNode = document.querySelector("[data-system-settings-summary]");
       const auditNode = document.querySelector("[data-system-settings-audit]");
-      const noticeNode = document.querySelector("[data-system-settings-notice]");
-      if (!summaryNode || !auditNode || !noticeNode) {
+      if (!summaryNode || !auditNode) {
         return;
       }
 
@@ -9343,9 +9354,6 @@
           `
         : "<p class='loading'>Loading worker status...</p>";
       auditNode.innerHTML = buildAuditMarkup(auditEvents);
-      noticeNode.innerHTML = state.notice
-        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
-        : "";
     }
 
     function attachHandlers() {
@@ -9702,19 +9710,21 @@
     }
 
     const load = async (silent = false) => {
-      try {
-        state.snapshot = await workerPauseTransport.fetchState();
-        if (!silent) {
-          setNotice(null, "");
-        }
-      } catch (error) {
-        console.error("system settings load failed", error);
-        if (!silent) {
-          const message =
-            error instanceof Error && error.message
-              ? error.message
-              : "Failed to load worker pause status.";
-          setNotice("error", message);
+      if (workerPauseTransport) {
+        try {
+          state.snapshot = await workerPauseTransport.fetchState();
+          if (!silent) {
+            setNotice(null, "");
+          }
+        } catch (error) {
+          console.error("system settings load failed", error);
+          if (!silent) {
+            const message =
+              error instanceof Error && error.message
+                ? error.message
+                : "Failed to load worker pause status.";
+            setNotice("error", message);
+          }
         }
       }
       if (silent && hasRendered) {
@@ -9733,7 +9743,9 @@
       { showAutoRefreshControls: true },
     );
     await load();
-    startPolling(() => load(true), workerPauseTransport.pollInterval);
+    if (workerPauseTransport) {
+      startPolling(() => load(true), workerPauseTransport.pollInterval);
+    }
   }
 
   function renderNotFound() {
@@ -9757,9 +9769,6 @@
     stopPolling();
     activateNav(normalizedRoute);
 
-    const orchestratorDetailMatch = normalizedRoute.match(
-      /^\/tasks\/orchestrator\/([^/]+)$/,
-    );
     const temporalDetailMatch = normalizedRoute.match(/^\/tasks\/temporal\/([^/]+)$/);
     const unifiedDetailMatch = normalizedRoute.match(/^\/tasks\/([^/]+)$/);
     const proposalDetailMatch = normalizedRoute.match(/^\/tasks\/proposals\/([^/]+)$/);

@@ -50,13 +50,11 @@ class ManifestsService:
     def __init__(
         self,
         session: AsyncSession,
-        queue_service: AgentQueueService | None,
         *,
         execution_service: TemporalExecutionService | None = None,
         artifact_service: TemporalArtifactService | None = None,
     ) -> None:
         self._session = session
-        self._queue_service = queue_service
         self._execution_service = execution_service
         self._artifact_service = artifact_service
 
@@ -139,85 +137,20 @@ class ManifestsService:
         idempotency_key: str | None = None,
         system_payload: dict[str, Any] | None = None,
     ) -> ManifestRunSubmission:
-        target = get_routing_target_for_task(is_manifest=True)
-        if (
-            target == "temporal"
-            and self._execution_service is not None
-            and self._artifact_service is not None
-        ):
-            return await self._submit_temporal_manifest_run(
-                name=name,
-                action=action,
-                options=options,
-                user_id=user_id,
-                title=title,
-                failure_policy=failure_policy,
-                max_concurrency=max_concurrency,
-                tags=tags,
-                idempotency_key=idempotency_key,
-                system_payload=system_payload,
-            )
-        if self._queue_service is None:
-            raise RuntimeError("Manifest submission runtime is not configured")
-        return await self._submit_queue_manifest_run(
+        if self._execution_service is None or self._artifact_service is None:
+            raise RuntimeError("Temporal execution service is not configured")
+        
+        return await self._submit_temporal_manifest_run(
             name=name,
             action=action,
             options=options,
             user_id=user_id,
+            title=title,
+            failure_policy=failure_policy,
+            max_concurrency=max_concurrency,
+            tags=tags,
+            idempotency_key=idempotency_key,
             system_payload=system_payload,
-        )
-
-    async def _submit_queue_manifest_run(
-        self,
-        *,
-        name: str,
-        action: str,
-        options: dict[str, Any] | None,
-        user_id: UUID | None,
-        system_payload: dict[str, Any] | None = None,
-    ) -> ManifestRunSubmission:
-        record = await self.require_manifest(name)
-
-        payload = {
-            "manifest": {
-                "name": record.name,
-                "action": action,
-                "source": {
-                    "kind": "registry",
-                    "name": record.name,
-                    "content": record.content,
-                },
-            }
-        }
-        if options:
-            payload["manifest"]["options"] = options
-        if system_payload:
-            payload["system"] = dict(system_payload)
-
-        assert self._queue_service is not None
-        job = await self._queue_service.create_job(
-            job_type=MANIFEST_JOB_TYPE,
-            payload=payload,
-            priority=0,
-            created_by_user_id=user_id,
-            requested_by_user_id=user_id,
-        )
-
-        record.last_run_job_id = job.id
-        record.last_run_source = "queue"
-        record.last_run_status = job.status.value
-        record.last_run_workflow_id = None
-        record.last_run_temporal_run_id = None
-        record.last_run_manifest_ref = None
-        record.last_run_started_at = job.created_at
-        record.last_run_finished_at = None
-        record.updated_at = datetime.now(UTC)
-        await self._session.flush()
-        await self._session.commit()
-        return ManifestRunSubmission(
-            source="queue",
-            status=job.status.value,
-            job=job,
         )
 
     async def _submit_temporal_manifest_run(
