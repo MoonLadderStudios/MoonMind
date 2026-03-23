@@ -181,7 +181,7 @@ class MoonMindAgentRun:
         *,
         manager_handle: workflow.ExternalWorkflowHandle,
         runtime_id: str,
-    ) -> None:
+    ) -> int:
         """Best-effort manager refresh from DB-backed auth_profile.list snapshot."""
         try:
             profile_snapshot = await workflow.execute_activity(
@@ -197,12 +197,14 @@ class MoonMindAgentRun:
                 if isinstance(raw_profiles, list):
                     profiles = raw_profiles
             await manager_handle.signal("sync_profiles", {"profiles": profiles})
+            return len(profiles)
         except Exception:
             workflow.logger.warning(
                 "Failed to sync auth profiles for runtime_id=%s; continuing with manager state",
                 runtime_id,
                 exc_info=True,
             )
+            return -1
 
     @workflow.signal
     def completion_signal(self, result_dict: dict) -> None:
@@ -449,10 +451,17 @@ class MoonMindAgentRun:
                         runtime_id,
                         request_slot=False,
                     )
-                    await self._sync_manager_profiles(
+                    profile_count = await self._sync_manager_profiles(
                         manager_handle=manager_handle,
                         runtime_id=runtime_id,
                     )
+                    if profile_count == 0:
+                        raise ApplicationError(
+                            f"No enabled auth profiles found for runtime_id='{runtime_id}'",
+                            type="ProfileResolutionError",
+                            non_retryable=True,
+                        )
+
                     await manager_handle.signal(
                         "request_slot",
                         {
