@@ -21,7 +21,10 @@ from api_service.api.routers.executions import (
 from api_service.auth_providers import get_current_user
 from api_service.db.models import MoonMindWorkflowState, TemporalWorkflowType
 from moonmind.config.settings import settings
-from moonmind.workflows.temporal import TemporalExecutionValidationError
+from moonmind.workflows.temporal import (
+    TemporalExecutionNotFoundError,
+    TemporalExecutionValidationError,
+)
 
 
 def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> SimpleNamespace:
@@ -537,6 +540,58 @@ def test_describe_execution_allows_search_attribute_owner_id_fallback(
 
     assert response.status_code == 200
     assert response.json()["workflowId"] == "mm:wf-1"
+
+
+def test_describe_execution_source_temporal_uses_projection_fallback_when_sync_fails(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+
+    async def _raise_sync_failure(*_args, **_kwargs):
+        raise RuntimeError("temporal unavailable")
+
+    monkeypatch.setattr("api_service.api.routers.executions.RPCError", RuntimeError)
+    monkeypatch.setattr(
+        "api_service.core.sync.fetch_and_sync_execution",
+        _raise_sync_failure,
+    )
+
+    response = test_client.get("/api/executions/mm:wf-1", params={"source": "temporal"})
+
+    assert response.status_code == 200
+    assert response.json()["workflowId"] == "mm:wf-1"
+    assert service.describe_execution.await_args.kwargs["include_orphaned"] is True
+
+
+def test_describe_execution_source_temporal_returns_503_when_no_fallback_record(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    service.describe_execution.side_effect = TemporalExecutionNotFoundError(
+        "Workflow execution mm:wf-missing was not found"
+    )
+
+    async def _raise_sync_failure(*_args, **_kwargs):
+        raise RuntimeError("temporal unavailable")
+
+    monkeypatch.setattr("api_service.api.routers.executions.RPCError", RuntimeError)
+    monkeypatch.setattr(
+        "api_service.core.sync.fetch_and_sync_execution",
+        _raise_sync_failure,
+    )
+
+    response = test_client.get(
+        "/api/executions/mm:wf-missing",
+        params={"source": "temporal"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "temporal_unavailable"
 
 
 def test_update_execution_invalid_update_name_returns_contract_error(

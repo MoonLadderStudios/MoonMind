@@ -1374,8 +1374,11 @@ async def describe_execution(
 
     from api_service.core.sync import fetch_and_sync_execution
 
-    use_projection_read = False
-    if settings.temporal.temporal_authoritative_read_enabled or source == "temporal":
+    source_is_temporal = source == "temporal"
+    use_projection_read = source_is_temporal
+    temporal_sync_unavailable = False
+
+    if settings.temporal.temporal_authoritative_read_enabled or source_is_temporal:
         try:
             client = temporal_client
             await fetch_and_sync_execution(session, canonical_workflow_id, client)
@@ -1383,14 +1386,13 @@ async def describe_execution(
             # Return the synced projection to avoid clobbering it with stale source data.
             use_projection_read = True
         except RPCError as exc:
-            if source == "temporal":
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "code": "temporal_unavailable",
-                        "message": "Temporal service unavailable.",
-                    },
-                ) from exc
+            temporal_sync_unavailable = True
+            logger.warning(
+                "Failed to sync execution %s from Temporal: %s",
+                canonical_workflow_id,
+                exc,
+                exc_info=True,
+            )
         except Exception as exc:
             logger.warning(
                 "Failed to sync execution %s from Temporal: %s",
@@ -1399,12 +1401,27 @@ async def describe_execution(
                 exc_info=True,
             )
 
-    record = await _get_owned_execution(
-        service=service,
-        workflow_id=workflow_id,
-        user=user,
-        include_orphaned_projection=use_projection_read,
-    )
+    try:
+        record = await _get_owned_execution(
+            service=service,
+            workflow_id=workflow_id,
+            user=user,
+            include_orphaned_projection=use_projection_read,
+        )
+    except HTTPException as exc:
+        if (
+            source_is_temporal
+            and temporal_sync_unavailable
+            and exc.status_code == status.HTTP_404_NOT_FOUND
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "temporal_unavailable",
+                    "message": "Temporal service unavailable.",
+                },
+            ) from exc
+        raise
     if alias_used:
         _mark_execution_alias_usage(
             response,
