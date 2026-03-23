@@ -116,7 +116,7 @@ Introduce a first-class **OAuth Session** layer that sits between Mission Contro
 ```text
 Mission Control UI
   -> Auth Session API
-  -> OAuth Session Orchestrator
+  -> OAuth session orchestrator
   -> Auth Runner Container + mounted auth volume
   -> tmate session
   -> provider login bootstrap
@@ -138,7 +138,7 @@ Responsible for:
 * finalizing sessions
 * exposing tmate connection metadata to the UI
 
-### B. OAuth Session Orchestrator
+### B. OAuth session orchestrator
 
 Responsible for:
 
@@ -469,7 +469,7 @@ Response:
 
 `POST /api/v1/oauth-sessions/{session_id}/finalize`
 
-Useful if the orchestrator uses optimistic verification and the user wants to push re-check explicitly.
+Useful if the system uses optimistic verification and the user wants to push re-check explicitly.
 
 ---
 

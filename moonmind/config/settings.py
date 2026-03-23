@@ -1786,12 +1786,6 @@ class AppSettings(BaseSettings):
         exclude=True,
         description="Compatibility passthrough for worker Codex effort env flags.",
     )
-    orchestrator_docker_host: Optional[str] = Field(
-        None,
-        env="ORCHESTRATOR_DOCKER_HOST",
-        exclude=True,
-        description="Compatibility passthrough for DooD docker host settings.",
-    )
     moonmind_workdir: Optional[str] = Field(
         None,
         env="MOONMIND_WORKDIR",

@@ -102,7 +102,7 @@ extend-ignore = ["E402", "E722", "F841"]
 
 [tool.pytest.ini_options]
 markers = [
-    "integration: marks integration tests that exercise orchestrator workflows.",
+    "integration: marks integration tests that exercise workflows.",
 ]
 
 [tool.pre-commit]

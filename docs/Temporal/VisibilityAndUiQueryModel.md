@@ -82,7 +82,7 @@ Current implemented behavior:
 - current ordering: `updated_at DESC`, then `workflow_id DESC`
 - current token implementation: opaque base64-encoded JSON carrying an offset
 
-The current dashboard runtime config and route shell still only model explicit sources such as `queue`, `orchestrator`, `proposals`, `manifests`, and `schedules`; there is not yet a first-class `temporal` dashboard source.
+The current dashboard runtime config and route shell still only model explicit sources such as `queue`, `system`, `proposals`, `manifests`, and `schedules`; there is not yet a first-class `temporal` dashboard source.
 
 ### 4.2 Target contract
 
@@ -517,7 +517,7 @@ Target rule:
 
 ### 11.5 Unified multi-source pages
 
-A unified `/tasks/list` page must **not** pretend that queue rows, orchestrator rows, and Temporal-backed rows share a single native cursor/count model.
+A unified `/tasks/list` page must **not** pretend that queue rows, system rows, and Temporal-backed rows share a single native cursor/count model.
 
 During migration, a unified page should do one of the following:
 

@@ -19,7 +19,6 @@ const {
   baseTaskRow,
   createTaskRow,
   createMixedRows,
-  createOrchestratorRow,
 } = require("./__fixtures__/task_rows");
 
 function createVmContext() {
@@ -429,7 +428,6 @@ function createProposalRow(overrides = {}) {
 (function testRenderQueueLayoutsCombinesTableAndCards() {
   const rows = [
     createTaskRow(),
-    createOrchestratorRow(),
   ];
   const html = renderTaskLayouts(rows);
   assert(html.includes("queue-table-wrapper"));
