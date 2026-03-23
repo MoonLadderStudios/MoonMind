@@ -3273,8 +3273,9 @@
       let leftVal;
       let rightVal;
       if (TIMESTAMP_SORT_FIELDS.has(field)) {
-        leftVal = Date.parse(left[field] || 0) || 0;
-        rightVal = Date.parse(right[field] || 0) || 0;
+        const getRawTimestamp = (row) => field === "scheduledFor" ? (row[field] || row.createdAt) : row[field];
+        leftVal = Date.parse(getRawTimestamp(left) || 0) || 0;
+        rightVal = Date.parse(getRawTimestamp(right) || 0) || 0;
         if (leftVal !== rightVal) {
           return dir * (leftVal - rightVal);
         }

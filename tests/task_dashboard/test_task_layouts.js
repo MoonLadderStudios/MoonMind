@@ -294,6 +294,18 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(sorted[2].rawStatus, 'succeeded');
 })();
 
+(function testSortRowsByColumnScheduledForFallsBackToCreatedAt() {
+  const rows = [
+    createTaskRow({ id: 'job-a', scheduledFor: null, createdAt: '2026-03-10T00:00:00Z' }),
+    createTaskRow({ id: 'job-b', scheduledFor: null, createdAt: '2026-03-12T00:00:00Z' }),
+    createTaskRow({ id: 'job-c', scheduledFor: '2026-03-15T00:00:00Z', createdAt: '2026-03-08T00:00:00Z' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'scheduledFor', 'desc');
+  assert.strictEqual(sorted[0].id, 'job-c', 'Explicit scheduledFor should sort first when newest');
+  assert.strictEqual(sorted[1].id, 'job-b', 'Null scheduledFor should fall back to createdAt');
+  assert.strictEqual(sorted[2].id, 'job-a', 'Oldest createdAt should sort last');
+})();
+
 (function testSortRowsByColumnDoesNotMutateOriginalArray() {
   const rows = [
     createTaskRow({ id: 'job-1', title: 'Zebra task' }),
