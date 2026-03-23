@@ -46,8 +46,8 @@ def _check_pr_merged(selector: str | None) -> bool:
         return False
     cmd = ["gh", "pr", "view", str(selector), "--json", "state"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    except OSError:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
         return False
     if result.returncode != 0:
         return False
