@@ -79,7 +79,7 @@ Never allow:
 
 - Never log `GITHUB_TOKEN` to Temporal histories or stdout.
 - Do not emit full environment dumps into `ActivityExecutionResult` or similar payloads.
-- Redact token-like strings in command output and exception traces sent back to the Temporal orchestrator.
+- Redact token-like strings in command output and exception traces sent back to the Temporal system.
 - Keep secret material out of Temporal events and artifacts.
 
 ## 7. Operational Runbook

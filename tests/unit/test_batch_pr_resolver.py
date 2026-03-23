@@ -239,9 +239,11 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     assert runtime.effort == "high"
 
 
-def test_resolve_runtime_selection_defaults_to_gemini_without_inheritance():
+def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
     module = _load_module()
     resolve_runtime_selection = module["_resolve_runtime_selection"]
+    
+    monkeypatch.delenv("MOONMIND_DEFAULT_TASK_RUNTIME", raising=False)
 
     args = type(
         "Args",
@@ -255,7 +257,7 @@ def test_resolve_runtime_selection_defaults_to_gemini_without_inheritance():
     )()
 
     runtime = resolve_runtime_selection(args)
-    assert runtime.mode == "gemini"
+    assert runtime.mode is None
     assert runtime.model is None
     assert runtime.effort is None
 
@@ -307,7 +309,7 @@ def _make_submission(module: dict[str, Any]) -> Any:
 
 
 def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
-    """When MOONMIND_URL is set, _submit_jobs should POST to /api/queue/jobs."""
+    """When MOONMIND_URL is set, _submit_jobs should POST to /api/executions."""
     module = _load_module()
     submit_jobs_via_http = module["_submit_jobs_via_http"]
     _read_worker_token = module["_read_worker_token"]
@@ -351,7 +353,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     assert created[0]["pr"] == 42
     mock_post.assert_awaited_once()
     call_path = mock_post.await_args[0][0]
-    assert call_path == "/api/queue/jobs"
+    assert call_path == "/api/executions"
 
 
 def test_submit_jobs_uses_http_when_moonmind_url_set(monkeypatch: Any) -> None:

@@ -646,7 +646,7 @@ Wrap tables in a scroll container:
 ### 10.5 Queue List Responsive Layout (shipped 2026-02-23)
 
 - HTML contract: wrap queue listings in `<div class="queue-layouts">` with a `.queue-table-wrapper` div and `.queue-card-list` sibling. The cards list must use `<ul role="list">` and `<li class="queue-card">`.
-- Table behavior: `.queue-table-wrapper` stays visible on `@media (min-width: 768px)` and still renders orchestrator/manifests rows. When non-queue sources exist, set `data-sticky-table="true"` so tablets/phones keep the table available.
+- Table behavior: `.queue-table-wrapper` stays visible on `@media (min-width: 768px)` and still renders system/manifests rows. When non-queue sources exist, set `data-sticky-table="true"` so tablets/phones keep the table available.
 - Card behavior: `.queue-card-list` is visible for `@media (max-width: 767px)` and hides on larger breakpoints. Each card uses `.queue-card-header`, `.queue-card-meta`, `.queue-card-fields`, and `.queue-card-actions` to keep typography consistent.
 - Definition list contract: iterate `queueFieldDefinitions` so `<dt>/<dd>` stacks match desktop columns. `.queue-card-fields` defaults to two columns and collapses to one column below 768px.
 - Buttons: reuse `.button.secondary` plus flexbox `.queue-card-actions` so "View details" spans the full card width on mobile.

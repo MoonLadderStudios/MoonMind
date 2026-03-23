@@ -48,7 +48,7 @@ black....................................................................Failed
 - hook id: black
 - files were modified by this hook
 
-reformatted tests/unit/workflows/orchestrator/test_tasks.py
+reformatted tests/unit/workflows/system/test_tasks.py
 
 Pre-commit checks failed. Please fix formatting issues and commit changes.
 ```
@@ -74,7 +74,7 @@ You can manually run pre-commit checks without running tests:
 pre-commit run --all-files
 
 # Check specific files
-pre-commit run --files tests/unit/workflows/orchestrator/test_tasks.py
+pre-commit run --files tests/unit/workflows/system/test_tasks.py
 
 # Auto-fix issues (where possible)
 pre-commit run --all-files

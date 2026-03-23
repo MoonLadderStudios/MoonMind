@@ -51,11 +51,6 @@ step_idle_timeout_seconds = 300
 step_no_progress_limit = 2
 job_self_heal_max_resets = 1
 
-[orchestrator]
-artifact_root = "var/artifacts/workflows"
-statsd_host = ""
-statsd_port = 8125
-
 # [jira]
 # jira_enabled = false
 # jira_url = "your-domain.atlassian.net"

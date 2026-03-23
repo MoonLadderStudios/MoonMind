@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.agents.codex_worker.self_heal import (
+from moonmind.workflows.temporal.runtime.self_heal import (
     AttemptBudgetExceeded,
     HardResetWorkspaceBuilder,
     SelfHealConfig,

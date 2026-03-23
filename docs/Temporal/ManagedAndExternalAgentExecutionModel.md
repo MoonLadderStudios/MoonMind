@@ -237,7 +237,7 @@ This separation keeps the adapter layer agent-oriented while allowing the lower 
 
 ## 5. External Agents
 
-External agents are delegated to through provider-specific adapters, but MoonMind remains the top-level orchestrator.
+External agents are delegated to through provider-specific adapters, but MoonMind remains the top-level system.
 
 ### Execution Model
 

@@ -78,8 +78,7 @@ async def test_upsert_manifest_persists_normalized_hash_and_version(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             record = await service.upsert_manifest(
                 name="demo", content=REGISTRY_MANIFEST
@@ -123,7 +122,7 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
                 )
 
             queue_service.create_job = _create_job  # type: ignore[attr-defined]
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
             submission = await service.submit_manifest_run(
@@ -158,7 +157,6 @@ async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
             execution_service = TemporalExecutionService(session)
             service = ManifestsService(
                 session,
-                None,
                 execution_service=execution_service,
                 artifact_service=artifact_service,
             )
@@ -243,7 +241,6 @@ async def test_submit_manifest_run_reuses_idempotent_execution_without_side_effe
             execution_service = TemporalExecutionService(session)
             service = ManifestsService(
                 session,
-                None,
                 execution_service=execution_service,
                 artifact_service=artifact_service,
             )
@@ -300,8 +297,7 @@ async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
             last_job_id = uuid4()
@@ -327,8 +323,7 @@ async def test_list_manifests_returns_ordered_and_limited_results(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             # Insert manifests in a random order
             # Note: upsert_manifest validates that the YAML metadata.name matches the arg.
@@ -358,8 +353,7 @@ async def test_list_manifests_filters_by_search_pattern(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             await service.upsert_manifest(
                 name="app-demo", content=_manifest_with_name("app-demo")
@@ -391,8 +385,7 @@ async def test_require_manifest_raises_not_found_for_missing_entry(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             with pytest.raises(ManifestRegistryNotFoundError) as exc_info:
                 await service.require_manifest("nonexistent-manifest")

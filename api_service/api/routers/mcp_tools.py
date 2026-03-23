@@ -55,18 +55,6 @@ if settings.jules.jules_enabled:
         )
 
 
-async def _get_repository(
-    session: AsyncSession = Depends(get_async_session),
-) -> AgentQueueRepository:
-    return get_agent_queue_repository(session)
-
-
-async def _get_service(
-    repository: AgentQueueRepository = Depends(_get_repository),
-) -> AgentQueueService:
-    return AgentQueueService(repository)
-
-
 def _to_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, ToolNotFoundError):
         return HTTPException(
@@ -77,45 +65,6 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "invalid_tool_arguments", "message": str(exc)},
-        )
-    if isinstance(exc, AgentJobNotFoundError):
-        return HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "job_not_found", "message": str(exc)},
-        )
-    if isinstance(exc, AgentJobOwnershipError):
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "job_ownership_mismatch", "message": str(exc)},
-        )
-    if isinstance(exc, AgentJobStateError):
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "job_state_conflict", "message": str(exc)},
-        )
-    if isinstance(exc, AgentArtifactNotFoundError):
-        return HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "artifact_not_found", "message": str(exc)},
-        )
-    if isinstance(exc, AgentArtifactJobMismatchError):
-        return HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "artifact_job_mismatch", "message": str(exc)},
-        )
-    if isinstance(exc, AgentQueueValidationError):
-        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        code = "invalid_queue_payload"
-        lowered = str(exc).lower()
-        if "exceeds max bytes" in lowered:
-            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-            code = "artifact_too_large"
-        elif "does not exist on disk" in lowered:
-            status_code = status.HTTP_404_NOT_FOUND
-            code = "artifact_file_missing"
-        return HTTPException(
-            status_code=status_code,
-            detail={"code": code, "message": str(exc)},
         )
     if isinstance(exc, JulesClientError):
         if exc.status_code == 429:
@@ -154,7 +103,6 @@ async def list_tools(
 @router.post("/tools/call", response_model=ToolCallResponse)
 async def call_tool(
     payload: ToolCallRequest,
-    service: AgentQueueService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> ToolCallResponse:
     """Dispatch one MCP tool invocation."""
@@ -171,7 +119,7 @@ async def call_tool(
             )
         else:
             queue_context = QueueToolExecutionContext(
-                service=service,
+                service=None,
                 user_id=getattr(user, "id", None),
             )
             result = await _queue_registry.call_tool(

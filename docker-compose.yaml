@@ -26,9 +26,6 @@ services:
     restart: unless-stopped
 
   api:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     ports:
       - "5000:5000"
@@ -234,9 +231,6 @@ services:
     restart: unless-stopped
 
   temporal-worker-workflow:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
@@ -275,9 +269,6 @@ services:
     restart: unless-stopped
 
   temporal-worker-artifacts:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
@@ -321,9 +312,6 @@ services:
     restart: unless-stopped
 
   temporal-worker-llm:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
@@ -364,9 +352,6 @@ services:
     restart: unless-stopped
 
   temporal-worker-sandbox:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
@@ -441,9 +426,6 @@ services:
     restart: unless-stopped
 
   temporal-worker-agent-runtime:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
@@ -519,9 +501,6 @@ services:
     restart: unless-stopped
 
   temporal-worker-integrations:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - PYTHONPATH=/app
@@ -571,9 +550,6 @@ services:
       - local-network
 
   init-db:
-    build:
-      context: .
-      dockerfile: ./api_service/Dockerfile
     image: ghcr.io/moonladderstudios/moonmind:latest
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@${POSTGRES_HOST:-moonmind-api-db}:5432/${POSTGRES_DB:-moonmind}

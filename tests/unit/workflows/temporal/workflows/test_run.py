@@ -425,6 +425,13 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     "plan node execution returned status FAILED",
                     exc_info.exception.cause.message,
                 )
+                
+                handle = env.client.get_workflow_handle("test-workflow-id-failed-skill-status")
+                desc = await handle.describe()
+                self.assertEqual(
+                    desc.search_attributes.get("mm_state"),
+                    ["failed"]
+                )
 
     async def test_proposals_stage_enabled(self) -> None:
         """When proposeTasks is true, proposal activities are invoked."""

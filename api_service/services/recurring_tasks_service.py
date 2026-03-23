@@ -263,7 +263,7 @@ class RecurringTasksService:
     def __init__(self, session: AsyncSession, *, execution_service: TemporalExecutionService | None = None) -> None:
         self._session = session
         self._execution_service = execution_service
-        self._manifests_service = ManifestsService(session, None, execution_service=self._execution_service)
+        self._manifests_service = ManifestsService(session, execution_service=self._execution_service)
         self._template_catalog = TaskTemplateCatalogService(session)
 
     async def list_definitions(

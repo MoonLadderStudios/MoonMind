@@ -102,7 +102,7 @@ async def test_scheduler_tick_creates_and_dispatches_runs(tmp_path: Path) -> Non
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = RecurringTasksService(session)
-            manifest_service = ManifestsService(session, None)
+            manifest_service = ManifestsService(session)
 
             await manifest_service.upsert_manifest(
                 name="demo",

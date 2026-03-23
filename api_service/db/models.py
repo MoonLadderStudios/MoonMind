@@ -769,6 +769,7 @@ class MoonMindWorkflowState(str, enum.Enum):
     INITIALIZING = "initializing"
     WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
     PLANNING = "planning"
+    AWAITING = "awaiting"
     EXECUTING = "executing"
     AWAITING_EXTERNAL = "awaiting_external"
     FINALIZING = "finalizing"

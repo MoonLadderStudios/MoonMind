@@ -153,7 +153,6 @@ const helpers = loadSubmitRuntimeHelpers();
 (function testDetermineSubmitDestinationRoutesPayloads() {
   const endpoints = {
     queue: "/api/queue/jobs",
-    orchestrator: "/orchestrator/tasks",
     temporal: "/api/executions",
   };
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
@@ -400,7 +399,6 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(typeof helpers.resolveQueueSubmitPriorityForRuntime, "function");
   const workerPriority = helpers.resolveQueueSubmitPriorityForRuntime("codex", {
     priority: "7",
-    orchestratorPriority: "high",
   });
   assert.strictEqual(workerPriority, 7);
 

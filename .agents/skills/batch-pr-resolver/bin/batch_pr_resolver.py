@@ -22,6 +22,7 @@ from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skil
 logger = logging.getLogger(__name__)
 
 TASK_DELAY_INCREMENT_MINUTES = 30
+API_EXECUTIONS_ENDPOINT = "/api/executions"
 
 
 @dataclass
@@ -33,7 +34,7 @@ class JobSubmission:
 
 @dataclass(frozen=True)
 class RuntimeSelection:
-    mode: str
+    mode: str | None = None
     model: str | None = None
     effort: str | None = None
 
@@ -222,9 +223,7 @@ def _extract_branch(pr: dict[str, Any]) -> str:
 
 def _normalize_runtime_mode(value: str | None) -> str | None:
     candidate = str(value or "").strip().lower()
-    if candidate in {"codex", "gemini", "claude"}:
-        return candidate
-    return None
+    return candidate if candidate else None
 
 
 def _runtime_text(value: Any) -> str | None:
@@ -291,7 +290,7 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
         os.getenv("MOONMIND_DEFAULT_TASK_RUNTIME")
     )
     runtime_mode = _normalize_runtime_mode(args.runtime_mode) or (
-        inherited.mode if inherited else (configured_default_mode or "gemini")
+        inherited.mode if inherited else configured_default_mode
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
@@ -301,7 +300,7 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
         runtime_effort = inherited.effort
 
     return RuntimeSelection(
-        mode=runtime_mode or "codex",
+        mode=runtime_mode,
         model=runtime_model,
         effort=runtime_effort,
     )
@@ -321,45 +320,48 @@ def _build_queue_request(
     schedule_after_minutes: int | None = None,
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
-    runtime_payload: dict[str, Any] = {"mode": runtime.mode}
+    runtime_payload: dict[str, Any] = {}
+    if runtime.mode:
+        runtime_payload["mode"] = runtime.mode
     if runtime.model:
         runtime_payload["model"] = runtime.model
     if runtime.effort:
         runtime_payload["effort"] = runtime.effort
 
+    payload_dict: dict[str, Any] = {
+        "repository": repo,
+        "requiredCapabilities": ["gh"],
+        "task": {
+            "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
+            "skill": {
+                "name": "pr-resolver",
+                "version": skill_version,
+            },
+            "inputs": {
+                "repo": repo,
+                "pr": str(pr_number),
+                "branch": branch,
+                "mergeMethod": merge_method,
+                "maxIterations": max_iterations,
+            },
+            "git": {
+                "startingBranch": branch,
+                "newBranch": branch,
+            },
+            "publish": {"mode": publish_mode},
+        },
+    }
+
+    if runtime.mode:
+        payload_dict["targetRuntime"] = runtime.mode
+    if runtime_payload:
+        payload_dict["task"]["runtime"] = runtime_payload
+
     request: dict[str, Any] = {
         "type": "task",
         "priority": priority,
         "maxAttempts": max_attempts,
-        "payload": {
-            "repository": repo,
-            "targetRuntime": runtime.mode,
-            # Top-level on payload so _create_execution_from_task_request can read it.
-            "requiredCapabilities": ["gh"],
-            "task": {
-                "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
-                # Aligned with SkillInvocation contract: skill.name + skill.version required;
-                # skill inputs live at the task-node level (not inside skill).
-                "skill": {
-                    "name": "pr-resolver",
-                    "version": skill_version,
-                },
-                "inputs": {
-                    "repo": repo,
-                    "pr": str(pr_number),
-                    "branch": branch,
-                    "mergeMethod": merge_method,
-                    "maxIterations": max_iterations,
-                },
-                "runtime": runtime_payload,
-                "git": {
-                    "startingBranch": branch,
-                    "newBranch": branch,
-                },
-                # `pr-resolver` performs commit/push/merge itself.
-                "publish": {"mode": publish_mode},
-            },
-        },
+        "payload": payload_dict,
     }
 
     if schedule_after_minutes is not None:
@@ -412,7 +414,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--runtime-mode",
-        choices=("codex", "gemini", "claude"),
         default=None,
         help="Explicit runtime mode for queued pr-resolver tasks.",
     )
@@ -481,7 +482,7 @@ async def _submit_jobs_via_http(
             if "schedule" in request:
                 body["schedule"] = request["schedule"]
             try:
-                response = await client.post("/api/queue/jobs", json=body)
+                response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
                 job_id = str(data.get("id", "")) or "(unknown)"
@@ -589,8 +590,16 @@ def _build_request_records(
             "head branches are not reliably check-outable by the worker."
         )
 
+    def _get_pr_number(pr_data: dict[str, Any]) -> int:
+        try:
+            return int(pr_data.get("number", 0))
+        except (ValueError, TypeError):
+            return 0
+
+    open_prs_sorted = sorted(open_prs, key=_get_pr_number)
+
     delay_minutes = TASK_DELAY_INCREMENT_MINUTES
-    for pr in open_prs:
+    for pr in open_prs_sorted:
         number = pr.get("number")
         branch = _extract_branch(pr)
         if not _is_local_head(pr, repo=repo):

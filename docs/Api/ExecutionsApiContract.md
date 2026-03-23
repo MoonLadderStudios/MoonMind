@@ -41,7 +41,7 @@ This document covers:
 This document does **not** define:
 
 - the `/tasks/*` product API,
-- legacy `/orchestrator/*` compatibility routes,
+- legacy compatibility routes,
 - artifact upload/download APIs,
 - direct Temporal server APIs,
 - worker-internal lifecycle helpers used only inside workflow/activity execution.

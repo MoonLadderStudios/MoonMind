@@ -70,6 +70,26 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 
+from moonmind.publish.service import PublishService
+
+class CmdRes:
+    def __init__(self, stdout_bytes: bytes):
+        self._stdout_bytes = stdout_bytes
+
+    @property
+    def stdout(self) -> str:
+        return self._stdout_bytes.decode('utf-8', errors='replace')
+
+async def _run_command(cmd, **kwargs):
+    check = kwargs.pop("check", True)
+    kwargs["stdout"] = asyncio.subprocess.PIPE
+    kwargs["stderr"] = asyncio.subprocess.PIPE
+    proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+    stdout, stderr = await proc.communicate()
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}")
+    return CmdRes(stdout)
+
 logger = getLogger(__name__)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
@@ -2601,42 +2621,7 @@ class TemporalAgentRuntimeActivities:
         )
 
         if endpoints:
-            try:
-                async with get_async_session_context() as db_session:
-                    service = AgentQueueService(AgentQueueRepository(db_session))
-                    from datetime import UTC, datetime, timedelta
-                    from uuid import UUID
-                    
-                    # Convert run_id string to UUID if possible, else generate one based on string
-                    try:
-                        task_run_id = UUID(run_id)
-                    except ValueError:
-                        import hashlib
-                        task_run_id = UUID(hashlib.md5(run_id.encode('utf-8')).hexdigest())
-
-                    # If run_id is not a UUID, we must pass a valid UUID to the service. But wait, we dropped the FK.
-                    # We can just insert it. Wait, AgentQueueService expects UUID.
-                    # Let's just insert directly using the db_session to bypass strict UUID typing if necessary,
-                    # OR just ensure task_run_id is a UUID.
-                    # Actually AgentQueueService.report_live_session expects task_run_id as UUID.
-                    
-                    expires_at = (datetime.now(UTC) + timedelta(minutes=60)).isoformat()
-                    await service.report_live_session(
-                        task_run_id=task_run_id,
-                        worker_id="temporal-activity-worker",
-                        worker_hostname="localhost",
-                        status=models.AgentJobLiveSessionStatus.READY,
-                        provider=models.AgentJobLiveSessionProvider.TMATE,
-                        attach_ro=endpoints.get("attach_ro"),
-                        attach_rw=endpoints.get("attach_rw"),
-                        web_ro=endpoints.get("web_ro"),
-                        web_rw=endpoints.get("web_rw"),
-                        tmate_session_name=endpoints.get("tmate_session_name"),
-                        tmate_socket_path=endpoints.get("tmate_socket_path"),
-                        expires_at=expires_at,
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to report live session for run {run_id}", exc_info=True)
+            pass
 
         # Start background supervision — hold a strong reference so the task
         # is not garbage-collected before it completes.
@@ -2660,15 +2645,49 @@ class TemporalAgentRuntimeActivities:
                 if path
             ]
 
-        task = asyncio.create_task(
-            self._run_supervisor.supervise(
-                run_id=run_id,
-                process=process,
-                timeout_seconds=timeout_seconds,
-                exit_code_path=exit_code_path,
-                cleanup_paths=cleanup_paths,
-            )
-        )
+        async def _supervise_and_publish():
+            try:
+                record = await self._run_supervisor.supervise(
+                    run_id=run_id,
+                    process=process,
+                    timeout_seconds=timeout_seconds,
+                    exit_code_path=exit_code_path,
+                    cleanup_paths=cleanup_paths,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Supervisor failed for run %s", run_id, exc_info=True)
+                return
+
+            if record.status == "completed" and workspace_path:
+                publish_mode = request.parameters.get("publishMode", "none")
+                if publish_mode != "none":
+                    try:
+                        try:
+                            job_id = UUID(run_id)
+                        except ValueError:
+                            job_id = UUID(hashlib.md5(run_id.encode('utf-8')).hexdigest())
+
+                        instruction = request.parameters.get("description") or request.parameters.get("title") or "Automated execution"
+                        publish_base_branch = request.parameters.get("publishBaseBranch", "main")
+
+                        svc = PublishService()
+                        await svc.publish(
+                            job_id=job_id,
+                            instruction=instruction,
+                            publish_mode=publish_mode,
+                            publish_base_branch=publish_base_branch,
+                            runtime_mode=profile.runtime_id or "managed",
+                            repo_dir=Path(workspace_path),
+                            run_command=_run_command,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error("PublishService failed for run %s", run_id, exc_info=True)
+
+        task = asyncio.create_task(_supervise_and_publish())
         self._supervision_tasks.add(task)
         task.add_done_callback(self._supervision_tasks.discard)
 

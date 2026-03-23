@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> ManifestsService:
-    queue_service = None
     execution_service = TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
@@ -60,7 +59,6 @@ async def _get_service(
     artifact_service = get_temporal_artifact_service(session)
     return ManifestsService(
         session,
-        queue_service,
         execution_service=execution_service,
         artifact_service=artifact_service,
     )

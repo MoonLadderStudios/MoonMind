@@ -11,6 +11,7 @@ AgentKind = Literal["external", "managed"]
 ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
 AgentRunState = Literal[
     "queued",
+    "awaiting",
     "launching",
     "running",
     "awaiting_callback",
