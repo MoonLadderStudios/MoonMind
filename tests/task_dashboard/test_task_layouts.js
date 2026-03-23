@@ -153,7 +153,7 @@ function createProposalRow(overrides = {}) {
   const expectedKeys = [
     "runtimeMode",
     "skillId",
-    "createdAt",
+    "scheduledFor",
     "startedAt",
     "finishedAt",
   ];
@@ -221,10 +221,10 @@ function createProposalRow(overrides = {}) {
 })();
 
 (function testRenderQueueTableWithDescSortStateAddsAriaSortDescending() {
-  const sortState = { field: "createdAt", direction: "desc" };
+  const sortState = { field: "scheduledFor", direction: "desc" };
   const html = renderTaskTable([createTaskRow()], sortState);
-  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on createdAt column');
-  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on createdAt column');
+  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on scheduledFor column');
+  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on scheduledFor column');
   assert(html.includes('\u25bc'), 'Expected descending indicator \u25bc');
 })();
 

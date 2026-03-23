@@ -146,6 +146,7 @@ async def test_describe_execution_source_temporal_syncs_projection(client) -> No
         record.memo = {}
         record.artifact_refs = []
         record.entry = "run"
+        record.created_at = datetime.now(UTC)
         record.started_at = datetime.now(UTC)
         record.updated_at = datetime.now(UTC)
         record.closed_at = None
@@ -187,6 +188,7 @@ async def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
     record.memo = {}
     record.artifact_refs = []
     record.entry = "run"
+    record.created_at = datetime.now(UTC)
     record.started_at = datetime.now(UTC)
     record.updated_at = datetime.now(UTC)
     record.closed_at = None

@@ -2480,9 +2480,9 @@
       tableSection: "primary",
     },
     {
-      key: "createdAt",
-      label: "Created",
-      render: (row) => escapeHtml(formatTimestamp(row.createdAt)),
+      key: "scheduledFor",
+      label: "Scheduled",
+      render: (row) => escapeHtml(formatTimestamp(row.scheduledFor || row.createdAt)),
       tableSection: "timeline",
     },
     {
@@ -3227,6 +3227,7 @@
         attentionRequired: Boolean(pick(item, "attentionRequired")),
         title: String(pick(item, "title") || "Temporal execution").trim(),
         createdAt: pick(item, "createdAt") || pick(item, "startedAt"),
+        scheduledFor: pick(item, "scheduledFor"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "closedAt"),
         updatedAt,
@@ -3264,7 +3265,7 @@
     });
   }
 
-  const TIMESTAMP_SORT_FIELDS = new Set(["createdAt", "startedAt", "finishedAt"]);
+  const TIMESTAMP_SORT_FIELDS = new Set(["scheduledFor", "createdAt", "startedAt", "finishedAt"]);
 
   function sortRowsByColumn(rows, field, direction) {
     const dir = direction === "asc" ? 1 : -1;
@@ -3497,7 +3498,7 @@
       pageEnd: 0,
     };
     let stableListOrderIndex = new Map();
-    let columnSort = { field: "createdAt", direction: "desc" };
+    let columnSort = { field: "scheduledFor", direction: "desc" };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -7541,6 +7542,7 @@
         ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
         ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
         ${pick(execution, "scheduledFor") ? `<div class="card"><strong>Scheduled For:</strong> ${escapeHtml(formatTimestamp(pick(execution, "scheduledFor")))}</div>` : ""}
+        <div class="card"><strong>Created:</strong> ${escapeHtml(formatTimestamp(pick(execution, "createdAt")))}</div>
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
