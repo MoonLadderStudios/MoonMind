@@ -23,8 +23,8 @@ The following documents contain valuable architectural concepts or workflows but
 |----------|--------|----------|
 | `docs/LiveTaskHandoff.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/LiveTaskManagement.md` and restructured to cover live log tailing + terminal handoff) |
 | `docs/ManifestTaskSystem.md` | Partially out-of-date | Merged into `docs/RAG/ManifestIngestDesign.md` (§17–§19) and deleted |
-| `docs/OrchestratorArchitecture.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorArchitecture.md` and refactored) |
-| `docs/OrchestratorTaskRuntime.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/OrchestratorTaskRuntime.md` and refactored) |
+| `docs/systemArchitecture.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/systemArchitecture.md` and refactored) |
+| `docs/systemTaskRuntime.md` | Partially out-of-date | Updated (Moved to `docs/Temporal/systemTaskRuntime.md` and refactored) |
 | `docs/SecretStore.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/SecretStore.md` and refactored) |
 | `docs/DockerOutOfDocker.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/DockerOutOfDocker.md` and refactored) |
 | `docs/SkillGithubPrResolver.md` | Partially out-of-date | Updated (Moved to `docs/ManagedAgents/SkillGithubPrResolver.md` and refactored) |

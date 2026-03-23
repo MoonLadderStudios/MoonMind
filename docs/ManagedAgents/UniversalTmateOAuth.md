@@ -116,7 +116,7 @@ Introduce a first-class **OAuth Session** layer that sits between Mission Contro
 ```text
 Mission Control UI
   -> Auth Session API
-  -> OAuth Session Orchestrator
+  -> OAuth session orchestrator
   -> Auth Runner Container + mounted auth volume
   -> tmate session
   -> provider login bootstrap
@@ -138,7 +138,7 @@ Responsible for:
 * finalizing sessions
 * exposing tmate connection metadata to the UI
 
-### B. OAuth Session Orchestrator
+### B. OAuth session orchestrator
 
 Responsible for:
 
@@ -316,11 +316,11 @@ This is the key missing abstraction that makes the UI and backend manageable.
    * profile id is valid
    * no conflicting active session for same profile
 4. Backend creates DB row with `pending`
-5. Orchestrator starts
+5. system starts
 
 ## 9.2 Provision auth runner
 
-The orchestrator:
+The system:
 
 1. ensures target Docker volume exists
 2. picks the auth runner image/service
@@ -349,7 +349,7 @@ After the user finishes login, the provider stores credentials in the mounted vo
 
 ## 9.4 Verification
 
-The orchestrator either polls or is manually nudged by UI refresh.
+The system either polls or is manually nudged by UI refresh.
 
 Verification step:
 
@@ -469,7 +469,7 @@ Response:
 
 `POST /api/v1/oauth-sessions/{session_id}/finalize`
 
-Useful if the orchestrator uses optimistic verification and the user wants to push re-check explicitly.
+Useful if the system uses optimistic verification and the user wants to push re-check explicitly.
 
 ---
 

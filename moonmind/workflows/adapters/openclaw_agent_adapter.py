@@ -31,7 +31,7 @@ _OPENCLAW_CAPABILITY = ProviderCapabilityDescriptor(
 
 _SYSTEM_PROMPT = (
     "You are an autonomous OpenClaw agent executing a bounded task delegated "
-    "by the MoonMind orchestrator. Follow instructions precisely."
+    "by MoonMind. Follow instructions precisely."
 )
 
 

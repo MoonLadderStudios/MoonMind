@@ -1,6 +1,6 @@
 # Single Execution Substrate Migration Plan
 
-> **Goal:** Finish the move to Temporal-backed execution as the **only** real substrate. Remove legacy queue and orchestrator paths so MoonMind has one task model, one execution model, one observability model, and one action model.
+> **Goal:** Finish the move to Temporal-backed execution as the **only** real substrate. Remove legacy queue and system paths so MoonMind has one task model, one execution model, one observability model, and one action model.
 >
 > **Last updated:** 2026-03-22
 
@@ -8,7 +8,7 @@
 
 ## Why This Matters
 
-The docs and codebase still treat Mission Control as transitional — merging queue, orchestrator, and Temporal sources with mixed-source views described as "a convenience rather than a true source of truth." That was useful during migration, but it now:
+The docs and codebase still treat Mission Control as transitional — merging queue, system, and Temporal sources with mixed-source views described as "a convenience rather than a true source of truth." That was useful during migration, but it now:
 
 - **Weakens the "one control plane" story** — operators see multiple sources instead of a unified model.
 - **Adds permanent UI and API complexity** — dashboard view model, routing, status maps, pagination, and compatibility adapters all branch on `source`.
@@ -25,10 +25,10 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - `MoonMind.Run` and `MoonMind.AgentRun` workflows handle managed + external agent execution
 - `/api/executions` adapter surface exists with full CRUD + signal/cancel
 - `TemporalExecutionRecord` projection row with sync metadata
-- Orchestrator code already deleted from `moonmind/workflows/orchestrator/` (only `__pycache__` remains)
-- Orchestrator DB tables dropped via migration `c1d2e3f4a5b6`
+- system code already deleted from `moonmind/workflows/system/` (only `__pycache__` remains)
+- system DB tables dropped via migration `c1d2e3f4a5b6`
 - External Runs tab removed from dashboard
-- Orchestrator submissions rejected with error in `dashboard.js`
+- system submissions rejected with error in `dashboard.js`
 
 ### What Still References Legacy Sources ⚠️
 
@@ -39,33 +39,33 @@ The target state is clean: **Temporal owns execution truth. Period.**
 | Task compatibility router | [task_compatibility.py](../../api_service/api/routers/task_compatibility.py) | `source` filter accepts `queue` literal, `source_hint` accepts `queue` |
 | Queue router | [agent_queue.py](../../api_service/api/routers/agent_queue.py) | Full queue API: `/api/queue/jobs`, `/api/tasks`, etc. |
 | Agent queue module | [moonmind/workflows/agent_queue/](../../moonmind/workflows/agent_queue/) | `service.py` (112 KB), `repositories.py` (50 KB), `models.py`, `task_contract.py` (48 KB), etc. |
-| Task routing | [routing.py](../../moonmind/workflows/tasks/routing.py) | References to orchestrator |
-| Automation orchestrator | [orchestrator.py](../../moonmind/workflows/automation/orchestrator.py) | Automation-level orchestration code |
-| Settings | [settings.py](../../moonmind/config/settings.py) | Queue/orchestrator config entries |
+| Task routing | [routing.py](../../moonmind/workflows/tasks/routing.py) | References to system |
+| Automation system | [system.py](../../moonmind/workflows/automation/system.py) | Automation-level orchestration code |
+| Settings | [settings.py](../../moonmind/config/settings.py) | Queue/system config entries |
 
 #### Frontend (dashboard.js)
 | Area | Legacy Reference |
 |------|-----------------|
-| Route matching | `orchestratorDetailMatch`, `/tasks/orchestrator/` routes |
-| Submit form | `validateOrchestratorSubmission`, `normalizeOrchestratorPriority`, `showOrchestratorFields` |
-| Source resolution | `explicitSource === "orchestrator"` branches |
-| Status maps | Consumes `queue` and `orchestrator` maps from runtime config |
+| Route matching | `systemDetailMatch`, `/tasks/system/` routes |
+| Submit form | `validatesystemSubmission`, `normalizesystemPriority`, `showsystemFields` |
+| Source resolution | `explicitSource === "system"` branches |
+| Status maps | Consumes `queue` and `system` maps from runtime config |
 
 #### Tests
 | Area | Files |
 |------|-------|
-| Queue layout fixtures | [queue_rows.js](../../tests/task_dashboard/__fixtures__/queue_rows.js) — `createOrchestratorRow()` |
-| Submit runtime tests | [test_submit_runtime.js](../../tests/task_dashboard/test_submit_runtime.js) — orchestrator validation, priority, UI state |
-| Queue layout tests | [test_queue_layouts.js](../../tests/task_dashboard/test_queue_layouts.js) — orchestrator row rendering |
+| Queue layout fixtures | [queue_rows.js](../../tests/task_dashboard/__fixtures__/queue_rows.js) — `createsystemRow()` |
+| Submit runtime tests | [test_submit_runtime.js](../../tests/task_dashboard/test_submit_runtime.js) — system validation, priority, UI state |
+| Queue layout tests | [test_queue_layouts.js](../../tests/task_dashboard/test_queue_layouts.js) — system row rendering |
 | View model tests | [test_task_dashboard_view_model.py](../../tests/unit/api/routers/test_task_dashboard_view_model.py) |
-| Orchestrator removal coverage | [test_doc_req_coverage.py](../../tests/unit/orchestrator_removal/test_doc_req_coverage.py) |
+| system removal coverage | [test_doc_req_coverage.py](../../tests/unit/orchestrator_removal/test_doc_req_coverage.py) |
 
 #### Docs
 | Document | Issue |
 |----------|-------|
 | [SourceOfTruthAndProjectionModel.md](../Temporal/SourceOfTruthAndProjectionModel.md) | Describes mixed-source as "migration stance", projection as "temporary implementation posture" |
-| [TaskExecutionCompatibilityModel.md](../Temporal/TaskExecutionCompatibilityModel.md) | Lists `queue`, `orchestrator`, `temporal` as execution sources; multi-source pagination rules |
-| [VisibilityAndUiQueryModel.md](../Temporal/VisibilityAndUiQueryModel.md) | References mixed-source pages, `queue`/`orchestrator` dashboard sources |
+| [TaskExecutionCompatibilityModel.md](../Temporal/TaskExecutionCompatibilityModel.md) | Lists `queue`, `system`, `temporal` as execution sources; multi-source pagination rules |
+| [VisibilityAndUiQueryModel.md](../Temporal/VisibilityAndUiQueryModel.md) | References mixed-source pages, `queue`/`system` dashboard sources |
 | [OrchestratorRemovalPlan.md](OrchestratorRemovalPlan.md) | Partially executed plan, tracked as H.1 |
 
 ---
@@ -89,20 +89,20 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ### Phase 2 — Collapse Dashboard to Single Source
 
-**Objective:** Remove `queue` and `orchestrator` as dashboard execution sources. All task list/detail goes through `temporal`.
+**Objective:** Remove `queue` and `system` as dashboard execution sources. All task list/detail goes through `temporal`.
 
 - [x] **2.1** Remove `sources.queue` from `build_runtime_config()` in `task_dashboard_view_model.py`
 - [x] **2.2** Remove `sources.manifests` queue-backed endpoint block (manifests should use Temporal source)
-- [x] **2.3** Remove `queue` and `orchestrator` from `_STATUS_MAPS` — only `proposals` and `temporal` remain
+- [x] **2.3** Remove `queue` and `system` from `_STATUS_MAPS` — only `proposals` and `temporal` remain
 - [x] **2.4** Simplify `normalize_status()` — single mapping for Temporal states
-- [x] **2.5** In `dashboard.js`: remove orchestrator route matching, form validation stubs, priority normalization, UI state branches
+- [x] **2.5** In `dashboard.js`: remove system route matching, form validation stubs, priority normalization, UI state branches
 - [x] **2.6** In `dashboard.js`: remove queue source fetcher/renderer code; point all task list/detail at Temporal endpoints
 - [x] **2.7** Remove `source` filter from compatibility APIs (always `temporal`) or deprecate the parameter
-- [x] **2.8** Update test fixtures: remove `createOrchestratorRow()`, `createQueueRow()`, update to Temporal-only rows
-- [x] **2.9** Update submit runtime tests to remove orchestrator validation/priority tests
+- [x] **2.8** Update test fixtures: remove `createsystemRow()`, `createQueueRow()`, update to Temporal-only rows
+- [x] **2.9** Update submit runtime tests to remove system validation/priority tests
 - [x] **2.10** Update view model tests for single-source config
 
-> **Gate:** Dashboard renders from Temporal source only. No `queue`/`orchestrator` branching in frontend or view model.
+> **Gate:** Dashboard renders from Temporal source only. No `queue`/`system` branching in frontend or view model.
 
 ---
 
@@ -114,12 +114,12 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [ ] **3.2** Delete `moonmind/workflows/agent_queue/` module (~250 KB of service, repository, model, contract code)
 - [ ] **3.3** Remove queue-related DB models and generate Alembic migration to drop queue tables
 - [ ] **3.4** Remove queue environment variables from settings (`MOONMIND_QUEUE`, `defaultQueue`, `queueEnv`)
-- [x] **3.5** Remove `moonmind/workflows/orchestrator/` directory (empty except `__pycache__`)
+- [x] **3.5** Remove `moonmind/workflows/system/` directory (empty except `__pycache__`)
 - [ ] **3.6** Remove `tests/unit/orchestrator_removal/` directory (removal is now complete)
 - [ ] **3.7** Remove queue-related integration tests and contract tests
-- [ ] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/orchestrator exports
+- [ ] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/system exports
 
-> **Gate:** `agent_queue` and `orchestrator` modules are deleted. No queue tables in DB schema.
+> **Gate:** `agent_queue` and `system` modules are deleted. No queue tables in DB schema.
 
 ---
 
@@ -144,11 +144,11 @@ The target state is clean: **Temporal owns execution truth. Period.**
 **Objective:** Remove transitional language from architecture docs.
 
 - [ ] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; promote steady-state as the only contract
-- [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`orchestrator` source definitions, multi-source pagination rules; simplify to Temporal-only or archive the doc
+- [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`system` source definitions, multi-source pagination rules; simplify to Temporal-only or archive the doc
 - [ ] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source references, retire multi-source pagination section
 - [ ] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — fully superseded
-- [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/orchestrator references remain
-- [ ] **5.6** Update Roadmap: close H.1 (orchestrator removal) and mark this plan's items as done
+- [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/system references remain
+- [ ] **5.6** Update Roadmap: close H.1 (system removal) and mark this plan's items as done
 - [ ] **5.7** Delete this document once complete
 
 ---
@@ -165,7 +165,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ## Relationship to Roadmap
 
-This plan **subsumes and extends** Housekeeping item **H.1** (Complete orchestrator removal). It goes further by also removing the queue substrate and collapsing the compatibility layer.
+This plan **subsumes and extends** Housekeeping item **H.1** (Complete system removal). It goes further by also removing the queue substrate and collapsing the compatibility layer.
 
 Successful completion delivers:
 - ✅ One task model (Temporal workflow execution)

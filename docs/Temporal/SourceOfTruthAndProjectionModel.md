@@ -66,7 +66,7 @@ This document does **not** define:
 - worker fleet topology
 - direct UI component design
 - detailed auth policy beyond ownership invariants
-- legacy queue/orchestrator persistence internals except where they intersect with compatibility surfaces
+- legacy queue/system persistence internals except where they intersect with compatibility surfaces
 
 ---
 
@@ -94,7 +94,7 @@ A compatibility surface is any API or UI path that continues to use MoonMind tas
 Examples include:
 
 - `/tasks/*`
-- transitional orchestrator/task views
+- transitional system/task views
 - task-oriented dashboard list/detail models
 
 ### 4.4 Reconciliation
@@ -133,7 +133,7 @@ For **Temporal-managed work**, MoonMind should treat systems of record as follow
 During migration, MoonMind may temporarily use Postgres projections as:
 
 - a local read model for APIs not yet moved to direct Temporal reads
-- a compatibility join layer across queue/orchestrator/Temporal sources
+- a compatibility join layer across queue/system/Temporal sources
 - a degraded-mode cache
 - a staging implementation while Temporal worker wiring is still being completed
 

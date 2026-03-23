@@ -56,7 +56,7 @@ _STATIC_PATHS = {
 _PATH_ALIASES = {
     "create": "new",
 }
-_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "orchestrator", "temporal"}
+_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "temporal"}
 
 
 class DashboardSkillOption(BaseModel):
@@ -286,11 +286,9 @@ async def list_dashboard_skills(
 
     worker_skills = list(list_available_skill_names())
     legacy_sorted = sorted(set(worker_skills), key=str)
-    # Empty orchestrator bucket keeps the response shape stable for older dashboard bundles.
     return DashboardSkillListResponse(
         items={
             "worker": worker_skills,
-            "orchestrator": [],
         },
         legacyItems=[DashboardSkillOption(id=skill_id) for skill_id in legacy_sorted],
     )

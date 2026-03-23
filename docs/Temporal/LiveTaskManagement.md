@@ -50,7 +50,7 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 - **DISABLED**: No live session has been provisioned.
 - **STARTING**: Worker created the socket and is waiting for tmate endpoints.
 - **READY**: RO endpoint is advertised; RW endpoint stored encrypted.
-- **REVOKED**: Orchestrator explicitly shut down the session.
+- **REVOKED**: system explicitly shut down the session.
 - **ENDED**: Workflow completed; worker tore down the session normally.
 - **ERROR**: tmate setup failed; the agent keeps running headless.
 
@@ -60,7 +60,7 @@ To support this for local subprocesses without Docker, the `ManagedRuntimeLaunch
 
 1. **Launcher Update**: Instead of calling `asyncio.create_subprocess_exec(['gemini', ...])` directly, the launcher wraps the command in a headless `tmate` session.
 2. **Metadata Extraction**: The launcher executes `tmate display -p` (or parses socket output) to extract the `ssh_ro`, `ssh_rw`, `web_ro`, and `web_rw` strings once the session is ready.
-3. **Database Hook**: The launcher reports these connection strings back to the Temporal orchestrator or directly to the API, storing them in a `TaskRunLiveSession` record associated with the workflow's `run_id`.
+3. **Database Hook**: The launcher reports these connection strings back to the Temporal system or directly to the API, storing them in a `TaskRunLiveSession` record associated with the workflow's `run_id`.
 4. **UI Restoration**: The Unified Dashboard embeds the `web_ro` URL in the Live Output panel, restoring the high-fidelity terminal UI.
 
 ```bash
@@ -269,7 +269,7 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 }
 ```
 
-Log tailing should ship first as it requires only the RO endpoint and no new backend infrastructure beyond the existing live session system.
+Log tailing should ship first as it requires only the RO endpoint and no new backend infrastructure beyond the existing live session orchestrator.
 
 ---
 

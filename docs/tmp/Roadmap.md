@@ -254,7 +254,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 These are technical debt items that don't map to README claims but improve code quality and maintainability.
 
 ### Remaining tasks
-- [ ] **H.1** Complete orchestrator removal — Migration exists (`c1d2e3f4a5b6`), spec 087; code remnants still in `moonmind/workflows/orchestrator/`, `tests/integration/orchestrator/`, `tests/unit/workflows/orchestrator/`. See `docs/tmp/OrchestratorRemovalPlan.md` for full plan.
+- [ ] **H.1** Complete legacy system removal — Migration exists (`c1d2e3f4a5b6`), spec 087; code remnants still in `moonmind/workflows/system/`, `tests/integration/system/`, `tests/unit/workflows/system/`. See `docs/tmp/OrchestratorRemovalPlan.md` for full plan.
 - [ ] **H.2** Spec deduplication — Merge duplicate specs identified in `docs/tmp/SpecMergeReview.md`: Worker Pause (038/040), Claude gating (044/046), Manifest Phase 0 (032/034), Jules events (048 stub → delete), Task Presets (026/028)
 - [ ] **H.3** Legacy skill dispatch cleanup — Remove dead `tool.type == "skill"` branch in `run.py`; all current plan generators emit `agent_runtime` nodes. See `docs/tmp/skill-system-alignment.md`.
 - [ ] **H.4** Delete legacy docs identified in `docs/LegacyDocsReview.md` — 6 docs flagged for deletion (`CodexCliWorkers.md`, `GeminiCliWorkers.md`, `SpecKitAutomation.md`, etc.)

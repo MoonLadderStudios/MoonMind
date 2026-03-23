@@ -203,7 +203,7 @@ description: Master orchestrator to resolve a PR by diagnosing state and delegat
 # PR Resolver Skill
 
 ## Purpose
-You are the master orchestrator for finishing Pull Requests. You diagnose the PR state using a snapshot script and resolve issues by reading and executing the instructions of specialized sub-skills (`fix-merge-conflicts`, `fix-ci`, etc.).
+You are the Master orchestrator for finishing Pull Requests. You diagnose the PR state using a snapshot script and resolve issues by reading and executing the instructions of specialized sub-skills (`fix-merge-conflicts`, `fix-ci`, etc.).
 
 ## Inputs (skill args)
 - inputs.repo (optional)
