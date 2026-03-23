@@ -1259,7 +1259,14 @@ async def list_executions(
             query_str = " AND ".join(query_parts) if query_parts else ""
 
             import base64
-            token_bytes = base64.b64decode(next_page_token) if next_page_token else None
+
+            token_bytes = None
+            if next_page_token:
+                try:
+                    token_bytes = base64.urlsafe_b64decode(next_page_token)
+                except Exception:
+                    # Fallback for legacy tokens that may not be URL-safe
+                    token_bytes = base64.b64decode(next_page_token)
 
             count_info = await client.count_workflows(query=query_str)
 
@@ -1286,7 +1293,9 @@ async def list_executions(
 
             new_token_str = None
             if iterator.next_page_token:
-                new_token_str = base64.b64encode(iterator.next_page_token).decode("utf-8")
+                new_token_str = base64.urlsafe_b64encode(iterator.next_page_token).decode(
+                    "utf-8"
+                )
 
             return ExecutionListResponse(
                 items=items,
@@ -1354,7 +1363,7 @@ async def list_executions(
         degraded_count=False,
         refreshed_at=max(
             (_compatibility_refreshed_at(item) for item in result.items),
-            default=None,
+            default=datetime.now(UTC),
         ),
     )
 

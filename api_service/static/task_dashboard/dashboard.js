@@ -3423,7 +3423,7 @@
     const parsedLimit = Number(params.get("limit") || DEFAULT_QUEUE_PAGE_SIZE);
     return {
       limit: QUEUE_PAGE_SIZE_OPTIONS.includes(parsedLimit) ? parsedLimit : DEFAULT_QUEUE_PAGE_SIZE,
-      cursor: String(params.get("cursor") || "").trim() || null,
+      cursor: (String(params.get("nextPageToken") || "").trim() || String(params.get("cursor") || "").trim()) || null,
     };
   }
 
@@ -3448,6 +3448,9 @@
   async function renderQueueListPage() {
     const initialQuery = new URLSearchParams(window.location.search || "");
     const initialSource = String(initialQuery.get("source") || "").trim().toLowerCase();
+    if (initialSource === "temporal" && !filterState.source) {
+      filterState.source = "temporal";
+    }
     const initialPagination = parseQueuePaginationFromSearch(window.location.search || "");
     const initialFilterRuntime = String(initialQuery.get("filterRuntime") || "").trim().toLowerCase();
     const initialTemporalToken = String(initialQuery.get("nextPageToken") || "").trim() || null;
