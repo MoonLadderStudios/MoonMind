@@ -36,11 +36,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract platform pair
-        id: platform
+      - name: Prepare build metadata
+        id: meta
         run: |
           platform=${{ matrix.platform }}
           echo "pair=${platform//\//-}" >> $GITHUB_OUTPUT
+          echo "image_name=$(echo '${{ env.REGISTRY_IMAGE }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
       - name: Build and push by digest
         id: build
@@ -52,9 +53,9 @@ jobs:
             INSTALL_CODEX_CLI=true
             INSTALL_GEMINI_CLI=true
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=build-${{ steps.platform.outputs.pair }}
-          cache-to: type=gha,scope=build-${{ steps.platform.outputs.pair }},mode=max
+          outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=build-${{ steps.meta.outputs.pair }}
+          cache-to: type=gha,scope=build-${{ steps.meta.outputs.pair }},mode=max
 
       - name: Export digest
         run: |
@@ -65,7 +66,7 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ steps.platform.outputs.pair }}
+          name: digests-${{ steps.meta.outputs.pair }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
