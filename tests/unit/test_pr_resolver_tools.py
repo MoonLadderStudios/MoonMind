@@ -807,3 +807,83 @@ def test_summarize_ci_head_checks_propagate_failures(
     assert summary["nonSecurityCheckCount"] == 1
     assert len(summary["failedChecks"]) == 1
     assert summary["failedChecks"][0]["name"] == "test"
+
+
+def test_finalize_already_merged_pr_returns_already_merged(
+    pr_resolve_finalize_module: dict[str, Any],
+) -> None:
+    evaluate_finalize_action = pr_resolve_finalize_module["evaluate_finalize_action"]
+
+    decision = evaluate_finalize_action(
+        {
+            "pr": {
+                "state": "MERGED",
+                "mergeable": "UNKNOWN",
+                "mergeStateStatus": "UNKNOWN",
+            },
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True, "source": "fixture"},
+            "commentsSummary": {
+                "hasActionableComments": False,
+                "includeBotReviewComments": True,
+            },
+        }
+    )
+
+    assert decision == {"action": "already_merged", "reason": "already_merged"}
+
+
+def test_finalize_pr_not_found_but_merged_succeeds(
+    pr_resolve_finalize_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """When snapshot refresh fails but the PR is actually merged,
+    finalize should report status=merged and exit with EXIT_CODE_MERGED."""
+    import subprocess as _subprocess
+
+    main = pr_resolve_finalize_module["main"]
+    globals_dict = main.__globals__
+    exit_code_merged = pr_resolve_finalize_module["EXIT_CODE_MERGED"]
+    exit_code_failed = pr_resolve_finalize_module["EXIT_CODE_FAILED"]
+
+    # Simulate snapshot refresh failure with EXIT_CODE_FAILED
+    def _boom(
+        _snapshot_script: Path,
+        _pr: str | None,
+        _snapshot_path: Path,
+    ) -> None:
+        raise _subprocess.CalledProcessError(
+            returncode=int(exit_code_failed),
+            cmd=["python3", "pr_resolve_snapshot.py"],
+            output="",
+            stderr="no pull requests found",
+        )
+
+    monkeypatch.setitem(globals_dict, "_run_snapshot", _boom)
+
+    # Simulate _check_pr_merged returning True (PR was merged)
+    monkeypatch.setitem(globals_dict, "_check_pr_merged", lambda _selector: True)
+
+    result_path = tmp_path / "pr_resolver_result.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pr_resolve_finalize.py",
+            "--pr",
+            "123",
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main()
+    assert int(raised.value.code) == int(exit_code_merged)
+
+    import json
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "merged"
+    assert payload["reason"] == "already_merged"
+    assert payload["merge_outcome"] == "merged"
