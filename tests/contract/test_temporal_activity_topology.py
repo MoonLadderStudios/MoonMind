@@ -39,6 +39,7 @@ def test_temporal_activity_topology_contract_uses_canonical_v1_queue_set() -> No
         "mm.activity.llm",
         "mm.activity.sandbox",
         "mm.activity.integrations",
+        "mm.activity.agent_runtime",
     }
 
 

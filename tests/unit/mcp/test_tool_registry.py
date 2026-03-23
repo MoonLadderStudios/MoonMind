@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-pytestmark = pytest.mark.skip(reason='Queue tool registry has been removed')
+
 
 import base64
 from datetime import UTC, datetime

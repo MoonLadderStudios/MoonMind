@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-pytestmark = pytest.mark.skip(reason='Queue MCP tools have been removed')
+
 
 from datetime import UTC, datetime
 from types import SimpleNamespace

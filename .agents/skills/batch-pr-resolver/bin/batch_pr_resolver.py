@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skill
 
 
 logger = logging.getLogger(__name__)
