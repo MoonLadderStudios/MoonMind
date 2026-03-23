@@ -489,8 +489,7 @@ class MoonMindAgentRun:
                         )
                         await parent_handle.signal(
                             "child_state_changed",
-                            "awaiting",
-                            f"Waiting for auth profile slot on {runtime_id}"
+                            args=["awaiting", f"Waiting for auth profile slot on {runtime_id}"]
                         )
 
                     try:
@@ -510,8 +509,7 @@ class MoonMindAgentRun:
                         )
                         await parent_handle.signal(
                             "child_state_changed",
-                            "launching",
-                            f"Slot acquired for {runtime_id}"
+                            args=["launching", f"Slot acquired for {runtime_id}"]
                         )
                     request.execution_profile_ref = self._assigned_profile_id
 
