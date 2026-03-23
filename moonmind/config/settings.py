@@ -25,11 +25,11 @@ _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 class DatabaseSettings(BaseSettings):
     """Database settings"""
 
-    POSTGRES_HOST: str = Field("moonmind-api-db", env="POSTGRES_HOST")
-    POSTGRES_USER: str = Field("postgres", env="POSTGRES_USER")
-    POSTGRES_PASSWORD: str = Field("password", env="POSTGRES_PASSWORD")
-    POSTGRES_DB: str = Field("moonmind", env="POSTGRES_DB")
-    POSTGRES_PORT: int = Field(5432, env="POSTGRES_PORT")
+    POSTGRES_HOST: str = Field("moonmind-api-db", alias="POSTGRES_HOST")
+    POSTGRES_USER: str = Field("postgres", alias="POSTGRES_USER")
+    POSTGRES_PASSWORD: str = Field("password", alias="POSTGRES_PASSWORD")
+    POSTGRES_DB: str = Field("moonmind", alias="POSTGRES_DB")
+    POSTGRES_PORT: int = Field(5432, alias="POSTGRES_PORT")
 
     @property
     def POSTGRES_URL(self) -> str:
@@ -42,13 +42,12 @@ class DatabaseSettings(BaseSettings):
         return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
-
 
 
 class TemporalSettings(BaseSettings):
@@ -82,7 +81,7 @@ class TemporalSettings(BaseSettings):
     )
     temporal_authoritative_read_enabled: bool = Field(
         False,
-        env="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
+        alias="TEMPORAL_AUTHORITATIVE_READ_ENABLED",
     )
     workflow_worker_concurrency: int | None = Field(
         8,
@@ -147,6 +146,7 @@ class TemporalSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
@@ -157,7 +157,14 @@ class TemporalSettings(BaseSettings):
     @classmethod
     def _normalize_worker_fleet(cls, value: Any) -> str:
         normalized = str(value or "workflow").strip().lower()
-        allowed = {"workflow", "artifacts", "llm", "sandbox", "integrations", "agent_runtime"}
+        allowed = {
+            "workflow",
+            "artifacts",
+            "llm",
+            "sandbox",
+            "integrations",
+            "agent_runtime",
+        }
         if normalized not in allowed:
             raise ValueError(
                 "TEMPORAL_WORKER_FLEET must be one of "
@@ -171,93 +178,77 @@ class TemporalDashboardSettings(BaseSettings):
 
     enabled: bool = Field(
         True,
-        env="TEMPORAL_DASHBOARD_ENABLED",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ENABLED"),
     )
     list_enabled: bool = Field(
         True,
-        env="TEMPORAL_DASHBOARD_LIST_ENABLED",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENABLED"),
     )
     detail_enabled: bool = Field(
         True,
-        env="TEMPORAL_DASHBOARD_DETAIL_ENABLED",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DETAIL_ENABLED"),
     )
     actions_enabled: bool = Field(
         True,
-        env="TEMPORAL_DASHBOARD_ACTIONS_ENABLED",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ACTIONS_ENABLED"),
     )
     submit_enabled: bool = Field(
         True,
-        env="TEMPORAL_DASHBOARD_SUBMIT_ENABLED",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SUBMIT_ENABLED"),
     )
     debug_fields_enabled: bool = Field(
         False,
-        env="TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DEBUG_FIELDS_ENABLED"),
     )
     list_endpoint: str = Field(
         "/api/executions",
-        env="TEMPORAL_DASHBOARD_LIST_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_LIST_ENDPOINT"),
     )
     create_endpoint: str = Field(
         "/api/executions",
-        env="TEMPORAL_DASHBOARD_CREATE_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_CREATE_ENDPOINT"),
     )
     detail_endpoint: str = Field(
         "/api/executions/{workflowId}",
-        env="TEMPORAL_DASHBOARD_DETAIL_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_DETAIL_ENDPOINT"),
     )
     update_endpoint: str = Field(
         "/api/executions/{workflowId}/update",
-        env="TEMPORAL_DASHBOARD_UPDATE_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_UPDATE_ENDPOINT"),
     )
     signal_endpoint: str = Field(
         "/api/executions/{workflowId}/signal",
-        env="TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_SIGNAL_ENDPOINT"),
     )
     cancel_endpoint: str = Field(
         "/api/executions/{workflowId}/cancel",
-        env="TEMPORAL_DASHBOARD_CANCEL_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_CANCEL_ENDPOINT"),
     )
     artifacts_endpoint: str = Field(
         "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
-        env="TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACTS_ENDPOINT"),
     )
     artifact_create_endpoint: str = Field(
         "/api/artifacts",
-        env="TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_CREATE_ENDPOINT"),
     )
     artifact_metadata_endpoint: str = Field(
         "/api/artifacts/{artifactId}",
-        env="TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_METADATA_ENDPOINT"),
     )
     artifact_presign_download_endpoint: str = Field(
         "/api/artifacts/{artifactId}/presign-download",
-        env="TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT",
         validation_alias=AliasChoices(
             "TEMPORAL_DASHBOARD_ARTIFACT_PRESIGN_DOWNLOAD_ENDPOINT"
         ),
     )
     artifact_download_endpoint: str = Field(
         "/api/artifacts/{artifactId}/download",
-        env="TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT",
         validation_alias=AliasChoices("TEMPORAL_DASHBOARD_ARTIFACT_DOWNLOAD_ENDPOINT"),
     )
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
@@ -270,24 +261,14 @@ class WorkflowSettings(BaseSettings):
 
     repo_root: str = Field(
         ".",
-        env=("WORKFLOW_REPO_ROOT",),
         validation_alias=AliasChoices("WORKFLOW_REPO_ROOT"),
     )
     tasks_root: str = Field(
         "specs",
-        env=("WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"
-        ),
+        validation_alias=AliasChoices("WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"),
     )
     artifacts_root: str = Field(
         "var/artifacts/workflows",
-        env=(
-            "WORKFLOW_ARTIFACT_ROOT",
-            "WORKFLOW_ARTIFACTS_ROOT",
-            "WORKFLOW_ARTIFACT_ROOT",
-            "WORKFLOW_ARTIFACTS_ROOT",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_ARTIFACT_ROOT",
             "WORKFLOW_ARTIFACTS_ROOT",
@@ -298,15 +279,11 @@ class WorkflowSettings(BaseSettings):
     )
     agent_job_artifact_root: str = Field(
         "var/artifacts/agent_jobs",
-        env="AGENT_JOB_ARTIFACT_ROOT",
+        alias="AGENT_JOB_ARTIFACT_ROOT",
         description="Filesystem location where agent queue artifacts are persisted.",
     )
     temporal_artifact_root: str = Field(
         "var/artifacts/temporal_artifacts",
-        env=(
-            "TEMPORAL_ARTIFACT_ROOT",
-            "TEMPORAL_ARTIFACTS_ROOT",
-        ),
         validation_alias=AliasChoices(
             "TEMPORAL_ARTIFACT_ROOT",
             "TEMPORAL_ARTIFACTS_ROOT",
@@ -315,13 +292,11 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_backend: str = Field(
         "s3",
-        env="TEMPORAL_ARTIFACT_BACKEND",
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_BACKEND"),
         description="Artifact blob backend for Temporal runtime (s3 or local_fs).",
     )
     temporal_artifact_s3_endpoint: str = Field(
         "http://minio:9000",
-        env=("TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"),
         validation_alias=AliasChoices(
             "TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"
         ),
@@ -329,13 +304,11 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_s3_bucket: str = Field(
         "moonmind-temporal-artifacts",
-        env=("TEMPORAL_ARTIFACT_S3_BUCKET", "MINIO_BUCKET"),
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_BUCKET", "MINIO_BUCKET"),
         description="S3 bucket used to persist Temporal artifact bytes.",
     )
     temporal_artifact_s3_access_key_id: str = Field(
         "minioadmin",
-        env=("TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID", "MINIO_ACCESS_KEY"),
         validation_alias=AliasChoices(
             "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID",
             "MINIO_ACCESS_KEY",
@@ -344,7 +317,6 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_s3_secret_access_key: str = Field(
         "minioadmin",
-        env=("TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY", "MINIO_SECRET_KEY"),
         validation_alias=AliasChoices(
             "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY",
             "MINIO_SECRET_KEY",
@@ -353,39 +325,33 @@ class WorkflowSettings(BaseSettings):
     )
     temporal_artifact_s3_region: str = Field(
         "us-east-1",
-        env="TEMPORAL_ARTIFACT_S3_REGION",
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_REGION"),
         description="Region hint for S3-compatible artifact backend.",
     )
     temporal_artifact_s3_use_ssl: bool = Field(
         False,
-        env="TEMPORAL_ARTIFACT_S3_USE_SSL",
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_S3_USE_SSL"),
         description="Whether S3-compatible artifact endpoint requires TLS.",
     )
     temporal_artifact_default_namespace: str = Field(
         "moonmind",
-        env="TEMPORAL_NAMESPACE",
         validation_alias=AliasChoices("TEMPORAL_NAMESPACE"),
         description="Default namespace prefix used for Temporal artifact storage keys.",
     )
     temporal_artifact_presign_ttl_seconds: int = Field(
         15 * 60,
-        env="TEMPORAL_ARTIFACT_PRESIGN_TTL_SECONDS",
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_PRESIGN_TTL_SECONDS"),
         description="TTL in seconds for local-dev artifact download/upload URL hints.",
         ge=1,
     )
     temporal_artifact_direct_upload_max_bytes: int = Field(
         10 * 1024 * 1024,
-        env="TEMPORAL_ARTIFACT_DIRECT_UPLOAD_MAX_BYTES",
         validation_alias=AliasChoices("TEMPORAL_ARTIFACT_DIRECT_UPLOAD_MAX_BYTES"),
         description="Maximum local-dev direct upload payload size in bytes.",
         gt=0,
     )
     temporal_artifact_lifecycle_hard_delete_after_seconds: int = Field(
         3600,
-        env="TEMPORAL_ARTIFACT_LIFECYCLE_HARD_DELETE_AFTER_SECONDS",
         validation_alias=AliasChoices(
             "TEMPORAL_ARTIFACT_LIFECYCLE_HARD_DELETE_AFTER_SECONDS"
         ),
@@ -396,75 +362,69 @@ class WorkflowSettings(BaseSettings):
     )
     agent_job_artifact_max_bytes: int = Field(
         50 * 1024 * 1024,
-        env="AGENT_JOB_ARTIFACT_MAX_BYTES",
+        alias="AGENT_JOB_ARTIFACT_MAX_BYTES",
         description="Maximum allowed artifact upload size in bytes for queue jobs.",
         gt=0,
     )
     agent_job_attachment_enabled: bool = Field(
         False,
-        env="AGENT_JOB_ATTACHMENT_ENABLED",
+        alias="AGENT_JOB_ATTACHMENT_ENABLED",
         description="Toggle for allowing input image attachments during queue job creation.",
     )
     agent_job_attachment_max_count: int = Field(
         10,
-        env="AGENT_JOB_ATTACHMENT_MAX_COUNT",
+        alias="AGENT_JOB_ATTACHMENT_MAX_COUNT",
         description="Maximum number of input attachments permitted per job.",
         ge=0,
     )
     agent_job_attachment_max_bytes: int = Field(
         10 * 1024 * 1024,
-        env="AGENT_JOB_ATTACHMENT_MAX_BYTES",
+        alias="AGENT_JOB_ATTACHMENT_MAX_BYTES",
         description="Maximum size (bytes) for a single input attachment.",
         gt=0,
     )
     agent_job_attachment_total_bytes: int = Field(
         25 * 1024 * 1024,
-        env="AGENT_JOB_ATTACHMENT_TOTAL_BYTES",
+        alias="AGENT_JOB_ATTACHMENT_TOTAL_BYTES",
         description="Maximum combined size (bytes) for all input attachments for a job.",
         gt=0,
     )
     agent_job_attachment_allowed_content_types: Annotated[tuple[str, ...], NoDecode] = (
         Field(
             ("image/png", "image/jpeg", "image/webp"),
-            env="AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
             validation_alias=AliasChoices("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES"),
             description="Allowed MIME types for input attachments.",
         )
     )
     vision_context_enabled: bool = Field(
         True,
-        env="MOONMIND_VISION_CONTEXT_ENABLED",
         validation_alias=AliasChoices("MOONMIND_VISION_CONTEXT_ENABLED"),
         description="Enable attachment vision context generation during worker prepare stages.",
     )
     vision_provider: str = Field(
         "gemini_cli",
-        env="MOONMIND_VISION_PROVIDER",
         validation_alias=AliasChoices("MOONMIND_VISION_PROVIDER"),
         description="Vision provider identifier (gemini, openai, anthropic, off).",
     )
     vision_model: str = Field(
         "models/gemini-2.5-flash",
-        env="MOONMIND_VISION_MODEL",
         validation_alias=AliasChoices("MOONMIND_VISION_MODEL"),
         description="Default caption/OCR model for the configured provider.",
     )
     vision_max_tokens: int = Field(
         512,
-        env="MOONMIND_VISION_MAX_TOKENS",
         validation_alias=AliasChoices("MOONMIND_VISION_MAX_TOKENS"),
         ge=64,
         description="Maximum token budget allocated per vision prompt batch.",
     )
     vision_ocr_enabled: bool = Field(
         True,
-        env="MOONMIND_VISION_OCR_ENABLED",
         validation_alias=AliasChoices("MOONMIND_VISION_OCR_ENABLED"),
         description="Toggle OCR extraction when rendering image context.",
     )
     agent_job_max_runtime_seconds: int = Field(
         4 * 3600,
-        env="AGENT_JOB_MAX_RUNTIME_SECONDS",
+        alias="AGENT_JOB_MAX_RUNTIME_SECONDS",
         description=(
             "Maximum wall-clock runtime (seconds) a queue job may run before it is"
             " automatically timed out."
@@ -473,7 +433,7 @@ class WorkflowSettings(BaseSettings):
     )
     agent_job_stale_lease_grace_seconds: int = Field(
         300,
-        env="AGENT_JOB_STALE_LEASE_GRACE_SECONDS",
+        alias="AGENT_JOB_STALE_LEASE_GRACE_SECONDS",
         description=(
             "Grace period (seconds) after a lease expires before the job is reported"
             " as stale-running to operators."
@@ -482,15 +442,11 @@ class WorkflowSettings(BaseSettings):
     )
     allow_manifest_path_source: bool = Field(
         False,
-        env="MOONMIND_ALLOW_MANIFEST_PATH_SOURCE",
+        alias="MOONMIND_ALLOW_MANIFEST_PATH_SOURCE",
         description="Allow manifest.source.kind='path' submissions (intended for dev/test images).",
     )
     manifest_required_capabilities: tuple[str, ...] = Field(
         ("manifest",),
-        env=(
-            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
-            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
             "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES",
@@ -499,15 +455,12 @@ class WorkflowSettings(BaseSettings):
     )
     job_image: str = Field(
         "ghcr.io/moonladderstudios/moonmind:latest",
-        env=("WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"
-        ),
+        validation_alias=AliasChoices("WORKFLOW_JOB_IMAGE", "WORKFLOW_JOB_IMAGE"),
         description="Container image used for workflow automation job executions.",
     )
     workspace_root: str = Field(
         "/work",
-        env="WORKFLOW_WORKSPACE_ROOT",
+        alias="WORKFLOW_WORKSPACE_ROOT",
         description="Host-mounted root directory for workflow automation workspaces.",
     )
     default_queue: str = Field(
@@ -527,22 +480,26 @@ class WorkflowSettings(BaseSettings):
     )
     metrics_enabled: bool = Field(
         False,
-        env=("WORKFLOW_METRICS_ENABLED", "WORKFLOW_METRICS_ENABLED"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_METRICS_ENABLED", "WORKFLOW_METRICS_ENABLED"
+        ),
         description="Toggle emission of workflow automation StatsD metrics.",
     )
     metrics_host: Optional[str] = Field(
         None,
-        env=("WORKFLOW_METRICS_HOST", "WORKFLOW_METRICS_HOST"),
+        validation_alias=AliasChoices("WORKFLOW_METRICS_HOST", "WORKFLOW_METRICS_HOST"),
         description="Hostname for the StatsD metrics sink (optional).",
     )
     metrics_port: Optional[int] = Field(
         None,
-        env=("WORKFLOW_METRICS_PORT", "WORKFLOW_METRICS_PORT"),
+        validation_alias=AliasChoices("WORKFLOW_METRICS_PORT", "WORKFLOW_METRICS_PORT"),
         description="Port for the StatsD metrics sink (optional).",
     )
     metrics_namespace: str = Field(
         "automation",
-        env=("WORKFLOW_METRICS_NAMESPACE", "WORKFLOW_METRICS_NAMESPACE"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_METRICS_NAMESPACE", "WORKFLOW_METRICS_NAMESPACE"
+        ),
         description="Namespace/prefix applied to emitted workflow automation metrics.",
     )
     default_feature_key: str = Field(
@@ -551,36 +508,30 @@ class WorkflowSettings(BaseSettings):
             "WORKFLOW_DEFAULT_FEATURE_KEY", "WORKFLOW_DEFAULT_FEATURE_KEY"
         ),
     )
-    codex_environment: Optional[str] = Field(None, env="CODEX_ENV")
+    codex_environment: Optional[str] = Field(None, alias="CODEX_ENV")
     codex_model: Optional[str] = Field(
         "gpt-5.3-codex",
-        env=("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
         validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
     )
     codex_effort: Optional[str] = Field(
         "high",
-        env=(
-            "MOONMIND_CODEX_EFFORT",
-            "CODEX_MODEL_REASONING_EFFORT",
-            "MODEL_REASONING_EFFORT",
-        ),
         validation_alias=AliasChoices(
             "MOONMIND_CODEX_EFFORT",
             "CODEX_MODEL_REASONING_EFFORT",
             "MODEL_REASONING_EFFORT",
         ),
     )
-    codex_profile: Optional[str] = Field(None, env="CODEX_PROFILE")
+    codex_profile: Optional[str] = Field(None, alias="CODEX_PROFILE")
     codex_shards: int = Field(
         3,
-        env="CODEX_SHARDS",
+        alias="CODEX_SHARDS",
         description="Number of Codex worker shards available for routing.",
         gt=0,
         le=64,
     )
     codex_queue: Optional[str] = Field(
         None,
-        env=(
+        validation_alias=AliasChoices(
             "MOONMIND_QUEUE",
             "WORKFLOW_CODEX_QUEUE",
             "WORKFLOW_CODEX_QUEUE",
@@ -590,36 +541,31 @@ class WorkflowSettings(BaseSettings):
     )
     codex_volume_name: Optional[str] = Field(
         None,
-        env="CODEX_VOLUME_NAME",
+        alias="CODEX_VOLUME_NAME",
         description="Docker volume providing persistent Codex authentication.",
     )
     claude_volume_name: Optional[str] = Field(
         None,
-        env="CLAUDE_VOLUME_NAME",
+        alias="CLAUDE_VOLUME_NAME",
         description="Docker volume providing persistent Claude authentication.",
     )
     claude_volume_path: Optional[str] = Field(
         None,
-        env="CLAUDE_VOLUME_PATH",
+        alias="CLAUDE_VOLUME_PATH",
         description="In-container path where Claude auth data is mounted.",
     )
     claude_home: Optional[str] = Field(
         None,
-        env="CLAUDE_HOME",
+        alias="CLAUDE_HOME",
         description="Claude CLI home directory used for persisted OAuth state.",
     )
     codex_login_check_image: Optional[str] = Field(
         None,
-        env="CODEX_LOGIN_CHECK_IMAGE",
+        alias="CODEX_LOGIN_CHECK_IMAGE",
         description="Override container image for Codex login status checks.",
     )
     default_task_runtime: str = Field(
         "codex",
-        env=(
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-            "MOONMIND_DEFAULT_TASK_RUNTIME",
-            "WORKFLOW_DEFAULT_TASK_RUNTIME",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_TASK_RUNTIME",
             "MOONMIND_DEFAULT_TASK_RUNTIME",
@@ -629,11 +575,6 @@ class WorkflowSettings(BaseSettings):
     )
     default_publish_mode: str = Field(
         "pr",
-        env=(
-            "WORKFLOW_DEFAULT_PUBLISH_MODE",
-            "MOONMIND_DEFAULT_PUBLISH_MODE",
-            "WORKFLOW_DEFAULT_PUBLISH_MODE",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_PUBLISH_MODE",
             "MOONMIND_DEFAULT_PUBLISH_MODE",
@@ -643,10 +584,6 @@ class WorkflowSettings(BaseSettings):
     )
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
-        env=(
-            "WORKFLOW_GITHUB_REPOSITORY",
-            "WORKFLOW_GITHUB_REPOSITORY",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_GITHUB_REPOSITORY",
             "WORKFLOW_GITHUB_REPOSITORY",
@@ -654,11 +591,6 @@ class WorkflowSettings(BaseSettings):
     )
     git_user_name: Optional[str] = Field(
         None,
-        env=(
-            "WORKFLOW_GIT_USER_NAME",
-            "WORKFLOW_GIT_USER_NAME",
-            "MOONMIND_GIT_USER_NAME",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_GIT_USER_NAME",
             "WORKFLOW_GIT_USER_NAME",
@@ -668,11 +600,6 @@ class WorkflowSettings(BaseSettings):
     )
     git_user_email: Optional[str] = Field(
         None,
-        env=(
-            "WORKFLOW_GIT_USER_EMAIL",
-            "WORKFLOW_GIT_USER_EMAIL",
-            "MOONMIND_GIT_USER_EMAIL",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_GIT_USER_EMAIL",
             "WORKFLOW_GIT_USER_EMAIL",
@@ -682,62 +609,61 @@ class WorkflowSettings(BaseSettings):
     )
     github_token: Optional[str] = Field(
         None,
-        env=("WORKFLOW_GITHUB_TOKEN", "WORKFLOW_GITHUB_TOKEN"),
-        validation_alias=AliasChoices(
-            "WORKFLOW_GITHUB_TOKEN", "WORKFLOW_GITHUB_TOKEN"
-        ),
+        validation_alias=AliasChoices("WORKFLOW_GITHUB_TOKEN", "WORKFLOW_GITHUB_TOKEN"),
     )
     test_mode: bool = Field(
         False,
-        env=("WORKFLOW_TEST_MODE", "WORKFLOW_TEST_MODE"),
         validation_alias=AliasChoices("WORKFLOW_TEST_MODE", "WORKFLOW_TEST_MODE"),
     )
     agent_backend: str = Field(
         "codex_cli",
-        env="WORKFLOW_AGENT_BACKEND",
+        alias="WORKFLOW_AGENT_BACKEND",
         description="Active agent backend identifier for workflow automation runs.",
     )
     allowed_agent_backends: tuple[str, ...] = Field(
         ("codex_cli",),
-        env="WORKFLOW_ALLOWED_AGENT_BACKENDS",
+        alias="WORKFLOW_ALLOWED_AGENT_BACKENDS",
         description="Whitelisted agent backend identifiers for workflow automation.",
     )
     agent_version: str = Field(
         "unspecified",
-        env="WORKFLOW_AGENT_VERSION",
+        alias="WORKFLOW_AGENT_VERSION",
         description="Version string recorded with the agent configuration snapshot.",
     )
     prompt_pack_version: Optional[str] = Field(
         None,
-        env="WORKFLOW_PROMPT_PACK_VERSION",
+        alias="WORKFLOW_PROMPT_PACK_VERSION",
         description="Prompt pack version associated with the selected agent.",
     )
     agent_runtime_env_keys: tuple[str, ...] = Field(
         ("CODEX_ENV", "CODEX_MODEL", "CODEX_PROFILE", "CODEX_API_KEY"),
-        env="WORKFLOW_AGENT_RUNTIME_ENV_KEYS",
+        alias="WORKFLOW_AGENT_RUNTIME_ENV_KEYS",
         description="Environment variable names forwarded to the agent runtime snapshot.",
     )
     skills_enabled: bool = Field(
         True,
-        env=("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS"),
+        validation_alias=AliasChoices("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS"),
         description="Enable skills-first orchestration policy for workflow stages.",
     )
     skills_shadow_mode: bool = Field(
         False,
-        env=("WORKFLOW_SKILLS_SHADOW_MODE", "WORKFLOW_SKILLS_SHADOW_MODE"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_SHADOW_MODE", "WORKFLOW_SKILLS_SHADOW_MODE"
+        ),
         description="Enable shadow-mode telemetry for skills orchestration.",
     )
     skills_fallback_enabled: bool = Field(
         True,
-        env=(
-            "WORKFLOW_SKILLS_FALLBACK_ENABLED",
-            "WORKFLOW_SKILLS_FALLBACK_ENABLED",
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_FALLBACK_ENABLED", "WORKFLOW_SKILLS_FALLBACK_ENABLED"
         ),
         description="Allow direct stage fallback when skill adapters fail.",
     )
     skills_canary_percent: int = Field(
         100,
-        env=("WORKFLOW_SKILLS_CANARY_PERCENT", "WORKFLOW_SKILLS_CANARY_PERCENT"),
+        validation_alias=AliasChoices(
+            "WORKFLOW_SKILLS_CANARY_PERCENT", "WORKFLOW_SKILLS_CANARY_PERCENT"
+        ),
         description="Percentage of runs routed through skills-first policy (0-100).",
         ge=0,
         le=100,
@@ -799,31 +725,26 @@ class WorkflowSettings(BaseSettings):
     )
     skills_cache_root: str = Field(
         "var/skill_cache",
-        env=("WORKFLOW_SKILLS_CACHE_ROOT",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_CACHE_ROOT"),
         description="Immutable cache root for verified skill artifacts.",
     )
     skills_workspace_root: str = Field(
         "runs",
-        env=("WORKFLOW_SKILLS_WORKSPACE_ROOT",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_WORKSPACE_ROOT"),
         description="Workspace subdirectory (under WORKFLOW_WORKSPACE_ROOT) for per-run active skills links.",
     )
     skills_registry_source: Optional[str] = Field(
         None,
-        env=("WORKFLOW_SKILLS_REGISTRY_SOURCE",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_REGISTRY_SOURCE"),
         description="Optional registry profile/URI for skill source resolution.",
     )
     skills_local_mirror_root: str = Field(
         ".agents/skills/local",
-        env=("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT"),
         description="Default local-only skill mirror directory used for source resolution.",
     )
     skills_legacy_mirror_root: str = Field(
         ".agents/skills",
-        env=("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT"),
         description=(
             "Secondary shared mirror root checked after local-only skills; "
@@ -832,31 +753,26 @@ class WorkflowSettings(BaseSettings):
     )
     skills_verify_signatures: bool = Field(
         False,
-        env=("WORKFLOW_SKILLS_VERIFY_SIGNATURES",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_VERIFY_SIGNATURES"),
         description="Require signature metadata for selected skills before activation.",
     )
     skills_validate_local_mirror: bool = Field(
         False,
-        env=("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR",),
         validation_alias=AliasChoices("WORKFLOW_SKILLS_VALIDATE_LOCAL_MIRROR"),
         description="Enable startup validation of the configured local skill mirror root.",
     )
     live_session_enabled_default: bool = Field(
         True,
-        env="MOONMIND_LIVE_SESSION_ENABLED_DEFAULT",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT"),
         description="Enable live task sessions by default for queue task runs.",
     )
     live_session_provider: str = Field(
         "tmate",
-        env="MOONMIND_LIVE_SESSION_PROVIDER",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_PROVIDER"),
         description="Live session provider implementation.",
     )
     live_session_ttl_minutes: int = Field(
         60,
-        env="MOONMIND_LIVE_SESSION_TTL_MINUTES",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_TTL_MINUTES"),
         description="Default live session lifetime before automatic revocation.",
         ge=1,
@@ -864,7 +780,6 @@ class WorkflowSettings(BaseSettings):
     )
     live_session_rw_grant_ttl_minutes: int = Field(
         15,
-        env="MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES"),
         description="Default RW reveal grant duration for live sessions.",
         ge=1,
@@ -872,19 +787,16 @@ class WorkflowSettings(BaseSettings):
     )
     live_session_allow_web: bool = Field(
         False,
-        env="MOONMIND_LIVE_SESSION_ALLOW_WEB",
         validation_alias=AliasChoices("MOONMIND_LIVE_SESSION_ALLOW_WEB"),
         description="Whether tmate web attach URLs are exposed via API responses.",
     )
     tmate_server_host: Optional[str] = Field(
         None,
-        env="MOONMIND_TMATE_SERVER_HOST",
         validation_alias=AliasChoices("MOONMIND_TMATE_SERVER_HOST"),
         description="Optional self-hosted tmate relay hostname.",
     )
     live_session_max_concurrent_per_worker: int = Field(
         4,
-        env="MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
         validation_alias=AliasChoices(
             "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER"
         ),
@@ -894,7 +806,6 @@ class WorkflowSettings(BaseSettings):
     )
     enable_task_proposals: bool = Field(
         True,
-        env=("MOONMIND_ENABLE_TASK_PROPOSALS", "ENABLE_TASK_PROPOSALS"),
         validation_alias=AliasChoices(
             "MOONMIND_ENABLE_TASK_PROPOSALS",
             "ENABLE_TASK_PROPOSALS",
@@ -903,7 +814,6 @@ class WorkflowSettings(BaseSettings):
     )
     proposal_targets_default: str = Field(
         "project",
-        env=("MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"),
         validation_alias=AliasChoices(
             "MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"
         ),
@@ -911,24 +821,18 @@ class WorkflowSettings(BaseSettings):
     )
     proposal_max_items_project: int = Field(
         3,
-        env=("TASK_PROPOSALS_MAX_ITEMS_PROJECT",),
         validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_PROJECT"),
         description="Default per-run project proposal cap applied when task policy omits maxItems.project.",
         ge=1,
     )
     proposal_max_items_moonmind: int = Field(
         2,
-        env=("TASK_PROPOSALS_MAX_ITEMS_MOONMIND",),
         validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_MOONMIND"),
         description="Default per-run MoonMind proposal cap applied when task policy omits maxItems.moonmind.",
         ge=1,
     )
     proposal_moonmind_severity_floor: str = Field(
         "high",
-        env=(
-            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
-            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
-        ),
         validation_alias=AliasChoices(
             "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
             "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
@@ -937,16 +841,13 @@ class WorkflowSettings(BaseSettings):
     )
     moonmind_ci_repository: str = Field(
         "MoonLadderStudios/MoonMind",
-        env=("MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"),
+        validation_alias=AliasChoices(
+            "MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"
+        ),
         description="Repository used for MoonMind CI/run-quality proposals.",
     )
     stage_command_timeout_seconds: int = Field(
         3600,
-        env=(
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
@@ -957,11 +858,11 @@ class WorkflowSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
-        populate_by_name=True,
     )
 
     @field_validator("manifest_required_capabilities", mode="before")
@@ -1022,8 +923,7 @@ class WorkflowSettings(BaseSettings):
         if text not in _ALLOWED_PROPOSAL_SEVERITIES:
             allowed = ", ".join(_ALLOWED_PROPOSAL_SEVERITIES)
             raise ValueError(
-                "workflow.proposal_moonmind_severity_floor must be one of: "
-                f"{allowed}"
+                f"workflow.proposal_moonmind_severity_floor must be one of: {allowed}"
             )
         return text
 
@@ -1287,7 +1187,6 @@ class AppWorkflowSettings(WorkflowSettings):
 
     github_repository: Optional[str] = Field(
         "MoonLadderStudios/MoonMind",
-        env=("WORKFLOW_GITHUB_REPOSITORY",),
         validation_alias=AliasChoices("WORKFLOW_GITHUB_REPOSITORY"),
     )
 
@@ -1296,13 +1195,13 @@ class SecuritySettings(BaseSettings):
     """Security settings"""
 
     JWT_SECRET_KEY: Optional[str] = Field(
-        "test_jwt_secret_key", env="JWT_SECRET_KEY"
+        "test_jwt_secret_key", alias="JWT_SECRET_KEY"
     )  # Made Optional and added default
     ENCRYPTION_MASTER_KEY: Optional[str] = Field(
-        "test_encryption_master_key", env="ENCRYPTION_MASTER_KEY"
+        "test_encryption_master_key", alias="ENCRYPTION_MASTER_KEY"
     )  # Made Optional and added default
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
@@ -1317,18 +1216,18 @@ class GoogleSettings(BaseSettings):
             "google_api_key", "GOOGLE_API_KEY", "GEMINI_API_KEY"
         ),
     )
-    google_chat_model: str = Field("gemini-3.1-pro", env="GOOGLE_CHAT_MODEL")
+    google_chat_model: str = Field("gemini-3.1-pro", alias="GOOGLE_CHAT_MODEL")
     google_embedding_model: str = Field(
-        "gemini-embedding-2-preview", env="GOOGLE_EMBEDDING_MODEL"
+        "gemini-embedding-2-preview", alias="GOOGLE_EMBEDDING_MODEL"
     )
     google_embedding_dimensions: int = Field(
-        DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS, env="GOOGLE_EMBEDDING_DIMENSIONS"
+        DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS, alias="GOOGLE_EMBEDDING_DIMENSIONS"
     )
-    google_enabled: bool = Field(True, env="GOOGLE_ENABLED")
-    google_embed_batch_size: int = Field(100, env="GOOGLE_EMBED_BATCH_SIZE")
+    google_enabled: bool = Field(True, alias="GOOGLE_ENABLED")
+    google_embed_batch_size: int = Field(100, alias="GOOGLE_EMBED_BATCH_SIZE")
     # google_application_credentials has been moved to GoogleDriveSettings as per requirements
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class AnthropicSettings(BaseSettings):
@@ -1340,105 +1239,119 @@ class AnthropicSettings(BaseSettings):
             "anthropic_api_key", "ANTHROPIC_API_KEY", "CLAUDE_API_KEY"
         ),
     )
-    anthropic_chat_model: str = Field("claude-sonnet-4-6", env="ANTHROPIC_CHAT_MODEL")
-    anthropic_enabled: bool = Field(True, env="ANTHROPIC_ENABLED")
+    anthropic_chat_model: str = Field("claude-sonnet-4-6", alias="ANTHROPIC_CHAT_MODEL")
+    anthropic_enabled: bool = Field(True, alias="ANTHROPIC_ENABLED")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class GitHubSettings(BaseSettings):
     """GitHub settings"""
 
-    github_token: Optional[str] = Field(None, env="GITHUB_TOKEN")
+    github_token: Optional[str] = Field(None, alias="GITHUB_TOKEN")
     github_repos: Optional[str] = Field(
-        None, env="GITHUB_REPOS"
+        None, alias="GITHUB_REPOS"
     )  # Comma-delimited string of repositories
-    github_enabled: bool = Field(True, env="GITHUB_ENABLED")
+    github_enabled: bool = Field(True, alias="GITHUB_ENABLED")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class GoogleDriveSettings(BaseSettings):
     """Google Drive settings"""
 
-    google_drive_enabled: bool = Field(False, env="GOOGLE_DRIVE_ENABLED")
-    google_drive_folder_id: Optional[str] = Field(None, env="GOOGLE_DRIVE_FOLDER_ID")
+    google_drive_enabled: bool = Field(False, alias="GOOGLE_DRIVE_ENABLED")
+    google_drive_folder_id: Optional[str] = Field(None, alias="GOOGLE_DRIVE_FOLDER_ID")
     google_application_credentials: Optional[str] = Field(
-        None, env="GOOGLE_APPLICATION_CREDENTIALS"
+        None, alias="GOOGLE_APPLICATION_CREDENTIALS"
     )
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class OpenAISettings(BaseSettings):
     """OpenAI API settings"""
 
-    openai_api_key: Optional[str] = Field(None, env="OPENAI_API_KEY")
-    openai_chat_model: str = Field("gpt-3.5-turbo", env="OPENAI_CHAT_MODEL")
+    openai_api_key: Optional[str] = Field(None, alias="OPENAI_API_KEY")
+    openai_chat_model: str = Field("gpt-3.5-turbo", alias="OPENAI_CHAT_MODEL")
     openai_embedding_model: str = Field(
-        "text-embedding-3-small", env="OPENAI_EMBEDDING_MODEL"
+        "text-embedding-3-small", alias="OPENAI_EMBEDDING_MODEL"
     )
-    openai_embedding_dimensions: int = Field(1536, env="OPENAI_EMBEDDING_DIMENSIONS")
-    openai_enabled: bool = Field(True, env="OPENAI_ENABLED")
+    openai_embedding_dimensions: int = Field(1536, alias="OPENAI_EMBEDDING_DIMENSIONS")
+    openai_enabled: bool = Field(True, alias="OPENAI_ENABLED")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class OllamaSettings(BaseSettings):
     """Ollama settings"""
 
-    ollama_base_url: str = Field("http://ollama:11434", env="OLLAMA_BASE_URL")
+    ollama_base_url: str = Field("http://ollama:11434", alias="OLLAMA_BASE_URL")
     ollama_embedding_model: str = Field(
         "hf.co/tensorblock/gte-Qwen2-7B-instruct-GGUF:Q6_K",
-        env="OLLAMA_EMBEDDING_MODEL",
+        alias="OLLAMA_EMBEDDING_MODEL",
     )
-    ollama_embeddings_dimensions: int = Field(3584, env="OLLAMA_EMBEDDINGS_DIMENSIONS")
-    ollama_keep_alive: str = Field("-1m", env="OLLAMA_KEEP_ALIVE")
-    ollama_chat_model: str = Field("devstral:24b", env="OLLAMA_CHAT_MODEL")
-    ollama_modes: str = Field("chat", env="OLLAMA_MODES")
-    ollama_enabled: bool = Field(True, env="OLLAMA_ENABLED")
+    ollama_embeddings_dimensions: int = Field(
+        3584, alias="OLLAMA_EMBEDDINGS_DIMENSIONS"
+    )
+    ollama_keep_alive: str = Field("-1m", alias="OLLAMA_KEEP_ALIVE")
+    ollama_chat_model: str = Field("devstral:24b", alias="OLLAMA_CHAT_MODEL")
+    ollama_modes: str = Field("chat", alias="OLLAMA_MODES")
+    ollama_enabled: bool = Field(True, alias="OLLAMA_ENABLED")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class ConfluenceSettings(BaseSettings):
     """Confluence specific settings"""
 
     confluence_space_keys: Optional[str] = Field(
-        None, env="ATLASSIAN_CONFLUENCE_SPACE_KEYS"
+        None, alias="ATLASSIAN_CONFLUENCE_SPACE_KEYS"
     )
-    confluence_enabled: bool = Field(False, env="ATLASSIAN_CONFLUENCE_ENABLED")
+    confluence_enabled: bool = Field(False, alias="ATLASSIAN_CONFLUENCE_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        populate_by_name=True,
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 
 class JiraSettings(BaseSettings):
     """Jira specific settings"""
 
-    jira_jql_query: Optional[str] = Field(None, env="ATLASSIAN_JIRA_JQL_QUERY")
-    jira_fetch_batch_size: int = Field(50, env="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
-    jira_enabled: bool = Field(False, env="ATLASSIAN_JIRA_ENABLED")
+    jira_jql_query: Optional[str] = Field(None, alias="ATLASSIAN_JIRA_JQL_QUERY")
+    jira_fetch_batch_size: int = Field(50, alias="ATLASSIAN_JIRA_FETCH_BATCH_SIZE")
+    jira_enabled: bool = Field(False, alias="ATLASSIAN_JIRA_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        populate_by_name=True,
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 
 class AtlassianSettings(BaseSettings):
     """Atlassian base settings"""
 
-    atlassian_api_key: Optional[str] = Field(None, env="ATLASSIAN_API_KEY")
-    atlassian_username: Optional[str] = Field(None, env="ATLASSIAN_USERNAME")
-    atlassian_url: Optional[str] = Field(None, env="ATLASSIAN_URL")
+    atlassian_api_key: Optional[str] = Field(None, alias="ATLASSIAN_API_KEY")
+    atlassian_username: Optional[str] = Field(None, alias="ATLASSIAN_USERNAME")
+    atlassian_url: Optional[str] = Field(None, alias="ATLASSIAN_URL")
 
     # Nested settings for Confluence and Jira
     confluence: ConfluenceSettings = Field(default_factory=ConfluenceSettings)
     jira: JiraSettings = Field(default_factory=JiraSettings)
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        populate_by_name=True,
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     def __init__(self, **data):
@@ -1462,21 +1375,21 @@ class AtlassianSettings(BaseSettings):
 class QdrantSettings(BaseSettings):
     """Qdrant settings"""
 
-    qdrant_host: str = Field("qdrant", env="QDRANT_HOST")
-    qdrant_port: int = Field(6333, env="QDRANT_PORT")
-    qdrant_api_key: Optional[str] = Field(None, env="QDRANT_API_KEY")
-    qdrant_enabled: bool = Field(True, env="QDRANT_ENABLED")
-    model_config = SettingsConfigDict(env_prefix="")
+    qdrant_host: str = Field("qdrant", alias="QDRANT_HOST")
+    qdrant_port: int = Field(6333, alias="QDRANT_PORT")
+    qdrant_api_key: Optional[str] = Field(None, alias="QDRANT_API_KEY")
+    qdrant_enabled: bool = Field(True, alias="QDRANT_ENABLED")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class RAGSettings(BaseSettings):
     """RAG (Retrieval-Augmented Generation) settings"""
 
-    rag_enabled: bool = Field(True, env="RAG_ENABLED")
-    similarity_top_k: int = Field(5, env="RAG_SIMILARITY_TOP_K")
-    max_context_length_chars: int = Field(8000, env="RAG_MAX_CONTEXT_LENGTH_CHARS")
+    rag_enabled: bool = Field(True, alias="RAG_ENABLED")
+    similarity_top_k: int = Field(5, alias="RAG_SIMILARITY_TOP_K")
+    max_context_length_chars: int = Field(8000, alias="RAG_MAX_CONTEXT_LENGTH_CHARS")
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class LocalDataSettings(BaseSettings):
@@ -1484,13 +1397,17 @@ class LocalDataSettings(BaseSettings):
 
     local_data_path: Optional[str] = Field(
         None,
-        env=["LocalData", "LOCAL_DATA_PATH"],
+        validation_alias=AliasChoices("LocalData", "LOCAL_DATA_PATH"),
     )
     # Add local_data_enabled if we want a separate boolean flag, but for now, path presence implies enabled.
-    # local_data_enabled: bool = Field(False, env="LOCAL_DATA_ENABLED")
+    # local_data_enabled: bool = Field(False, alias="LOCAL_DATA_ENABLED")
 
     model_config = SettingsConfigDict(
-        env_prefix="", env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        populate_by_name=True,
+        env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 
@@ -1500,32 +1417,32 @@ class OIDCSettings(BaseSettings):
     AUTH_PROVIDER: str = Field(
         "disabled",
         description="Authentication provider: 'disabled' or 'keycloak'.",
-        env="AUTH_PROVIDER",
+        alias="AUTH_PROVIDER",
     )
     OIDC_ISSUER_URL: Optional[str] = Field(
         None,
-        env="OIDC_ISSUER_URL",
+        alias="OIDC_ISSUER_URL",
         description="URL of the OIDC provider, e.g., Keycloak.",
     )
-    OIDC_CLIENT_ID: Optional[str] = Field(None, env="OIDC_CLIENT_ID")
-    OIDC_CLIENT_SECRET: Optional[str] = Field(None, env="OIDC_CLIENT_SECRET")
+    OIDC_CLIENT_ID: Optional[str] = Field(None, alias="OIDC_CLIENT_ID")
+    OIDC_CLIENT_SECRET: Optional[str] = Field(None, alias="OIDC_CLIENT_SECRET")
     DEFAULT_USER_ID: Optional[str] = Field(
         None,
-        env="DEFAULT_USER_ID",
+        alias="DEFAULT_USER_ID",
         description="Default user ID for 'disabled' auth_provider mode.",
     )
     DEFAULT_USER_EMAIL: Optional[str] = Field(
         None,
-        env="DEFAULT_USER_EMAIL",
+        alias="DEFAULT_USER_EMAIL",
         description="Default user email for 'disabled' auth_provider mode.",
     )
     DEFAULT_USER_PASSWORD: Optional[str] = Field(
         "default_password_please_change",
-        env="DEFAULT_USER_PASSWORD",
+        alias="DEFAULT_USER_PASSWORD",
         description="Default user password for 'disabled' auth_provider mode. Used for user creation if needed.",
     )
 
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 
 
 class FeatureFlagsSettings(BaseSettings):
@@ -1560,6 +1477,7 @@ class FeatureFlagsSettings(BaseSettings):
         )
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="FEATURE_FLAGS__",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
@@ -1572,7 +1490,6 @@ class TaskProposalSettings(BaseSettings):
 
     proposal_targets_default: str = Field(
         "project",
-        env=("MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"),
         validation_alias=AliasChoices(
             "MOONMIND_PROPOSAL_TARGETS", "TASK_PROPOSALS_TARGETS_DEFAULT"
         ),
@@ -1580,29 +1497,25 @@ class TaskProposalSettings(BaseSettings):
     )
     moonmind_ci_repository: str = Field(
         "MoonLadderStudios/MoonMind",
-        env=("MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"),
+        validation_alias=AliasChoices(
+            "MOONMIND_CI_REPOSITORY", "TASK_PROPOSALS_MOONMIND_CI_REPOSITORY"
+        ),
         description="MoonMind CI repository used whenever proposals target run-quality improvements.",
     )
     max_items_project_default: int = Field(
         3,
-        env=("TASK_PROPOSALS_MAX_ITEMS_PROJECT",),
         validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_PROJECT"),
         description="Default per-run cap for project-targeted proposals when unspecified.",
         ge=1,
     )
     max_items_moonmind_default: int = Field(
         2,
-        env=("TASK_PROPOSALS_MAX_ITEMS_MOONMIND",),
         validation_alias=AliasChoices("TASK_PROPOSALS_MAX_ITEMS_MOONMIND"),
         description="Default per-run cap for MoonMind-targeted proposals when unspecified.",
         ge=1,
     )
     moonmind_severity_floor_default: str = Field(
         "high",
-        env=(
-            "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
-            "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
-        ),
         validation_alias=AliasChoices(
             "MOONMIND_MIN_SEVERITY_FOR_MOONMIND",
             "TASK_PROPOSALS_MIN_SEVERITY_FOR_MOONMIND",
@@ -1611,27 +1524,27 @@ class TaskProposalSettings(BaseSettings):
     )
     severity_vocabulary: tuple[str, ...] = Field(
         _ALLOWED_PROPOSAL_SEVERITIES,
-        env=("TASK_PROPOSALS_SEVERITY_VOCABULARY",),
+        validation_alias=AliasChoices("TASK_PROPOSALS_SEVERITY_VOCABULARY"),
         description="Allowed severity labels for proposal policy evaluation.",
     )
     notifications_enabled: bool = Field(
         False,
-        env="TASK_PROPOSALS_NOTIFICATIONS_ENABLED",
+        alias="TASK_PROPOSALS_NOTIFICATIONS_ENABLED",
         description="Emit webhook notifications for high-signal proposal categories.",
     )
     notifications_webhook_url: Optional[str] = Field(
         None,
-        env="TASK_PROPOSALS_NOTIFICATIONS_WEBHOOK_URL",
+        alias="TASK_PROPOSALS_NOTIFICATIONS_WEBHOOK_URL",
         description="Webhook endpoint for proposal alerts.",
     )
     notifications_authorization: Optional[str] = Field(
         None,
-        env="TASK_PROPOSALS_NOTIFICATIONS_AUTHORIZATION",
+        alias="TASK_PROPOSALS_NOTIFICATIONS_AUTHORIZATION",
         description="Optional Authorization header for webhook calls.",
     )
     notifications_timeout_seconds: int = Field(
         5,
-        env="TASK_PROPOSALS_NOTIFICATIONS_TIMEOUT_SECONDS",
+        alias="TASK_PROPOSALS_NOTIFICATIONS_TIMEOUT_SECONDS",
         description="Webhook timeout in seconds.",
         gt=0,
     )
@@ -1699,6 +1612,7 @@ class TaskProposalSettings(BaseSettings):
         return ordered or _ALLOWED_PROPOSAL_SEVERITIES
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_prefix="",
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
@@ -1728,15 +1642,12 @@ class AppSettings(BaseSettings):
     temporal_dashboard: TemporalDashboardSettings = Field(
         default_factory=TemporalDashboardSettings
     )
-    workflow: AppWorkflowSettings = Field(
-        default_factory=AppWorkflowSettings
-    )
+    workflow: AppWorkflowSettings = Field(default_factory=AppWorkflowSettings)
     feature_flags: FeatureFlagsSettings = Field(default_factory=FeatureFlagsSettings)
     task_proposals: TaskProposalSettings = Field(default_factory=TaskProposalSettings)
     jules: JulesSettings = Field(default_factory=JulesSettings)
     worker_enable_task_proposals: Optional[bool] = Field(
         None,
-        env=("MOONMIND_ENABLE_TASK_PROPOSALS", "ENABLE_TASK_PROPOSALS"),
         validation_alias=AliasChoices(
             "MOONMIND_ENABLE_TASK_PROPOSALS",
             "ENABLE_TASK_PROPOSALS",
@@ -1748,11 +1659,6 @@ class AppSettings(BaseSettings):
     )
     worker_stage_command_timeout_seconds: Optional[int] = Field(
         None,
-        env=(
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
-            "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
-        ),
         validation_alias=AliasChoices(
             "WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS",
             "MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS",
@@ -1766,18 +1672,12 @@ class AppSettings(BaseSettings):
     )
     worker_codex_model: Optional[str] = Field(
         None,
-        env=("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
         validation_alias=AliasChoices("MOONMIND_CODEX_MODEL", "CODEX_MODEL"),
         exclude=True,
         description="Compatibility passthrough for worker Codex model env flags.",
     )
     worker_codex_effort: Optional[str] = Field(
         None,
-        env=(
-            "MOONMIND_CODEX_EFFORT",
-            "CODEX_MODEL_REASONING_EFFORT",
-            "MODEL_REASONING_EFFORT",
-        ),
         validation_alias=AliasChoices(
             "MOONMIND_CODEX_EFFORT",
             "CODEX_MODEL_REASONING_EFFORT",
@@ -1786,39 +1686,39 @@ class AppSettings(BaseSettings):
         exclude=True,
         description="Compatibility passthrough for worker Codex effort env flags.",
     )
+
     moonmind_workdir: Optional[str] = Field(
         None,
-        env="MOONMIND_WORKDIR",
+        alias="MOONMIND_WORKDIR",
         exclude=True,
         description="Compatibility passthrough for worker workspace root.",
     )
     moonmind_agent_workspaces_volume_name: Optional[str] = Field(
         None,
-        env="MOONMIND_AGENT_WORKSPACES_VOLUME_NAME",
+        alias="MOONMIND_AGENT_WORKSPACES_VOLUME_NAME",
         exclude=True,
         description="Compatibility passthrough for worker workspace volume name.",
     )
     moonmind_worker_capabilities: Optional[str] = Field(
         None,
-        env="MOONMIND_WORKER_CAPABILITIES",
+        alias="MOONMIND_WORKER_CAPABILITIES",
         exclude=True,
         description="Compatibility passthrough for worker capabilities declaration.",
     )
     moonmind_unreal_ccache_volume_name: Optional[str] = Field(
         None,
-        env="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
+        alias="MOONMIND_UNREAL_CCACHE_VOLUME_NAME",
         exclude=True,
         description="Compatibility passthrough for ccache volume in DooD workflows.",
     )
     moonmind_unreal_ubt_volume_name: Optional[str] = Field(
         None,
-        env="MOONMIND_UNREAL_UBT_VOLUME_NAME",
+        alias="MOONMIND_UNREAL_UBT_VOLUME_NAME",
         exclude=True,
         description="Compatibility passthrough for UBT metadata volume in DooD workflows.",
     )
     workflow_git_user_name: Optional[str] = Field(
         None,
-        env="WORKFLOW_GIT_USER_NAME",
         validation_alias=AliasChoices(
             "workflow_git_user_name", "WORKFLOW_GIT_USER_NAME"
         ),
@@ -1827,10 +1727,6 @@ class AppSettings(BaseSettings):
     )
     workflow_github_repository: Optional[str] = Field(
         None,
-        env=(
-            "WORKFLOW_GITHUB_REPOSITORY",
-            "WORKFLOW_GITHUB_REPOSITORY",
-        ),
         validation_alias=AliasChoices(
             "workflow_github_repository",
             "WORKFLOW_GITHUB_REPOSITORY",
@@ -1841,7 +1737,6 @@ class AppSettings(BaseSettings):
     )
     workflow_git_user_email: Optional[str] = Field(
         None,
-        env="WORKFLOW_GIT_USER_EMAIL",
         validation_alias=AliasChoices(
             "workflow_git_user_email", "WORKFLOW_GIT_USER_EMAIL"
         ),
@@ -1850,7 +1745,6 @@ class AppSettings(BaseSettings):
     )
     moonmind_git_user_name: Optional[str] = Field(
         None,
-        env="MOONMIND_GIT_USER_NAME",
         validation_alias=AliasChoices(
             "moonmind_git_user_name", "MOONMIND_GIT_USER_NAME"
         ),
@@ -1859,7 +1753,6 @@ class AppSettings(BaseSettings):
     )
     moonmind_git_user_email: Optional[str] = Field(
         None,
-        env="MOONMIND_GIT_USER_EMAIL",
         validation_alias=AliasChoices(
             "moonmind_git_user_email", "MOONMIND_GIT_USER_EMAIL"
         ),
@@ -1868,7 +1761,6 @@ class AppSettings(BaseSettings):
     )
     moonmind_live_log_events_enabled: Optional[str] = Field(
         None,
-        env="MOONMIND_LIVE_LOG_EVENTS_ENABLED",
         validation_alias=AliasChoices(
             "moonmind_live_log_events_enabled",
             "MOONMIND_LIVE_LOG_EVENTS_ENABLED",
@@ -1878,7 +1770,6 @@ class AppSettings(BaseSettings):
     )
     moonmind_live_log_events_batch_bytes: Optional[int] = Field(
         None,
-        env="MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES",
         validation_alias=AliasChoices(
             "moonmind_live_log_events_batch_bytes",
             "MOONMIND_LIVE_LOG_EVENTS_BATCH_BYTES",
@@ -1888,7 +1779,6 @@ class AppSettings(BaseSettings):
     )
     moonmind_live_log_events_flush_interval_ms: Optional[int] = Field(
         None,
-        env="MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS",
         validation_alias=AliasChoices(
             "moonmind_live_log_events_flush_interval_ms",
             "MOONMIND_LIVE_LOG_EVENTS_FLUSH_INTERVAL_MS",
@@ -1898,7 +1788,6 @@ class AppSettings(BaseSettings):
     )
     moonmind_gemini_cli_auth_mode: Optional[str] = Field(
         None,
-        env="MOONMIND_GEMINI_CLI_AUTH_MODE",
         validation_alias=AliasChoices(
             "moonmind_gemini_cli_auth_mode",
             "MOONMIND_GEMINI_CLI_AUTH_MODE",
@@ -1908,14 +1797,12 @@ class AppSettings(BaseSettings):
     )
     gemini_home: Optional[str] = Field(
         None,
-        env="GEMINI_HOME",
         validation_alias=AliasChoices("gemini_home", "GEMINI_HOME"),
         description="Compatibility passthrough for legacy Gemini auth home.",
         exclude=True,
     )
     moonmind_claude_cli_auth_mode: Optional[str] = Field(
         None,
-        env="MOONMIND_CLAUDE_CLI_AUTH_MODE",
         validation_alias=AliasChoices(
             "moonmind_claude_cli_auth_mode",
             "MOONMIND_CLAUDE_CLI_AUTH_MODE",
@@ -1925,65 +1812,68 @@ class AppSettings(BaseSettings):
     )
     claude_home: Optional[str] = Field(
         None,
-        env="CLAUDE_HOME",
         validation_alias=AliasChoices("claude_home", "CLAUDE_HOME"),
         description="Compatibility passthrough for legacy Claude auth home.",
         exclude=True,
     )
 
     # Default providers and models
-    default_chat_provider: str = Field("google", env="DEFAULT_CHAT_PROVIDER")
-    default_embedding_provider: str = Field("google", env="DEFAULT_EMBEDDING_PROVIDER")
+    default_chat_provider: str = Field("google", alias="DEFAULT_CHAT_PROVIDER")
+    default_embedding_provider: str = Field(
+        "google", alias="DEFAULT_EMBEDDING_PROVIDER"
+    )
 
     # Legacy settings for backwards compatibility
     default_embeddings_provider: str = Field(
-        "ollama", env="DEFAULT_EMBEDDINGS_PROVIDER"
+        "ollama", alias="DEFAULT_EMBEDDINGS_PROVIDER"
     )
 
     # Model cache settings
-    model_cache_refresh_interval: int = Field(3600, env="MODEL_CACHE_REFRESH_INTERVAL")
+    model_cache_refresh_interval: int = Field(
+        3600, alias="MODEL_CACHE_REFRESH_INTERVAL"
+    )
     model_cache_refresh_interval_seconds: int = Field(
-        3600, env="MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
+        3600, alias="MODEL_CACHE_REFRESH_INTERVAL_SECONDS"
     )
     vector_store_provider: str = Field(
-        "qdrant", env="VECTOR_STORE_PROVIDER"
+        "qdrant", alias="VECTOR_STORE_PROVIDER"
     )  # Added field
 
     # Vector store settings
     vector_store_collection_name: str = Field(
-        "moonmind", env="VECTOR_STORE_COLLECTION_NAME"
+        "moonmind", alias="VECTOR_STORE_COLLECTION_NAME"
     )
 
     # Other settings
-    fastapi_reload: bool = Field(False, env="FASTAPI_RELOAD")
-    fernet_key: Optional[str] = Field(None, env="FERNET_KEY")
-    hf_access_token: Optional[str] = Field(None, env="HF_ACCESS_TOKEN")
+    fastapi_reload: bool = Field(False, alias="FASTAPI_RELOAD")
+    fernet_key: Optional[str] = Field(None, alias="FERNET_KEY")
+    hf_access_token: Optional[str] = Field(None, alias="HF_ACCESS_TOKEN")
 
-    langchain_api_key: Optional[str] = Field(None, env="LANGCHAIN_API_KEY")
-    langchain_tracing_v2: str = Field("true", env="LANGCHAIN_TRACING_V2")
-    langchain_project: str = Field("MoonMind", env="LANGCHAIN_PROJECT")
+    langchain_api_key: Optional[str] = Field(None, alias="LANGCHAIN_API_KEY")
+    langchain_tracing_v2: str = Field("true", alias="LANGCHAIN_TRACING_V2")
+    langchain_project: str = Field("MoonMind", alias="LANGCHAIN_PROJECT")
 
-    model_directory: str = Field("/app/model_data", env="MODEL_DIRECTORY")
+    model_directory: str = Field("/app/model_data", alias="MODEL_DIRECTORY")
 
     # OpenHands settings
-    openhands_llm_api_key: Optional[str] = Field(None, env="OPENHANDS__LLM__API_KEY")
+    openhands_llm_api_key: Optional[str] = Field(None, alias="OPENHANDS__LLM__API_KEY")
     openhands_llm_model: str = Field(
-        "gemini/gemini-2.5-pro-exp-03-25", env="OPENHANDS__LLM__MODEL"
+        "gemini/gemini-2.5-pro-exp-03-25", alias="OPENHANDS__LLM__MODEL"
     )
     openhands_llm_custom_llm_provider: str = Field(
-        "gemini_cli", env="OPENHANDS__LLM__CUSTOM_LLM_PROVIDER"
+        "gemini_cli", alias="OPENHANDS__LLM__CUSTOM_LLM_PROVIDER"
     )
-    openhands_llm_timeout: int = Field(600, env="OPENHANDS__LLM__TIMEOUT")
+    openhands_llm_timeout: int = Field(600, alias="OPENHANDS__LLM__TIMEOUT")
     openhands_llm_embedding_model: str = Field(
-        "models/text-embedding-004", env="OPENHANDS__LLM__EMBEDDING_MODEL"
+        "models/text-embedding-004", alias="OPENHANDS__LLM__EMBEDDING_MODEL"
     )
     openhands_core_workspace_base: str = Field(
-        "/workspace", env="OPENHANDS__CORE__WORKSPACE_BASE"
+        "/workspace", alias="OPENHANDS__CORE__WORKSPACE_BASE"
     )
 
-    postgres_version: int = Field(14, env="POSTGRES_VERSION")
-    rabbitmq_user: Optional[str] = Field(None, env="RABBITMQ_USER")
-    rabbitmq_password: Optional[str] = Field(None, env="RABBITMQ_PASSWORD")
+    postgres_version: int = Field(14, alias="POSTGRES_VERSION")
+    rabbitmq_user: Optional[str] = Field(None, alias="RABBITMQ_USER")
+    rabbitmq_password: Optional[str] = Field(None, alias="RABBITMQ_PASSWORD")
 
     # ------------------------------------------------------------------
     # Validators
@@ -2094,6 +1984,7 @@ class AppSettings(BaseSettings):
                 raise ValueError(default_runtime_gate.error_message)
 
     model_config = SettingsConfigDict(
+        populate_by_name=True,
         env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",

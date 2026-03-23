@@ -122,7 +122,7 @@ async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
                 )
 
             queue_service.create_job = _create_job  # type: ignore[attr-defined]
-            service = ManifestsService(session, queue_service)  # type: ignore[arg-type]
+            service = ManifestsService(session)
 
             await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
             submission = await service.submit_manifest_run(
