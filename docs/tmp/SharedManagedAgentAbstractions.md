@@ -245,14 +245,14 @@ The standalone `codex_worker` package (8 source files) provides capabilities not
 | Capability | Status | Notes |
 |---|---|---|
 | RAG context injection | ✅ Shared | `ContextInjectionService` in `moonmind/rag/context_injection.py`; wired from `CodexCliStrategy.prepare_workspace()` |
-| Publish/PR workflows | ✅ Shared service | `PublishService` exists at `moonmind/publish/service.py`; still only consumed from `codex_worker/handlers.py` |
-| Self-healing | ❌ codex_worker only | `self_heal.py` — not factored into shared service |
+| Publish/PR workflows | ✅ Shared service | `PublishService` exists at `moonmind/publish/service.py`; now consumed from `agent_runtime_launch` in managed runtime path |
+| Self-healing | ✅ Shared | `self_heal.py` moved to `moonmind/workflows/temporal/runtime/` |
 | Metrics | ❌ codex_worker only | `metrics.py` — standalone |
-| Secret refs | ❌ codex_worker only | `secret_refs.py` — standalone |
+| Secret refs | ✅ Shared | `secret_refs.py` moved to `moonmind/auth/` |
 | Output sanitization | ❓ Status unclear | `publish_sanitization.py` was removed from `codex_worker` directory listing; may have moved |
 
 > [!IMPORTANT]
-> The **Wrap first, absorb incrementally** approach remains recommended. RAG context injection is shared. PublishService exists as a shared module but is only wired from the legacy codex_worker path. Remaining capabilities (self-heal, metrics, secret refs) are candidates for absorption into shared services or supervisor hooks.
+> The **Wrap first, absorb incrementally** approach remains recommended. RAG context injection, Publish workflows, self-healing, and secret refs are now shared. Remaining capabilities (metrics) are candidates for absorption into shared services or supervisor hooks.
 
 ---
 
@@ -344,11 +344,11 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 - [x] Extract `_resolve_prompt_context` into a shared `ContextInjectionService` (`moonmind/rag/context_injection.py`; used from `CodexCliStrategy.prepare_workspace()`)
 - [x] Extract `_maybe_publish` into a shared `PublishService` (`moonmind/publish/service.py`)
 - [x] Verify Codex CLI tasks work through the managed runtime path end-to-end *(ongoing validation)*
-- [ ] Wire `PublishService` from the managed runtime path (currently only `codex_worker/handlers.py` consumes it)
-- [ ] Factor out self-heal capability into a shared supervisor hook or strategy method
-- [ ] Factor out secret-ref resolution into a shared module
+- [x] Wire `PublishService` from the managed runtime path (currently only `codex_worker/handlers.py` consumes it)
+- [x] Factor out self-heal capability into a shared supervisor hook or strategy method
+- [x] Factor out secret-ref resolution into a shared module
 
-**Output**: **Partial.** RAG context injection is shared and hooked for Codex managed runs. `PublishService` exists as a shared service but is only consumed from the legacy `codex_worker` path. Self-heal, metrics, and secret refs remain `codex_worker`-only.
+**Output**: **Complete.** RAG context injection is shared and hooked for Codex managed runs. `PublishService` is integrated into the managed runtime lifecycle (`agent_runtime_launch`). Self-heal capability and secret-ref resolution have been factored into shared modules (`moonmind/workflows/temporal/runtime/self_heal.py` and `moonmind/auth/secret_refs.py`). Metrics remain `codex_worker`-only.
 
 ---
 

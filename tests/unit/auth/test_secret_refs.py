@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from moonmind.agents.codex_worker.secret_refs import (
+from moonmind.auth.secret_refs import (
     SecretReferenceError,
     VaultSecretResolver,
     load_vault_token,
