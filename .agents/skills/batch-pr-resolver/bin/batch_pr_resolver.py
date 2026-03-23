@@ -11,7 +11,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skil
 
 logger = logging.getLogger(__name__)
 
+TASK_DELAY_INCREMENT_MINUTES = 30
 API_EXECUTIONS_ENDPOINT = "/api/executions"
 
 
@@ -316,6 +317,7 @@ def _build_queue_request(
     priority: int,
     max_attempts: int,
     skill_version: str = "1.0",
+    schedule_after_minutes: int | None = None,
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
     runtime_payload: dict[str, Any] = {}
@@ -355,12 +357,23 @@ def _build_queue_request(
     if runtime_payload:
         payload_dict["task"]["runtime"] = runtime_payload
 
-    return {
+    request: dict[str, Any] = {
         "type": "task",
         "priority": priority,
         "maxAttempts": max_attempts,
         "payload": payload_dict,
     }
+
+    if schedule_after_minutes is not None:
+        scheduled_for = (datetime.now(UTC) + timedelta(minutes=schedule_after_minutes)).isoformat()
+        if scheduled_for.endswith("+00:00"):
+            scheduled_for = scheduled_for[:-6] + "Z"
+        request["schedule"] = {
+            "mode": "once",
+            "scheduledFor": scheduled_for
+        }
+
+    return request
 
 
 def _parse_args() -> argparse.Namespace:
@@ -466,6 +479,8 @@ async def _submit_jobs_via_http(
                 "priority": int(request.get("priority", 0)),
                 "maxAttempts": int(request.get("maxAttempts", 3)),
             }
+            if "schedule" in request:
+                body["schedule"] = request["schedule"]
             try:
                 response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
@@ -506,13 +521,18 @@ async def _submit_jobs_via_db(
             queue_type = str(request["type"])
             priority = int(request.get("priority", 0))
             max_attempts = int(request.get("maxAttempts", 3))
+            
+            kwargs = {
+                "job_type": queue_type,
+                "payload": payload,
+                "priority": priority,
+                "max_attempts": max_attempts,
+            }
+            if "schedule" in request:
+                kwargs["schedule"] = request["schedule"]
+
             try:
-                job = await service.create_job(
-                    job_type=queue_type,
-                    payload=payload,
-                    priority=priority,
-                    max_attempts=max_attempts,
-                )
+                job = await service.create_job(**kwargs)
                 created.append(
                     {
                         "pr": submission.pr_number,
@@ -578,6 +598,7 @@ def _build_request_records(
 
     open_prs_sorted = sorted(open_prs, key=_get_pr_number)
 
+    delay_minutes = TASK_DELAY_INCREMENT_MINUTES
     for pr in open_prs_sorted:
         number = pr.get("number")
         branch = _extract_branch(pr)
@@ -595,10 +616,12 @@ def _build_request_records(
             priority=args.priority,
             max_attempts=args.max_attempts,
             skill_version=args.skill_version,
+            schedule_after_minutes=delay_minutes,
         )
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
         )
+        delay_minutes += TASK_DELAY_INCREMENT_MINUTES
 
     return queue_requests, skipped
 
