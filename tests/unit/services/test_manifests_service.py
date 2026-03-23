@@ -78,7 +78,6 @@ async def test_upsert_manifest_persists_normalized_hash_and_version(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
             service = ManifestsService(session)
 
             record = await service.upsert_manifest(
@@ -298,7 +297,6 @@ async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
             service = ManifestsService(session)
 
             await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
@@ -325,7 +323,6 @@ async def test_list_manifests_returns_ordered_and_limited_results(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
             service = ManifestsService(session)
 
             # Insert manifests in a random order
@@ -356,7 +353,6 @@ async def test_list_manifests_filters_by_search_pattern(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
             service = ManifestsService(session)
 
             await service.upsert_manifest(
@@ -389,7 +385,6 @@ async def test_require_manifest_raises_not_found_for_missing_entry(
 
     async with manifest_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            queue_service = SimpleNamespace(create_job=None)
             service = ManifestsService(session)
 
             with pytest.raises(ManifestRegistryNotFoundError) as exc_info:
