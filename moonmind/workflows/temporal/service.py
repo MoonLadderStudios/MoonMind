@@ -67,6 +67,13 @@ NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FINALIZING,
 }
 
+_RUNNING_STATES: set[MoonMindWorkflowState] = {
+    MoonMindWorkflowState.PLANNING,
+    MoonMindWorkflowState.EXECUTING,
+    MoonMindWorkflowState.AWAITING_EXTERNAL,
+    MoonMindWorkflowState.FINALIZING,
+}
+
 TERMINAL_STATE_TO_CLOSE_STATUS: dict[
     MoonMindWorkflowState, TemporalExecutionCloseStatus
 ] = {
@@ -1512,12 +1519,6 @@ class TemporalExecutionService:
             record.closed_at = None
 
         # Populate started_at on first transition to a running state.
-        _RUNNING_STATES = {
-            MoonMindWorkflowState.PLANNING,
-            MoonMindWorkflowState.EXECUTING,
-            MoonMindWorkflowState.AWAITING_EXTERNAL,
-            MoonMindWorkflowState.FINALIZING,
-        }
         if state in _RUNNING_STATES and record.started_at is None:
             record.started_at = _utc_now()
 
