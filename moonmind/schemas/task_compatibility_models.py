@@ -12,6 +12,7 @@ TaskStatus = Literal[
     "queued",
     "running",
     "awaiting_action",
+    "waiting",
     "succeeded",
     "failed",
     "cancelled",
