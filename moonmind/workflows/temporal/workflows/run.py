@@ -462,118 +462,141 @@ class MoonMindRunWorkflow:
             )
             self._update_memo()
 
-            if tool_type == "agent_runtime":
-                # --- Agent dispatch: child workflow ---
-                try:
-                    request = self._build_agent_execution_request(
-                        node_inputs=node_inputs,
-                        node_id=node_id,
-                        tool_name=tool_name,
-                    )
-                    # --- Multi-step Jules: inject session_id for continuation ---
-                    if jules_session_id and request.agent_id == "jules":
-                        request = request.model_copy(
-                            update={
-                                "parameters": {
-                                    **request.parameters,
-                                    "jules_session_id": jules_session_id,
+            system_retries = 0
+            while system_retries <= 3:
+                if tool_type == "agent_runtime":
+                    # --- Agent dispatch: child workflow ---
+                    try:
+                        request = self._build_agent_execution_request(
+                            node_inputs=node_inputs,
+                            node_id=node_id,
+                            tool_name=tool_name,
+                        )
+                        # --- Multi-step Jules: inject session_id for continuation ---
+                        if jules_session_id and request.agent_id == "jules":
+                            request = request.model_copy(
+                                update={
+                                    "parameters": {
+                                        **request.parameters,
+                                        "jules_session_id": jules_session_id,
+                                    }
                                 }
-                            }
+                            )
+                        child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
+                        if system_retries > 0:
+                            child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
+                        child_result = await workflow.execute_child_workflow(
+                            "MoonMind.AgentRun",
+                            request,
+                            id=child_workflow_id,
+                            task_queue=WORKFLOW_TASK_QUEUE,
                         )
-                    child_result = await workflow.execute_child_workflow(
-                        "MoonMind.AgentRun",
-                        request,
-                        id=f"{workflow.info().workflow_id}:agent:{node_id}",
-                        task_queue=WORKFLOW_TASK_QUEUE,
-                    )
-                    execution_result = self._map_agent_run_result(child_result)
-                except Exception:
-                    if failure_mode == "FAIL_FAST":
-                        raise
-                    # Clear session on failure so later Jules steps start fresh.
-                    if "request" in dir() and getattr(request, "agent_id", None) == "jules":
-                        jules_session_id = None
-                    continue
+                        execution_result = self._map_agent_run_result(child_result)
+                    except Exception:
+                        if failure_mode == "FAIL_FAST":
+                            raise
+                        # Clear session on failure so later Jules steps start fresh.
+                        if "request" in dir() and getattr(request, "agent_id", None) == "jules":
+                            jules_session_id = None
+                        result_status = "FAILED"
+                        break
 
-            elif tool_type == "skill":
-                # --- Activity dispatch: existing skill path ---
-                if not tool_name or not tool_version:
-                    raise ValueError("plan node tool name/version is required")
-                invocation_payload = {
-                    "id": node_id,
-                    "tool": {"type": "skill", "name": tool_name, "version": tool_version},
-                    "skill": {"name": tool_name, "version": tool_version},
-                    "inputs": node_inputs,
-                    "options": node.get("options", {}),
-                }
-                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
-                if skill_definitions_by_key:
-                    skill_key = (tool_name, tool_version)
-                    if skill_key not in skill_definitions_by_key:
+                elif tool_type == "skill":
+                    # --- Activity dispatch: existing skill path ---
+                    if not tool_name or not tool_version:
+                        raise ValueError("plan node tool name/version is required")
+                    invocation_payload = {
+                        "id": node_id,
+                        "tool": {"type": "skill", "name": tool_name, "version": tool_version},
+                        "skill": {"name": tool_name, "version": tool_version},
+                        "inputs": node_inputs,
+                        "options": node.get("options", {}),
+                    }
+                    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("mm.skill.execute")
+                    if skill_definitions_by_key:
+                        skill_key = (tool_name, tool_version)
+                        if skill_key not in skill_definitions_by_key:
+                            raise ValueError(
+                                "Tool "
+                                f"'{tool_name}:{tool_version}' was not found in pinned "
+                                "registry snapshot"
+                            )
+                        route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
+                            skill_definitions_by_key[skill_key]
+                        )
+                    if route.activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
                         raise ValueError(
-                            "Tool "
-                            f"'{tool_name}:{tool_version}' was not found in pinned "
-                            "registry snapshot"
+                            "plan node tool executor "
+                            f"'{route.activity_type}' is unsupported by MoonMind.Run; "
+                            "expected mm.tool.execute or mm.skill.execute"
                         )
-                    route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(
-                        skill_definitions_by_key[skill_key]
-                    )
-                if route.activity_type not in {"mm.skill.execute", "mm.tool.execute"}:
-                    raise ValueError(
-                        "plan node tool executor "
-                        f"'{route.activity_type}' is unsupported by MoonMind.Run; "
-                        "expected mm.tool.execute or mm.skill.execute"
-                    )
 
-                try:
-                    execution_result = await workflow.execute_activity(
-                        route.activity_type,
-                        {
-                            "invocation_payload": invocation_payload,
-                            "principal": self._principal(),
-                            "registry_snapshot_ref": registry_snapshot_ref,
-                            "context": {
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                                "node_id": node_id,
+                    try:
+                        execution_result = await workflow.execute_activity(
+                            route.activity_type,
+                            {
+                                "invocation_payload": invocation_payload,
+                                "principal": self._principal(),
+                                "registry_snapshot_ref": registry_snapshot_ref,
+                                "context": {
+                                    "workflow_id": workflow.info().workflow_id,
+                                    "run_id": workflow.info().run_id,
+                                    "node_id": node_id,
+                                },
                             },
-                        },
-                        **self._execute_kwargs_for_route(route),
+                            **self._execute_kwargs_for_route(route),
+                        )
+                    except Exception:
+                        if failure_mode == "FAIL_FAST":
+                            raise
+                        result_status = "FAILED"
+                        break
+
+                else:
+                    raise ValueError(
+                        f"unsupported plan node tool.type: '{tool_type}'; "
+                        "expected 'skill' or 'agent_runtime'"
                     )
-                except Exception:
+
+                result_status = self._activity_result_status(execution_result)
+                if result_status is None:
                     if failure_mode == "FAIL_FAST":
-                        raise
-                    continue
+                        raise ValueError(
+                            "plan node execution result is missing required status field"
+                        )
+                    break
+                if result_status != "SUCCEEDED":
+                    failure_message = self._activity_result_failure_message(
+                        execution_result
+                    )
+                    
+                    if failure_message == "system_error" and system_retries < 3:
+                        system_retries += 1
+                        workflow.logger.info(
+                            f"Retrying plan node {node_id} after system_error "
+                            f"(attempt {system_retries} of 3)"
+                        )
+                        if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
+                            jules_session_id = None
+                        continue
+                        
+                    if failure_mode == "FAIL_FAST":
+                        detail = (
+                            f" with error '{failure_message}'"
+                            if failure_message
+                            else ""
+                        )
+                        raise ValueError(
+                            f"plan node execution returned status {result_status}{detail}"
+                        )
+                    # Clear session on failure so later Jules steps start fresh.
+                    if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
+                        jules_session_id = None
+                    break
 
-            else:
-                raise ValueError(
-                    f"unsupported plan node tool.type: '{tool_type}'; "
-                    "expected 'skill' or 'agent_runtime'"
-                )
+                break
 
-            result_status = self._activity_result_status(execution_result)
-            if result_status is None:
-                if failure_mode == "FAIL_FAST":
-                    raise ValueError(
-                        "plan node execution result is missing required status field"
-                    )
-                continue
-            if result_status != "SUCCEEDED":
-                failure_message = self._activity_result_failure_message(
-                    execution_result
-                )
-                if failure_mode == "FAIL_FAST":
-                    detail = (
-                        f" with error '{failure_message}'"
-                        if failure_message
-                        else ""
-                    )
-                    raise ValueError(
-                        f"plan node execution returned status {result_status}{detail}"
-                    )
-                # Clear session on failure so later Jules steps start fresh.
-                if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
-                    jules_session_id = None
+            if result_status is None or result_status != "SUCCEEDED":
                 continue
 
             # --- Multi-step Jules: extract session_id only on success ---
