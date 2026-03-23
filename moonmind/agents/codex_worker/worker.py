@@ -36,6 +36,16 @@ from moonmind.agents.codex_worker.handlers import (
     OutputChunkCallback,
     WorkerExecutionResult,
 )
+from moonmind.workflows.tasks.job_types import CANONICAL_TASK_JOB_TYPE, LEGACY_TASK_JOB_TYPES
+from moonmind.workflows.tasks.task_contract import (
+    SUPPORTED_EXECUTION_RUNTIMES,
+    TaskContractError,
+    TaskProposalPolicy,
+    build_canonical_task_view,
+    build_effective_proposal_policy,
+    build_task_stage_plan,
+    is_self_managed_publish_skill,
+)
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
 from moonmind.agents.codex_worker.secret_refs import (
     SecretReferenceError,
@@ -61,17 +71,6 @@ from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.schemas.jules_models import JulesCreateTaskRequest, JulesGetTaskRequest
 from moonmind.workflows.adapters.jules_client import JulesClient, JulesClientError
-from moonmind.workflows.agent_queue.task_contract import (
-    CANONICAL_TASK_JOB_TYPE,
-    LEGACY_TASK_JOB_TYPES,
-    SUPPORTED_EXECUTION_RUNTIMES,
-    TaskContractError,
-    TaskProposalPolicy,
-    build_canonical_task_view,
-    build_effective_proposal_policy,
-    build_task_stage_plan,
-    is_self_managed_publish_skill,
-)
 from moonmind.workflows.skills.materializer import (
     SkillMaterializationError,
     materialize_run_skill_workspace,

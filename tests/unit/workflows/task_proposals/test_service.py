@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 
 from moonmind.utils.logging import SecretRedactor
-from moonmind.workflows.agent_queue.service import AgentQueueAuthenticationError
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
     TaskProposalReviewPriority,
@@ -32,7 +31,6 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
         repository="Moon/Repo",
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
-        promoted_job_id=None,
         promoted_at=None,
         promoted_by_user_id=None,
         decided_by_user_id=None,
@@ -96,7 +94,6 @@ async def test_create_proposal_accepts_enum_origin_source() -> None:
         repository="Moon/Repo",
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
-        promoted_job_id=None,
         promoted_at=None,
         promoted_by_user_id=None,
         decided_by_user_id=None,
@@ -174,7 +171,6 @@ async def test_create_proposal_overrides_priority_for_moonmind() -> None:
         repository="MoonLadderStudios/MoonMind",
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
-        promoted_job_id=None,
         promoted_at=None,
         promoted_by_user_id=None,
         decided_by_user_id=None,
@@ -232,7 +228,6 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
         repository="MoonLadderStudios/MoonMind",
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
-        promoted_job_id=None,
         promoted_at=None,
         promoted_by_user_id=None,
         decided_by_user_id=None,
@@ -276,112 +271,8 @@ async def test_create_proposal_honors_requested_priority_when_higher() -> None:
     assert kwargs["priority_override_reason"] is None
 
 
-@pytest.mark.asyncio
-async def test_promote_proposal_calls_queue_and_updates_record() -> None:
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "Moon/Repo",
-            "task": {"instructions": "edited", "publish": {"mode": "none"}},
-        }
-    )
-    job = SimpleNamespace(id=uuid4())
-    queue.create_job = AsyncMock(return_value=job)
-    proposal = SimpleNamespace(
-        id=uuid4(),
-        status=TaskProposalStatus.OPEN,
-        promoted_job_id=None,
-        promoted_at=None,
-        promoted_by_user_id=None,
-        decided_by_user_id=None,
-        decision_note=None,
-        task_create_request={
-            "type": "task",
-            "priority": 0,
-            "maxAttempts": 3,
-            "affinityKey": None,
-            "payload": {"repository": "Moon/Repo"},
-        },
-    )
-    repo.get_proposal_for_update.return_value = proposal
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
-
-    updated, created_job = await service.promote_proposal(
-        proposal_id=proposal.id,
-        promoted_by_user_id=uuid4(),
-        priority_override=5,
-        max_attempts_override=4,
-        note="ship",
-    )
-
-    queue.create_job.assert_awaited_once()
-    repo.commit.assert_awaited()
-    repo.refresh.assert_awaited_with(proposal)
-    assert updated.status is TaskProposalStatus.PROMOTED
-    assert created_job is job
-    _, kwargs = queue.create_job.await_args
-    assert kwargs["payload"]["task"]["publish"]["mode"] == "pr"
 
 
-@pytest.mark.asyncio
-async def test_promote_proposal_applies_runtime_defaults() -> None:
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "Moon/Repo",
-            "targetRuntime": "gemini_cli",
-            "task": {
-                "instructions": "edited",
-                "runtime": {
-                    "mode": "gemini_cli",
-                    "model": "gemini-3.1-pro-preview",
-                    "effort": None,
-                },
-                "publish": {"mode": "none"},
-            },
-        }
-    )
-    job = SimpleNamespace(id=uuid4())
-    queue.create_job = AsyncMock(return_value=job)
-    proposal = SimpleNamespace(
-        id=uuid4(),
-        status=TaskProposalStatus.OPEN,
-        promoted_job_id=None,
-        promoted_at=None,
-        promoted_by_user_id=None,
-        decided_by_user_id=None,
-        decision_note=None,
-        task_create_request={
-            "type": "task",
-            "priority": 0,
-            "maxAttempts": 3,
-            "affinityKey": None,
-            "payload": {
-                "repository": "Moon/Repo",
-                "task": {
-                    "instructions": "edited",
-                    "runtime": {"mode": None, "model": None, "effort": None},
-                },
-            },
-        },
-    )
-    repo.get_proposal_for_update.return_value = proposal
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
-
-    await service.promote_proposal(
-        proposal_id=proposal.id,
-        promoted_by_user_id=uuid4(),
-    )
-
-    _, kwargs = queue.create_job.await_args
-    assert kwargs["payload"]["targetRuntime"] == "gemini_cli"
-    assert kwargs["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
-    assert kwargs["payload"]["task"]["runtime"]["model"] == "gemini-3.1-pro-preview"
-    assert (
-        proposal.task_create_request["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
-    )
 
 
 @pytest.mark.asyncio
@@ -409,55 +300,7 @@ async def test_dismiss_proposal_updates_status() -> None:
     assert "not now" in (dismissed.decision_note or "")
 
 
-@pytest.mark.asyncio
-async def test_promote_proposal_accepts_task_override() -> None:
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    queue.normalize_task_job_payload = MagicMock(
-        return_value={
-            "repository": "Moon/Repo",
-            "task": {"instructions": "edited", "publish": {"mode": "none"}},
-        }
-    )
-    job = SimpleNamespace(id=uuid4())
-    queue.create_job = AsyncMock(return_value=job)
-    proposal = SimpleNamespace(
-        id=uuid4(),
-        status=TaskProposalStatus.OPEN,
-        promoted_job_id=None,
-        promoted_at=None,
-        promoted_by_user_id=None,
-        decided_by_user_id=None,
-        decision_note=None,
-        task_create_request={
-            "type": "task",
-            "priority": 0,
-            "maxAttempts": 3,
-            "payload": {"repository": "Moon/Repo", "task": {"instructions": "old"}},
-        },
-    )
-    repo.get_proposal_for_update.return_value = proposal
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
 
-    override = {
-        "type": "task",
-        "priority": 1,
-        "maxAttempts": 2,
-        "payload": {"repository": "Moon/Repo", "task": {"instructions": "edited"}},
-    }
-    await service.promote_proposal(
-        proposal_id=proposal.id,
-        promoted_by_user_id=uuid4(),
-        priority_override=None,
-        max_attempts_override=None,
-        note=None,
-        task_create_request_override=override,
-    )
-
-    queue.create_job.assert_awaited_once()
-    _, kwargs = queue.create_job.await_args
-    assert kwargs["payload"]["task"]["instructions"] == "edited"
-    assert kwargs["payload"]["task"]["publish"]["mode"] == "pr"
 
 
 @pytest.mark.asyncio
@@ -537,22 +380,4 @@ async def test_resolve_worker_token_rejects_without_required_capability() -> Non
         await service.resolve_worker_token("mmwt_restricted")
 
 
-@pytest.mark.asyncio
-async def test_resolve_worker_token_wraps_authentication_error() -> None:
-    """AgentQueueAuthenticationError from the queue service must surface as
-    TaskProposalValidationError so the router returns 403 instead of 500."""
 
-    repo = AsyncMock()
-    queue = SimpleNamespace()
-    queue.resolve_worker_token = AsyncMock(
-        side_effect=AgentQueueAuthenticationError("invalid worker token")
-    )
-    service = TaskProposalService(repo, queue, redactor=SecretRedactor([], "***"))
-
-    with pytest.raises(
-        TaskProposalValidationError,
-        match="invalid worker token",
-    ):
-        await service.resolve_worker_token("mmwt_bad")
-
-    queue.resolve_worker_token.assert_awaited_once_with("mmwt_bad")

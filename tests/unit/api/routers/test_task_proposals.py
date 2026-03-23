@@ -55,8 +55,8 @@ def _build_proposal() -> SimpleNamespace:
         priority_override_reason=None,
         proposed_by_worker_id="worker-1",
         proposed_by_user_id=None,
-        promoted_job_id=None,
         promoted_at=None,
+        promoted_job_id=None,
         promoted_by_user_id=None,
         decided_by_user_id=None,
         decision_note=None,
@@ -101,61 +101,6 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
     assert payload["repository"] == "Moon/Repo"
 
 
-def test_create_proposal_with_invalid_worker_token(
-    client: tuple[TestClient, AsyncMock],
-) -> None:
-    test_client, service = client
-    service.resolve_worker_token.side_effect = TaskProposalValidationError("Invalid token")
-
-    response = test_client.post(
-        "/api/proposals",
-        headers={"X-MoonMind-Worker-Token": "invalid-token"},
-        json={
-            "title": "Add tests",
-            "summary": "Ensure coverage",
-            "origin": {"source": "queue"},
-            "taskCreateRequest": {
-                "type": "task",
-                "priority": 0,
-                "maxAttempts": 3,
-                "payload": {"repository": "Moon/Repo"},
-            },
-        },
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "worker_not_authorized"
-
-
-def test_create_proposal_with_worker_token(
-    client: tuple[TestClient, AsyncMock],
-) -> None:
-    test_client, service = client
-    proposal = _build_proposal()
-    service.create_proposal.return_value = proposal
-    policy = SimpleNamespace(worker_id="worker-99", capabilities=("proposals_write",))
-    service.resolve_worker_token.return_value = policy
-
-    response = test_client.post(
-        "/api/proposals",
-        headers={"X-MoonMind-Worker-Token": "token-1"},
-        json={
-            "title": "Add tests",
-            "summary": "Ensure coverage",
-            "origin": {"source": "queue"},
-            "taskCreateRequest": {
-                "type": "task",
-                "priority": 0,
-                "maxAttempts": 3,
-                "payload": {"repository": "Moon/Repo"},
-            },
-        },
-    )
-
-    assert response.status_code == 201
-    service.create_proposal.assert_awaited()
-    kwargs = service.create_proposal.await_args.kwargs
-    assert kwargs["proposed_by_worker_id"] == "worker-99"
 
 
 def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock]) -> None:
@@ -184,22 +129,13 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock]) -
     assert payload["items"]
 
 
-def test_promote_proposal_returns_job(client: tuple[TestClient, AsyncMock]) -> None:
+def test_promote_proposal_returns_proposal(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
     test_client, service = client
     proposal = _build_proposal()
-    now = datetime.now(UTC)
-    job = SimpleNamespace(
-        id=uuid4(),
-        type="task",
-        status="queued",
-        priority=0,
-        payload={"repository": "Moon/Repo"},
-        attempt=0,
-        max_attempts=3,
-        created_at=now,
-        updated_at=now,
-    )
-    service.promote_proposal.return_value = (proposal, job)
+    execution_mock = SimpleNamespace(workflow_id="wf-1")
+    service.promote_proposal.return_value = (proposal, execution_mock)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
@@ -208,7 +144,8 @@ def test_promote_proposal_returns_job(client: tuple[TestClient, AsyncMock]) -> N
 
     assert response.status_code == 200
     body = response.json()
-    assert body["job"]["id"] == str(job.id)
+    assert "proposal" in body
+    assert body["proposal"]["title"] == "Add tests"
 
 
 def test_promote_proposal_accepts_override_payload(
@@ -216,19 +153,8 @@ def test_promote_proposal_accepts_override_payload(
 ) -> None:
     test_client, service = client
     proposal = _build_proposal()
-    now = datetime.now(UTC)
-    job = SimpleNamespace(
-        id=uuid4(),
-        type="task",
-        status="queued",
-        priority=0,
-        payload={"repository": "Moon/Repo"},
-        attempt=0,
-        max_attempts=3,
-        created_at=now,
-        updated_at=now,
-    )
-    service.promote_proposal.return_value = (proposal, job)
+    execution_mock = SimpleNamespace(workflow_id="wf-2")
+    service.promote_proposal.return_value = (proposal, execution_mock)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
@@ -316,20 +242,9 @@ def test_promote_proposal_with_runtime_mode_shortcut(
             },
         },
     }
-    now = datetime.now(UTC)
-    job = SimpleNamespace(
-        id=uuid4(),
-        type="task",
-        status="queued",
-        priority=0,
-        payload={"repository": "Moon/Repo"},
-        attempt=0,
-        max_attempts=3,
-        created_at=now,
-        updated_at=now,
-    )
+    execution_mock = SimpleNamespace(workflow_id="wf-3")
     service.get_proposal.return_value = proposal
-    service.promote_proposal.return_value = (proposal, job)
+    service.promote_proposal.return_value = (proposal, execution_mock)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",

@@ -58,6 +58,8 @@ def _run(**overrides):
         "dispatch_after": now,
         "queue_job_id": None,
         "queue_job_type": None,
+        "temporal_workflow_id": None,
+        "temporal_run_id": None,
         "message": None,
         "created_at": now,
         "updated_at": now,

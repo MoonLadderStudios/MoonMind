@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Iterator
@@ -14,7 +17,6 @@ from fastapi.testclient import TestClient
 
 from api_service.api.routers.mcp_tools import _get_service, router
 from api_service.auth_providers import get_current_user
-from moonmind.workflows.agent_queue import models
 
 pytestmark = []
 
@@ -106,6 +108,7 @@ def test_list_tools_returns_queue_definitions(
     }.issubset(names)
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 def test_call_queue_enqueue_success_returns_wrapped_job(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

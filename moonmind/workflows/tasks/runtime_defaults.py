@@ -1,4 +1,8 @@
-"""Helpers for resolving default queue task runtime settings."""
+"""Helpers for resolving default task runtime settings.
+
+Relocated from the deleted ``moonmind.workflows.agent_queue.runtime_defaults``
+module as part of the single-substrate migration.
+"""
 
 from __future__ import annotations
 
@@ -43,7 +47,7 @@ def resolve_default_task_runtime(
     *,
     fallback: str = DEFAULT_TASK_RUNTIME,
 ) -> str:
-    """Return the configured queue default runtime with a stable fallback."""
+    """Return the configured default runtime with a stable fallback."""
 
     configured = _clean_optional_string(
         getattr(workflow_settings, "default_task_runtime", None)

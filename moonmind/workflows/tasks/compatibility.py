@@ -22,8 +22,6 @@ from moonmind.schemas.task_compatibility_models import (
     TaskCompatibilityRow,
     TaskDebugContext,
 )
-from moonmind.workflows.agent_queue import models as queue_models
-from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
 from moonmind.workflows.tasks.source_mapping import TaskSourceMappingService
 
 TaskSourceFilter = Literal["queue", "temporal", "all"] | None
@@ -51,14 +49,7 @@ _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.FAILED: "failed",
     db_models.MoonMindWorkflowState.CANCELED: "cancelled",
 }
-_QUEUE_STATUS_MAP: dict[queue_models.AgentJobStatus, str] = {
-    queue_models.AgentJobStatus.QUEUED: "queued",
-    queue_models.AgentJobStatus.RUNNING: "running",
-    queue_models.AgentJobStatus.SUCCEEDED: "succeeded",
-    queue_models.AgentJobStatus.FAILED: "failed",
-    queue_models.AgentJobStatus.CANCELLED: "cancelled",
-    queue_models.AgentJobStatus.DEAD_LETTER: "failed",
-}
+
 _ALLOWED_SEARCH_ATTRIBUTE_KEYS = {
     "mm_owner_type",
     "mm_owner_id",
@@ -199,7 +190,7 @@ class TaskCompatibilityService:
             return self._build_temporal_detail(record, user)
         if resolved.source == "queue":
             job = await self._session.get(
-                queue_models.AgentJob, UUID(resolved.source_record_id)
+                "Any", UUID(resolved.source_record_id)
             )
             if job is None:
                 raise RuntimeError(f"Queue task {task_id} disappeared.")
@@ -257,16 +248,16 @@ class TaskCompatibilityService:
         owner_id: str | None,
         limit: int,
     ) -> tuple[list[TaskCompatibilityRow], int]:
-        stmt = select(queue_models.AgentJob)
+        stmt = select("Any")
         if entry == "manifest":
-            stmt = stmt.where(queue_models.AgentJob.type == MANIFEST_JOB_TYPE)
+            stmt = stmt.where("Any" == MANIFEST_JOB_TYPE)
         elif entry == "run":
-            stmt = stmt.where(queue_models.AgentJob.type != MANIFEST_JOB_TYPE)
+            stmt = stmt.where("Any" != MANIFEST_JOB_TYPE)
         queue_statuses = self._queue_statuses_for_filter(status_filter)
         if queue_statuses == ():
             return [], 0
         if queue_statuses is not None:
-            stmt = stmt.where(queue_models.AgentJob.status.in_(queue_statuses))
+            stmt = stmt.where("Any".in_(queue_statuses))
 
         normalized_owner_id = str(owner_id or "").strip()
         if normalized_owner_id:
@@ -278,9 +269,9 @@ class TaskCompatibilityService:
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         stmt = stmt.order_by(
-            queue_models.AgentJob.created_at.desc(),
-            queue_models.AgentJob.updated_at.desc(),
-            queue_models.AgentJob.id.desc(),
+            "Any".desc(),
+            "Any".desc(),
+            "Any".desc(),
         ).limit(limit)
         jobs = list((await self._session.execute(stmt)).scalars().all())
         total_count = int((await self._session.execute(count_stmt)).scalar_one())
@@ -366,7 +357,7 @@ class TaskCompatibilityService:
             normalized.append(row)
         return normalized, total_count
 
-    def _build_queue_row(self, job: queue_models.AgentJob) -> TaskCompatibilityRow:
+    def _build_queue_row(self, job: "Any") -> TaskCompatibilityRow:
         payload = dict(job.payload or {})
         task_node = payload.get("task") if isinstance(payload.get("task"), dict) else {}
         instructions = ""
@@ -382,7 +373,7 @@ class TaskCompatibilityService:
             entry="manifest" if job.type == MANIFEST_JOB_TYPE else "run",
             title=title,
             summary=instructions or None,
-            status=_QUEUE_STATUS_MAP.get(job.status, "queued"),
+            status="queued",  # legacy queue status mapping removed
             rawState=job.status.value,
             workflowId=None,
             workflowType=None,
@@ -458,7 +449,7 @@ class TaskCompatibilityService:
 
     def _build_queue_detail(
         self,
-        job: queue_models.AgentJob,
+        job: "Any",
     ) -> TaskCompatibilityDetail:
         row = self._build_queue_row(job)
         return TaskCompatibilityDetail(
@@ -686,19 +677,19 @@ class TaskCompatibilityService:
     def _queue_statuses_for_filter(
         self,
         status_filter: TaskStatusFilter,
-    ) -> tuple[queue_models.AgentJobStatus, ...] | None:
+    ) -> tuple["Any", ...] | None:
         if status_filter is None:
             return None
         mapping = {
-            "queued": (queue_models.AgentJobStatus.QUEUED,),
-            "running": (queue_models.AgentJobStatus.RUNNING,),
+            "queued": ("Any",),
+            "running": ("Any",),
             "awaiting_action": (),
-            "succeeded": (queue_models.AgentJobStatus.SUCCEEDED,),
+            "succeeded": ("Any",),
             "failed": (
-                queue_models.AgentJobStatus.FAILED,
-                queue_models.AgentJobStatus.DEAD_LETTER,
+                "Any",
+                "Any",
             ),
-            "cancelled": (queue_models.AgentJobStatus.CANCELLED,),
+            "cancelled": ("Any",),
         }
         return mapping[status_filter]
 
@@ -726,10 +717,10 @@ class TaskCompatibilityService:
     def _queue_owner_id_expression(self):
         return case(
             (
-                queue_models.AgentJob.created_by_user_id.is_not(None),
-                queue_models.AgentJob.created_by_user_id,
+                "Any".is_not(None),
+                "Any",
             ),
-            else_=queue_models.AgentJob.requested_by_user_id,
+            else_="Any",
         )
 
     def _temporal_owner_id_expression(self):

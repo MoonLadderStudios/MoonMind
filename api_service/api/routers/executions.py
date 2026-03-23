@@ -26,7 +26,6 @@ from api_service.db.models import (
 )
 from moonmind.config.settings import settings
 from moonmind.workflows.tasks.routing import _coerce_bool
-from moonmind.schemas.agent_queue_models import CreateJobRequest
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -54,6 +53,7 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from api_service.api.schemas import CreateJobRequest
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"

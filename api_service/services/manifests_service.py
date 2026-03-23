@@ -12,12 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import ManifestRecord, MoonMindWorkflowState
 from moonmind.schemas.manifest_ingest_models import manifest_node_counts_from_nodes
-from moonmind.workflows.agent_queue import models as queue_models
-from moonmind.workflows.agent_queue.job_types import MANIFEST_JOB_TYPE
-from moonmind.workflows.agent_queue.manifest_contract import (
-    normalize_manifest_job_payload,
-)
-from moonmind.workflows.agent_queue.service import AgentQueueService
+from moonmind.workflows.tasks.manifest_contract import normalize_manifest_job_payload
 from moonmind.workflows.tasks.routing import get_routing_target_for_task
 from moonmind.workflows.temporal import (
     ManifestIngestValidationError,
@@ -41,7 +36,7 @@ class ManifestRunSubmission:
 
     source: str
     status: str
-    job: queue_models.AgentJob | None = None
+    job: "Any" | None = None
     workflow_id: str | None = None
     run_id: str | None = None
     workflow_type: str | None = None

@@ -6,7 +6,6 @@ import asyncio
 import json
 from typing import Any
 
-from moonmind.workflows.agent_queue.storage import AgentQueueArtifactStorage
 
 
 class RuntimeLogStreamer:
@@ -14,7 +13,7 @@ class RuntimeLogStreamer:
 
     CHUNK_SIZE = 64 * 1024  # 64KB
 
-    def __init__(self, artifact_storage: AgentQueueArtifactStorage) -> None:
+    def __init__(self, artifact_storage: Any) -> None:
         self._storage = artifact_storage
 
     async def stream_to_artifact(

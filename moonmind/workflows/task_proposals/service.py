@@ -15,16 +15,6 @@ from pydantic import ValidationError
 
 from moonmind.config import settings
 from moonmind.utils.logging import SecretRedactor
-from moonmind.workflows.agent_queue.service import (
-    AgentQueueAuthenticationError,
-    AgentQueueService,
-    AgentQueueValidationError,
-    WorkerAuthPolicy,
-)
-from moonmind.workflows.agent_queue.task_contract import (
-    CanonicalTaskPayload,
-    TaskContractError,
-)
 from moonmind.workflows.task_proposals.models import (
     TaskProposal,
     TaskProposalOriginSource,
@@ -34,6 +24,10 @@ from moonmind.workflows.task_proposals.models import (
 from moonmind.workflows.task_proposals.repositories import (
     TaskProposalNotFoundError,
     TaskProposalRepository,
+)
+from moonmind.workflows.tasks.task_contract import (
+    CanonicalTaskPayload,
+    TaskContractError,
 )
 
 logger = logging.getLogger(__name__)
@@ -717,18 +711,8 @@ class TaskProposalService:
         note: str | None = None,
         task_create_request_override: dict[str, Any] | None = None,
     ) -> tuple[TaskProposal, Any]:
-        proposal = await self._repository.get_proposal_for_update(proposal_id)
-        if proposal.status is TaskProposalStatus.PROMOTED:
-            if proposal.promoted_job_id is None:
-                raise TaskProposalStatusError(
-                    "proposal already promoted without job id"
-                )
-            job = await self._queue_service.get_job(proposal.promoted_job_id)
-            if job is None:
-                raise TaskProposalStatusError(
-                    "proposal already promoted but job record is unavailable"
-                )
-            return proposal, job
+        """Deprecated."""
+        raise NotImplementedError("Legacy queue backend is disabled")
         if proposal.status is not TaskProposalStatus.OPEN:
             raise TaskProposalStatusError(
                 f"proposal status {proposal.status.value} cannot be promoted"
@@ -782,7 +766,6 @@ class TaskProposalService:
         )
 
         proposal.status = TaskProposalStatus.PROMOTED
-        proposal.promoted_job_id = job.id
         proposal.promoted_at = datetime.now(UTC)
         proposal.promoted_by_user_id = promoted_by_user_id
         proposal.decided_by_user_id = promoted_by_user_id

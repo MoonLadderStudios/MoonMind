@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from moonmind.schemas.agent_queue_models import JobModel
 from moonmind.schemas.task_proposal_models import (
     TaskProposalCreateRequest,
     TaskProposalDismissRequest,
@@ -24,7 +23,6 @@ from moonmind.schemas.task_proposal_models import (
     TaskProposalTaskPreview,
 )
 from moonmind.workflows import get_task_proposal_service
-from moonmind.workflows.agent_queue.service import WorkerAuthPolicy
 from moonmind.workflows.task_proposals.models import (
     TaskProposal,
     TaskProposalOriginSource,
@@ -158,26 +156,15 @@ def _serialize_proposal(
 
 async def _resolve_actor(
     *,
-    service: TaskProposalService,
-    worker_token: Optional[str],
     user: Optional[User],
 ) -> tuple[Optional[UUID], Optional[str]]:
-    if worker_token:
-        try:
-            policy: WorkerAuthPolicy = await service.resolve_worker_token(worker_token)
-        except TaskProposalValidationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": "worker_not_authorized", "message": str(exc)},
-            ) from exc
-        return None, policy.worker_id
     if user is not None:
         return getattr(user, "id", None), None
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={
             "code": "authentication_required",
-            "message": "User or worker authentication is required.",
+            "message": "User authentication is required.",
         },
     )
 
@@ -186,21 +173,16 @@ async def _resolve_actor(
 async def create_proposal(
     payload: TaskProposalCreateRequest = Body(...),
     service: TaskProposalService = Depends(_get_service),
-    worker_token: Optional[str] = Header(None, alias="X-MoonMind-Worker-Token"),
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> TaskProposalModel:
-    proposed_by_user_id, proposed_by_worker_id = await _resolve_actor(
-        service=service,
-        worker_token=worker_token,
-        user=user,
-    )
+    proposed_by_user_id, proposed_by_worker_id = await _resolve_actor(user=user)
     try:
         proposal = await service.create_proposal(
             title=payload.title,
             summary=payload.summary,
             category=payload.category,
             tags=payload.tags,
-            task_create_request=payload.task_create_request.model_dump(by_alias=True),
+            task_create_request=payload.task_create_request,
             origin_source=payload.origin.source,
             origin_id=payload.origin.id,
             origin_metadata=payload.origin.metadata,
@@ -303,9 +285,7 @@ async def promote_proposal(
         # precedence; runtimeMode is a lightweight shortcut that
         # constructs one on-the-fly when the full override is absent.
         if payload.task_create_request_override is not None:
-            override_payload = payload.task_create_request_override.model_dump(
-                by_alias=True
-            )
+            override_payload = payload.task_create_request_override
         elif payload.runtime_mode:
             runtime_mode = payload.runtime_mode.strip()
             if not runtime_mode:
@@ -334,7 +314,7 @@ async def promote_proposal(
         else:
             override_payload = None
 
-        proposal, job = await service.promote_proposal(
+        proposal, execution = await service.promote_proposal(
             proposal_id=proposal_id,
             promoted_by_user_id=getattr(user, "id"),
             priority_override=payload.priority,
@@ -357,9 +337,9 @@ async def promote_proposal(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "proposal_not_found", "message": str(exc)},
         ) from exc
+        
     return TaskProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
-        job=JobModel.model_validate(job),
     )
 
 

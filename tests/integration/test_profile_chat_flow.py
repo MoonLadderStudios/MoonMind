@@ -43,6 +43,8 @@ async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):
             user_id=user.id,
             profile_data=UserProfileUpdate(openai_api_key="user-key"),
         )
+        from api_service.auth_providers import get_current_user
+        app.dependency_overrides[get_current_user()] = lambda: user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:

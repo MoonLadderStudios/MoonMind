@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from moonmind.config.settings import settings
-from moonmind.workflows.agent_queue.runtime_defaults import (
+from moonmind.workflows.tasks.runtime_defaults import (
     DEFAULT_REPOSITORY,
     resolve_default_task_runtime,
     resolve_runtime_defaults,

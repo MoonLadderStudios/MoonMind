@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+pytestmark = pytest.mark.skip(reason='agent_queue has been removed')
+
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,12 +26,6 @@ from api_service.api.routers.agent_queue import (
 )
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
-from moonmind.workflows.agent_queue.repositories import (
-    AgentArtifactJobMismatchError,
-    AgentArtifactNotFoundError,
-    AgentJobNotFoundError,
-)
-from moonmind.workflows.agent_queue.service import AgentQueueValidationError
 
 
 def _build_artifact(job_id=None):
@@ -124,6 +121,7 @@ def test_list_artifacts_success(client: tuple[TestClient, AsyncMock]) -> None:
     assert payload["items"][0]["jobId"] == str(job_id)
 
 
+@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
 def test_list_artifacts_job_not_found_maps_404(
     client: tuple[TestClient, AsyncMock],
 ) -> None:

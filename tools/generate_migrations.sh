@@ -107,7 +107,13 @@ echo "Attempting to generate Alembic revision in ${ALEMBIC_DIR} using config ${A
 # Let's try running it from project root, with absolute path to config.
 # env.py typically uses `os.path.join(os.path.dirname(__file__), "..", "..")` to get to project root for model imports.
 
-if alembic -c "${ALEMBIC_CONFIG_FILE}" revision --autogenerate -m "$MIGRATION_MESSAGE"; then
+export POSTGRES_HOST="127.0.0.1"
+export POSTGRES_USER="${DB_USER}"
+export POSTGRES_PASSWORD="${DB_PASSWORD}"
+export POSTGRES_DB="${DB_NAME}"
+export POSTGRES_PORT="${DB_PORT}"
+poetry run alembic -c "${ALEMBIC_CONFIG_FILE}" upgrade head
+if poetry run alembic -c "${ALEMBIC_CONFIG_FILE}" revision --autogenerate -m "$MIGRATION_MESSAGE"; then
     echo "Alembic revision generated successfully in ${ALEMBIC_DIR}/versions."
 else
     echo "ERROR: Alembic revision command failed. CWD is $(pwd)."

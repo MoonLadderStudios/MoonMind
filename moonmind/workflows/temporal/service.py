@@ -192,11 +192,10 @@ class TemporalExecutionService:
 
         Used by API guard to prevent new workflow submissions (DOC-REQ-001/004/005).
         """
-        from moonmind.workflows.agent_queue.repositories import AgentQueueRepository
 
-        repo = AgentQueueRepository(self._session)
-        state = await repo.get_pause_state()
-        return bool(state.paused)
+        # TODO(phase-4): Implement Temporal-native system pause check.
+        # AgentQueueRepository was removed in Phase 3.5 queue backend removal.
+        return False
 
     async def send_quiesce_pause_signal(self) -> int:
         """Send a Quiesce pause signal to all running workflows (DOC-REQ-003, FR-007)."""

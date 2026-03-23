@@ -15,10 +15,6 @@ from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings
-from moonmind.workflows.agent_queue.service import (
-    AgentQueueAuthenticationError,
-    AgentQueueService,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +46,6 @@ def get_retrieval_service(request: Request) -> ContextRetrievalService:
     return service
 
 
-def get_agent_queue_service(
-    session=Depends(get_async_session),
-) -> AgentQueueService:
-    from moonmind.workflows import get_agent_queue_repository
-
-    repository = get_agent_queue_repository(session)
-    return AgentQueueService(repository)
-
 
 def _bearer_token(authorization_header: Optional[str]) -> Optional[str]:
     raw = str(authorization_header or "").strip()
@@ -72,29 +60,15 @@ def _bearer_token(authorization_header: Optional[str]) -> Optional[str]:
 async def authorize_retrieval_request(
     worker_token_header: Optional[str] = Header(None, alias="X-MoonMind-Worker-Token"),
     authorization_header: Optional[str] = Header(None, alias="Authorization"),
-    queue_service: AgentQueueService = Depends(get_agent_queue_service),
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> RetrievalAuthContext:
     token = worker_token_header or _bearer_token(authorization_header)
     if token:
-        try:
-            policy = await queue_service.resolve_worker_token(token)
-        except AgentQueueAuthenticationError as exc:
-            raise HTTPException(
-                status_code=401, detail="Invalid worker token."
-            ) from exc
-        capabilities = set(policy.capabilities)
-        if not capabilities.intersection(
-            {"rag", "gateway", "direct-qdrant", "rag:gateway", "rag:direct-qdrant"}
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Worker token does not have RAG retrieval capability.",
-            )
-        return RetrievalAuthContext(
-            auth_source=policy.auth_source,
-            allowed_repositories=policy.allowed_repositories,
-            capabilities=policy.capabilities,
+        # TODO(phase-4): Re-implement worker token auth with Temporal-native resolver.
+        # Queue-based AgentQueueService was removed in Phase 3.5.
+        raise HTTPException(
+            status_code=401,
+            detail="Worker token authentication is temporarily unavailable.",
         )
 
     if getattr(user, "id", None) is not None:
