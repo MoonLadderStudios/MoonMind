@@ -10,7 +10,6 @@ def _build_proposal_service_factory():
         async with get_async_session_context() as db_session:
             yield TaskProposalService(
                 TaskProposalRepository(db_session),
-                AgentQueueService(AgentQueueRepository(db_session)),
             )
     return factory
 
