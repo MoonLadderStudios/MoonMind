@@ -1092,9 +1092,9 @@ class MoonMindRunWorkflow:
                 "jobId": workflow.info().workflow_id,
                 "targetRuntime": parameters.get("runtime", {}).get("mode", "auto"),
                 "timestamps": {
-                    "startedAt": workflow.info().workflow_execution_timeout, # not strictly right but good enough
+                    "startedAt": workflow.info().start_time.isoformat(),
                     "finishedAt": workflow.now().isoformat(),
-                    "durationMs": 0,
+                    "durationMs": int((workflow.now() - workflow.info().start_time).total_seconds() * 1000),
                 },
                 "finishOutcome": {
                     "code": code,
@@ -1104,7 +1104,12 @@ class MoonMindRunWorkflow:
                 "publish": {
                     "mode": self._publish_mode(parameters),
                     "status": "skipped" if status != "success" else "published",
-                    "reason": "no local changes",
+                    "reason": (
+                        "run did not complete successfully" if status in ("failed", "canceled")
+                        else "publishing disabled" if self._publish_mode(parameters) == "none"
+                        else "published successfully" if status == "success"
+                        else "no local changes"
+                    ),
                 },
                 "proposals": {
                     "generatedCount": self._proposals_generated,
@@ -1129,13 +1134,13 @@ class MoonMindRunWorkflow:
                 "artifact.write_complete",
                 {
                     "principal": self._principal(),
-                    "artifact_id": artifact_ref.get("artifact_id") if isinstance(artifact_ref, dict) else getattr(artifact_ref, "artifact_id", ""),
+                    "artifact_id": self._get_from_result(artifact_ref, "artifact_id") or "",
                     "payload": json.dumps(finish_summary).encode("utf-8"),
                     "content_type": "application/json",
                 },
                 **self._execute_kwargs_for_route(artifact_write_route),
             )
-            self._summary_ref = artifact_ref.get("artifact_id") if isinstance(artifact_ref, dict) else getattr(artifact_ref, "artifact_id", "")
+            self._summary_ref = self._get_from_result(artifact_ref, "artifact_id") or ""
         except Exception as exc:
             workflow.logger.warning(f"Failed to generate finish summary: {exc}")
 
