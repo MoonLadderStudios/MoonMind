@@ -194,7 +194,6 @@
       ? systemConfig.temporalCompatibility
       : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
-  const WORKFLOWS_WITHOUT_LIVE_LOGS = ["MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"];
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
   );
@@ -7578,37 +7577,6 @@
       }</tbody>
         </table>
       </section>
-      ${WORKFLOWS_WITHOUT_LIVE_LOGS.includes(String(pick(execution, "workflowType") || "")) ? "" : `
-      <section id="temporal-live-logs-section">
-        <h3>Live Logs</h3>
-        <div id="temporal-live-logs-inactive">
-          <p class="small">Event logs are not streamed by default. Start tailing to see live output from this task.</p>
-          <button type="button" id="temporal-start-tailing">Start Tailing</button>
-        </div>
-        <div id="temporal-live-logs-active" style="display:none">
-          <div class="actions queue-live-output-toolbar">
-            <label class="queue-inline-toggle">
-              <input type="checkbox" id="temporal-follow-output" checked />
-              Follow output
-            </label>
-            <label class="queue-inline-filter">
-              Filter
-              <select id="temporal-output-filter">
-                <option value="all" selected>All</option>
-                <option value="stages">Stages</option>
-                <option value="logs">Logs</option>
-                <option value="warnings">Warnings/Errors</option>
-              </select>
-            </label>
-            <button type="button" class="secondary" id="temporal-copy-output">Copy</button>
-            <button type="button" class="secondary" id="temporal-stop-tailing">Stop</button>
-            <span class="small" id="temporal-live-transport-status">Live transport: Idle</span>
-          </div>
-          <pre id="temporal-live-output" class="queue-live-output"></pre>
-        </div>
-      </section>
-      <section id="temporal-live-output-section"></section>
-      `}
       ${debugFields}
     `;
   }
