@@ -25,6 +25,10 @@ from moonmind.workflows.task_proposals.repositories import (
     TaskProposalNotFoundError,
     TaskProposalRepository,
 )
+from moonmind.workflows.tasks.task_contract import (
+    CanonicalTaskPayload,
+    TaskContractError,
+)
 
 logger = logging.getLogger(__name__)
 _PROPOSALS_WRITE_CAPABILITY = "proposals_write"

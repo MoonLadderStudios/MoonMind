@@ -1,12 +1,33 @@
 import asyncio
 import json
+from pathlib import Path
+
 import pytest
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 
 
+class _StubArtifactStorage:
+    """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    def write_artifact(
+        self, *, job_id: str, artifact_name: str, data: bytes
+    ) -> tuple[Path, str]:
+        target_dir = self._root / job_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / artifact_name
+        target.write_bytes(data)
+        return target, f"{job_id}/{artifact_name}"
+
+    def resolve_storage_path(self, ref: str) -> Path:
+        return self._root / ref
+
+
 @pytest.fixture
 def streamer(tmp_path):
-    storage = AgentQueueArtifactStorage(tmp_path)
+    storage = _StubArtifactStorage(tmp_path)
     return RuntimeLogStreamer(storage), storage
 
 

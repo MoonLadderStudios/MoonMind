@@ -7,6 +7,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 if TYPE_CHECKING:
     pass
 
+
+class CreateJobRequest(BaseModel):
+    """Request body for queue job creation (compatibility shim)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = Field(..., alias="type")
+    priority: int = Field(0, alias="priority")
+    payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
+    affinity_key: Optional[str] = Field(None, alias="affinityKey")
+    max_attempts: int = Field(3, alias="maxAttempts", ge=1)
+    schedule: Optional[Any] = Field(None, alias="schedule")
+
 class UserProfileBaseSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

@@ -53,6 +53,7 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from api_service.api.schemas import CreateJobRequest
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 _TEMPORAL_SOURCE = "temporal"

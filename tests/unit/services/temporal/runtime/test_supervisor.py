@@ -10,6 +10,23 @@ from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 
 
+class _StubArtifactStorage:
+    """Minimal file-based artifact storage for tests (replaces AgentQueueArtifactStorage)."""
+
+    def __init__(self, root) -> None:
+        self._root = root
+
+    def write_artifact(self, *, job_id, artifact_name, data):
+        target_dir = self._root / job_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / artifact_name
+        target.write_bytes(data)
+        return target, f"{job_id}/{artifact_name}"
+
+    def resolve_storage_path(self, ref):
+        return self._root / ref
+
+
 def _make_record(
     store: ManagedRunStore,
     run_id: str = "run-1",
@@ -36,7 +53,7 @@ def supervisor_env(tmp_path):
     artifact_root.mkdir()
 
     store = ManagedRunStore(store_root)
-    artifact_storage = AgentQueueArtifactStorage(artifact_root)
+    artifact_storage = _StubArtifactStorage(artifact_root)
     log_streamer = RuntimeLogStreamer(artifact_storage)
     supervisor = ManagedRunSupervisor(store, log_streamer)
     return store, artifact_storage, log_streamer, supervisor
