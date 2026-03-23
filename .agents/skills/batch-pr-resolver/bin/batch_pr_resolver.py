@@ -355,12 +355,14 @@ def _build_queue_request(
     if runtime_payload:
         payload_dict["task"]["runtime"] = runtime_payload
 
-    return {
+    request: dict[str, Any] = {
         "type": "task",
         "priority": priority,
         "maxAttempts": max_attempts,
         "payload": payload_dict,
     }
+
+    return request
 
 
 def _parse_args() -> argparse.Namespace:
@@ -506,13 +508,16 @@ async def _submit_jobs_via_db(
             queue_type = str(request["type"])
             priority = int(request.get("priority", 0))
             max_attempts = int(request.get("maxAttempts", 3))
+            
+            kwargs = {
+                "job_type": queue_type,
+                "payload": payload,
+                "priority": priority,
+                "max_attempts": max_attempts,
+            }
+
             try:
-                job = await service.create_job(
-                    job_type=queue_type,
-                    payload=payload,
-                    priority=priority,
-                    max_attempts=max_attempts,
-                )
+                job = await service.create_job(**kwargs)
                 created.append(
                     {
                         "pr": submission.pr_number,

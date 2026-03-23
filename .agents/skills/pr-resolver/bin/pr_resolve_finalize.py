@@ -35,6 +35,32 @@ CONFLICTING_MERGEABLE = {"CONFLICTING", "DIRTY"}
 DIRECT_MERGE_STATE = {"CLEAN"}
 
 
+def _check_pr_merged(selector: str | None) -> bool:
+    """Best-effort check whether the PR identified by *selector* is merged.
+
+    Returns ``True`` when ``gh pr view`` reports ``state: MERGED``.
+    Returns ``False`` on any error or non-merged state so the caller
+    can fall through to standard error handling.
+    """
+    if not selector:
+        return False
+    cmd = ["gh", "pr", "view", str(selector), "--json", "state"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(payload, dict)
+        and normalize_text(payload.get("state")).upper() == "MERGED"
+    )
+
+
 def _is_conflicting(pr: dict[str, Any]) -> bool:
     mergeable = pr.get("mergeable")
     merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
@@ -197,6 +223,20 @@ def main() -> None:
                 _run_snapshot(snapshot_script, args.pr, snapshot_path)
             except subprocess.CalledProcessError as exc:
                 if exc.returncode == EXIT_CODE_FAILED:
+                    # The snapshot failed — but the PR may simply have been
+                    # merged (and its branch deleted) between task creation
+                    # and execution.  Check before reporting failure.
+                    if _check_pr_merged(args.pr):
+                        _write_result(
+                            result_path,
+                            snapshot={"pr": {"state": "MERGED"}},
+                            decision="already merged (detected after snapshot failure)",
+                            merge_outcome="merged",
+                            status="merged",
+                            reason="already_merged",
+                        )
+                        print("PR is already merged (detected after snapshot failure).")
+                        sys.exit(EXIT_CODE_MERGED)
                     _write_result(
                         result_path,
                         snapshot={"pr": {}},

@@ -6836,6 +6836,14 @@ class CodexWorker:
         else:
             pr_node = snapshot_payload.get("pr")
             pr = pr_node if isinstance(pr_node, Mapping) else {}
+
+            # Shortcircuit: if the PR is already merged, skip all signal
+            # checks — the objective is satisfied regardless of stale
+            # snapshot data (e.g. CI, comments, merge state).
+            pr_state = str(pr.get("state") or "").strip().upper()
+            if pr_state == "MERGED":
+                return StepGateResult(passed=True)
+
             comments_node = snapshot_payload.get("commentsSummary")
             comments_summary = (
                 comments_node if isinstance(comments_node, Mapping) else {}
