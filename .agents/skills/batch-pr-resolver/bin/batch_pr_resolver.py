@@ -316,6 +316,7 @@ def _build_queue_request(
     priority: int,
     max_attempts: int,
     skill_version: str = "1.0",
+    schedule_after_minutes: int | None = None,
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
     runtime_payload: dict[str, Any] = {"mode": runtime.mode}
@@ -324,7 +325,7 @@ def _build_queue_request(
     if runtime.effort:
         runtime_payload["effort"] = runtime.effort
 
-    return {
+    request: dict[str, Any] = {
         "type": "task",
         "priority": priority,
         "maxAttempts": max_attempts,
@@ -358,6 +359,18 @@ def _build_queue_request(
             },
         },
     }
+
+    if schedule_after_minutes is not None:
+        from datetime import timedelta
+        scheduled_for = (datetime.now(UTC) + timedelta(minutes=schedule_after_minutes)).isoformat()
+        if scheduled_for.endswith("+00:00"):
+            scheduled_for = scheduled_for[:-6] + "Z"
+        request["schedule"] = {
+            "mode": "once",
+            "scheduledFor": scheduled_for
+        }
+
+    return request
 
 
 def _parse_args() -> argparse.Namespace:
@@ -464,6 +477,8 @@ async def _submit_jobs_via_http(
                 "priority": int(request.get("priority", 0)),
                 "maxAttempts": int(request.get("maxAttempts", 3)),
             }
+            if "schedule" in request:
+                body["schedule"] = request["schedule"]
             try:
                 response = await client.post("/api/queue/jobs", json=body)
                 response.raise_for_status()
@@ -504,13 +519,18 @@ async def _submit_jobs_via_db(
             queue_type = str(request["type"])
             priority = int(request.get("priority", 0))
             max_attempts = int(request.get("maxAttempts", 3))
+            
+            kwargs = {
+                "job_type": queue_type,
+                "payload": payload,
+                "priority": priority,
+                "max_attempts": max_attempts,
+            }
+            if "schedule" in request:
+                kwargs["schedule"] = request["schedule"]
+
             try:
-                job = await service.create_job(
-                    job_type=queue_type,
-                    payload=payload,
-                    priority=priority,
-                    max_attempts=max_attempts,
-                )
+                job = await service.create_job(**kwargs)
                 created.append(
                     {
                         "pr": submission.pr_number,
@@ -568,6 +588,7 @@ def _build_request_records(
             "head branches are not reliably check-outable by the worker."
         )
 
+    delay_minutes = 30
     for pr in open_prs:
         number = pr.get("number")
         branch = _extract_branch(pr)
@@ -585,10 +606,12 @@ def _build_request_records(
             priority=args.priority,
             max_attempts=args.max_attempts,
             skill_version=args.skill_version,
+            schedule_after_minutes=delay_minutes,
         )
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
         )
+        delay_minutes += 30
 
     return queue_requests, skipped
 
