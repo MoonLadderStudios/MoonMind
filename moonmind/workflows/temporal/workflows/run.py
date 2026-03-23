@@ -64,8 +64,10 @@ STATE_AWAITING_EXTERNAL = "awaiting_external"
 STATE_FINALIZING = "finalizing"
 STATE_SUCCEEDED = "succeeded"
 STATE_CANCELED = "canceled"
+STATE_FAILED = "failed"
 CLOSE_STATUS_COMPLETED = "completed"
 CLOSE_STATUS_CANCELED = "canceled"
+CLOSE_STATUS_FAILED = "failed"
 OWNER_ID_SEARCH_ATTRIBUTE = "mm_owner_id"
 OWNER_TYPE_SEARCH_ATTRIBUTE = "mm_owner_type"
 _GITHUB_PR_URL_PATTERN = re.compile(
@@ -246,6 +248,8 @@ class MoonMindRunWorkflow:
                 plan_ref=resolved_plan_ref,
             )
         except ValueError as exc:
+            self._close_status = CLOSE_STATUS_FAILED
+            self._set_state(STATE_FAILED, summary=str(exc))
             raise exceptions.ApplicationError(
                 str(exc),
                 non_retryable=True,
