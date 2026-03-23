@@ -134,7 +134,7 @@ class ManagedRuntimeStrategy(ABC):
 
         Note: The underlying helpers (_OAUTH_CLEARED_VARS,
         _shape_environment_for_oauth) are also used by the OAuth
-        Session orchestrator (UniversalTmateOAuth.md §9.2).  Shared
+        session orchestrator (UniversalTmateOAuth.md §9.2).  Shared
         env-shaping logic should be factored into common utilities
         rather than duplicated.
         """
@@ -273,7 +273,7 @@ The codebase has adopted a **Strategy Pattern-based Registry** (`ManagedRuntimeS
 **Still outstanding:**
 - **Gemini/Claude** workspace prep content (no-op stubs)
 - **Output parser integration** into `RuntimeLogStreamer` for structured event streaming
-- **Shared env-shaping module** (`moonmind/auth/env_shaping.py`) to unify strategies and OAuth orchestrator
+- **Shared env-shaping module** (`moonmind/auth/env_shaping.py`) to unify strategies and OAuth session orchestrator
 - **Adapter auth-mode fallback** still has legacy `cursor_cli → oauth` branch for unregistered runtimes
 - **`agent_runtime_env_keys` in `settings.py`** may be dead config — verify and clean up
 - **codex_worker** unification: self-heal, metrics, and secret refs not yet factored into shared services
@@ -377,7 +377,7 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 - [x] Implement and verify `CursorCliStrategy.prepare_workspace()` — write `.cursor/rules/` and `.cursor/cli.json` via existing helpers
 - [x] Add workspace prep call in `launcher.py:launch()` after workspace resolution, before subprocess spawn *(calls `await strategy.prepare_workspace(...)`)*
 - [x] Wire launcher subprocess env through `strategy.shape_environment()` (launcher line 419)
-- [ ] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth Session orchestrator (per UniversalTmateOAuth.md alignment)
+- [ ] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per UniversalTmateOAuth.md alignment)
 - [ ] Clean up `agent_runtime_env_keys` in `settings.py` if confirmed dead config
 - [ ] Remove dead imports and unused code from adapter and launcher
 - [ ] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference the managed runtime strategy pattern

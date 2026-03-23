@@ -107,7 +107,7 @@ For **Temporal-managed work**, Temporal Visibility is the list/query/count sourc
 During migration, MoonMind may still expose unified task-oriented surfaces that combine:
 
 * queue-backed tasks
-* orchestrator-backed tasks
+* system-backed tasks
 * Temporal-backed executions
 
 The platform contract here is narrower: Temporal-managed records should be listed from **Temporal Visibility**, not from mirrored Postgres dashboard tables.

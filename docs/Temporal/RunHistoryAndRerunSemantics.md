@@ -41,7 +41,7 @@ This is a focused lifecycle document. It does **not** redefine the broader Tempo
 ### 3.2 Out of scope
 
 - Designing a full Temporal-native operator UI
-- Replacing all existing `/tasks/*` or `/orchestrator/*` compatibility routes now
+- Replacing all existing `/tasks/*` or `/system/*` compatibility routes now
 - Defining every Search Attribute and list filter (covered elsewhere)
 - Building an immutable per-run audit/read model in this document
 
@@ -96,7 +96,7 @@ Rules:
 
 The repo currently has both:
 
-- legacy/transitional **orchestrator run** concepts in task/orchestrator docs, and
+- legacy/transitional **system run** concepts in task/system docs, and
 - Temporal **run IDs** in the Temporal execution API model.
 
 To avoid confusion:
@@ -104,7 +104,7 @@ To avoid confusion:
 - product-facing documentation should treat `workflowId` as the durable logical execution handle
 - Temporal run instance IDs should be described as **run IDs for the current Temporal run**
 - if a compatibility surface needs explicit disambiguation later, it should use `temporalRunId` in external payloads or docs
-- legacy `runId` naming from orchestrator-era contracts should not be reused to mean Temporal run ID in task-facing compatibility payloads
+- legacy `runId` naming from system-era contracts should not be reused to mean Temporal run ID in task-facing compatibility payloads
 
 ## 6. Run history model
 

@@ -42,7 +42,6 @@ class TaskProposalOriginSource(str, enum.Enum):
     """Accepted proposal origin sources for auditing."""
 
     QUEUE = "queue"
-    ORCHESTRATOR = "orchestrator"
     WORKFLOW = "workflow"
     MANUAL = "manual"
 

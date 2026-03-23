@@ -1,6 +1,6 @@
 # Skill & Plan Design Evolution (MoonMind & Temporal)
 
-**Executive Summary:** The MoonMind orchestrator uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
+**Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
 
 ## Current MoonMind Tool & Plan Contracts
 
@@ -147,7 +147,7 @@ Two dispatch paths exist for plan nodes:
 ## Diagram: Plan Execution (Mermaid)
 ```mermaid
 flowchart LR
-  subgraph Workflow["MoonMind Workflow (orchestrator)"]
+  subgraph Workflow["MoonMind Workflow (system)"]
     A[Load Plan Artifact] --> B[Validate Plan Activity]
     B --> C{Plan Valid?}
     C -- No --> E[Fail Workflow]

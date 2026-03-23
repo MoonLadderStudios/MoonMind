@@ -8,7 +8,7 @@ Last Updated: 2026-03-18
 
 Define the concrete implementation architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, artifact flows, and phased rollout.
 
-The dashboard integrates securely over the Control Plane API, interpreting Temporal execution statuses alongside legacy queue and orchestrator sources.
+The dashboard integrates securely over the Control Plane API, interpreting Temporal execution statuses alongside legacy queue and system sources.
 
 ## 2. Related Docs
 
@@ -123,7 +123,7 @@ The dashboard presents work from multiple backend sources through a unified UI.
 Runtime config (`build_runtime_config()`) currently exposes:
 
 - `queue`
-- `orchestrator`
+- `system`
 - `proposals`
 - `manifests`
 - `schedules`
@@ -131,7 +131,7 @@ Runtime config (`build_runtime_config()`) currently exposes:
 
 ### 5.2 Temporal as a Dashboard Source
 
-Temporal-backed work is integrated as a **first-class source** alongside queue and orchestrator, not as a separate UI or a worker runtime.
+Temporal-backed work is integrated as a **first-class source** alongside queue and system, not as a separate UI or a worker runtime.
 
 Rules:
 
@@ -148,7 +148,7 @@ Rules:
 
 - Do **not** add `temporal` as a worker runtime option.
 - Do **not** overload the existing runtime picker to mean "execution engine."
-- Prefer invisible backend routing: the user submits a task-shaped request, and the backend decides whether the execution is queue-backed, orchestrator-backed, or Temporal-backed.
+- Prefer invisible backend routing: the user submits a task-shaped request, and the backend decides whether the execution is queue-backed, system-backed, or Temporal-backed.
 
 ### 5.4 Task-Oriented Product Surface
 
@@ -248,7 +248,7 @@ When viewing `/tasks/:taskId`, the dashboard polls the API (which maps to Tempor
 
 ### 7.1 Temporal Detail Routing
 
-The current dashboard route shell assumes queue/orchestrator-era identifier patterns in places.
+The current dashboard route shell assumes queue/system-era identifier patterns in places.
 
 Required change:
 
@@ -259,7 +259,7 @@ Required change:
 Recommendation:
 
 - Keep `/tasks/:taskId` as the canonical product route.
-- Use a persisted source mapping / global task index to resolve `taskId` to `queue`, `orchestrator`, or `temporal`.
+- Use a persisted source mapping / global task index to resolve `taskId` to `queue`, `system`, or `temporal`.
 - Widen the route allowlist to accept safe Temporal-compatible identifiers as an implementation detail.
 - Optionally add `/tasks/executions/:workflowId` as an internal/debug alias that redirects to `/tasks/:taskId?source=temporal`.
 
@@ -326,7 +326,7 @@ V1 detail behavior for Temporal-backed work:
 When `source` is not pinned, the client may merge rows from:
 
 - queue
-- orchestrator
+- system
 - temporal
 
 Rules:
@@ -345,7 +345,7 @@ Behavior:
 - Call `GET /api/executions`.
 - Pass `workflowType`, `state`, `entry`, `ownerType`, `ownerId`, `pageSize`, and `nextPageToken` where applicable.
 - Use the returned `nextPageToken`, `count`, and `countMode` as-is.
-- Avoid pretending that queue/orchestrator records are part of the same exact paginated result set.
+- Avoid pretending that queue/system records are part of the same exact paginated result set.
 
 ### 8.3 Row Model for Temporal-Backed Items
 
@@ -623,14 +623,14 @@ Rules:
 - `taskId` remains the main dashboard route handle during migration.
 - `workflowId` is the durable Temporal identity.
 - `temporalRunId` is detail/debug metadata, not the main user-facing identifier.
-- `runId` remains reserved for legacy orchestrator compatibility and should not be reused for Temporal-backed task payloads.
+- `runId` remains reserved for legacy system compatibility and should not be reused for Temporal-backed task payloads.
 
 ### 12.3 Mixed-Source List Caveat
 
 A mixed-source `/tasks/list` page is a product convenience view, not a universal durable source of truth.
 
 - Queue-backed rows remain sourced from queue APIs.
-- Orchestrator-backed rows remain sourced from orchestrator APIs.
+- system-backed rows remain sourced from system APIs.
 - Temporal-backed rows remain sourced from Temporal lifecycle APIs.
 - No shared global pagination promise across all three systems.
 
@@ -736,4 +736,4 @@ A mixed-source `/tasks/list` page is a product convenience view, not a universal
 2. Is the current `awaiting_action` compatibility grouping sufficient once `waitingReason` and `attentionRequired` are exposed, or do we eventually want a sharper dashboard distinction for approval versus external wait states?
 3. Should direct Temporal-backed create be hidden entirely behind backend routing, or exposed as a feature-flagged advanced submit path during rollout?
 4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common?
-5. When a queue- or orchestrator-backed flow migrates to Temporal, should the dashboard preserve the previous source label for user continuity, or show `Temporal` directly?
+5. When a queue- or system-backed flow migrates to Temporal, should the dashboard preserve the previous source label for user continuity, or show `Temporal` directly?
