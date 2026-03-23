@@ -234,4 +234,4 @@ The Mission Control UI must be updated to support viewing and configuring task d
 
 ## 8. Implementation Plan
 
-See [`docs/tmp/TaskDependenciesPlan.md`](../tmp/TaskDependenciesPlan.md) for the phased implementation plan with current status.
+See [`docs/plans/TaskDependenciesPlan.md`](../plans/TaskDependenciesPlan.md) for the phased implementation plan with current status.
