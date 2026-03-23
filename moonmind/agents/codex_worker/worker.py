@@ -47,12 +47,12 @@ from moonmind.workflows.tasks.task_contract import (
     is_self_managed_publish_skill,
 )
 from moonmind.agents.codex_worker.metrics import WorkerMetrics
-from moonmind.agents.codex_worker.secret_refs import (
+from moonmind.auth.secret_refs import (
     SecretReferenceError,
     VaultSecretResolver,
     load_vault_token,
 )
-from moonmind.agents.codex_worker.self_heal import (
+from moonmind.workflows.temporal.runtime.self_heal import (
     FailureClass,
     IdleTimeoutWatcher,
     SelfHealConfig,

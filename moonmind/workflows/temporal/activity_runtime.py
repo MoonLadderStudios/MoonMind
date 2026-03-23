@@ -70,6 +70,26 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 
+from moonmind.publish.service import PublishService
+
+class CmdRes:
+    def __init__(self, stdout_bytes: bytes):
+        self._stdout_bytes = stdout_bytes
+
+    @property
+    def stdout(self) -> str:
+        return self._stdout_bytes.decode('utf-8', errors='replace')
+
+async def _run_command(cmd, **kwargs):
+    check = kwargs.pop("check", True)
+    kwargs["stdout"] = asyncio.subprocess.PIPE
+    kwargs["stderr"] = asyncio.subprocess.PIPE
+    proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+    stdout, stderr = await proc.communicate()
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}")
+    return CmdRes(stdout)
+
 logger = getLogger(__name__)
 
 HeartbeatCallback = Callable[[Mapping[str, Any]], Awaitable[None] | None]
@@ -2625,15 +2645,49 @@ class TemporalAgentRuntimeActivities:
                 if path
             ]
 
-        task = asyncio.create_task(
-            self._run_supervisor.supervise(
-                run_id=run_id,
-                process=process,
-                timeout_seconds=timeout_seconds,
-                exit_code_path=exit_code_path,
-                cleanup_paths=cleanup_paths,
-            )
-        )
+        async def _supervise_and_publish():
+            try:
+                record = await self._run_supervisor.supervise(
+                    run_id=run_id,
+                    process=process,
+                    timeout_seconds=timeout_seconds,
+                    exit_code_path=exit_code_path,
+                    cleanup_paths=cleanup_paths,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Supervisor failed for run %s", run_id, exc_info=True)
+                return
+
+            if record.status == "completed" and workspace_path:
+                publish_mode = request.parameters.get("publishMode", "none")
+                if publish_mode != "none":
+                    try:
+                        try:
+                            job_id = UUID(run_id)
+                        except ValueError:
+                            job_id = UUID(hashlib.md5(run_id.encode('utf-8')).hexdigest())
+
+                        instruction = request.parameters.get("description") or request.parameters.get("title") or "Automated execution"
+                        publish_base_branch = request.parameters.get("publishBaseBranch", "main")
+
+                        svc = PublishService()
+                        await svc.publish(
+                            job_id=job_id,
+                            instruction=instruction,
+                            publish_mode=publish_mode,
+                            publish_base_branch=publish_base_branch,
+                            runtime_mode=profile.runtime_id or "managed",
+                            repo_dir=Path(workspace_path),
+                            run_command=_run_command,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error("PublishService failed for run %s", run_id, exc_info=True)
+
+        task = asyncio.create_task(_supervise_and_publish())
         self._supervision_tasks.add(task)
         task.add_done_callback(self._supervision_tasks.discard)
 
