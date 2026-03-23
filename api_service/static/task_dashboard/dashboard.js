@@ -6983,6 +6983,7 @@
     planning: ["rename", "cancel"],
     queued: ["rename", "cancel"],
     running: ["pause", "rename", "cancel"],
+    scheduled: ["rename", "cancel"],
     succeeded: ["rerun"],
   };
 
