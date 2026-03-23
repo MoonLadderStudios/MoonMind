@@ -925,36 +925,48 @@ class MoonMindAgentRun:
             return AgentRunResult(failure_class="execution_error")
 
         except CancelledError:
+            tasks = []
+
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = f"auth-profile-manager:{runtime_id}"
-                try:
-                    manager_handle = workflow.get_external_workflow_handle(manager_id)
-                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
-                except Exception:
-                    # Errors are intentionally ignored to avoid masking the original cancellation
-                    workflow.logger.warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
+                
+                async def _release_slot():
+                    try:
+                        manager_handle = workflow.get_external_workflow_handle(manager_id)
+                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                    except Exception:
+                        # Errors are intentionally ignored to avoid masking the original cancellation
+                        workflow.logger.warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
+                
+                tasks.append(asyncio.shield(_release_slot()))
 
             if self.run_id is not None and self.agent_kind is not None:
-                try:
-                    if self.agent_kind == "external" and self._external_agent_id is not None:
-                        # Route external cancel through integration activity.
-                        await workflow.execute_activity(
-                            f"integration.{self._external_agent_id}.cancel",
-                            {"external_id": self.run_id},
-                            task_queue=INTEGRATIONS_TASK_QUEUE,
-                            start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
-                        )
-                    else:
-                        await workflow.execute_activity(
-                            "agent_runtime.cancel",
-                            {"agent_kind": self.agent_kind, "run_id": self.run_id},
-                            task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                            start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
-                        )
-                except Exception:
-                    workflow.logger.warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
+                async def _cancel_agent():
+                    try:
+                        if self.agent_kind == "external" and self._external_agent_id is not None:
+                            # Route external cancel through integration activity.
+                            await workflow.execute_activity(
+                                f"integration.{self._external_agent_id}.cancel",
+                                {"external_id": self.run_id},
+                                task_queue=INTEGRATIONS_TASK_QUEUE,
+                                start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                            )
+                        else:
+                            await workflow.execute_activity(
+                                "agent_runtime.cancel",
+                                {"agent_kind": self.agent_kind, "run_id": self.run_id},
+                                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                                start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                            )
+                    except Exception:
+                        workflow.logger.warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
+                
+                tasks.append(asyncio.shield(_cancel_agent()))
+
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             raise
             
         except Exception:
