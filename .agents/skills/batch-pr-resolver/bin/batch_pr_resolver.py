@@ -570,7 +570,15 @@ def _build_request_records(
             "head branches are not reliably check-outable by the worker."
         )
 
-    for pr in open_prs:
+    def _get_pr_number(pr_data: dict[str, Any]) -> int:
+        try:
+            return int(pr_data.get("number", 0))
+        except (ValueError, TypeError):
+            return 0
+
+    open_prs_sorted = sorted(open_prs, key=_get_pr_number)
+
+    for pr in open_prs_sorted:
         number = pr.get("number")
         branch = _extract_branch(pr)
         if not _is_local_head(pr, repo=repo):
