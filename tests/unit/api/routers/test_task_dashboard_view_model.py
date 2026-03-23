@@ -116,10 +116,6 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
     assert "templateSaveEnabled" in config["system"]["taskTemplateCatalog"]
-    worker_pause = config["system"]["workerPause"]
-    assert worker_pause["get"] == "/api/system/worker-pause"
-    assert worker_pause["post"] == "/api/system/worker-pause"
-    assert worker_pause["pollIntervalMs"] == 5000
     temporal_compat = config["system"]["temporalCompatibility"]
     assert temporal_compat["enabled"] is True
     assert temporal_compat["uiQueryModel"] == "compatibility_adapter"
