@@ -69,7 +69,7 @@ cryptography = "~=46.0.5"
 psycopg2-binary = "~=2.9.11"
 jinja2 = "~=3.1.4"
 toml = "~=0.10.2"
-pydantic-extra-types = "~=2.11.0"
+pydantic-extra-types = "~=2.11.1"
 structlog = "~=25.5.0"
 pytest = { version = "~=9.0.2", optional = true }
 pytest-mock = { version = "~=3.15.1", optional = true }
