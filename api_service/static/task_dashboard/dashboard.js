@@ -194,6 +194,7 @@
       ? systemConfig.temporalCompatibility
       : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
+  const WORKFLOWS_WITHOUT_LIVE_LOGS = ["MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"];
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
   );
@@ -7573,7 +7574,7 @@
       }</tbody>
         </table>
       </section>
-      ${["MoonMind.Run", "MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"].includes(String(pick(execution, "workflowType") || "")) ? "" : `
+      ${WORKFLOWS_WITHOUT_LIVE_LOGS.includes(String(pick(execution, "workflowType") || "")) ? "" : `
       <section id="temporal-live-logs-section">
         <h3>Live Logs</h3>
         <div id="temporal-live-logs-inactive">
