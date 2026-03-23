@@ -9073,15 +9073,6 @@
     await loadProfile();
   }
   async function renderSystemSettingsPage() {
-    if (!workerPauseTransport) {
-      setView(
-        "System Settings",
-        "Pause or resume worker processing.",
-        "<div class='notice error'>Worker pause controls are not configured for this deployment.</div>",
-      );
-      return;
-    }
-
     const numberFormatter = new Intl.NumberFormat();
     const state = {
       snapshot: null,
@@ -9282,9 +9273,7 @@
           </details>
         </section>
       ` : "";
-      const layout = `
-        <div data-system-settings-notice>${noticeHtml}</div>
-        <div class="system-settings">
+      const workerPauseMarkup = workerPauseTransport ? `
           <section class="card">
             <div data-system-settings-summary></div>
           </section>
@@ -9295,6 +9284,12 @@
               <div data-system-settings-audit></div>
             </section>
           </div>
+      ` : `<div class='notice error'>Worker pause controls are not configured for this deployment.</div>`;
+
+      const layout = `
+        <div data-system-settings-notice>${noticeHtml}</div>
+        <div class="system-settings">
+          ${workerPauseMarkup}
           ${authProfilesMarkup}
         </div>
       `;
@@ -9310,10 +9305,16 @@
     }
 
     function syncDynamicView() {
+      const noticeNode = document.querySelector("[data-system-settings-notice]");
+      if (noticeNode) {
+        noticeNode.innerHTML = state.notice
+          ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+          : "";
+      }
+
       const summaryNode = document.querySelector("[data-system-settings-summary]");
       const auditNode = document.querySelector("[data-system-settings-audit]");
-      const noticeNode = document.querySelector("[data-system-settings-notice]");
-      if (!summaryNode || !auditNode || !noticeNode) {
+      if (!summaryNode || !auditNode) {
         return;
       }
 
@@ -9343,9 +9344,6 @@
           `
         : "<p class='loading'>Loading worker status...</p>";
       auditNode.innerHTML = buildAuditMarkup(auditEvents);
-      noticeNode.innerHTML = state.notice
-        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
-        : "";
     }
 
     function attachHandlers() {
@@ -9702,19 +9700,21 @@
     }
 
     const load = async (silent = false) => {
-      try {
-        state.snapshot = await workerPauseTransport.fetchState();
-        if (!silent) {
-          setNotice(null, "");
-        }
-      } catch (error) {
-        console.error("system settings load failed", error);
-        if (!silent) {
-          const message =
-            error instanceof Error && error.message
-              ? error.message
-              : "Failed to load worker pause status.";
-          setNotice("error", message);
+      if (workerPauseTransport) {
+        try {
+          state.snapshot = await workerPauseTransport.fetchState();
+          if (!silent) {
+            setNotice(null, "");
+          }
+        } catch (error) {
+          console.error("system settings load failed", error);
+          if (!silent) {
+            const message =
+              error instanceof Error && error.message
+                ? error.message
+                : "Failed to load worker pause status.";
+            setNotice("error", message);
+          }
         }
       }
       if (silent && hasRendered) {
@@ -9733,7 +9733,9 @@
       { showAutoRefreshControls: true },
     );
     await load();
-    startPolling(() => load(true), workerPauseTransport.pollInterval);
+    if (workerPauseTransport) {
+      startPolling(() => load(true), workerPauseTransport.pollInterval);
+    }
   }
 
   function renderNotFound() {
