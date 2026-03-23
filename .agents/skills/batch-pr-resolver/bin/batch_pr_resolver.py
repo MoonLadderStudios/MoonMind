@@ -11,7 +11,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,8 @@ from moonmind.workflows.tasks.task_contract import resolve_publish_mode_for_skil
 
 
 logger = logging.getLogger(__name__)
+
+TASK_DELAY_INCREMENT_MINUTES = 30
 
 
 @dataclass
@@ -361,7 +363,6 @@ def _build_queue_request(
     }
 
     if schedule_after_minutes is not None:
-        from datetime import timedelta
         scheduled_for = (datetime.now(UTC) + timedelta(minutes=schedule_after_minutes)).isoformat()
         if scheduled_for.endswith("+00:00"):
             scheduled_for = scheduled_for[:-6] + "Z"
@@ -588,7 +589,7 @@ def _build_request_records(
             "head branches are not reliably check-outable by the worker."
         )
 
-    delay_minutes = 30
+    delay_minutes = TASK_DELAY_INCREMENT_MINUTES
     for pr in open_prs:
         number = pr.get("number")
         branch = _extract_branch(pr)
@@ -611,7 +612,7 @@ def _build_request_records(
         queue_requests.append(
             JobSubmission(queue_request=queue_request, pr_number=number, branch=branch)
         )
-        delay_minutes += 30
+        delay_minutes += TASK_DELAY_INCREMENT_MINUTES
 
     return queue_requests, skipped
 
