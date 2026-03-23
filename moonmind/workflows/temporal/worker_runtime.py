@@ -347,7 +347,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
-                from moonmind.api_service.db.base import get_async_session_context
+                from api_service.db.base import get_async_session_context
                 async with get_async_session_context() as session:
                     service = TemporalArtifactService(TemporalArtifactRepository(session))
                     func = getattr(service, name)
