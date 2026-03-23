@@ -1,4 +1,3 @@
-import re
 with open("tests/unit/services/test_manifests_service.py", "r") as f:
     c = f.read()
 c = c.replace("""service = ManifestsService(
