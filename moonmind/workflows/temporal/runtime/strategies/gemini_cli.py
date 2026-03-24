@@ -73,3 +73,17 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
             if k not in env and k in os.environ:
                 env[k] = os.environ[k]
         return env
+
+    async def prepare_workspace(
+        self,
+        workspace_path: Any,
+        request: Any,
+    ) -> None:
+        """Write .gemini/instruction.md in the workspace."""
+        if not getattr(request, "instruction_ref", None):
+            return
+
+        gemini_dir = workspace_path / ".gemini"
+        gemini_dir.mkdir(parents=True, exist_ok=True)
+        instruction_path = gemini_dir / "instruction.md"
+        instruction_path.write_text(request.instruction_ref, encoding="utf-8")

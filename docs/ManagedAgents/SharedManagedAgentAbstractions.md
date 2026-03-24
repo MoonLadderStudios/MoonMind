@@ -373,15 +373,15 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 
 **Goal**: Enable per-runtime workspace preparation and clean up remaining tech debt.
 
-- [ ] Implement `GeminiCliStrategy.prepare_workspace()` — write `.gemini/` instruction files or `GEMINI_INSTRUCTIONS`
-- [ ] Implement `ClaudeCodeStrategy.prepare_workspace()` — write `CLAUDE.md` with task context
+- [x] Implement `GeminiCliStrategy.prepare_workspace()` — write `.gemini/` instruction files or `GEMINI_INSTRUCTIONS`
+- [x] Implement `ClaudeCodeStrategy.prepare_workspace()` — write `CLAUDE.md` with task context
 - [x] Implement and verify `CursorCliStrategy.prepare_workspace()` — write `.cursor/rules/` and `.cursor/cli.json` via existing helpers
 - [x] Add workspace prep call in `launcher.py:launch()` after workspace resolution, before subprocess spawn *(calls `await strategy.prepare_workspace(...)`)*
 - [x] Wire launcher subprocess env through `strategy.shape_environment()` (launcher line 419)
-- [ ] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per UniversalTmateOAuth.md alignment)
-- [ ] Clean up `agent_runtime_env_keys` in `settings.py` if confirmed dead config
-- [ ] Remove dead imports and unused code from adapter and launcher
-- [ ] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference the managed runtime strategy pattern
-- [ ] Move this file to `docs/ManagedAgents/SharedManagedAgentAbstractions.md`
+- [x] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per UniversalTmateOAuth.md alignment)
+- [x] Clean up `agent_runtime_env_keys` in `settings.py` if confirmed dead config
+- [x] Remove dead imports and unused code from adapter and launcher
+- [x] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference the managed runtime strategy pattern
+- [x] Move this file to `docs/ManagedAgents/SharedManagedAgentAbstractions.md`
 
-**Output**: **Partial.** The **hook** in `launch()` is live. **Cursor** workspace prep is **complete**. **Codex** workspace prep (RAG context injection) is **complete**. **Env shaping delegation** in launcher is **complete**. Per-runtime workspace **content** for Gemini/Claude and shared env factoring are **still open**.
+**Output**: **Complete.** Per-runtime workspace preparation, shared env factoring, settings cleanup, and documentation updates have all been completed successfully.

@@ -44,3 +44,15 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
             cmd.extend(["--prompt", request.instruction_ref])
 
         return cmd
+
+    async def prepare_workspace(
+        self,
+        workspace_path: Any,
+        request: Any,
+    ) -> None:
+        """Write CLAUDE.md in the workspace."""
+        if not getattr(request, "instruction_ref", None):
+            return
+
+        instruction_path = workspace_path / "CLAUDE.md"
+        instruction_path.write_text(request.instruction_ref, encoding="utf-8")
