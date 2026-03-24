@@ -375,7 +375,7 @@ COPY api_service /app/api_service/
 
 # Build frontend assets
 COPY frontend /app/frontend/
-COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs vite.config.ts /app/
+COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /app/
 RUN npm ci && npm run dashboard:css:min && npm run ui:build
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
