@@ -54,6 +54,7 @@ _STATIC_PATHS = {
     "schedules",
     "schedules/new",
     "settings",
+    "skills",
     "workers",
 }
 
@@ -75,6 +76,7 @@ class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
+    markdown: str | None = Field(None, description="Markdown content of the skill, if requested")
 
 
 class DashboardSkillListResponse(BaseModel):
@@ -282,7 +284,7 @@ async def task_dashboard_route(
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
                     "/tasks/create, /tasks/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/schedules/new, /tasks/workers, or /tasks/settings."
+                    "/tasks/schedules, /tasks/schedules/new, /tasks/workers, /tasks/skills, or /tasks/settings."
                 ),
             },
         )
@@ -292,17 +294,31 @@ async def task_dashboard_route(
 
 @router.get("/api/tasks/skills", response_model=DashboardSkillListResponse)
 async def list_dashboard_skills(
+    include_content: bool = Query(False, alias="includeContent"),
     _user: User = Depends(get_current_user()),
 ) -> DashboardSkillListResponse:
     """List currently available skills for task dashboard submission forms."""
 
     worker_skills = list(list_available_skill_names())
     legacy_sorted = sorted(set(worker_skills), key=str)
+
+    legacy_items = []
+    skills_root = resolve_skills_local_mirror_root()
+
+    for skill_id in legacy_sorted:
+        markdown_content = None
+        if include_content:
+            skill_dir = skills_root / skill_id
+            skill_file = skill_dir / "SKILL.md"
+            if skill_file.exists():
+                markdown_content = skill_file.read_text(encoding="utf-8")
+        legacy_items.append(DashboardSkillOption(id=skill_id, markdown=markdown_content))
+
     return DashboardSkillListResponse(
         items={
             "worker": worker_skills,
         },
-        legacyItems=[DashboardSkillOption(id=skill_id) for skill_id in legacy_sorted],
+        legacyItems=legacy_items,
     )
 
 

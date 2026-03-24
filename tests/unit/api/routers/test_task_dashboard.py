@@ -170,7 +170,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/create, /tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-        "/tasks/schedules, /tasks/schedules/new, /tasks/workers, or /tasks/settings."
+        "/tasks/schedules, /tasks/schedules/new, /tasks/workers, /tasks/skills, or /tasks/settings."
     )
 
 
@@ -190,8 +190,8 @@ def test_skills_api_returns_available_skill_ids(
             "worker": ["speckit", "speckit-orchestrate"],
         },
         "legacyItems": [
-            {"id": "speckit"},
-            {"id": "speckit-orchestrate"},
+            {"id": "speckit", "markdown": None},
+            {"id": "speckit-orchestrate", "markdown": None},
         ],
     }
 

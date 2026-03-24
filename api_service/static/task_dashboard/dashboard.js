@@ -8908,6 +8908,238 @@
         || null,
     };
   }
+  async function renderSkillsPage() {
+    const state = {
+      skills: [],
+      selectedSkill: null,
+      mode: "view", // "view" or "create"
+      notice: null,
+      requestInFlight: false,
+    };
+
+    function setNotice(level, text) {
+      if (!text) {
+        state.notice = null;
+        return;
+      }
+      state.notice = {
+        level: level === "error" ? "error" : "ok",
+        text,
+      };
+    }
+
+    function renderView() {
+      const noticeHtml = state.notice
+        ? `<div class="notice ${state.notice.level}">${escapeHtml(state.notice.text)}</div>`
+        : "";
+
+      const skillsListHtml = state.skills.length > 0
+        ? `<ul class="queue-card-list" role="list">
+            ${state.skills.map(skill => `
+              <li class="queue-card ${state.selectedSkill && state.selectedSkill.id === skill.id ? 'active' : ''}" data-skill-id="${escapeHtml(skill.id)}" style="cursor: pointer;">
+                <div class="queue-card-header">
+                  <span class="queue-card-title">${escapeHtml(skill.id)}</span>
+                </div>
+              </li>
+            `).join("")}
+          </ul>`
+        : `<p class="small">No skills found.</p>`;
+
+      let detailPaneHtml = "";
+      if (state.mode === "create") {
+        detailPaneHtml = `
+          <div class="mm-glass-strong" style="padding: 1.5rem; border-radius: 8px;">
+            <h3>Create New Skill</h3>
+            <form id="create-skill-form" class="stack" style="margin-top: 1rem;">
+              <label>
+                Skill Name
+                <input type="text" name="name" required placeholder="e.g. MyNewSkill" pattern="^[a-zA-Z0-9_-]+$" title="Only letters, numbers, underscores, and dashes are allowed.">
+              </label>
+              <label>
+                Markdown Content (SKILL.md)
+                <textarea name="markdown" required rows="15" placeholder="# My New Skill\\n\\nInstructions here..."></textarea>
+              </label>
+              <div style="margin-top: 1rem;">
+                <button type="submit" class="queue-submit-primary">Save Skill</button>
+                <button type="button" class="secondary" id="cancel-create-skill">Cancel</button>
+              </div>
+            </form>
+          </div>
+        `;
+      } else if (state.selectedSkill) {
+        const contentHtml = state.selectedSkill.markdown
+          ? `<div class="markdown-body" style="white-space: pre-wrap; font-family: monospace;">${escapeHtml(state.selectedSkill.markdown)}</div>`
+          : `<p class="small">No content available for this skill.</p>`;
+
+        detailPaneHtml = `
+          <div class="mm-glass-strong" style="padding: 1.5rem; border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+              <h3 style="margin: 0;">${escapeHtml(state.selectedSkill.id)}</h3>
+            </div>
+            ${contentHtml}
+          </div>
+        `;
+      } else {
+        detailPaneHtml = `
+          <div class="mm-glass-strong" style="padding: 1.5rem; border-radius: 8px; display: flex; justify-content: center; align-items: center; height: 100%;">
+            <p class="small">Select a skill to view its content, or create a new one.</p>
+          </div>
+        `;
+      }
+
+      const layout = `
+        <div data-skills-notice>${noticeHtml}</div>
+        <div style="display: grid; grid-template-columns: 300px 1fr; gap: 1.5rem; align-items: start; margin-bottom: 1rem;">
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+              <h3 style="margin: 0;">Available Skills</h3>
+              <button type="button" id="btn-create-skill" class="btn-small">Create New Skill</button>
+            </div>
+            <div class="mm-glass" style="max-height: 70vh; overflow-y: auto; padding: 0.5rem; border-radius: 8px;">
+              ${skillsListHtml}
+            </div>
+          </div>
+          <div>
+            ${detailPaneHtml}
+          </div>
+        </div>
+      `;
+
+      setView(
+        "Skills",
+        "Manage and view local skills.",
+        layout
+      );
+      attachHandlers();
+    }
+
+    function attachHandlers() {
+      const createBtn = document.getElementById("btn-create-skill");
+      if (createBtn) {
+        createBtn.addEventListener("click", () => {
+          state.mode = "create";
+          state.selectedSkill = null;
+          setNotice(null, "");
+          renderView();
+        });
+      }
+
+      const cancelBtn = document.getElementById("cancel-create-skill");
+      if (cancelBtn) {
+        cancelBtn.addEventListener("click", () => {
+          state.mode = "view";
+          setNotice(null, "");
+          renderView();
+        });
+      }
+
+      const skillItems = document.querySelectorAll(".queue-card[data-skill-id]");
+      skillItems.forEach(item => {
+        item.addEventListener("click", () => {
+          const skillId = item.getAttribute("data-skill-id");
+          const skill = state.skills.find(s => s.id === skillId);
+          if (skill) {
+            state.selectedSkill = skill;
+            state.mode = "view";
+            setNotice(null, "");
+            renderView();
+          }
+        });
+      });
+
+      const form = document.getElementById("create-skill-form");
+      if (form) {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          if (state.requestInFlight) return;
+
+          const formData = new FormData(form);
+          const payload = {
+            name: formData.get("name").trim(),
+            markdown: formData.get("markdown")
+          };
+
+          if (!payload.name || !payload.markdown) {
+            setNotice("error", "Both name and markdown content are required.");
+            renderView();
+            return;
+          }
+
+          state.requestInFlight = true;
+          const submitBtn = form.querySelector('button[type="submit"]');
+          if (submitBtn) submitBtn.disabled = true;
+
+          try {
+            const response = await fetch("/api/tasks/skills", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+              const err = await response.json();
+              throw new Error(err.detail || response.statusText);
+            }
+
+            setNotice("ok", `Skill "${payload.name}" created successfully.`);
+            await loadSkills(); // Reload list
+
+            // Auto-select the newly created skill
+            const newSkill = state.skills.find(s => s.id === payload.name);
+            if (newSkill) {
+              state.selectedSkill = newSkill;
+            }
+            state.mode = "view";
+
+          } catch (error) {
+            console.error("Failed to create skill:", error);
+            setNotice("error", error.message || "Failed to create skill.");
+          } finally {
+            state.requestInFlight = false;
+            renderView();
+          }
+        });
+      }
+    }
+
+    async function loadSkills() {
+      try {
+        const response = await fetch("/api/tasks/skills?includeContent=true", {
+          headers: {
+            "Accept": "application/json"
+          }
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to fetch skills: ${response.statusText}`);
+        }
+        const data = await response.json();
+        state.skills = data.legacyItems || [];
+
+        if (state.selectedSkill) {
+            const updated = state.skills.find(s => s.id === state.selectedSkill.id);
+            if (updated) {
+                state.selectedSkill = updated;
+            } else {
+                state.selectedSkill = null;
+            }
+        }
+      } catch (error) {
+        console.error("Failed to load skills:", error);
+        setNotice("error", "Failed to load skills.");
+      }
+    }
+
+    setView(
+      "Skills",
+      "Manage and view local skills.",
+      "<p class='loading'>Loading skills...</p>"
+    );
+    await loadSkills();
+    renderView();
+  }
+
   async function renderUserSettingsPage() {
     const state = {
       profile: null,
@@ -9794,6 +10026,11 @@
     }
     if (normalizedRoute === "/tasks/workers") {
       await renderWorkerControlsPage();
+      return;
+    }
+
+    if (normalizedRoute === "/tasks/skills") {
+      await renderSkillsPage();
       return;
     }
 
