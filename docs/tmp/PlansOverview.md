@@ -19,7 +19,6 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | Document | Summary |
 | -------- | ------- |
 | [`docs/Api/ExecutionsApiContract.md`](../Api/ExecutionsApiContract.md) | Migration posture for `/api/executions` and compatibility during the task-oriented / Temporal migration (incl. §16 compatibility contract). |
-| [`docs/CodexMcpToolsAdapter.md`](../CodexMcpToolsAdapter.md) | Notes legacy Codex paths as compatibility during migration. |
 | [`docs/Temporal/TaskExecutionCompatibilityModel.md`](../Temporal/TaskExecutionCompatibilityModel.md) | Bridge contract for task-shaped surfaces and Temporal; compatibility maturity (sequencing in `remaining-work`). |
 | [`docs/Temporal/SourceOfTruthAndProjectionModel.md`](../Temporal/SourceOfTruthAndProjectionModel.md) | Migration stance for projections vs Temporal; migration-phase exception matrix. |
 | [`docs/Temporal/VisibilityAndUiQueryModel.md`](../Temporal/VisibilityAndUiQueryModel.md) | Projection rules; target contract vs implementation gaps (tracker). |

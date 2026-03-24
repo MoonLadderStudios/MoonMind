@@ -17,7 +17,6 @@ Each file in this directory tracks **open migration or implementation work** des
 |-----------------|---------|
 | `docs/Tasks/TaskDependenciesPlan.md` | [`plans-TaskDependenciesPlan.md`](plans-TaskDependenciesPlan.md) |
 | `docs/Api/ExecutionsApiContract.md` | [`Api-ExecutionsApiContract.md`](Api-ExecutionsApiContract.md) |
-| `docs/CodexMcpToolsAdapter.md` | [`CodexMcpToolsAdapter.md`](CodexMcpToolsAdapter.md) |
 | `docs/Temporal/TaskExecutionCompatibilityModel.md` | [`Temporal-TaskExecutionCompatibilityModel.md`](Temporal-TaskExecutionCompatibilityModel.md) |
 | `docs/Temporal/SourceOfTruthAndProjectionModel.md` | [`Temporal-SourceOfTruthAndProjectionModel.md`](Temporal-SourceOfTruthAndProjectionModel.md) |
 | `docs/Temporal/VisibilityAndUiQueryModel.md` | [`Temporal-VisibilityAndUiQueryModel.md`](Temporal-VisibilityAndUiQueryModel.md) |
