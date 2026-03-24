@@ -44,7 +44,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - [x] **1.5** Remove Claude API key gate — #795
 - [x] **1.6** Auto-seed auth profiles on startup
 - [ ] **1.7** Graceful worker pause / unpause — Spec 038/040 (`worker-pause`), API exists, dashboard wiring needed
-- [ ] **1.8** Universal Tmate OAuth sessions — Design doc in `docs/ManagedAgents/UniversalTmateOAuth.md` (4 phases: session table, API, UI modal, tmate runner, provider registry)
+- [ ] **1.8** Universal Tmate OAuth sessions — Design doc in `docs/ManagedAgents/TmateArchitecture.md` (4 phases: session table, API, UI modal, tmate runner, provider registry)
 
 ---
 

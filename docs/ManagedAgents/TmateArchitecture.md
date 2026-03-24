@@ -1,85 +1,54 @@
-# Universal Tmate OAuth Sessions — MVP Design for MoonMind
+# Tmate Architecture in MoonMind
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md)
+**Implementation plan:** [`docs/tmp/TmatePlan.md`](../tmp/TmatePlan.md)  
+**Remaining-work tracker:** [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md)
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Scope: Mission Control auth UX for managed CLI runtimes
-Applies to: `codex_cli`, `gemini_cli`, `claude_code`, future `cursor_cli`
 
 > [!NOTE]
-> The shared tmate session lifecycle, `TmateSessionManager` abstraction, and self-hosted server configuration are defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md). This document covers the OAuth session UX and provider registry; tmate internals are delegated to the shared architecture.
+> Auth profile management, OAuth volume details, and profile assignment logic are covered in [AuthProfiles.md](../Security/AuthProfiles.md). The shared `TmateSessionManager` abstraction and low-level session lifecycle are defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md).
 
 ---
 
 ## 1. Summary
 
-Build a single **OAuth Session** system in Mission Control where the MVP transport is always **tmate**.
+Tmate is integrated into MoonMind as a **first-class tool** that provides terminal multiplexing over SSH. It serves three operational roles within the platform:
 
-From the user’s perspective, every managed CLI runtime gets the same flow:
+1. **Live logging** — every managed agent run is wrapped in a tmate session, enabling real-time log tailing from Mission Control.
+2. **Live terminal handoff** — operators can escalate from read-only log viewing to interactive read-write terminal access for debugging or manual intervention.
+3. **OAuth authentication** — short-lived tmate sessions inside Docker containers give users an interactive terminal to complete provider OAuth login flows.
 
-1. Click **Connect Account** in Mission Control.
-2. MoonMind creates or selects an auth volume.
-3. MoonMind launches a short-lived auth container with that volume mounted.
-4. MoonMind starts a **tmate session** inside that container.
-5. The user opens the tmate terminal from the UI.
-6. The terminal auto-launches the provider’s login bootstrap.
-7. The provider writes credentials into the mounted volume.
-8. MoonMind verifies the volume and registers or updates the normal auth profile.
-9. MoonMind closes the session and marks it complete.
-
-This gives MoonMind a single shippable OAuth story for all providers now, while preserving the option to introduce cleaner provider-specific drivers later.
+The MVP transport for all three use cases is tmate. The architecture standardizes the **session transport**, while provider-specific behavior is limited to the commands that run inside the terminal and the verification logic.
 
 ---
 
-## 2. Product goal
+## 2. Use Cases
 
-The MVP goal is not “perfect provider-native auth.”
+| Use Case | Description | Consumer |
+|---|---|---|
+| **Runtime wrapping** | Every managed agent run (Gemini, Codex, Claude, Cursor) is wrapped in a tmate session to enable live log tailing and terminal handoff from Mission Control. | `ManagedRuntimeLauncher.launch()` |
+| **OAuth sessions** | Short-lived Docker containers with tmate give users an interactive terminal to complete provider OAuth login flows. | `oauth_session_activities.start_auth_runner()` |
 
-The MVP goal is:
-
-* one **consistent Mission Control OAuth button**
-* one **consistent backend session model**
-* one **consistent volume outcome**
-* one **consistent auth profile registration path**
-
-The universal behavior is the **session transport** and **operator UX**.
-The provider-specific behavior is limited to the command that runs inside the tmate terminal and the verification logic.
+Both share identical lifecycle concerns (session creation, readiness detection, endpoint extraction, teardown). The `TmateSessionManager` defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4 is the **target abstraction** that unifies them.
 
 ---
 
-## 3. Why this MVP
+## 3. Mission Control Integration
 
-This design is a good MVP because it:
+### 3.1 Live Log Tailing
 
-* works with providers that expect interactive terminal login
-* avoids blocking on a polished device-code or browser callback flow for each CLI
-* reuses the existing auth-volume model
-* fits the existing auth-profile model
-* keeps the future path open for Codex-native, Gemini-specific, or Claude-specific auth drivers later
+When a managed agent run starts, the worker launches a tmate session wrapping the CLI process. The tmate read-only web endpoint (`web_ro`) is persisted to the `workflow_live_sessions` table and exposed via `GET /api/workflows/{id}/live-session`. The Mission Control dashboard embeds this endpoint in the Live Output panel, giving operators real-time visibility into agent execution without SSH access to the worker.
 
-The key idea is:
+See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §5 for the endpoint persistence data model and API.
 
-**standardize the session architecture, not the provider ritual**
+### 3.2 Live Terminal Handoff
 
----
+Operators can escalate from read-only log viewing to interactive read-write terminal access. The RW endpoint (`web_rw`) is stored encrypted at rest and only revealed via explicit operator grant with a TTL (default: 15 minutes). This enables debugging stuck agents, manually completing interactive prompts, or inspecting runtime state.
 
-## 4. Non-goals for MVP
+See [LiveTaskManagement.md](../Temporal/LiveTaskManagement.md) for the full handoff UX design including operator messages, pause/resume, and session revocation.
 
-This MVP does **not** try to:
-
-* make every provider authenticate the exact same way internally
-* eliminate interactive terminal use
-* support multi-API-instance resilient session recovery on day one
-* replace API-key auth flows
-* solve all enterprise auth cases
-* dynamically mount arbitrary volumes into already-running workers
-
----
-
-## 5. User experience
-
-## 5.1 Mission Control UI
+### 3.3 OAuth Session UX
 
 In **System Settings → Auth Profiles**, each runtime gets:
 
@@ -112,11 +81,11 @@ After creation, the modal shows:
 
 ---
 
-## 6. Architecture
+## 4. Architecture
 
-## 6.1 Core idea
+### 4.1 Core Idea
 
-Introduce a first-class **OAuth Session** layer that sits between Mission Control and the existing auth profile registry.
+A first-class **OAuth Session** layer sits between Mission Control and the auth profile registry (see [AuthProfiles.md](../Security/AuthProfiles.md)):
 
 ```text
 Mission Control UI
@@ -129,11 +98,9 @@ Mission Control UI
   -> auth profile create/update
 ```
 
----
+### 4.2 Main Components
 
-## 6.2 Main components
-
-### A. Auth Session API
+#### A. Auth Session API
 
 Responsible for:
 
@@ -143,7 +110,7 @@ Responsible for:
 * finalizing sessions
 * exposing tmate connection metadata to the UI
 
-### B. OAuth session orchestrator
+#### B. OAuth Session Orchestrator
 
 Responsible for:
 
@@ -152,12 +119,12 @@ Responsible for:
 * waiting for tmate readiness
 * monitoring session status
 * verifying auth files
-* registering/updating the auth profile
+* registering/updating the auth profile (via [AuthProfiles.md](../Security/AuthProfiles.md))
 * tearing down the session
 
 For MoonMind, this should be a **Temporal workflow** even in MVP.
 
-### C. Auth Runner Container
+#### C. Auth Runner Container
 
 A short-lived container whose only job is to:
 
@@ -167,7 +134,7 @@ A short-lived container whose only job is to:
 * run the provider bootstrap command in the tmate session
 * leave the shell open for user interaction
 
-### D. Provider Registry
+#### D. Provider Registry
 
 A small provider-specific contract that defines:
 
@@ -179,11 +146,11 @@ A small provider-specific contract that defines:
 * optional post-login command
 * profile defaults
 
-### E. Profile Registrar
+#### E. Profile Registrar
 
-Calls the existing auth-profile registration path after successful verification.
+Calls the existing auth-profile registration path (see [AuthProfiles.md](../Security/AuthProfiles.md)) after successful verification.
 
-### F. TmateSessionManager (shared — target architecture)
+#### F. TmateSessionManager (shared — target architecture)
 
 > [!NOTE]
 > `TmateSessionManager` does not exist yet. Currently, `oauth_session_activities.py` uses a Docker-exec polling approach with hardcoded `/tmp/tmate.sock`. The target architecture delegates tmate lifecycle management to the shared abstraction defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.
@@ -199,7 +166,7 @@ The same abstraction will also be used by `ManagedRuntimeLauncher` for runtime s
 
 ---
 
-## 7. Proposed runtime contract
+## 5. Provider Registry
 
 Create a provider registry with one entry per runtime.
 
@@ -247,39 +214,36 @@ Example entries:
 * `default_mount_path = "/home/app/.cursor"`
 * bootstrap: placeholder until runtime support exists
 
-The important part is that all of them use:
-
-* `auth_mode = "oauth"`
-* `session_transport = "tmate"`
-
-for the MVP.
+All providers use `auth_mode = "oauth"` and `session_transport = "tmate"` for the MVP.
 
 ---
 
-## 8. Data model
+## 6. Provider Bootstrap Behavior
 
-## 8.1 Keep existing auth profile model
+The MVP does not try to fully unify provider commands. Instead, it unifies the shell contract.
 
-Do not complicate the existing auth profile model for MVP.
+Each provider gets a bootstrap script with the same shape:
 
-Continue to use the current auth profile record for durable runtime assignment:
+1. print standardized MoonMind auth banner
+2. print provider-specific instructions
+3. export the provider's OAuth env vars
+4. launch provider login command
+5. print next steps on success/failure
 
-* `profile_id`
-* `runtime_id`
-* `auth_mode = oauth`
-* `volume_ref`
-* `volume_mount_path`
-* `account_label`
-* `max_parallel_runs`
-* `cooldown_after_429_seconds`
-* `rate_limit_policy`
-* `enabled`
+Example conceptual commands:
 
-## 8.2 Add OAuth session table
+* Codex: start Codex login flow in the mounted auth home
+* Gemini: start Gemini CLI in OAuth mode with API keys cleared
+* Claude: start Claude and guide the user into login
+* Cursor: start Cursor CLI login flow when runtime support lands
 
-Add a new table:
+The UI is universal. The bootstrap script is provider-specific.
 
-### `managed_agent_oauth_sessions`
+---
+
+## 7. OAuth Session Data Model
+
+### `managed_agent_oauth_sessions` Table
 
 Fields:
 
@@ -304,9 +268,7 @@ Fields:
 * `failure_reason`
 * `metadata_json`
 
-### Status enum
-
-Suggested states:
+### Status Enum
 
 * `pending`
 * `starting`
@@ -319,39 +281,36 @@ Suggested states:
 * `cancelled`
 * `expired`
 
-This is the key missing abstraction that makes the UI and backend manageable.
-
 ---
 
-## 9. Session flow
+## 8. Session Flow
 
-## 9.1 Start session
+### 8.1 Start Session
 
 1. User clicks **Connect with OAuth**
 2. UI sends `POST /api/v1/oauth-sessions`
 3. Backend validates:
-
    * runtime is supported
    * profile id is valid
    * no conflicting active session for same profile
 4. Backend creates DB row with `pending`
 5. Orchestrator starts
 
-## 9.2 Provision auth runner
+### 8.2 Provision Auth Runner
 
 The orchestrator:
 
 1. ensures target Docker volume exists
 2. picks the auth runner image/service
 3. launches a short-lived auth container
-4. mounts the auth volume at the provider’s expected path
+4. mounts the auth volume at the provider's expected path
 5. injects environment shaping needed for OAuth mode
 6. starts tmate inside the container
 7. waits for tmate readiness
 8. stores web/ssh URLs in the session row
 9. marks status `tmate_ready` then `awaiting_user`
 
-## 9.3 User completes login
+### 8.3 User Completes Login
 
 The user opens the tmate web terminal from Mission Control.
 
@@ -366,7 +325,7 @@ Inside the terminal, a bootstrap script runs automatically. It should:
 
 After the user finishes login, the provider stores credentials in the mounted volume.
 
-## 9.4 Verification
+### 8.4 Verification and Profile Registration
 
 The orchestrator either polls or is manually nudged by UI refresh.
 
@@ -375,12 +334,12 @@ Verification step:
 1. inspect the mounted volume
 2. run provider-specific success check
 3. if successful, mark `verifying`
-4. create or update the auth profile
+4. create or update the auth profile (see [AuthProfiles.md](../Security/AuthProfiles.md))
 5. mark `registering_profile`
 6. mark `succeeded`
 7. tear down tmate/container
 
-## 9.5 Failure / cancel
+### 8.5 Failure / Cancel
 
 If the user cancels:
 
@@ -404,35 +363,9 @@ If verification fails:
 
 ---
 
-## 10. Provider bootstrap behavior
+## 9. API Design
 
-The MVP should not try to fully unify provider commands.
-
-Instead, unify the shell contract.
-
-Each provider gets a bootstrap script with the same shape:
-
-1. print standardized MoonMind auth banner
-2. print provider-specific instructions
-3. export the provider’s OAuth env vars
-4. launch provider login command
-5. print next steps on success/failure
-
-Example conceptual commands:
-
-* Codex: start Codex login flow in the mounted auth home
-* Gemini: start Gemini CLI in OAuth mode with API keys cleared
-* Claude: start Claude and guide the user into login
-* Cursor: start Cursor CLI login flow when runtime support lands
-
-The UI is universal.
-The bootstrap script is provider-specific.
-
----
-
-## 11. API design
-
-## 11.1 Create session
+### 9.1 Create Session
 
 `POST /api/v1/oauth-sessions`
 
@@ -461,7 +394,7 @@ Response:
 }
 ```
 
-## 11.2 Get session
+### 9.2 Get Session
 
 `GET /api/v1/oauth-sessions/{session_id}`
 
@@ -480,11 +413,11 @@ Response:
 }
 ```
 
-## 11.3 Cancel session
+### 9.3 Cancel Session
 
 `POST /api/v1/oauth-sessions/{session_id}/cancel`
 
-## 11.4 Optional manual finalize
+### 9.4 Optional Manual Finalize
 
 `POST /api/v1/oauth-sessions/{session_id}/finalize`
 
@@ -492,9 +425,7 @@ Useful if the system uses optimistic verification and the user wants to push re-
 
 ---
 
-## 12. Temporal design
-
-Create a workflow like:
+## 10. Temporal Workflow Design
 
 ### `MoonMind.OAuthSession`
 
@@ -524,11 +455,55 @@ Why Temporal even for MVP:
 * durable status transitions
 * retries on container startup
 * clearer operational story
-* fits MoonMind’s existing workflow-driven architecture
+* fits MoonMind's existing workflow-driven architecture
 
 ---
 
-## 13. Suggested repo structure
+## 11. Security
+
+### 11.1 Access Control
+
+Only authenticated MoonMind users with admin or auth-management permission can start OAuth sessions.
+
+### 11.2 Session Lifetime
+
+Tmate sessions should be short-lived:
+
+* default 20–30 minutes
+* auto-expire if idle
+* auto-destroy after success
+
+### 11.3 Secret Handling
+
+Do not send credential contents to the UI.
+
+The UI only ever sees:
+
+* session status
+* tmate URLs
+* timestamps
+* failure messages
+
+Credentials remain in the mounted Docker volume.
+
+### 11.4 Self-Hosted Tmate Server
+
+For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.3 for configuration details.
+
+### 11.5 Audit
+
+Store:
+
+* who started the session
+* what runtime
+* what profile
+* when it started
+* when it ended
+* whether it succeeded
+
+---
+
+## 12. Suggested Repo Structure
 
 ### Backend
 
@@ -536,7 +511,7 @@ Why Temporal even for MVP:
 * `api_service/api/schemas_oauth_sessions.py`
 * `api_service/services/oauth_session_service.py`
 
-### Auth runtime logic
+### Auth Runtime Logic
 
 * `moonmind/auth/providers/base.py`
 * `moonmind/auth/providers/registry.py`
@@ -568,65 +543,17 @@ The bootstrap scripts can initially wrap the existing volume conventions rather 
 
 ---
 
-## 14. Security model
+## 13. Operational Behavior
 
-## 14.1 Access control
-
-Only authenticated MoonMind users with admin or auth-management permission can start OAuth sessions.
-
-## 14.2 Session lifetime
-
-tmate sessions should be short-lived:
-
-* default 20–30 minutes
-* auto-expire if idle
-* auto-destroy after success
-
-## 14.3 Secret handling
-
-Do not send credential contents to the UI.
-
-The UI only ever sees:
-
-* session status
-* tmate URLs
-* timestamps
-* failure messages
-
-Credentials remain in the mounted Docker volume.
-
-## 14.4 Volume ownership
-
-Preserve the current pattern of writing auth state into dedicated named volumes with correct ownership and file permissions.
-
-## 14.5 Audit
-
-Store:
-
-* who started the session
-* what runtime
-* what profile
-* when it started
-* when it ended
-* whether it succeeded
-
-## 14.6 Self-hosted tmate server
-
-For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.3 for configuration details.
-
----
-
-## 15. Operational behavior
-
-## 15.1 Single active session per profile
+### 13.1 Single Active Session Per Profile
 
 For MVP, allow only one active OAuth session per `profile_id`.
 
-## 15.2 Session cleanup
+### 13.2 Session Cleanup
 
 A periodic cleanup job should expire stale sessions and stop abandoned auth containers.
 
-## 15.3 Restart behavior
+### 13.3 Restart Behavior
 
 For MVP, acceptable behavior is:
 
@@ -638,7 +565,7 @@ Full runner reattachment can wait until later.
 
 ---
 
-## 16. Why universal tmate is acceptable for MVP
+## 14. Why Universal Tmate Is Acceptable for MVP
 
 It is not the ideal end state, but it is a good first shippable system because it gives you:
 
@@ -648,9 +575,7 @@ It is not the ideal end state, but it is a good first shippable system because i
 * one operational story
 * one path to auth-volume registration
 
-It also creates a clean future seam:
-
-later you can swap only the **session transport** for a provider without changing the rest of the system.
+It also creates a clean future seam: later you can swap only the **session transport** for a provider without changing the rest of the system.
 
 Examples of later improvements:
 
@@ -663,9 +588,9 @@ That migration becomes small if the rest of the system already thinks in terms o
 
 ---
 
-## 17. Tradeoffs
+## 15. Tradeoffs
 
-## Pros
+### Pros
 
 * fastest unified OAuth MVP
 * works for interactive CLI auth flows
@@ -673,7 +598,7 @@ That migration becomes small if the rest of the system already thinks in terms o
 * matches existing auth-volume outcome
 * preserves future provider-specific optimization
 
-## Cons
+### Cons
 
 * tmate is heavier than native auth for some providers
 * session cleanup and access control matter
@@ -683,6 +608,6 @@ That migration becomes small if the rest of the system already thinks in terms o
 
 ---
 
-## 18. Delivery milestones
+## 16. Delivery Milestones
 
 **MVP:** OAuth session store + API + Mission Control modal + tmate-backed runner (Gemini first), then Codex/Claude via the same transport with profile registration, then cleanup/audit/hardening/reconnect flows, then optional provider-specific driver splits. Task-level tracking: [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).

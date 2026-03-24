@@ -1,6 +1,6 @@
-# Remaining work: `docs/ManagedAgents/UniversalTmateOAuth.md`
+# Remaining work: `docs/ManagedAgents/TmateArchitecture.md`
 
-**Source:** [`docs/ManagedAgents/UniversalTmateOAuth.md`](../../ManagedAgents/UniversalTmateOAuth.md)  
+**Source:** [`docs/ManagedAgents/TmateArchitecture.md`](../../ManagedAgents/TmateArchitecture.md)  
 **Last synced:** 2026-03-24
 
 ## Open items
