@@ -44,7 +44,6 @@ _JULES_STATUS_MAP: dict[str, JulesNormalizedStatus] = {
     "state_unspecified": "unknown",
     "submitted": "queued",
     "success": "completed",
-    "completed": "completed",
     "timed_out": "failed",
     "timeout": "failed",
 }

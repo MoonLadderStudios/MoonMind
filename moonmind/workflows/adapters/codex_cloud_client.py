@@ -62,7 +62,6 @@ _CODEX_CLOUD_STATUS_MAP: dict[str, str] = {
     "running": "running",
     "started": "running",
     "submitted": "queued",
-    "completed": "completed",
     "success": "completed",
     "timed_out": "failed",
     "timeout": "failed",
