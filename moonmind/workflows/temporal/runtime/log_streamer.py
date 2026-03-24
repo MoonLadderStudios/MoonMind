@@ -12,8 +12,6 @@ from moonmind.workflows.temporal.runtime.output_parser import RuntimeOutputParse
 class RuntimeLogStreamer:
     """Streams subprocess output to artifact storage and collects diagnostics."""
 
-    CHUNK_SIZE = 64 * 1024  # 64KB
-
     def __init__(self, artifact_storage: Any) -> None:
         self._storage = artifact_storage
 

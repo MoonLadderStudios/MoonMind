@@ -142,9 +142,6 @@ class ManagedRunSupervisor:
                 events=events,
             )
 
-            record = self._store.load(run_id)
-            runtime_id = record.runtime_id if record else None
-
             # Classify exit
             status, failure_class = self._classify_exit(
                 runtime_id=runtime_id,

@@ -137,5 +137,5 @@ class NdjsonOutputParser(RuntimeOutputParser):
                 event = json.loads(stripped)
                 events.append(event)
             except json.JSONDecodeError:
-                pass
+                logger.debug("Skipping malformed NDJSON line: %s", stripped)
         return events
