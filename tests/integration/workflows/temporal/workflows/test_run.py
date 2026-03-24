@@ -31,6 +31,8 @@ SKILL_EXECUTE_CALLS: list[Dict[str, Any]] = []
 SANDBOX_COMMAND_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_START_CALLS: list[Dict[str, Any]] = []
 INTEGRATION_STATUS_CALLS: list[Dict[str, Any]] = []
+INTEGRATION_FETCH_RESULT_CALLS: list[Dict[str, Any]] = []
+INTEGRATION_MERGE_PR_CALLS: list[Dict[str, Any]] = []
 PROPOSAL_GENERATE_CALLS: list[Dict[str, Any]] = []
 PROPOSAL_SUBMIT_CALLS: list[Dict[str, Any]] = []
 
@@ -178,6 +180,18 @@ async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"normalized_status": "completed"}
 
 
+@activity.defn(name="integration.jules.fetch_result")
+async def mock_integration_fetch_result(args: Dict[str, Any]) -> Dict[str, Any]:
+    INTEGRATION_FETCH_RESULT_CALLS.append(args)
+    return {"external_url": "https://github.com/moonladder/moonmind/pull/999"}
+
+
+@activity.defn(name="integration.jules.merge_pr")
+async def mock_integration_merge_pr(args: Dict[str, Any]) -> Dict[str, Any]:
+    INTEGRATION_MERGE_PR_CALLS.append(args)
+    return {"merged": True}
+
+
 @activity.defn(name="proposal.generate")
 async def mock_proposal_generate(args: Dict[str, Any]) -> list[Dict[str, Any]]:
     PROPOSAL_GENERATE_CALLS.append(args)
@@ -222,6 +236,8 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
         SANDBOX_COMMAND_CALLS.clear()
         INTEGRATION_START_CALLS.clear()
         INTEGRATION_STATUS_CALLS.clear()
+        INTEGRATION_FETCH_RESULT_CALLS.clear()
+        INTEGRATION_MERGE_PR_CALLS.clear()
         PROPOSAL_GENERATE_CALLS.clear()
         PROPOSAL_SUBMIT_CALLS.clear()
 
@@ -533,3 +549,106 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(PROPOSAL_GENERATE_CALLS), 0)
             self.assertEqual(len(PROPOSAL_SUBMIT_CALLS), 0)
             self.assertNotIn("proposals_generated", result)
+
+    async def test_moonmind_run_signal_completion(self) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            
+            import asyncio
+            signal_sent_event = asyncio.Event()
+
+            @activity.defn(name="integration.jules.status")
+            async def mock_integration_status_wait(args: Dict[str, Any]) -> Dict[str, Any]:
+                INTEGRATION_STATUS_CALLS.append(args)
+                await signal_sent_event.wait()
+                return {"normalized_status": "running"}
+
+            async with (
+                Worker(env.client, task_queue=LLM_TASK_QUEUE, activities=[mock_plan_generate]),
+                Worker(env.client, task_queue=ARTIFACTS_TASK_QUEUE, activities=[mock_artifact_read]),
+                Worker(env.client, task_queue=SANDBOX_TASK_QUEUE, activities=[mock_sandbox_command, mock_skill_execute]),
+                Worker(env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[mock_integration_start, mock_integration_status_wait]),
+                Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindRunWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
+            ):
+                request = {
+                    "workflowType": "MoonMind.Run",
+                    "title": "Test Signal Run",
+                    "initialParameters": {
+                        "repo": "moonladder/moonmind",
+                        "integration": "jules",
+                    },
+                }
+
+                # Start workflow
+                handle = await env.client.start_workflow(
+                    MoonMindRunWorkflow.run,
+                    request,
+                    id="test-workflow-signal",
+                    task_queue="test-task-queue",
+                    search_attributes=_trusted_search_attributes(),
+                )
+                
+                # We need to wait until the activity is actually called to avoid race conditions
+                # but temporalio in python doesn't easily expose this, so we just yield a bit.
+                await asyncio.sleep(0.5)
+                
+                # Signal the workflow to complete the external stage
+                await handle.signal(
+                    MoonMindRunWorkflow.external_event, 
+                    {
+                        "correlation_id": "corr-123",
+                        "normalized_status": "completed"
+                    }
+                )
+                signal_sent_event.set()
+
+                result = await handle.result()
+                self.assertEqual(result["status"], "success")
+                self.assertGreaterEqual(len(INTEGRATION_START_CALLS), 1)
+
+    async def test_moonmind_run_jules_branch_publish_merge(self) -> None:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_test_search_attributes(env)
+            
+            async with (
+                Worker(env.client, task_queue=LLM_TASK_QUEUE, activities=[mock_plan_generate]),
+                Worker(env.client, task_queue=ARTIFACTS_TASK_QUEUE, activities=[mock_artifact_read]),
+                Worker(env.client, task_queue=SANDBOX_TASK_QUEUE, activities=[mock_sandbox_command, mock_skill_execute]),
+                Worker(
+                    env.client,
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                    activities=[
+                        mock_integration_start,
+                        mock_integration_status,
+                        mock_integration_fetch_result,
+                        mock_integration_merge_pr,
+                    ],
+                ),
+                Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindRunWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
+            ):
+                request = {
+                    "workflowType": "MoonMind.Run",
+                    "title": "Test Branch Publish Merge",
+                    "initialParameters": {
+                        "repo": "moonladder/moonmind",
+                        "integration": "jules",
+                        "publishMode": "branch",
+                        "workspaceSpec": {
+                            "branch": "feature-branch",
+                        }
+                    },
+                }
+
+                # Start workflow
+                handle = await env.client.start_workflow(
+                    MoonMindRunWorkflow.run,
+                    request,
+                    id="test-workflow-merge",
+                    task_queue="test-task-queue",
+                    search_attributes=_trusted_search_attributes(),
+                )
+
+                result = await handle.result()
+                self.assertEqual(result["status"], "success")
+                self.assertGreaterEqual(len(INTEGRATION_FETCH_RESULT_CALLS), 1)
+                self.assertGreaterEqual(len(INTEGRATION_MERGE_PR_CALLS), 1)

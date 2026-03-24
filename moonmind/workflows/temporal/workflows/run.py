@@ -112,6 +112,7 @@ class MoonMindRunWorkflow:
         self._resume_requested = False
         self._parameters_updated = False
         self._updated_parameters: dict[str, Any] = {}
+        self._external_status: Optional[str] = None
 
         # Internal state
         self._wait_cycle_count = 0
@@ -861,7 +862,9 @@ class MoonMindRunWorkflow:
         self._attention_required = False
         self._update_search_attributes()
 
-        while not self._resume_requested and not self._cancel_requested:
+        _poll_terminal = False
+
+        while not self._resume_requested and not self._cancel_requested and not _poll_terminal:
             self._wait_cycle_count += 1
             try:
                 await workflow.wait_condition(
@@ -900,7 +903,8 @@ class MoonMindRunWorkflow:
 
                 status = self._get_from_result(poll_result, "normalized_status")
                 if status in ("completed", "failed", "canceled"):
-                    self._resume_requested = True
+                    _poll_terminal = True
+                    self._external_status = status
                     if status == "failed":
                         workflow.logger.warning(f"Integration failed: {poll_result}")
                     elif status == "canceled":
@@ -911,7 +915,7 @@ class MoonMindRunWorkflow:
                 poll_interval_seconds = min(
                     poll_interval_seconds * 2, max_poll_interval_seconds
                 )
-        self._resume_requested = False
+
         self._awaiting_external = False
         self._waiting_reason = None
         self._attention_required = False
@@ -927,7 +931,7 @@ class MoonMindRunWorkflow:
             publish_mode == "branch"
             and self._integration == "jules"
             and not self._cancel_requested
-            and status == "completed"
+            and self._external_status == "completed"
         ):
             workflow.logger.info("Jules branch-publish: fetching result for PR merge")
             try:
@@ -1393,6 +1397,11 @@ class MoonMindRunWorkflow:
             "failed",
             "canceled",
         ):
+            if normalized_status:
+                self._external_status = normalized_status
+            elif event_type == "completed":
+                self._external_status = "completed"
+
             if normalized_status == "failed":
                 safe_payload = {
                     key: value
@@ -1418,3 +1427,15 @@ class MoonMindRunWorkflow:
     def update_parameters(self, new_parameters: dict[str, Any]) -> None:
         self._parameters_updated = True
         self._updated_parameters = new_parameters
+
+    @workflow.query
+    def get_status(self) -> dict[str, Any]:
+        return {
+            "state": self._state,
+            "paused": self._paused,
+            "cancel_requested": self._cancel_requested,
+            "step_count": self._step_count,
+            "summary": self._summary,
+            "awaiting_external": self._awaiting_external,
+            "waiting_reason": self._waiting_reason,
+        }
