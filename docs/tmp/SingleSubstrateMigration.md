@@ -2,7 +2,7 @@
 
 > **Goal:** Finish the move to Temporal-backed execution as the **only** real substrate. Remove legacy queue and system paths so MoonMind has one task model, one execution model, one observability model, and one action model.
 >
-> **Last updated:** 2026-03-22
+> **Last updated:** 2026-03-24
 
 ---
 
@@ -26,6 +26,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - `/api/executions` adapter surface exists with full CRUD + signal/cancel
 - `TemporalExecutionRecord` projection row with sync metadata
 - system code already deleted from `moonmind/workflows/system/` (only `__pycache__` remains)
+- legacy queue router and `moonmind/workflows/agent_queue/` removed; queue backend tables dropped via migration `b92f4891f27c`
 - system DB tables dropped via migration `c1d2e3f4a5b6`
 - External Runs tab removed from dashboard
 - system submissions rejected with error in `dashboard.js`
@@ -35,21 +36,18 @@ The target state is clean: **Temporal owns execution truth. Period.**
 #### Python Backend
 | Component | File | Legacy Reference |
 |-----------|------|-----------------|
-| View model | [task_dashboard_view_model.py](../../api_service/api/routers/task_dashboard_view_model.py) | Residual queue-oriented **system** keys (`defaultQueue`, `queueEnv`, `taskSourceResolver`); imports from `agent_queue.runtime_defaults` for submit defaults |
-| Task compatibility router | [task_compatibility.py](../../api_service/api/routers/task_compatibility.py) | `source` filter accepts `queue` literal, `source_hint` accepts `queue` |
-| Queue router | [agent_queue.py](../../api_service/api/routers/agent_queue.py) | Full queue API: `/api/queue/jobs`, `/api/tasks`, etc. |
-| Agent queue module | [moonmind/workflows/agent_queue/](../../moonmind/workflows/agent_queue/) | `service.py` (112 KB), `repositories.py` (50 KB), `models.py`, `task_contract.py` (48 KB), etc. |
-| Task routing | [routing.py](../../moonmind/workflows/tasks/routing.py) | References to system |
-| Automation system | [system.py](../../moonmind/workflows/automation/system.py) | Automation-level orchestration code |
-| Settings | [settings.py](../../moonmind/config/settings.py) | Queue/system config entries |
+| View model | [task_dashboard_view_model.py](../../api_service/api/routers/task_dashboard_view_model.py) | Residual **system** block keys (`defaultQueue`, `queueEnv`, `taskSourceResolver`); submit defaults from `moonmind.workflows.tasks.runtime_defaults` |
+| Task compatibility router | [task_compatibility.py](../../api_service/api/routers/task_compatibility.py) | Deprecated `source` / `source_hint` query params; handlers pass `temporal` only — Phase 4 will remove the adapter surface |
+| Task routing | [routing.py](../../moonmind/workflows/tasks/routing.py) | Any remaining non-Temporal routing names |
+| Automation | [automation/](../../moonmind/workflows/automation/) | Naming/orchestration that predates single substrate |
+| Settings | [settings.py](../../moonmind/config/settings.py) | `MOONMIND_QUEUE` alias still used for **Codex worker queue** (`codex_queue`), not the removed agent queue API |
 
 #### Frontend (dashboard.js)
 | Area | Legacy Reference |
 |------|-----------------|
-| Route matching | Legacy `/tasks/system` removed; worker controls live at `/tasks/workers` |
-| Submit form | `validatesystemSubmission`, `normalizesystemPriority`, `showsystemFields` |
-| Source resolution | `explicitSource === "system"` branches |
-| Status maps | Consumes `queue` and `system` maps from runtime config |
+| Worker runtime capabilities | `queueSourceConfig` + default `/api/queue/workers/runtime-capabilities` when `sources.queue` absent — should move to Temporal/worker-auth config (Phase 3+) |
+| Copy / labels | `defaultQueueName` and “Unified queue” strings — cosmetic naming cleanup |
+| Task resolution | Optional calls to `taskSourceResolver` / `taskResolution` endpoints until Phase 4 removes them |
 
 #### Tests
 | Area | Files |
@@ -71,9 +69,13 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ## Migration Phases
 
-### Phase 1 — Queue Submission Path → Temporal *(prerequisite)*
+**Progress:** Phases **1** and **2** are **complete**. Phase **3** is **in progress**. Phases **4** and **5** are **not started**.
+
+### Phase 1 — Queue Submission Path → Temporal *(prerequisite)* — **COMPLETE**
 
 **Objective:** Ensure every action that currently routes through `/api/queue/jobs` can be performed through the Temporal execution path instead.
+
+**Status:** Finished. Gate met: no user-facing action requires the removed queue path.
 
 - [x] **1.1** Audit queue-only features: attachments, live sessions, operator messages, task control, events/SSE, skills list
 - [x] **1.2** Map each queue feature to its Temporal equivalent or mark as deferred
@@ -82,13 +84,13 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [x] **1.5** Confirm recurring tasks (`/api/recurring-tasks`) already use Temporal Schedules (check if still queue-backed)
 - [x] **1.6** Verify step templates work against Temporal execution path
 
-> **Gate:** No user-facing action requires the queue path. Queue router can be deprecated without feature loss.
-
 ---
 
-### Phase 2 — Collapse Dashboard to Single Source
+### Phase 2 — Collapse Dashboard to Single Source — **COMPLETE**
 
 **Objective:** Remove `queue` and `system` as dashboard execution sources. All task list/detail goes through `temporal`.
+
+**Status:** Finished. Dashboard execution views use Temporal; residual strings and worker-capability URL fallbacks are Phase 3+ cleanup.
 
 - [x] **2.1** Remove `sources.queue` from `build_runtime_config()` in `task_dashboard_view_model.py`
 - [x] **2.2** Remove `sources.manifests` queue-backed endpoint block (manifests should use Temporal source)
@@ -101,24 +103,24 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [x] **2.9** Update submit runtime tests to remove system validation/priority tests
 - [x] **2.10** Update view model tests for single-source config
 
-> **Gate:** Dashboard renders from Temporal source only. No `queue`/`system` branching in frontend or view model.
-
 ---
 
-### Phase 3 — Remove Queue Backend Code
+### Phase 3 — Remove Queue Backend Code — **IN PROGRESS**
 
-**Objective:** Delete the legacy queue execution substrate code.
+**Objective:** Delete the legacy queue execution substrate code and scrub remaining queue-shaped config, tests, and UI fallbacks.
 
-- [ ] **3.1** Remove `api_service/api/routers/agent_queue.py` and its inclusion in the API router setup
-- [ ] **3.2** Delete `moonmind/workflows/agent_queue/` module (~250 KB of service, repository, model, contract code)
-- [ ] **3.3** Remove queue-related DB models and generate Alembic migration to drop queue tables
-- [ ] **3.4** Remove queue environment variables from settings (`MOONMIND_QUEUE`, `defaultQueue`, `queueEnv`)
+**Status:** Core backend removal is done; cleanup of env keys, dashboard copy, skipped tests, and e2e mocks remains.
+
+- [x] **3.1** Remove `api_service/api/routers/agent_queue.py` and its inclusion in the API router setup *(removed)*
+- [x] **3.2** Delete `moonmind/workflows/agent_queue/` module (~250 KB of service, repository, model, contract code) *(removed; shared helpers live under `moonmind/workflows/tasks/` where noted in file headers)*
+- [x] **3.3** Remove queue-related DB models and generate Alembic migration to drop queue tables *(see `b92f4891f27c_remove_legacy_queue_backend_tables.py`)*
+- [ ] **3.4** Remove or rename queue-shaped dashboard settings: `defaultQueue`, `queueEnv` in view model; align worker queue naming vs Codex `MOONMIND_QUEUE` in settings; update dashboard copy and runtime-capabilities URL config (no default `/api/queue/...` path)
 - [x] **3.5** Remove `moonmind/workflows/system/` directory (empty except `__pycache__`)
-- [ ] **3.6** Remove `tests/unit/orchestrator_removal/` directory (removal is now complete)
-- [ ] **3.7** Remove queue-related integration tests and contract tests
-- [ ] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/system exports
+- [ ] **3.6** Remove `tests/unit/orchestrator_removal/` directory (e.g. migrate or drop `test_doc_req_coverage.py` once redundant)
+- [ ] **3.7** Remove or rewrite queue-related tests: skipped `test_agent_queue_artifacts.py`, JS fixtures still referencing `/api/queue/jobs`, e2e mocks for queue routes
+- [x] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/system exports *(no `get_agent_queue_service`; Temporal factories only)*
 
-> **Gate:** `agent_queue` and `system` modules are deleted. No queue tables in DB schema.
+> **Gate:** `agent_queue` and `system` workflow modules are deleted; queue tables removed from schema. Open items **3.4–3.7** finish config/test/e2e cleanup so nothing queue-shaped remains in the operator surface.
 
 ---
 
