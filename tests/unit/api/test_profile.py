@@ -36,6 +36,7 @@ MOCK_PROFILE_DATA = {
     "user_id": USER_ID,
     "google_api_key": "test_google_key",
     "openai_api_key": "test_openai_key",
+    "anthropic_api_key": "test_anthropic_key",
 }
 MOCK_PROFILE_READ_SCHEMA = UserProfileRead(**MOCK_PROFILE_DATA)
 
@@ -75,6 +76,7 @@ async def test_get_current_user_profile_success(mock_db_session, mock_profile_se
     assert result.user_id == MOCK_PROFILE_DATA["user_id"]
     assert result.google_api_key_set is True  # test data has google_api_key set
     assert result.openai_api_key_set is True  # test data has openai_api_key set
+    assert result.anthropic_api_key_set is True
 
 
 @pytest.mark.asyncio
@@ -118,6 +120,7 @@ async def test_update_current_user_profile_success(
     assert isinstance(result, UserProfileReadSanitized)
     assert result.google_api_key_set is True
     assert result.openai_api_key_set is True
+    assert result.anthropic_api_key_set is True
     mock_profile_service.update_profile.assert_called_once_with(
         db_session=mock_db_session, user_id=USER_ID, profile_data=update_data
     )

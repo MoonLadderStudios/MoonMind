@@ -45,6 +45,10 @@ _SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
 _ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS: frozenset[str] = frozenset(
     {"GH_TOKEN", "GITHUB_TOKEN"}
 )
+# Non-secret metadata keys allowed in envOverrides (values are refs / env names, not raw secrets).
+_ALLOWED_MANAGED_LAUNCH_METADATA_KEYS: frozenset[str] = frozenset(
+    {"MANAGED_API_KEY_REF", "MANAGED_API_KEY_TARGET_ENV"}
+)
 _MAX_SUMMARY_CHARS = 4096
 
 
@@ -294,7 +298,10 @@ class ManagedRuntimeProfile(BaseModel):
         )
         if not self.command_template:
             raise ValueError("commandTemplate must not be empty")
-        if _contains_sensitive_key(self.env_overrides):
+        if _contains_sensitive_key(
+            self.env_overrides,
+            allowed_sensitive_keys=_ALLOWED_MANAGED_LAUNCH_METADATA_KEYS,
+        ):
             raise ValueError("envOverrides must not contain raw credential keys")
 
         normalized_passthrough: list[str] = []

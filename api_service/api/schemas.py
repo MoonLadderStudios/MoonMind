@@ -31,7 +31,10 @@ class UserProfileBaseSchema(BaseModel):
         default=None,
         alias="openai_api_key_encrypted",
     )
-    # Add other profile fields here as they are defined in the UserProfile model
+    anthropic_api_key: Optional[str] = Field(
+        default=None,
+        alias="anthropic_api_key_encrypted",
+    )
 
 
 class UserProfileRead(
@@ -53,7 +56,7 @@ class UserProfileReadSanitized(BaseModel):
     user_id: uuid.UUID
     google_api_key_set: bool = False
     openai_api_key_set: bool = False
-    # Exclude sensitive fields by not including them in the schema
+    anthropic_api_key_set: bool = False
 
 
 class UserProfileUpdate(UserProfileBaseSchema):
