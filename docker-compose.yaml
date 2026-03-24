@@ -123,8 +123,8 @@ services:
       - NUM_HISTORY_SHARDS=${TEMPORAL_NUM_HISTORY_SHARDS:-1}
       - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml
       - BIND_ON_IP=0.0.0.0
-    expose:
-      - "7233"
+    ports:
+      - "7233:7233"
     volumes:
       - ./services/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro
     depends_on:
