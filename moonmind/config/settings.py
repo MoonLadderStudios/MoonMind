@@ -532,8 +532,6 @@ class WorkflowSettings(BaseSettings):
     codex_queue: Optional[str] = Field(
         None,
         validation_alias=AliasChoices(
-            "MOONMIND_QUEUE",
-            "WORKFLOW_CODEX_QUEUE",
             "WORKFLOW_CODEX_QUEUE",
             "CODEX_QUEUE",
         ),

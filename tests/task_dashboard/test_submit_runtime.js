@@ -152,12 +152,12 @@ const helpers = loadSubmitRuntimeHelpers();
 
 (function testDetermineSubmitDestinationRoutesPayloads() {
   const endpoints = {
-    queue: "/api/queue/jobs",
+    queue: "/api/executions",
     temporal: "/api/executions",
   };
   const workerTarget = helpers.determineSubmitDestination("codex", endpoints);
   assert.strictEqual(workerTarget.mode, "worker");
-  assert.strictEqual(workerTarget.endpoint, "/api/queue/jobs");
+  assert.strictEqual(workerTarget.endpoint, "/api/executions");
 
   const temporalTarget = helpers.determineSubmitDestination(
     "codex",
@@ -604,18 +604,18 @@ const helpers = loadSubmitRuntimeHelpers();
   assert.strictEqual(typeof helpers.resolveQueuePrefillSubmitTarget, "function");
 
   const editTarget = helpers.resolveQueuePrefillSubmitTarget("edit", {
-    update: "/api/queue/jobs/{id}",
+    update: "/api/executions/{id}",
   });
   assert.strictEqual(editTarget.method, "PUT");
-  assert.strictEqual(editTarget.endpointTemplate, "/api/queue/jobs/{id}");
+  assert.strictEqual(editTarget.endpointTemplate, "/api/executions/{id}");
 
   const resubmitTarget = helpers.resolveQueuePrefillSubmitTarget("resubmit", {
-    resubmit: "/api/queue/jobs/{id}/resubmit",
+    resubmit: "/api/executions/{id}/resubmit",
   });
   assert.strictEqual(resubmitTarget.method, "POST");
   assert.strictEqual(
     resubmitTarget.endpointTemplate,
-    "/api/queue/jobs/{id}/resubmit",
+    "/api/executions/{id}/resubmit",
   );
 })();
 

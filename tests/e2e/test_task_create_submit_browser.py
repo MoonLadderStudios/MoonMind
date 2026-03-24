@@ -148,8 +148,8 @@ def _route_handlers(
     page.route(f"{base_url}/api/tasks/skills", _mock_skills)
     page.route(f"{base_url}/api/system/worker-pause", _mock_worker_pause)
     page.route(f"{base_url}/api/task-step-templates*", _mock_task_step_templates)
-    page.route(f"{base_url}/api/queue/jobs", _mock_create)
-    page.route(f"{base_url}/api/queue/jobs/*", _mock_detail)
+    page.route(f"{base_url}/api/executions", _mock_create)
+    page.route(f"{base_url}/api/executions/*", _mock_detail)
     return calls
 
 

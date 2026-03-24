@@ -49,7 +49,7 @@ def resolve_worker_queue(
     """Resolve a worker queue with single-queue-first precedence."""
 
     env_map = env or os.environ
-    queue = (env_map.get("MOONMIND_QUEUE") or "").strip()
+    queue = (env_map.get("CODEX_QUEUE") or "").strip()
     if queue:
         return queue
 
