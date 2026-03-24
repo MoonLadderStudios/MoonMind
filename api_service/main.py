@@ -44,6 +44,7 @@ from api_service.api.routers.planning import router as planning_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_tasks import router as recurring_tasks_router
 from api_service.api.routers.automation import router as automation_router
+from api_service.test_ui_route import router as test_ui_router
 
 from api_service.api.routers.task_compatibility import (
     router as task_compatibility_router,
@@ -327,6 +328,7 @@ app.include_router(task_dashboard_router)
 app.include_router(task_compatibility_router)
 app.include_router(task_step_templates_router)
 app.include_router(temporal_artifacts_router)
+app.include_router(test_ui_router)
 
 # Auth routers
 API_AUTH_PREFIX = "/api/v1/auth"  # Defined a constant for clarity

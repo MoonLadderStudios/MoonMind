@@ -26,6 +26,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check and Test Frontend
+        run: |
+          npm ci
+          npm run ui:typecheck
+          npm run ui:lint
+          npm run ui:test
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
