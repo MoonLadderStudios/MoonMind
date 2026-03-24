@@ -500,13 +500,12 @@ async def _auto_seed_auth_profiles() -> list[str]:
                 )
                 session.add(profile)
                 seeded.append(profile_def["runtime_id"])
-                logger.info(
-                    "Auto-seeded auth profile '%s' for runtime '%s'",
-                    profile_def["profile_id"],
-                    profile_def["runtime_id"],
-                )
 
             await session.commit()
+            logger.info(
+                "Committed %d auto-seeded managed-agent auth profile row(s).",
+                len(seeded),
+            )
     except Exception as e:
         logger.error("Failed to auto-seed auth profiles: %s", e, exc_info=True)
 
