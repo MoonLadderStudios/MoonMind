@@ -11,7 +11,7 @@ These warnings are caused by the upgrade to Pydantic V2 and require straightforw
   - Replace `.dict()` with `.model_dump()` in `api_service/services/profile_service.py` (line 120) and potentially in Temporalio converter code if within project bounds.
   - Replace `.parse_obj()` with `.model_validate()` where found.
 
-## Phase 2: FastAPI & Dependency Deprecations
+## Phase 2: FastAPI & Dependency Deprecations (Complete)
 These are standard library and dependency deprecation changes pointing to future breaking changes.
 - **Starlette/FastAPI HTTP Status**: Change occurrences of `HTTP_422_UNPROCESSABLE_ENTITY` to `HTTP_422_UNPROCESSABLE_CONTENT` and `HTTP_413_REQUEST_ENTITY_TOO_LARGE` to `HTTP_413_CONTENT_TOO_LARGE` in:
   - `api_service/api/routers/temporal_artifacts.py`

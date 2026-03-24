@@ -244,7 +244,7 @@ def _map_error(exc: Exception) -> HTTPException:
         )
     if isinstance(exc, RecurringTaskValidationError):
         return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_recurring_task",
                 "message": str(exc),
