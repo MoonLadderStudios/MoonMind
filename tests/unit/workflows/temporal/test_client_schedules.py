@@ -6,12 +6,14 @@ and T017 (SDK error wrapping).
 
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+from temporalio.client import ScheduleOverlapPolicy
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.schedule_errors import (
@@ -76,7 +78,6 @@ class TestCreateSchedule:
 
     @pytest.mark.asyncio
     async def test_overlap_policy_passed_through(self) -> None:
-        from temporalio.client import ScheduleOverlapPolicy
 
         mock_handle = MagicMock()
         mock_handle.id = _SCHEDULE_ID
@@ -96,8 +97,6 @@ class TestCreateSchedule:
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:
-        from datetime import timedelta
-
         mock_handle = MagicMock()
         mock_handle.id = _SCHEDULE_ID
         mock_client = MagicMock()
@@ -166,6 +165,92 @@ class TestCreateSchedule:
 # ---------------------------------------------------------------------------
 # T016: describe, update, pause, unpause, trigger, delete
 # ---------------------------------------------------------------------------
+
+
+class TestUpdateSchedule:
+    """DOC-REQ-002: update schedule."""
+
+    @pytest.mark.asyncio
+    async def test_calls_handle_update_with_all_params(self) -> None:
+        handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        # Mock the input to the update callback
+        mock_update_input = MagicMock()
+        mock_schedule = MagicMock()
+        mock_schedule.spec.cron_expressions = ["0 0 * * *"]
+        mock_schedule.spec.time_zone_name = "UTC"
+        mock_schedule.spec.jitter = timedelta(seconds=0)
+
+        mock_schedule.policy.overlap.name = "SKIP"
+        mock_schedule.policy.catchup_window = timedelta(minutes=15)
+
+        mock_schedule.state.paused = False
+        mock_schedule.state.note = ""
+        mock_update_input.schedule = mock_schedule
+
+        adapter = _make_adapter(mock_client)
+        await adapter.update_schedule(
+            definition_id=_TEST_UUID,
+            cron_expression="0 12 * * *",
+            timezone="America/New_York",
+            overlap_mode="allow",
+            catchup_mode="none",
+            jitter_seconds=60,
+            enabled=False,
+            note="Updated note",
+        )
+        handle.update.assert_awaited_once()
+
+        # Get the callback passed to update()
+        update_callback = handle.update.call_args[0][0]
+
+        # Call it with our mock input
+        updated_schedule = await update_callback(mock_update_input)
+
+        assert updated_schedule.spec.cron_expressions == ["0 12 * * *"]
+        assert updated_schedule.spec.time_zone_name == "America/New_York"
+        assert updated_schedule.spec.jitter == timedelta(seconds=60)
+        assert updated_schedule.policy.overlap == ScheduleOverlapPolicy.ALLOW_ALL
+        assert updated_schedule.policy.catchup_window == timedelta(seconds=0)
+        assert updated_schedule.state.paused is True
+        assert updated_schedule.state.note == "Updated note"
+
+    @pytest.mark.asyncio
+    async def test_update_preserves_unprovided_fields(self) -> None:
+        handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        mock_update_input = MagicMock()
+        mock_schedule = MagicMock()
+        mock_schedule.spec.cron_expressions = ["0 0 * * *"]
+        mock_schedule.spec.time_zone_name = "UTC"
+        mock_schedule.spec.jitter = timedelta(seconds=30)
+
+        mock_schedule.policy.overlap.name = "SKIP"
+        mock_schedule.policy.catchup_window = timedelta(days=365) # catchup_mode = "all"
+
+        mock_schedule.state.paused = True # enabled = False
+        mock_schedule.state.note = "Original note"
+        mock_update_input.schedule = mock_schedule
+
+        adapter = _make_adapter(mock_client)
+        await adapter.update_schedule(definition_id=_TEST_UUID)
+
+        handle.update.assert_awaited_once()
+        update_callback = handle.update.call_args[0][0]
+        updated_schedule = await update_callback(mock_update_input)
+
+        # Verify fields are preserved
+        assert updated_schedule.spec.cron_expressions == ["0 0 * * *"]
+        assert updated_schedule.spec.time_zone_name == "UTC"
+        assert updated_schedule.spec.jitter == timedelta(seconds=30)
+        assert updated_schedule.policy.overlap.name == "SKIP"
+        assert updated_schedule.policy.catchup_window == timedelta(days=365)
+        assert updated_schedule.state.paused is True
+        assert updated_schedule.state.note == "Original note"
 
 
 class TestDescribeSchedule:
