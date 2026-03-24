@@ -26,6 +26,10 @@ from moonmind.workflows.skills.resolver import (
     resolve_skills_local_mirror_root,
     validate_skill_name,
 )
+
+from api_service.ui_boot import generate_boot_payload
+from api_service.ui_assets import ui_assets
+
 from moonmind.workflows.tasks.source_mapping import (
     TaskResolutionAmbiguousError,
     TaskResolutionNotFoundError,
@@ -265,6 +269,28 @@ async def task_dashboard_root(
     """Serve the dashboard root page."""
 
     return _render_dashboard(request, "/tasks")
+
+
+@router.get("/tasks/settings", response_class=HTMLResponse)
+async def task_settings_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered settings page."""
+    current_path = "/tasks/settings"
+    boot_payload = generate_boot_payload("settings", initial_data=build_runtime_config(current_path))
+    assets_html = ui_assets("settings")
+
+    return templates.TemplateResponse(
+        request,
+        "react_dashboard.html",
+        {
+            "request": request,
+            "boot_payload": boot_payload,
+            "assets_html": assets_html,
+            "current_path": current_path,
+        },
+    )
 
 
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)

@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         // Entrypoints will be added here as pages are migrated
         'tasks-home': resolve(__dirname, 'src/entrypoints/tasks-home.tsx'),
+        'settings': resolve(__dirname, 'src/entrypoints/settings.tsx'),
       },
     },
   },
