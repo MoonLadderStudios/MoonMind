@@ -31,10 +31,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     WORKFLOW_TASK_QUEUE,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from moonmind.workflows.temporal.workflows.agent_run import (
-    MoonMindAgentRun,
-    resolve_external_adapter,
-)
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
 # ── Mock activities ──
@@ -128,7 +125,7 @@ async def mock_artifact_read_agent(args: Dict[str, Any]) -> bytes:
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute_agent(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
-    return {"status": "SUCCEEDED", "outputs": {}}
+    return {"status": "COMPLETED", "outputs": {}}
 
 
 # ── Integration tests (require Temporal test server) ──

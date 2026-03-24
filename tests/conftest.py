@@ -107,8 +107,11 @@ def _kill_owned_temporal_servers() -> None:
             try:
                 os.kill(pid, signal.SIGTERM)
             except OSError:
+                # Best-effort: the child may already be gone or we may lack permission.
                 pass
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        # Best-effort cleanup: if `pgrep` is unavailable, fails, or output is unexpected,
+        # we silently ignore it to avoid disrupting test shutdown.
         pass
 
 
