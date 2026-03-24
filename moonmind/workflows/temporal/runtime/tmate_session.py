@@ -58,9 +58,19 @@ class TmateServerConfig:
         host = os.environ.get("MOONMIND_TMATE_SERVER_HOST", "").strip()
         if not host:
             return None
+        port_str = os.environ.get("MOONMIND_TMATE_SERVER_PORT", "22")
+        try:
+            port = int(port_str)
+        except ValueError:
+            logger.warning(
+                "Invalid MOONMIND_TMATE_SERVER_PORT value '%s', "
+                "falling back to default.",
+                port_str,
+            )
+            port = 22
         return cls(
             host=host,
-            port=int(os.environ.get("MOONMIND_TMATE_SERVER_PORT", "22")),
+            port=port,
             rsa_fingerprint=os.environ.get(
                 "MOONMIND_TMATE_SERVER_RSA_FINGERPRINT", ""
             ),
@@ -266,7 +276,11 @@ class TmateSessionManager:
                 except asyncio.TimeoutError:
                     self._process.kill()
             except ProcessLookupError:
-                pass
+                # Process already exited — safe to ignore.  
+                logger.debug(
+                    "Tmate process for session %s already gone",
+                    self.session_name,
+                )
             except Exception:
                 logger.warning(
                     "Failed to terminate tmate process for session %s",

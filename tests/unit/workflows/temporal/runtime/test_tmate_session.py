@@ -11,7 +11,7 @@ Tests cover:
 
 from __future__ import annotations
 
-import asyncio
+
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -118,6 +118,20 @@ class TestTmateServerConfig:
             assert cfg.port == 2222
             assert cfg.rsa_fingerprint == "SHA256:rsa-abc"
             assert cfg.ed25519_fingerprint == "SHA256:ed-xyz"
+
+    def test_from_env_invalid_port_falls_back(self):
+        """Invalid port value should fall back to default 22."""
+        with patch.dict(
+            os.environ,
+            {
+                "MOONMIND_TMATE_SERVER_HOST": "tmate.internal",
+                "MOONMIND_TMATE_SERVER_PORT": "not-a-number",
+            },
+            clear=True,
+        ):
+            cfg = TmateServerConfig.from_env()
+            assert cfg is not None
+            assert cfg.port == 22
 
 
 # ---------------------------------------------------------------------------

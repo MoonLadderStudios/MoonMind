@@ -13,7 +13,6 @@ from moonmind.workflows.temporal.runtime.launcher import (
 from moonmind.workflows.temporal.runtime.tmate_session import (
     TmateEndpoints,
     TmateSessionManager,
-    _TMATE_FOREGROUND_RESTART_OFF,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
