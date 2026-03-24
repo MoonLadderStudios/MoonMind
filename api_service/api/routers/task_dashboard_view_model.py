@@ -25,7 +25,7 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
         "open": "queued",
         "promoted": "completed",
-        "dismissed": "cancelled",
+        "dismissed": "canceled",
         "accepted": "completed",
         "rejected": "failed",
     },
@@ -41,11 +41,11 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "succeeded": "completed",
         "completed": "completed",
         "failed": "failed",
-        # Accept both Temporal's raw status spelling and the normalized dashboard value.
-        "canceled": "cancelled",
+        "canceled": "canceled",
+        # Accept British spelling from legacy data or external adapters.
+        "cancelled": "canceled",
         "queued": "queued",
         "awaiting_action": "awaiting_action",
-        "cancelled": "cancelled",
     },
 
 }

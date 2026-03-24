@@ -28,7 +28,7 @@ Renames applied: `AWAITING` → `AWAITING_SLOT`, `SUCCEEDED` → `COMPLETED`.
 | Running | `FINALIZING` | running | ❌ | Wrapping up, collecting results |
 | Completed | `COMPLETED` | completed | ✅ | Finished successfully |
 | Failed | `FAILED` | failed | ✅ | Terminated with error |
-| Canceled | `CANCELED` | cancelled | ❌ | Canceled by user or system |
+| Canceled | `CANCELED` | canceled | ✅ | Canceled by user or system |
 
 States not yet 1:1 require a normalization layer. The goal is to eliminate that layer.
 

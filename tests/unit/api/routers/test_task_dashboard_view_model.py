@@ -25,9 +25,9 @@ def test_normalize_status_maps_temporal_planning_to_running() -> None:
     assert normalize_status("temporal", "planning") == "running"
 
 
-def test_normalize_status_maps_temporal_canceled_spellings_to_cancelled() -> None:
-    assert normalize_status("temporal", "canceled") == "cancelled"
-    assert normalize_status("temporal", "cancelled") == "cancelled"
+def test_normalize_status_maps_temporal_canceled_spellings_to_canceled() -> None:
+    assert normalize_status("temporal", "canceled") == "canceled"
+    assert normalize_status("temporal", "cancelled") == "canceled"
 
 
 def test_normalize_status_fallback_for_unknown_source() -> None:
@@ -328,7 +328,7 @@ def test_normalize_status_maps_manifest_ingest_states() -> None:
     """Manifest-ingest-specific temporal states should map correctly."""
     assert normalize_status("temporal", "executing") == "running"
     assert normalize_status("temporal", "planning") == "running"
-    assert normalize_status("temporal", "canceled") == "cancelled"
+    assert normalize_status("temporal", "canceled") == "canceled"
     assert normalize_status("temporal", "awaiting_external") == "awaiting_action"
 
 
