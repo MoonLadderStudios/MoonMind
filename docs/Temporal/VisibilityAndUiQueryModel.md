@@ -1,5 +1,7 @@
 # Visibility and UI Query Model
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md`](../tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md)
+
 **Status:** Draft  
 **Owner:** MoonMind Platform  
 **Last updated:** 2026-03-06  
@@ -625,11 +627,11 @@ If the dashboard continues to stay task-oriented for now, compatibility adapters
 
 ---
 
-## 14. Migration rules for source of truth and projections
+## 14. Projection rules for source of truth
 
 ### 14.1 Projection discipline
 
-During migration, any app DB projection or adapter cache that mirrors Temporal-managed executions must mirror these canonical fields faithfully:
+Any app DB projection or adapter cache that mirrors Temporal-managed executions must mirror these canonical fields faithfully:
 
 - `workflowId`
 - `runId`
@@ -660,36 +662,9 @@ If the projection and Temporal-backed canonical execution metadata drift, the sy
 
 ---
 
-## 15. Implementation status against this document
+## 15. Target contract vs implementation
 
-### 15.1 Implemented today in the current adapter/projection layer
-
-- Search Attribute-style projection fields: `mm_owner_id`, `mm_state`, `mm_updated_at`, `mm_entry`
-- required Memo fields: `title`, `summary`
-- optional Memo refs: `input_ref`, `manifest_ref`
-- exact list filters: `workflowType`, `state`, `ownerId`
-- opaque `nextPageToken`
-- exact count in `/api/executions`
-- stable default ordering by recency then `workflowId`
-- update/signal/cancel adapter endpoints
-- Continue-As-New behavior for rerun-style updates while preserving `workflowId`
-
-### 15.2 Not yet implemented in true Temporal Visibility-backed query execution
-
-- Visibility-native query/count as the actual backend for `/api/executions`
-- `mm_owner_type` as a first-class Visibility field
-- `ownerType` filter on the public adapter API
-- `entry` filter on the public adapter API
-- `repo` and `integration` filters
-- first-class `temporal` dashboard source
-- task-surface enforcement of `taskId == workflowId` for Temporal-backed rows
-- canonical top-level `title` / `summary` / `entry` fields on adapter list rows
-- canonical top-level `ownerType`, `waitingReason`, and `attentionRequired` fields
-
-### 15.3 Transitional gaps to retire
-
-- compatibility dashboards that collapse all waiting states into a generic action-required label
-- any task-oriented payload that hides `workflowId` in raw/debug-only metadata
+This document specifies the **desired** Visibility, Memo, adapter list/detail, and UI query contract (§§1–14). Current implementation gaps, Visibility-native query work, and items to retire after substrate cutover are tracked in [`docs/tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md`](../tmp/remaining-work/Temporal-VisibilityAndUiQueryModel.md).
 
 ---
 

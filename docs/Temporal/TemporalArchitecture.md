@@ -1,5 +1,7 @@
 # MoonMind Temporal Architecture
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TemporalArchitecture.md`](../tmp/remaining-work/Temporal-TemporalArchitecture.md)
+
 **Status:** Draft (migration-oriented)  
 **Owner:** MoonMind Platform  
 **Last updated:** 2026-03-16  
@@ -334,39 +336,9 @@ All Temporal containers join the `local-network` Docker network. Internal servic
 
 No Temporal ports are published to the host by default. The `temporal-ui` container optionally publishes **8088→8080**.
 
-## 7. Migration phases
+## 7. Substrate evolution
 
-### Phase 0: Current production path
-
-- Queue tasks and Celery automation remain canonical for current runtime features not yet on Temporal
-- Temporal foundation may be present but is not yet the primary execution substrate
-
-### Phase 1: Temporal foundation
-
-- Stand up self-hosted Temporal in Docker Compose
-- Register namespace and retention policy
-- Validate Postgres visibility and upgrade playbooks
-- Establish artifact store and worker topology contracts
-
-### Phase 2: Temporal-backed workflow introduction
-
-- Introduce first workflow types behind MoonMind APIs
-- preserve current task-oriented UI and compatibility API surfaces
-- map task actions to workflow start/update/signal/cancel operations
-
-### Phase 3: Temporal as primary workflow engine
-
-- new durable orchestration flows start on Temporal by default
-- Temporal Visibility becomes the source of truth for Temporal-managed list/detail surfaces
-- compatibility adapters remain for legacy queue records still in flight
-
-### Phase 4: Legacy decommission
-
-Only after parity is proven:
-
-- remove Celery paths that Temporal has replaced
-- remove duplicated queue leasing/state logic where Temporal is authoritative
-- retire transitional identifier and route compatibility
+Execution moves toward **Temporal** as the durable orchestration layer for new flows, while preserving compatibility for legacy queue/system records until retired. Phase-style rollout notes and decommission criteria are tracked in [`docs/tmp/remaining-work/Temporal-TemporalArchitecture.md`](../tmp/remaining-work/Temporal-TemporalArchitecture.md) and [`docs/tmp/SingleSubstrateMigration.md`](../tmp/SingleSubstrateMigration.md).
 
 ## 8. Concept mapping: current MoonMind to Temporal
 

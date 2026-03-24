@@ -1,5 +1,7 @@
 # Tool and Plan Contracts (Skills as a Tool Subtype)
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md)
+
 MoonMind system design (Temporal-first)
 
 Status: **Implemented** (contracts active, runtime live)
@@ -665,15 +667,6 @@ Reserve fields without enabling them:
 
 ---
 
-## 14) Implementation checklist (minimum to start coding)
+## 14) Engineering backlog
 
-1. Define Tool registry file format + loader + validator.
-2. Implement registry snapshot digest + artifact storage.
-3. Implement `plan.validate` activity (deep validation).
-4. Implement Plan Interpreter inside `MoonMind.Run` workflow:
-
-   * schedule nodes
-   * track results
-   * enforce policy
-5. Implement `mm.skill.execute` dispatcher activity in worker fleet.
-6. Implement progress query + optional progress artifact output.
+Minimum components: tool registry format + loader + validator; registry snapshot digest artifact; `plan.validate`; Plan Interpreter in `MoonMind.Run`; `mm.tool.execute` / skill dispatch activity; progress query and optional progress artifact. Status is tracked in [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md).

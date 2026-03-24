@@ -1,5 +1,7 @@
 # Adding a New External Agent Provider
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-AddingExternalProvider.md`](../tmp/remaining-work/ExternalAgents-AddingExternalProvider.md)
+
 This guide walks through integrating a new external AI agent provider with MoonMind's universal external adapter pattern.
 
 ## Prerequisites

@@ -1,5 +1,7 @@
 # Secret Store Design (HashiCorp Vault for Managed Agents)
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-SecretStore.md`](../tmp/remaining-work/ManagedAgents-SecretStore.md)
+
 Status: Proposed  
 Owners: MoonMind Engineering  
 Last Updated: 2026-03-14
@@ -181,31 +183,9 @@ Require both:
 
 If either fails, fail the Activity with a non-secret reason string so the workflow can safely terminate or alert operators.
 
-## 9. Implementation Plan
+## 9. Rollout expectations
 
-### Phase 1: Vault foundation
-
-1. deploy Vault with KV v2 and audit logs
-2. configure worker auth method
-3. create least-privilege policies
-
-### Phase 2: Workflow auth refs
-
-1. extend Workflow Input model with optional `auth` object
-2. add Vault client abstraction in worker runtime
-3. resolve/apply credentials during prepare/publish Activities
-4. redact secret-like strings in logging interceptors
-
-### Phase 3: Observability and resilience
-
-1. add metrics for secret resolution success/failure/latency
-2. correlate Temporal workflow ID with Vault request IDs (without secret values)
-3. add integration tests for denied/expired/rotated credentials
-
-### Phase 4: Remove temporary bridge
-
-1. migrate private repo workflows away from plain `GITHUB_TOKEN` injected from the API server.
-2. keep env-token path only for local fallback and break-glass operations.
+Production secret handling converges on **Vault KV v2** with audited access, worker auth, least-privilege policies, **`repoAuthRef` / workflow `auth` objects** resolved in Activities (never in workflow history), logging redaction, **metrics and correlation** for resolution outcomes, and **removal of long-lived API-injected `GITHUB_TOKEN`** except local/break-glass. Phased completion is tracked in [`docs/tmp/remaining-work/ManagedAgents-SecretStore.md`](../tmp/remaining-work/ManagedAgents-SecretStore.md).
 
 ## 10. Operational Runbook
 

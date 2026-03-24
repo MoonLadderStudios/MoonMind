@@ -1,5 +1,7 @@
 # Temporal Scheduling
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TemporalScheduling.md`](../tmp/remaining-work/Temporal-TemporalScheduling.md)
+
 **Status:** Active
 **Owner:** MoonMind Platform
 **Last Updated:** 2026-03-23
@@ -409,6 +411,6 @@ flowchart TD
 
 ---
 
-## 10. Implementation Plan
+## 10. Scheduling implementation notes
 
-See [TemporalSchedulingPlan.md](../tmp/TemporalSchedulingPlan.md) for the phased implementation plan, file-level change details, and verification strategy.
+Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked in [`docs/tmp/TemporalSchedulingPlan.md`](../tmp/TemporalSchedulingPlan.md) and [`docs/tmp/remaining-work/Temporal-TemporalScheduling.md`](../tmp/remaining-work/Temporal-TemporalScheduling.md).

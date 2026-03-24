@@ -1,5 +1,7 @@
 # Jules Proposal Delivery and Management
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-JulesProposalDelivery.md`](../tmp/remaining-work/Temporal-JulesProposalDelivery.md)
+
 Status: Proposed
 Owner: MoonMind Engineering
 Audience: Platform, Temporal, and API teams
@@ -73,9 +75,6 @@ Temporal provides the necessary durability to handle intermittent delivery failu
 - **Secrets:** Jules API keys remain strictly in the worker context. They are never exposed in workflow history, memo fields, or artifacts.
 - **Correlation:** MoonMind will attach a stable `correlation_id` in the Jules payload metadata to link the Jules entity back to the MoonMind proposal, ensuring idempotency across retries and preventing duplicate submissions.
 
-## 7) Rollout Plan
+## 7) Delivery surface
 
-1. **Phase 1: Adapter Expansion:** Extend the Jules client adapter and schemas to support proposal delivery payloads.
-2. **Phase 2: Activity Registration:** Implement and register the Temporal activities (`send_proposal`, `sync_proposal_status`).
-3. **Phase 3: Workflow Orchestration:** Author the `MoonMind.ProposalDelivery` workflow and configure the API to trigger it asynchronously upon proposal creation.
-4. **Phase 4: UI/Observability:** Update the Task Dashboard and proposal UI to reflect the Jules delivery status and derived priority.
+**Target:** Jules-facing proposal payloads flow through extended adapter schemas, dedicated Temporal activities (`send_proposal`, `sync_proposal_status` or equivalents), a `MoonMind.ProposalDelivery` (or integrated) workflow triggered from the API, and dashboard visibility of delivery status. Build-out status is in [`docs/tmp/remaining-work/Temporal-JulesProposalDelivery.md`](../tmp/remaining-work/Temporal-JulesProposalDelivery.md).

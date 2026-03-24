@@ -1,5 +1,7 @@
 # Jules Temporal Integration Report
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesTemporalIntegrationReport.md`](remaining-work/ExternalAgents-JulesTemporalIntegrationReport.md)
+
 > **Status**: Historical planning report. Most phases described here are now **complete**.
 > See [`ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md) for the current implementation status.
 > Last reviewed: 2026-03-16
@@ -101,16 +103,9 @@ Below we detail **specific document edits** with example snippets, **implementat
 
 - **Code/Params**: Consider adding an example or reference to where this is implemented, e.g. "The activities correspond to entries in `moonmind/workflows/temporal/activity_catalog.py` (see code) and the workflow logic is in `moonmind/workflows/temporal/workflows/agent_run.py`."
 
-## 2. Implementation Tasks (Prioritized)
+## 2. Implementation status
 
-| Task | Effort | Status | Notes |
-| --- | :---: | :---: | --- |
-| **Extend Jules adapter schema & runtime**: Add `idempotencyKey`, `correlationId`, and optional `callbackUrl` fields to the adapter's start request; enforce adding them in code (`JulesIntegrationStartRequest`). Ensure `normalize_jules_status` covers all alias mappings. | M | ✅ Done | `JulesAgentAdapter` and `normalize_jules_status()` implemented |
-| **Register/Implement Temporal activities**: Create activity handlers for `integration.jules.start`, `.status`, and `.fetch_result` in activity runtime. Activities call the adapter and wrap results in the normalized contract. | L | ✅ Done | Registered in `activity_catalog.py`, handlers in `activity_runtime.py` |
-| **Workflow orchestration**: Implement `MoonMind.AgentRun` child workflow dispatched per plan step from `MoonMind.Run`. Handles adapter lifecycle, polling/callback wait, auth slot management, 429 retry. | L | ✅ Done | External adapter instantiation (Phase C) still pending |
-| **Testing & QA**: Unit tests and contract tests. Activity topology test, contract tests for activity inputs/outputs, security tests ensuring no secrets in failures. | M | 🔧 Partial | Core tests exist; coverage expanding |
-| **Observability & Artifact storage**: Instrument activities/workflows to emit metrics and logs with correlation IDs. Final Jules snapshots saved using the Temporal artifact backend. | M | 🔧 Partial | structlog in use; metrics and dashboards remaining |
-| **UI/Dashboard updates**: Extend the Task Dashboard to display the Jules `external_operation_id` separately from the workflow ID, and show normalized status with a link to `externalUrl`. | S | ⬜ Remaining | Dashboard shows managed runs but not external agent details |
+Adapter schema (`idempotencyKey`, `correlationId`, callbacks), `integration.jules.*` activities, and `MoonMind.AgentRun` orchestration are **implemented**. Remaining work spans **tests**, **metrics/artifacts**, **dashboard surfacing** of Jules IDs, and **callback wiring** as providers allow. The prioritized task table lives in [`docs/tmp/remaining-work/ExternalAgents-JulesTemporalIntegrationReport.md`](remaining-work/ExternalAgents-JulesTemporalIntegrationReport.md).
 
 ## 3. Testing Strategy
 

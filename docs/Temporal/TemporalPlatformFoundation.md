@@ -1,5 +1,7 @@
 # Temporal Platform Foundation
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TemporalPlatformFoundation.md`](../tmp/remaining-work/Temporal-TemporalPlatformFoundation.md)
+
 **Project:** MoonMind
 **Doc type:** System architecture / platform foundation
 **Status:** Draft (implementation-oriented)

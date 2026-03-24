@@ -1,5 +1,7 @@
 # Skill & Plan Design Evolution (MoonMind & Temporal)
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-SkillAndPlanEvolution.md`](../tmp/remaining-work/Tasks-SkillAndPlanEvolution.md)
+
 **Executive Summary:** The MoonMind system uses **tools** and **plans** atop Temporal to manage agent tasks. A *Tool* (`ToolDefinition`) is a named capability with input/output schemas, execution bindings, retries, etc. (not a workflow). A *Plan* is a DAG of tool invocations (Steps) with explicit dependencies and policies. This design leverages Temporal's deterministic workflows (orchestration) vs activities (side-effects). The codebase has completed a rename from `Skill*` to `Tool*` for Temporal contract objects; the term "Skill" is now reserved for agent instruction bundles (`.agents/skills/SKILL.md` files).
 
 ## Current MoonMind Tool & Plan Contracts
@@ -126,23 +128,9 @@ Two dispatch paths exist for plan nodes:
 | `skill` | Temporal Activity (`mm.tool.execute`) | `ToolDefinition` from registry snapshot |
 | `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
-## Implementation Roadmap
+## Engineering roadmap
 
-1. **Registry & Loader:** Define YAML/JSON schema for ToolDefinitions. Implement a registry loader that validates each entry at build-time and startup. Compute a registry snapshot digest (SHA) and publish it as an artifact for reproducibility.
-
-2. **Validation Activity:** Build an activity `plan.validate(artifactRef, registryDigest)`. It reads the plan, checks structural rules and JSON-schema rules. Return either a validated plan reference or a ToolFailure.
-
-3. **Workflow (Interpreter):** Implement the Plan Interpreter algorithm as a Temporal workflow (`MoonMind.Run`). Use a deterministic loop: compute ready nodes, schedule activities, wait for completions, update state/progress, apply policy.
-
-4. **Activity Dispatcher:** In the worker fleet, code `mm.tool.execute(context, toolName, toolVersion, inputs, overrides)` to perform a tool call. Resolve the `ToolDefinition` from pinned snapshot, enforce timeouts/retries, route to the correct queue, and collect outputs/artifacts.
-
-5. **Progress & Query:** Maintain counters in workflow state. Implement a Query handler returning `{total_nodes, pending, running, succeeded, failed, last_event, updated_at}`.
-
-6. **Logging & Metrics:** Increment a metric per tool start/finish, gauge of running nodes, counters of failures by error_code.
-
-7. **Security & Secrets:** Enforce `ToolDefinition.security.allowed_roles`. Encrypt artifact storage if needed.
-
-8. **Migration:** Ship v1 of these interfaces and workflows. Document that plans/tasks must conform to v1 schema.
+The platform converges on a **registry-backed tool set**, **`plan.validate`**, a **deterministic interpreter** in `MoonMind.Run`, **`mm.tool.execute` dispatch**, **progress queries**, **metrics**, and **role-aware security**. Sequencing and gap list: [`docs/tmp/remaining-work/Tasks-SkillAndPlanEvolution.md`](../tmp/remaining-work/Tasks-SkillAndPlanEvolution.md).
 
 ## Diagram: Plan Execution (Mermaid)
 ```mermaid

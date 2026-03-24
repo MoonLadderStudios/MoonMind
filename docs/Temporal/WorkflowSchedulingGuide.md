@@ -1,5 +1,7 @@
 # Workflow Scheduling Guide
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowSchedulingGuide.md`](../tmp/remaining-work/Temporal-WorkflowSchedulingGuide.md)
+
 **Status:** Active
 **Owner:** MoonMind Platform
 **Last Updated:** 2026-03-18

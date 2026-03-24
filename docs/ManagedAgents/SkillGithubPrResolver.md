@@ -1,12 +1,12 @@
 # Managed Agent Skill: Github PR Resolver Technical Design
 
-Status: Draft
+Status: Active
 Owners: MoonMind Engineering
-Last Updated: 2026-03-14
+Last Updated: 2026-03-24
 
 ## 1. Purpose
 
-Add a **PR Resolver** skill that can be invoked from Mission Control (triggering a Temporal Workflow) to:
+The **PR Resolver** skill is invoked from Mission Control (via Temporal `AgentTaskWorkflow`) to:
 
 1. **Resolve target PR** (defaults to the PR associated with the current branch).
 2. **Fetch PR metadata + CI status + comments**.
@@ -26,23 +26,27 @@ This skill acts as an **Umbrella Skill**. It relies on existing specialized skil
 
 ---
 
-## 3. Skill Packaging
+## 3. Skill packaging
 
-### 3.1 Location
+### 3.1 Layout
 
-Add a new skill in the shared repo skill mirror:
+Shared repo skill mirror:
 
 ```
 .agents/skills/pr-resolver/
   SKILL.md
   bin/
     pr_resolve_snapshot.py
+    pr_resolve_contract.py
+    pr_resolve_finalize.py
+    pr_resolve_full.py
+    pr_resolve_orchestrate.py
   schemas/
     pr_resolver_snapshot.schema.json
     pr_resolver_result.schema.json
 ```
 
-Because we use the "Read-and-Execute" pattern, we do not need complex execution scripts here. The `pr-resolver` relies on its own `bin/pr_resolve_snapshot.py` for diagnosis, and delegates execution to the sub-skills' defined workflows.
+The **Read-and-Execute** pattern keeps orchestration in `SKILL.md`; `bin/pr_resolve_snapshot.py` produces the machine-readable snapshot, and sub-skills supply fix procedures.
 
 ### 3.2 Required Worker Capabilities
 
@@ -93,7 +97,7 @@ Use `gh pr view --json` (fields: `number,title,url,isDraft,state,headRefName,bas
 Reuse existing scripts (`tools/get_branch_pr_comments.py` or `tools/get_pr_comments.py`) to yield a normalized list of comments.
 
 **C. CI / Checks / Running state**
-Implement `bin/pr_resolve_snapshot.py` to emit a unified snapshot, computing:
+`bin/pr_resolve_snapshot.py` emits a unified snapshot, computing:
 * `ci.isRunning`
 * `ci.hasFailures`
 * `ci.failedChecks[]`
@@ -146,12 +150,11 @@ Execution: `gh pr merge <pr> --<mergeMethod>`
 
 ---
 
-## 9. Mission Control Integration
+## 9. Mission Control integration
 
-### 9.1 Temporal Workflow Template
+### 9.1 Example `AgentTaskWorkflow` payload
 
-Create a Temporal `AgentTaskWorkflow` template named `Resolve PR`.
-Important: set `publish.mode` to `none`, because the skill owns git pushes and merging natively within the Agent loop.
+Use an `AgentTaskWorkflow` with `publish.mode` `none`, because the skill owns git pushes and merging inside the agent loop.
 
 ```json
 {
@@ -232,11 +235,7 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
 
 ---
 
-## 13. Implementation Checklist
+## 13. Verification
 
-1. Add `.agents/skills/pr-resolver/` directory with `SKILL.md`.
-2. Implement `bin/pr_resolve_snapshot.py`:
-   * resolves PR selector defaulting to current branch
-   * emits PR metadata + CI rollup + comment summary
-3. Add a Workflow Template entry in the dashboard catalog for `Resolve PR`.
-4. Unit test the snapshot script JSON schema and key decision gates (mock `gh` output).
+- Skill assets live under `.agents/skills/pr-resolver/`; snapshot logic is exercised by `tests/unit/test_pr_resolver_tools.py` (loads `pr_resolve_snapshot.py` from the skill tree).
+- Mission Control / task-dashboard flows reference `pr-resolver` in submit and step drafts (see `tests/task_dashboard/test_submit_runtime.js`).

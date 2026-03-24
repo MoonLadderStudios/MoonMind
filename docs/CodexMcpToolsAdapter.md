@@ -4,6 +4,8 @@ Status: Proposed
 Owners: MoonMind Engineering  
 Last Updated: 2026-02-16
 
+**Implementation tracking:** [`docs/tmp/remaining-work/CodexMcpToolsAdapter.md`](tmp/remaining-work/CodexMcpToolsAdapter.md)
+
 This guide shows the HTTP tools surface for queue operations using the canonical Task job contract.
 
 ## Endpoints
@@ -79,4 +81,4 @@ curl -X POST "http://localhost:5000/mcp/tools/call" \
 - Tool responses are wrapped as `{ "result": ... }` and mirror REST payloads.
 - Use `GET /mcp/tools` as source of truth for argument schemas.
 - Runtime overrides are passed as `payload.task.runtime.model` and `payload.task.runtime.effort`.
-- `codex_exec` and `codex_skill` are legacy compatibility paths during migration.
+- `codex_exec` and `codex_skill` remain supported as legacy compatibility names in queue claims where the worker still advertises them.

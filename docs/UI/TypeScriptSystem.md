@@ -2,8 +2,10 @@
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-03-22
+Last Updated: 2026-03-24
 Related: `README.md`, `api_service/static/task_dashboard/`, `docs/Tasks/TaskArchitecture.md`
+
+**Implementation tracking:** [`docs/tmp/remaining-work/UI-TypeScriptSystem.md`](../tmp/remaining-work/UI-TypeScriptSystem.md)
 
 ---
 
@@ -18,7 +20,7 @@ The core decision is:
 - **Keep FastAPI as the owner of routes, auth, and HTML page delivery.**
 - **Adopt TypeScript for all new frontend code.**
 - **Use a modern frontend build pipeline for typed client code and componentized UI.**
-- **Migrate page by page instead of rewriting Mission Control in one step.**
+- **Evolve page by page** instead of rewriting Mission Control in one step (see tracker for sequencing).
 
 This is intentionally **not** a move to a separately deployed SPA. It is a move to a **typed, componentized, server-rendered frontend system**.
 
@@ -497,17 +499,17 @@ Shared UI code should be separated into:
 4. **status, badge, and feedback components**
 5. **API/query hooks**
 
-## 11.3 Migration Rule
+## 11.3 Coexistence rule
 
-During migration:
+While both codepaths exist:
 
-- the legacy dashboard JavaScript may continue serving unmigrated pages
-- new feature work should default to the TypeScript system
-- legacy JS should receive bug fixes only once a replacement path exists
+- legacy dashboard JavaScript may still serve unmigrated pages
+- new feature work defaults to the TypeScript system
+- legacy JS receives only small fixes until a TS replacement exists for that surface
 
 ## 11.4 Client Router Policy
 
-Do **not** introduce React Router as a primary app dependency in Phase 1.
+Do **not** introduce React Router as a primary app dependency in the initial TypeScript rollout.
 
 Reason:
 
@@ -633,58 +635,9 @@ If multiple pages need boot payloads, add a small backend helper layer so payloa
 
 ---
 
-## 15. Migration Plan
+## 15. Incremental adoption
 
-## 15.1 Phase 0 — Foundation
-
-1. Add `frontend/` source tree.
-2. Add Vite, TypeScript, React, ESLint, Vitest, Testing Library, TanStack Query, Zod, and OpenAPI generation tooling.
-3. Add a Vite manifest-backed asset resolver in FastAPI.
-4. Add a boot payload parser and page mount system.
-5. Keep existing dashboard JS fully operational.
-
-## 15.2 Phase 1 — First Typed Vertical Slice
-
-Migrate one page end-to-end to prove the system.
-
-Recommended candidates:
-
-- settings
-- proposals list/detail
-- recurring schedules list/create
-
-These areas have enough interactivity to validate the new architecture without being the most operationally risky surface.
-
-## 15.3 Phase 2 — Feature-by-Feature Migration
-
-Move the rest of Mission Control feature areas incrementally.
-
-Suggested order:
-
-1. settings and auth profiles
-2. proposals
-3. schedules
-4. manifests
-5. task detail
-6. task lists and landing views
-
-## 15.4 Phase 3 — Legacy Retirement
-
-When all major pages are migrated:
-
-1. remove the monolithic dashboard JS entrypoint
-2. remove legacy helper code
-3. simplify static asset structure
-4. make the TS system the only path for new frontend work
-
-## 15.5 Migration Constraints
-
-During migration:
-
-- avoid simultaneous rewrites of backend routes and frontend architecture unless necessary
-- keep URLs stable
-- preserve existing workflow operations
-- prioritize high-change pages first
+The frontend moves toward **Vite + React + TypeScript** under FastAPI-owned routes: foundation tooling (`frontend/`), a first typed vertical slice, then feature-by-feature migration, then retirement of the monolithic dashboard entrypoint. Sequencing, constraints, and page-level status belong in [`docs/tmp/remaining-work/UI-TypeScriptSystem.md`](../tmp/remaining-work/UI-TypeScriptSystem.md).
 
 ---
 
@@ -747,16 +700,13 @@ Do not treat `dist/` output as source code.
 
 ## 18. Risks and Mitigations
 
-## 18.1 Risk: Two Frontend Systems During Migration
+## 18.1 Risk: Two frontend systems
 
-For a period of time, MoonMind will have:
-
-- legacy JS pages
-- TS/React pages
+MoonMind may run legacy JS pages alongside TS/React pages until migration completes.
 
 ### Mitigation
 
-Keep the bridge period explicit and temporary. Track migration status by page.
+Keep the bridge period explicit. Track migration status by page in the tracker linked at the top of this document.
 
 ## 18.2 Risk: Overengineering Too Early
 

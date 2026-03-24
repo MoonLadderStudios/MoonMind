@@ -2,13 +2,15 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-18  
+Last Updated: 2026-03-24  
+
+**Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlArchitecture.md`](../tmp/remaining-work/UI-MissionControlArchitecture.md)
 
 ## 1. Purpose
 
-Define the concrete implementation architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, artifact flows, and phased rollout.
+Define the concrete architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, and artifact flows.
 
-The dashboard integrates securely over the Control Plane API, interpreting Temporal execution statuses alongside legacy queue and system sources.
+The dashboard integrates over the Control Plane API and interprets execution status from configured sources (including Temporal and, where enabled, queue and system sources).
 
 ## 2. Related Docs
 
@@ -152,7 +154,7 @@ Rules:
 
 ### 5.4 Task-Oriented Product Surface
 
-During migration, the dashboard continues to present work primarily as **tasks**.
+The dashboard presents work primarily as **tasks**.
 
 - Use **task** in the main dashboard UX.
 - Use **workflow execution** in advanced/debug metadata and implementation-facing text.
@@ -231,12 +233,7 @@ Notes:
 }
 ```
 
-Recommended rollout order:
-
-1. list/detail read-only
-2. actions
-3. submit flows
-4. optional debug metadata
+Suggested **enablement order** for `temporalDashboard` flags: list/detail read-only, then actions, then submit flows, then optional debug metadata (see tracker for feature-flag work).
 
 ## 7. Detail View Lifecycle
 
@@ -634,103 +631,7 @@ A mixed-source `/tasks/list` page is a product convenience view, not a universal
 - Temporal-backed rows remain sourced from Temporal lifecycle APIs.
 - No shared global pagination promise across all three systems.
 
-## 13. Rollout Plan
-
-### Phase 1: Temporal Read Integration
-
-- Add `temporal` source to runtime config.
-- Add Temporal row normalization.
-- Add source-filtered Temporal list mode.
-- Add Temporal detail rendering.
-- Add canonical server-side source resolution for Temporal-backed `taskId`.
-- Widen task detail route handling for Temporal-safe identifiers.
-
-### Phase 2: Temporal Action Integration
-
-- Enable cancel.
-- Enable set title / update inputs.
-- Enable pause / resume / approve where supported.
-- Enable rerun.
-
-### Phase 3: Temporal Artifact-First Submit Integration
-
-- Add artifact upload helper flows in submit pages where required.
-- Enable backend-routed Temporal create for run-shaped submits from `/tasks/new`.
-- Enable backend-routed Temporal create for manifest-oriented submits.
-
-### Phase 3.5: Scheduling Integration
-
-- Add `submitScheduleEnabled` feature flag.
-- Implement schedule panel on `/tasks/new` submit form.
-- Add deferred one-time support via Temporal `start_delay` on `POST /api/executions`.
-- Add inline recurring schedule creation via delegation to `RecurringTasksService`.
-- Add `scheduled` state rendering on detail page with countdown banner.
-- Verify redirect flows for both deferred and recurring submit.
-
-### Phase 4: Compatibility Refinement
-
-- Tighten multi-source route semantics.
-- Decide whether a dedicated Temporal-first list view is needed.
-- Retire temporary fallbacks that are no longer justified.
-
-## 14. Implementation Checklist
-
-### Backend/UI Boundary
-
-- [ ] Add `sources.temporal` to `build_runtime_config()`
-- [ ] Add `statusMaps.temporal`
-- [ ] Add feature flags for Temporal list/detail/actions/submit
-- [ ] Add canonical source resolution metadata/path for `/tasks/:taskId`
-- [ ] Ensure dashboard shell route allowlist accepts Temporal-safe task identifiers
-
-### List Page
-
-- [ ] Add Temporal fetch client for `GET /api/executions`
-- [ ] Add Temporal row normalization
-- [ ] Add `source=temporal` filter option
-- [ ] Add `entry` and operator-only ownership filters only where API policy allows
-- [ ] Add Temporal-only pagination token handling
-- [ ] Document mixed-source total limitations in UI copy if needed
-
-### Detail Page
-
-- [ ] Add Temporal detail resolver
-- [ ] Add execution artifact list fetch
-- [ ] Add source-aware metadata rendering for workflow ID / Temporal run ID
-- [ ] Add wait metadata rendering (`waitingReason`, `attentionRequired`)
-- [ ] Add Temporal artifact download flow
-- [ ] Add v1 synthesized timeline panel
-
-### Actions
-
-- [ ] Add cancel action
-- [ ] Add update action wrappers (`UpdateInputs`, `SetTitle`, `RequestRerun`)
-- [ ] Add signal action wrappers (`Approve`, `Pause`, `Resume`)
-- [ ] Add optimistic refresh / post-action reload behavior
-
-### Submit
-
-- [ ] Keep Temporal out of the runtime picker
-- [ ] Add artifact-first submit helpers where needed
-- [ ] Add backend-routed Temporal submit flow for run-shaped requests
-- [ ] Add backend-routed Temporal submit flow for manifest-oriented requests
-- [ ] Redirect new Temporal-backed executions to `/tasks/{taskId}?source=temporal`
-
-### Scheduling
-
-- [ ] Add `submitScheduleEnabled` feature flag to `build_runtime_config()`
-- [ ] Add schedule panel UI component to submit form
-- [ ] Implement "Run immediately" / "Schedule for later" / "Recurring" radio toggle
-- [ ] Add date/time/timezone picker for deferred one-time mode
-- [ ] Add cron expression input with live preview for recurring mode
-- [ ] Add `schedule` field to `CreateExecutionRequest` and `CreateJobRequest` models
-- [ ] Implement `schedule.mode=once` via Temporal `start_delay`
-- [ ] Implement `schedule.mode=recurring` via `RecurringTasksService` delegation
-- [ ] Add `scheduled` state to `TemporalExecutionRecord` and dashboard status maps
-- [ ] Add scheduled banner rendering on detail page
-- [ ] Redirect recurring creation to `/tasks/schedules/{definitionId}`
-
-## 15. Open Questions
+## 13. Open Questions
 
 1. Should `/tasks/:taskId` remain the only canonical Temporal detail route, or should `/tasks/executions/:workflowId` exist as a first-class compatibility alias?
 2. Is the current `awaiting_action` compatibility grouping sufficient once `waitingReason` and `attentionRequired` are exposed, or do we eventually want a sharper dashboard distinction for approval versus external wait states?

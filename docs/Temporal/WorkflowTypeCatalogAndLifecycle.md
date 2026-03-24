@@ -1,8 +1,10 @@
 # Workflow Type Catalog and Lifecycle
 
-MoonMind Temporal-native lifecycle contract for **Temporal-managed executions** during migration
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md`](../tmp/remaining-work/Temporal-WorkflowTypeCatalogAndLifecycle.md)
 
-**Status:** Draft
+MoonMind **Temporal-native** lifecycle contract for Temporal-managed executions. Task-shaped product surfaces may still use `task` labels; this document governs workflow types and execution semantics inside Temporal.
+
+**Status:** Normative (Temporal application layer)
 **Owner:** MoonMind Platform
 **Last updated:** 2026-03-05
 **Audience:** backend + infra + dashboard
@@ -19,7 +21,7 @@ Define the **Workflow Types** that constitute MoonMind's Temporal application la
 * lifecycle **invariants**, **timeouts**, **retry policies**, and **history management**
 * the minimal set of **Search Attributes** and **Memo** fields required for list + filtering + totals
 
-This document defines the **Temporal-side contract**. Public MoonMind APIs and UI flows may still use `task` terminology during migration, but once work is represented inside Temporal, this document treats it as a **Workflow Execution**.
+This document defines the **Temporal-side contract**. Public MoonMind APIs and UI flows may still use `task` terminology where compatibility requires it; once work is represented inside Temporal, this document treats it as a **Workflow Execution**.
 
 ---
 
@@ -71,7 +73,7 @@ Rules:
 * Workflow ID is the canonical Temporal identifier for a Temporal-managed execution.
 * Do not encode sensitive info into the ID.
 * A “re-run” or “restart” uses the same Workflow ID via **Continue-As-New** when appropriate.
-* Public MoonMind task APIs may expose `taskId` alongside `workflowId` during migration.
+* Public MoonMind task APIs may expose `taskId` alongside `workflowId` where the compatibility bridge requires it.
 
 ### 3.3 Run IDs
 

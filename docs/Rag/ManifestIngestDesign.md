@@ -1,5 +1,7 @@
 # Manifest Ingest Design & Implementation
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Rag-ManifestIngestDesign.md`](../tmp/remaining-work/Rag-ManifestIngestDesign.md)
+
 **Status:** Draft (2026-03-20)
 **Scope:** How MoonMind ingests a “manifest” artifact and reliably turns it into one or more **Temporal Workflow Executions**, with strong observability, editability, and scalability. Includes architecture, design decisions, and implementation-level detail.
 **See also:** [LlamaIndexManifestSystem.md](LlamaIndexManifestSystem.md) (v0 manifest schema & operator guide), [WorkflowRag.md](WorkflowRag.md) (how agents retrieve data from Qdrant at runtime)
@@ -659,27 +661,11 @@ The manifest contract (`manifest_contract.py`) enforces this at validation time 
 
 ---
 
-## 19. Delivery plan
+## 19. Delivery scope
 
-### Phase 0: Foundations ✅
-1. ~~Implement `MoonMind.ManifestIngest` workflow skeleton and Temporal test suite.~~
-2. ~~Add minimal `/api/manifests` registry endpoints (GET/PUT) to store text YAML bodies.~~
-3. ~~Implement manifest contract validation and normalization.~~
-4. ~~Implement compiled plan model and node materialization.~~
-5. ~~Implement all 6 Temporal Updates for interactive control.~~
-6. ~~Implement projection and snapshot system for API queries.~~
+**Delivered baseline:** `MoonMind.ManifestIngest` workflow and tests, `/api/manifests` registry, manifest contract validation and normalization, compiled plan model and node materialization, Temporal Updates for interactive control, and projection/snapshot plumbing for API queries.
 
-### Phase 1: Engine Pipeline (in progress)
-1. Implement Activities for GitHub, Drive, Confluence, Local FS data fetchers behind child `MoonMind.Run` workflows.
-2. Implement chunking and deterministic embeddings Activities.
-3. Wire stable IDs + delete-by-filter semantics for Qdrant Activities.
-4. Implement checkpoint read/write for incremental sync.
-
-### Phase 2: User Interface
-1. Add Mission Control manifest workflow list/detail views via Temporal Visibility.
-2. Form view for launching manifest executions.
-3. Node-level status and progress display.
-4. Interactive Update controls (pause/resume, cancel nodes, retry nodes, update manifest).
+**Remaining work:** data-fetch and embedding pipeline activities, incremental checkpoint semantics, Qdrant integration, and Mission Control list/detail/launch and node-level controls. Phased sequencing and verification are tracked in [`docs/tmp/remaining-work/Rag-ManifestIngestDesign.md`](../tmp/remaining-work/Rag-ManifestIngestDesign.md).
 
 ---
 

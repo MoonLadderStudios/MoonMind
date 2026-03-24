@@ -1,8 +1,10 @@
 # Task Execution Compatibility Model
 
-Bridge contract between MoonMind's **task-oriented product surfaces** and **Temporal-backed workflow executions** during migration.
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`](../tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md)
 
-**Status:** Draft  
+Bridge contract between MoonMind's **task-oriented product surfaces** and **Temporal-backed workflow executions**.
+
+**Status:** Normative (evolves with the compatibility layer)  
 **Owner:** MoonMind Platform  
 **Last updated:** 2026-03-06  
 **Audience:** backend, dashboard, API, workflow authors
@@ -566,34 +568,9 @@ Public naming can lag runtime naming while compatibility remains explicit.
 
 ---
 
-## 15. Migration checkpoints
+## 15. Compatibility maturity
 
-### Phase A — adapter-ready
-
-- Temporal-backed executions can be created, listed, described, edited, signaled, and canceled
-- compatibility payload shape is documented and stable
-- `taskId == workflowId` rule is in place for Temporal-backed rows
-
-### Phase B — dashboard integration
-
-- dashboard recognizes `source=temporal`
-- Temporal-backed rows render in `/tasks/list`
-- `/tasks/{taskId}` can resolve Temporal-backed details without inventing a second detail shell
-- normalized status mapping is wired into the current dashboard status family
-
-### Phase C — parity hardening
-
-- edit, rerun, cancel, approve, pause, resume, and callback flows work end-to-end through task-oriented controls
-- Continue-As-New does not break task detail routes
-- exact vs estimated count behavior is explicit and truthful
-
-### Phase D — compatibility retirement decisions
-
-Only after parity and adoption are proven:
-
-- decide whether `/api/executions` becomes more directly public
-- decide whether any legacy `runId` compatibility is still needed
-- decide whether multi-source `/tasks/list` remains permanent or becomes Temporal-first
+The bridge is **in force** when Temporal-backed executions participate honestly in task-shaped list/detail/edit/cancel/rerun flows: **`taskId == workflowId`**, stable routes across Continue-As-New, documented payload shapes, normalized dashboard status, and explicit handling of raw Temporal identifiers in operator views. Sequencing, phase-style checkpoints, and retirement decisions for compatibility surfaces are tracked in [`docs/tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md`](../tmp/remaining-work/Temporal-TaskExecutionCompatibilityModel.md).
 
 ---
 

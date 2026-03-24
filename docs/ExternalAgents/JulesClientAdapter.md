@@ -1,5 +1,7 @@
 # Technical Design: Jules Provider Adapter
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesClientAdapter.md`](../tmp/remaining-work/ExternalAgents-JulesClientAdapter.md)
+
 ## 1. Objective
 
 Describe Jules as a provider-specific implementation of MoonMind's shared external-agent architecture.

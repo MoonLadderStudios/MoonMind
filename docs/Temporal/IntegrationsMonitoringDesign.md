@@ -1,5 +1,7 @@
 # Integrations Monitoring Design
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md`](../tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md)
+
 Status: Draft (Temporal-first, migration-aware)  
 Owner: MoonMind Platform  
 Last updated: 2026-03-05  
@@ -573,14 +575,9 @@ At minimum, Jules result handling should produce:
 * any provider URLs needed for follow-up
 * optional raw payload artifacts if Jules later exposes richer terminal output
 
-## 15) Implementation order
+## 15) Build order (reference)
 
-1. Finalize the provider activity contract and normalized status model.
-2. Add durable callback correlation storage rather than depending on search-attribute lookup by external ID.
-3. Implement `ExternalEvent`-driven callback handling in the API and workflow path.
-4. Add timer-based polling fallback and explicit Continue-As-New policy.
-5. Wire visibility updates using existing `mm_*` lifecycle fields.
-6. Add provider-specific tests and only then consider reconciliation schedules.
+Integrations should land in an order that preserves **contract clarity**, **durable callback correlation**, **`ExternalEvent` handling**, **polling/CAN fallbacks**, **visibility `mm_*` updates**, and **tests** before optional reconciliation jobs. Detailed sequencing lives in [`docs/tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md`](../tmp/remaining-work/Temporal-IntegrationsMonitoringDesign.md).
 
 ## 16) Open decisions
 

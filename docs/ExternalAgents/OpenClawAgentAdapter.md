@@ -2,7 +2,7 @@
 
 ## 1. Objective
 
-Declare the **desired state** for integrating **OpenClaw** (autonomous agent gateway with an OpenAI-compatible HTTP API) as an **external** agent provider in MoonMind.
+Describe how **OpenClaw** (autonomous agent gateway with an OpenAI-compatible HTTP API) is integrated as an **external** agent provider in MoonMind.
 
 OpenClaw runs as an autonomous gateway: long-lived work (terminal access, file edits, multi-step reasoning) is exposed through an **OpenAI-compatible HTTP API**, including **`stream: true`** Server-Sent Events (SSE) on chat completions. MoonMind must treat that stream as the source of execution progress and final output, not as a short request/response RPC.
 
@@ -32,7 +32,7 @@ Operational visibility for streamed chunks should align with MoonMind’s **live
 
 OpenClaw should still be described using the same five concerns as every external provider:
 
-| Layer | OpenClaw desired responsibility |
+| Layer | OpenClaw responsibility |
 |--------|-----------------------------------|
 | **1. Configuration and runtime gate** | Typed settings, env-driven enablement, safe defaults for gateway URL, model id, and timeouts. |
 | **2. Provider transport** | Async HTTP client: POST `/v1/chat/completions` with `Accept: text/event-stream`, incremental SSE parsing, scrubbed errors. |
@@ -46,14 +46,12 @@ OpenClaw should still be described using the same five concerns as every externa
 
 ### 4.1 Non-secret configuration
 
-Desired artifacts (names may follow existing patterns such as `moonmind/jules/runtime.py` / `moonmind/codex_cloud/settings.py`):
+Runtime configuration lives in `moonmind/openclaw/settings.py` and includes:
 
-- **`OPENCLAW_ENABLED`** — boolean gate; when false, OpenClaw must not register in the external adapter registry and activities must not be advertised as available.
-- **`OPENCLAW_GATEWAY_URL`** — base URL for the gateway (desired default for local dev: `http://127.0.0.1:18789`).
-- **`OPENCLAW_DEFAULT_MODEL`** — model string sent in the chat-completions payload (provider-defined; placeholder default acceptable until gateway contract is fixed).
-- **`OPENCLAW_TIMEOUT_SECONDS`** — upper bound for “whole run” timeout semantics (desired default: `3600`). Read timeout on the HTTP client should allow indefinite read while a total/activity boundary enforces cancellation.
-
-Typed settings should live in a dedicated module (for example `moonmind/openclaw/settings.py` or `moonmind/config/openclaw_settings.py`) and be composed into the central settings object if that is the project norm.
+- **`OPENCLAW_ENABLED`** — boolean gate; when false, OpenClaw does not register in the external adapter registry and integration activities are not advertised as available.
+- **`OPENCLAW_GATEWAY_URL`** — base URL for the gateway (default for local dev: `http://127.0.0.1:18789`).
+- **`OPENCLAW_DEFAULT_MODEL`** — model string sent in the chat-completions payload.
+- **`OPENCLAW_TIMEOUT_SECONDS`** — upper bound for whole-run timeout semantics; the HTTP client avoids a tight read timeout so long streams are bounded by activity/workflow cancellation instead.
 
 ### 4.2 Secrets
 
@@ -63,15 +61,15 @@ Typed settings should live in a dedicated module (for example `moonmind/openclaw
 
 ## 5. Provider Transport (HTTP + SSE)
 
-### 5.1 Desired module
+### 5.1 Module
 
-- `moonmind/workflows/adapters/openclaw_client.py` — thin `httpx` async client.
+- `moonmind/workflows/adapters/openclaw_client.py` — async `httpx` client with SSE parsing.
 
 ### 5.2 Behavioral requirements
 
 - **Streaming request**: JSON body includes `"stream": true` and OpenAI-style `model` + `messages`.
 - **Headers**: `Content-Type: application/json`, `Accept: text/event-stream`, `Authorization` as above.
-- **Timeouts**: Avoid a tight **read** timeout that would kill long autonomous loops; rely on combined **activity** / **workflow** timeout and explicit cancellation. Document the chosen `httpx.Timeout` shape in code comments when implementing.
+- **Timeouts**: Avoid a tight **read** timeout that would kill long autonomous loops; rely on combined **activity** / **workflow** timeout and explicit cancellation. The `httpx.Timeout` shape is documented in `openclaw_client.py`.
 - **SSE parsing**: For each `data:` line, strip prefix; treat `[DONE]` as stream end; parse JSON; extract incremental `choices[0].delta.content` (or documented OpenClaw extensions if they differ — normalize in one place).
 - **Errors**: Non-2xx responses must raise a provider-specific, testable exception with secrets scrubbed from messages.
 - **Cancellation**: When the consumer stops reading (e.g. Temporal activity cancellation), the HTTP connection should close so the gateway can observe disconnect (best-effort **implicit cancel** without requiring a separate OpenClaw cancel REST call in v1).
@@ -80,23 +78,15 @@ Typed settings should live in a dedicated module (for example `moonmind/openclaw
 
 ## 6. Adapter Layer
 
-### 6.1 Desired module
+### 6.1 Module
 
-- `moonmind/workflows/adapters/openclaw_agent_adapter.py`
+- `moonmind/workflows/adapters/openclaw_agent_adapter.py` — registry adapter and translation helpers; poll hooks raise because execution uses the streaming activity only.
 
 ### 6.2 Contract alignment
 
-The shared runtime contract is `AgentAdapter` (`start`, `status`, `fetch_result`, `cancel`) in `moonmind/workflows/adapters/agent_adapter.py`, typically implemented via `BaseExternalAgentAdapter` hooks as described in [`AddingExternalProvider.md`](./AddingExternalProvider.md).
+The shared runtime contract is `AgentAdapter` in `moonmind/workflows/adapters/agent_adapter.py`. OpenClaw uses **`execution_style="streaming_gateway"`** on `ProviderCapabilityDescriptor` so `MoonMind.AgentRun` takes the **single long-running activity** path (§7) instead of start/status/fetch. See [`AddingExternalProvider.md`](./AddingExternalProvider.md) for the pattern used by poll-based providers; OpenClaw is the streaming variant.
 
-**Desired state for v1 (choose one approach in implementation; document the choice in the PR):**
-
-1. **Streaming-primary (recommended)**
-   OpenClaw does not map cleanly to external-id polling. Implement a **dedicated execution path** (§7) that calls transport + translation directly from a single Temporal activity. The class in `openclaw_agent_adapter.py` then focuses on **request translation** and **result normalization** (pure functions or a small service), while `MoonMind.AgentRun` does not use `start` → `status` → `fetch_result` for this provider.
-
-2. **Shim adapter (discouraged)**
-   A synthetic external id with no real poll semantics would mislead operators and complicate cancellation; avoid unless a hard compatibility constraint appears.
-
-### 6.3 Translation rules (desired)
+### 6.3 Translation rules
 
 - **System message**: Stable instruction that the model acts as the MoonMind-delegated OpenClaw agent for a bounded task.
 - **User message**: Combine structured task instructions from `AgentExecutionRequest` with any prepared workspace/context text (equivalent to the former “context files” bundle), using the same artifact/context preparation rules as other external agents where applicable.
@@ -104,52 +94,35 @@ The shared runtime contract is `AgentAdapter` (`start`, `status`, `fetch_result`
 
 ### 6.4 Capability descriptor
 
-Today, `ProviderCapabilityDescriptor` describes poll-oriented providers. **Desired extension** (schema + codegen if needed):
-
-- Add something equivalent to **`execution_style`**: `polling` | `streaming_gateway`.
-
-OpenClaw should register as **`streaming_gateway`** with **`supports_callbacks: false`**, and polling-related hints should be ignored by `MoonMind.AgentRun` when this style is active.
+`ProviderCapabilityDescriptor` includes **`execution_style`**: `polling` | `streaming_gateway` (`moonmind/schemas/agent_runtime_models.py`). OpenClaw registers as **`streaming_gateway`** with **`supports_callbacks: false`**; `MoonMind.AgentRun` routes streaming providers to `integration.openclaw.execute` instead of the poll loop.
 
 ---
 
-## 7. Temporal Orchestration (Required Divergence)
+## 7. Temporal orchestration (streaming path)
 
-### 7.1 Problem
+### 7.1 Poll loop vs streaming
 
-`MoonMind.AgentRun` today assumes **external** agents use:
+For **`execution_style == polling`**, `MoonMind.AgentRun` uses `integration.<agent_id>.start`, repeated `integration.<agent_id>.status`, and `integration.<agent_id>.fetch_result` (Jules, Codex Cloud).
 
-1. `integration.<agent_id>.start`
-2. Repeated `integration.<agent_id>.status` until terminal
-3. `integration.<agent_id>.fetch_result`
+For **`execution_style == streaming_gateway`** (OpenClaw), a single long-lived SSE stream **is** the run, so the workflow uses one activity instead of that loop.
 
-That pattern matches Jules and Codex Cloud. It does **not** match a single long-lived SSE connection that **is** the run.
+### 7.2 Behavior
 
-### 7.2 Desired behavior
+1. After adapter resolution, the workflow invokes **`integration.openclaw.execute`** (see `activity_runtime.py` / `moonmind/openclaw/execute.py`).
+2. That activity resolves settings and `OPENCLAW_GATEWAY_TOKEN`, opens the SSE stream, buffers assistant text, emits **`activity.heartbeat(...)`** on chunks (or throttled) for live surfaces, and returns an **`AgentRunResult`**-compatible payload.
+3. Execution continues with the existing **`agent_runtime.publish_artifacts`** step.
 
-For providers with `execution_style == streaming_gateway` (initially `openclaw` only):
+**Cancellation:** Activity cancellation tears down the httpx stream (implicit cancel on disconnect); this is the primary cancel path for OpenClaw.
 
-1. After `integration.resolve_external_adapter` validates registration, the workflow should invoke **one** long-running activity, for example:
-   - `integration.openclaw.execute`
-2. That activity:
-   - Resolves settings and `OPENCLAW_GATEWAY_TOKEN`
-   - Opens the SSE stream
-   - Appends text chunks to the final buffer
-   - Calls **`activity.heartbeat(...)`** with a meaningful payload on each chunk (or on a throttled schedule) so Temporal records liveness and downstream systems can surface **incremental log/output**
-   - Returns a serialized **`AgentRunResult`** (or dict equivalent) on successful completion
-3. The workflow then continues with the existing **`agent_runtime.publish_artifacts`** step, unchanged.
+### 7.3 Registration
 
-**Cancellation:** Rely on **activity cancellation** (and thus httpx stream teardown) as the primary cancel path. The workflow’s generic `integration.<id>.cancel` path may be a no-op for OpenClaw if `run_id` is unused, provided cancellation is still correct via the execute activity’s cancellation semantics.
-
-### 7.3 Activity catalog and worker registration
-
-- Register `integration.openclaw.execute` in `moonmind/workflows/temporal/activity_catalog.py` and wire it in `activity_runtime.py` / integrations fleet the same way as other integration activities.
-- Register `openclaw` in `build_default_registry()` in `moonmind/workflows/adapters/external_adapter_registry.py` **only when** the runtime gate passes (mirror Jules / Codex Cloud).
-- **`integration.openclaw.start` / `status` / `fetch_result` / `cancel`** are **not** required for v1 if the streaming activity is the sole path; avoid registering dead activity types.
+- `integration.openclaw.execute` is registered in the activity catalog and wired on the integrations fleet (`activity_runtime.py`).
+- `openclaw` is registered in `build_default_registry()` when the runtime gate passes.
+- Separate `integration.openclaw.start` / `status` / `fetch_result` activities are not used; the adapter’s poll hooks raise if called.
 
 ### 7.4 Heartbeat and timeout policy
 
-- Configure **heartbeat timeout** for the execute activity so that stalled gateways fail fast relative to product expectations, distinct from the generous **start-to-close** budget for long tasks.
-- Document chosen values next to the activity definition when implementing.
+Heartbeat timeout and start-to-close limits for `integration.openclaw.execute` are defined next to the activity registration so stalled gateways fail fast while long autonomous runs remain possible within the start-to-close budget.
 
 ---
 
@@ -160,34 +133,20 @@ For providers with `execution_style == streaming_gateway` (initially `openclaw` 
 
 ---
 
-## 9. Testing and Verification (Desired)
+## 9. Testing and verification
 
-1. **Unit tests** — SSE parsing with fixture lines; adapter translation with frozen `AgentExecutionRequest` samples; error paths and JSON decode resilience.
-2. **Activity tests** — Mock `openclaw_client` to emit async chunks; assert `heartbeat` calls and final `AgentRunResult` shape.
-3. **Integration tests** (optional, environment-gated) — Against a real local OpenClaw gateway in CI only if stable fixtures exist.
+Unit coverage:
 
-Suggested command entrypoints should match repo norms (e.g. `./tools/test_unit.sh` with focused paths under `tests/unit/workflows/adapters/`).
+- `tests/unit/workflows/adapters/test_openclaw_client.py` — SSE parsing and transport errors.
+- `tests/unit/workflows/adapters/test_openclaw_agent_adapter.py` — adapter registration and translation.
 
----
-
-## 10. Implementation Checklist
-
-Use this as a merge-ready sequence:
-
-1. OpenClaw settings module + runtime gate + env documentation.
-2. `OpenClawHttpClient` with streaming generator and tests.
-3. Request/result translation module (adapter or pure helpers).
-4. Temporal activity `integration.openclaw.execute` with heartbeats and cancellation behavior.
-5. Extend `ProviderCapabilityDescriptor` and `MoonMind.AgentRun` branching for `streaming_gateway`.
-6. Activity catalog + integrations fleet wiring.
-7. `build_default_registry()` registration behind gate.
-8. Dashboard / live-log consumer verification if heartbeat payloads are consumed by existing plumbing.
+Run via `./tools/test_unit.sh` (or focused paths under `tests/unit/workflows/adapters/`). Optional integration tests against a live gateway remain environment-gated.
 
 ---
 
-## 11. Summary
+## 10. Summary
 
-| Topic | Desired state |
+| Topic | State |
 |--------|----------------|
 | **Integration style** | External agent via OpenAI-compatible **streaming** gateway |
 | **Transport** | Dedicated async HTTP client, SSE parsing, implicit cancel on disconnect |
@@ -196,4 +155,4 @@ Use this as a merge-ready sequence:
 | **Configuration** | Typed settings + `OPENCLAW_GATEWAY_TOKEN` via MoonMind secret resolution |
 | **Identity** | `agent_id` = `openclaw` in `ExternalAdapterRegistry` |
 
-OpenClaw is intentionally a **streaming-gateway** profile of the universal external-agent system. Implementing it requires the small, explicit **orchestration extension** in §7; the rest should follow the same layering discipline as Jules and Codex Cloud.
+OpenClaw is the **streaming-gateway** profile of the universal external-agent system: same stack as poll-based providers, with `execution_style="streaming_gateway"` and the single execute activity in §7 instead of the poll loop.

@@ -1,11 +1,13 @@
 # Executions API Contract
 
 **Project:** MoonMind  
-**Doc type:** API contract / migration adapter  
+**Doc type:** API contract  
 **Status:** Draft  
 **Owner:** MoonMind Platform  
 **Last updated:** 2026-03-06 (America/Los_Angeles)  
 **Audience:** backend, dashboard, integrations
+
+**Implementation tracking:** [`docs/tmp/remaining-work/Api-ExecutionsApiContract.md`](../tmp/remaining-work/Api-ExecutionsApiContract.md)
 
 ---
 
@@ -15,11 +17,11 @@ This document defines the contract for MoonMind's direct **Temporal-backed execu
 
 It exists to make three things explicit:
 
-1. the current HTTP surface exposed by the API service,
+1. the HTTP surface exposed by the API service,
 2. the execution lifecycle semantics that callers can rely on,
-3. the migration posture of this surface relative to MoonMind's task-oriented UI and compatibility routes.
+3. how this execution-oriented surface relates to task-oriented UI and compatibility routes.
 
-This is an **adapter-first** contract. It describes a direct execution API for Temporal-managed work, but it does **not** declare `/api/executions` to be the primary long-term public product surface yet.
+This is an **adapter-first** contract: it describes lifecycle operations for Temporal-managed work. Product prioritization of `/api/executions` vs `/tasks/*` is a separate concern; open work is tracked in the file linked above.
 
 ---
 
@@ -34,7 +36,7 @@ This document covers:
 - ownership and authorization rules,
 - filtering, pagination, and count semantics,
 - update/signal/cancel behavior for Temporal-managed executions,
-- compatibility expectations during the Temporal migration.
+- how callers should interpret identifiers when task-shaped and execution-shaped surfaces coexist.
 
 ### 2.2 Out of scope
 
@@ -46,14 +48,12 @@ This document does **not** define:
 - direct Temporal server APIs,
 - worker-internal lifecycle helpers used only inside workflow/activity execution.
 
-### 2.3 Migration posture
+### 2.3 Relationship to task-oriented surfaces
 
-During migration:
-
-- MoonMind may continue to present **task-oriented** UI and compatibility APIs.
-- `/api/executions` is the **execution-oriented** adapter surface for Temporal-managed work.
+- MoonMind may present **task-oriented** UI and compatibility APIs alongside this API.
+- `/api/executions` is the **execution-oriented** surface for Temporal-managed work.
 - Callers should treat `workflowId` as the canonical execution handle for this API.
-- This contract should remain stable even if backing reads later move closer to Temporal Visibility.
+- This contract should remain stable even if backing reads move closer to Temporal Visibility.
 
 ### 2.4 Current implementation note
 
@@ -782,33 +782,16 @@ Malformed request bodies, wrong JSON types, and invalid query/path coercions may
 
 ---
 
-## 16. Compatibility contract during migration
+## 16. Compatibility with task-shaped clients
 
-### 16.1 Adapter role
+`/api/executions` is execution-oriented. Task-shaped clients and routes may still exist; when they map to Temporal-backed work:
 
-`/api/executions` should be treated as:
-
-- an execution-oriented adapter surface for Temporal-managed work,
-- not yet the sole or final public product API for all task flows.
-
-### 16.2 Task compatibility
-
-During migration:
-
-- `/tasks/*` may remain the user-facing surface,
-- task rows may map to Temporal-backed executions behind the scenes,
-- `workflowId` should be the canonical Temporal execution identity,
+- `workflowId` is the canonical Temporal execution identity,
 - compatibility adapters may transform execution responses into task-shaped payloads,
-- for task-shaped create/update payloads, `task.tool` / `step.tool` should be canonical while `task.skill` / `step.skill` remain compatibility aliases,
-- task-oriented compatibility surfaces should preserve the fixed identifier bridge `taskId == workflowId` for Temporal-backed work even though this API itself remains execution-oriented.
+- for task-shaped create/update payloads, `task.tool` / `step.tool` are canonical while `task.skill` / `step.skill` remain compatibility aliases where supported,
+- task-oriented compatibility surfaces preserve `taskId == workflowId` for Temporal-backed work.
 
-### 16.3 Contract stability goal
-
-The external JSON shape in this document should remain stable even if the backing implementation changes from:
-
-- a local execution projection,
-- to direct Temporal Visibility reads,
-- or to a mixed adapter strategy.
+The JSON shapes in this document should remain stable even if the backing implementation shifts among projection, Visibility, or mixed adapters.
 
 ---
 
@@ -865,7 +848,7 @@ Any future change to this contract must explicitly call out whether it is:
 
 1. a **backward-compatible additive change**,
 2. a **behavioral cleanup** that keeps payload shape stable,
-3. a **breaking contract change** requiring coordinated API/UI migration.
+3. a **breaking contract change** requiring coordinated API and client updates.
 
 Examples of changes that require a contract update:
 
@@ -888,4 +871,4 @@ Its contract is:
 - authenticated and ownership-scoped,
 - grounded in `workflowId` as the durable handle,
 - explicit about update/signal/cancel semantics,
-- compatible with the larger task-oriented migration strategy rather than a replacement for it.
+- usable alongside task-oriented surfaces where those still exist; it is not inherently a replacement for every `/tasks/*` flow.

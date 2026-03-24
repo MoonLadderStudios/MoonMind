@@ -1,5 +1,7 @@
 ## DOOD Plan: Generic Container Runner for Temporal Managed Agents (Desired State)
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md`](../tmp/remaining-work/ManagedAgents-DockerOutOfDocker.md)
+
 Status: **Proposed**
 Owners: **MoonMind Eng**
 Last Updated: **2026-03-14**

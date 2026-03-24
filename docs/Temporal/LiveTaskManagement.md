@@ -1,5 +1,7 @@
 # Live Task Management
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-LiveTaskManagement.md`](../tmp/remaining-work/Temporal-LiveTaskManagement.md)
+
 Status: Draft  
 Owners: MoonMind Engineering  
 Last Updated: 2026-03-17
@@ -269,34 +271,11 @@ The task detail page (`/tasks/:taskId`) should include two live-session UI eleme
 }
 ```
 
-Log tailing should ship first as it requires only the RO endpoint and no new backend infrastructure beyond the existing live session system.
+**Desired experience:** managed runs expose a **`web_ro` read-only URL** where available; operators get log tailing in the task detail UI, optional live handoff (RO/RW, pause/resume, operator messages), and post-session artifacts such as **`transcript.log`**. Sequencing of UI/backend pieces is tracked in [`docs/tmp/remaining-work/Temporal-LiveTaskManagement.md`](../tmp/remaining-work/Temporal-LiveTaskManagement.md).
 
 ---
 
-## 11. Rollout Plan
-
-### Phase 1: Live Log Tailing
-
-- Ensure live sessions provision the `web_ro` URL for all managed agent runs.
-- Add the collapsible Live Output panel to the task detail page.
-- Embed the tmate web RO viewer when the operator toggles it open.
-- Handle session lifecycle states (loading, ready, ended, error, not available).
-
-### Phase 2: Live Terminal Handoff
-
-- Add the Live Session Card with RO attach info and status.
-- Enable pause/resume signal buttons.
-- Enable RW grant/revoke flows with time-bound TTL.
-- Add operator message composer.
-
-### Phase 3: Post-Session Artifacts
-
-- Capture `transcript.log` as a downloadable artifact on session end.
-- Show transcript link on the detail page for completed workflows.
-
----
-
-## 12. Open Questions
+## 11. Open Questions
 
 1. Should `web_ro` embedding use a raw iframe or a terminal widget library (e.g., xterm.js) that connects to the tmate web RO stream?
 2. Should log tailing be enabled by default for all running tasks, or only when a live session has been explicitly provisioned?

@@ -1,5 +1,7 @@
 # Cursor CLI as a Managed Agent Runtime
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-CursorCli.md`](../tmp/remaining-work/ManagedAgents-CursorCli.md)
+
 Status: **Proposed**
 Owners: **MoonMind Engineering**
 Last Updated: **2026-03-20**
@@ -512,42 +514,9 @@ Cursor CLI is **multi-model**: it can use Claude, GPT, Gemini, and other models 
 
 ---
 
-## 13. Implementation Plan
+## 13. Integration backlog
 
-### Phase 1: Binary Integration
-
-- [ ] Add Cursor CLI installation to worker Dockerfile
-- [ ] Create `tools/auth-cursor-volume.sh` provisioning script
-- [ ] Verify `agent status` and `agent -p` work in container environment
-- [ ] Document required `CURSOR_API_KEY` in `.env.example`
-
-### Phase 2: Adapter Wiring
-
-- [ ] Add `cursor_cli` branch to `resolve_volume_mount_env()` in `adapter.py`
-- [ ] Add `CURSOR_API_KEY` to `shape_agent_environment()` scrubbable keys
-- [ ] Implement `_build_cursor_command()` in the launcher
-- [ ] Add NDJSON stream parser for `stream-json` output format
-- [ ] Register `cursor_cli` in `activity_catalog.py` and worker capability sets
-
-### Phase 3: Auth Profile Support
-
-- [ ] Seed default `cursor_cli` auth profile in database migration
-- [ ] Start `AuthProfileManager` for `cursor_cli` runtime on API startup
-- [ ] Add `cursor_auth_volume` to `docker-compose.yaml` (optional, for OAuth mode)
-
-### Phase 4: Permission and Context Integration
-
-- [ ] Implement `.cursor/cli.json` generation from MoonMind approval policies
-- [ ] Implement `.cursor/rules/moonmind-task.mdc` generation for skill injection
-- [ ] Wire MCP configuration for MoonMind context servers (optional)
-
-### Phase 5: Testing and Hardening
-
-- [ ] Unit tests for command construction and output parsing
-- [ ] Integration test: end-to-end headless execution in Docker
-- [ ] Verify 429/rate-limit detection and cooldown signaling
-- [ ] Verify cancellation (SIGTERM → SIGKILL) path
-- [ ] Dashboard visibility for `cursor_cli` runs
+Cursor CLI is a candidate fourth managed runtime: container image + auth volume wiring, adapter/launcher integration (including NDJSON `stream-json` parsing), auth profiles, permission/skill file generation, tests, and observability. Detailed tasks are in [`docs/tmp/remaining-work/ManagedAgents-CursorCli.md`](../tmp/remaining-work/ManagedAgents-CursorCli.md).
 
 ---
 

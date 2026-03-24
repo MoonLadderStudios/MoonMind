@@ -1,5 +1,9 @@
 # Memory Strategies for LLM Agents and Recommendations for MoonMind
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Memory-MemoryResearch.md`](../tmp/remaining-work/Memory-MemoryResearch.md)
+
+Prioritized experiments, schema/API follow-ups, and effort estimates are listed in the tracker; this document stays **research and recommendations**, not a delivery backlog in prose.
+
 ## Executive summary
 
 As of February 2026, “memory” for LLM-based agents is best understood as a *systems* problem rather than a single model feature: most reliable deployments combine short-term working memory (what fits in the prompt), durable stores (documents, vectors, databases), and explicit state machines + logs so that agent behavior is auditable and recoverable. Core research results still point to a practical theme: **LLMs are strong reasoners when the right context is surfaced, but weak at reliably “remembering” without deliberate retrieval and state management**—hence the mainstream adoption of retrieval-augmented generation and tiered memory architectures. citeturn22view0turn20view0

@@ -3,6 +3,8 @@ Status: Draft
 Owners: MoonMind Platform
 Last updated: 2026-03-12
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md)
+
 ## 1. Context
 
 MoonMind is being redesigned around **Temporal**.
@@ -551,25 +553,9 @@ All artifact IO happens in activities:
 
 ---
 
-## 16. Deliverables checklist
+## 16. Contract completion
 
-### Deliverable A — Artifact API contract
-
-* [ ] Endpoints defined (create/presign/complete/get/list/link/pin/delete)
-* [ ] Auth and audit rules specified
-* [ ] Multipart semantics defined
-
-### Deliverable B — ArtifactRef format
-
-* [ ] `ArtifactRef` JSON schema versioned
-* [ ] Required fields: artifact_id, sha256, size_bytes, content_type
-* [ ] Rules: no presigned URLs in workflow state
-
-### Deliverable C — Retention policy and lifecycle management
-
-* [ ] Retention classes defined
-* [ ] Default mapping by `link_type`
-* [ ] Lifecycle manager design (idempotent delete + tombstones)
+The artifact platform should expose a **stable HTTP contract** (create / presign / complete / get / list / link / pin / delete) with auth, audit, and multipart rules; a **versioned `ArtifactRef` JSON schema** (artifact_id, sha256, size_bytes, content_type; no presigned URLs in workflow state); and **retention classes** with per-`link_type` defaults and an idempotent lifecycle manager. Delivery status and gaps are tracked in [`docs/tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md`](../tmp/remaining-work/Temporal-WorkflowArtifactSystemDesign.md).
 
 ---
 
