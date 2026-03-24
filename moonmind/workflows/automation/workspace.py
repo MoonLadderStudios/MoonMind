@@ -270,7 +270,7 @@ class WorkflowWorkspaceManager:
         """Create the run/home/artifact directories if missing.
 
         Returns a :class:`RunWorkspacePaths` object with the resolved paths so
-        orchestrator code can export them to job containers and log producers.
+        worker runtimes can export them to job containers and log producers.
         """
 
         run_root = self.run_root(run_id)
