@@ -185,6 +185,12 @@ def _resolve_mirror_root(raw_root: str | Path) -> Path:
     return repo_relative
 
 
+def resolve_skills_local_mirror_root() -> Path:
+    """Resolve the configured local skills mirror root to an absolute path."""
+
+    return _resolve_mirror_root(settings.workflow.skills_local_mirror_root)
+
+
 def _iter_skill_mirror_roots(raw_root: str | Path) -> tuple[Path, ...]:
     """Yield effective skill roots, including nested legacy layout fallback."""
 

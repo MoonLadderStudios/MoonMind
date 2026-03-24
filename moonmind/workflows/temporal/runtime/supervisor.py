@@ -111,6 +111,7 @@ class ManagedRunSupervisor:
                 duration_seconds=duration,
                 log_refs=log_refs,
                 parsed_output=parsed_output,
+                events=parsed_output.events,
             )
 
             # Classify exit

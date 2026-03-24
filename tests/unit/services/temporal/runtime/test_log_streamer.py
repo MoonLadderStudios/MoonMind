@@ -43,13 +43,14 @@ async def test_stream_writes_file(streamer, tmp_path):
     reader.feed_data(b"line 1\nline 2\n")
     reader.feed_eof()
 
-    ref, content = await log_streamer.stream_to_artifact(
+    ref, content, events = await log_streamer.stream_to_artifact(
         reader, run_id="run-1", stream_name="stdout"
     )
 
     assert ref.endswith("stdout.log")
     resolved = storage.resolve_storage_path(ref)
     assert resolved.read_bytes() == b"line 1\nline 2\n"
+    assert events == []
 
 
 @pytest.mark.asyncio
@@ -58,12 +59,13 @@ async def test_stream_empty(streamer, tmp_path):
     reader = asyncio.StreamReader()
     reader.feed_eof()
 
-    ref, content = await log_streamer.stream_to_artifact(
+    ref, content, events = await log_streamer.stream_to_artifact(
         reader, run_id="run-2", stream_name="stderr"
     )
 
     resolved = storage.resolve_storage_path(ref)
     assert resolved.read_bytes() == b""
+    assert events == []
 
 
 def test_diagnostics_json_structure(streamer, tmp_path):
@@ -73,6 +75,7 @@ def test_diagnostics_json_structure(streamer, tmp_path):
         exit_code=0,
         duration_seconds=42.5,
         log_refs={"stdout": "run-3/stdout.log"},
+        events=[{"type": "step", "status": "running"}],
     )
 
     resolved = storage.resolve_storage_path(ref)
@@ -80,8 +83,8 @@ def test_diagnostics_json_structure(streamer, tmp_path):
     assert data["exit_code"] == 0
     assert data["duration_seconds"] == 42.5
     assert data["log_refs"]["stdout"] == "run-3/stdout.log"
-
-
+    assert len(data["events"]) == 1
+    assert data["events"][0]["type"] == "step"
 # ---------------------------------------------------------------------------
 # stream_and_parse tests
 # ---------------------------------------------------------------------------

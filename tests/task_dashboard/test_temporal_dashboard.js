@@ -89,7 +89,11 @@ function createVmContext() {
       removeItem() {},
     },
     __MOONMIND_DASHBOARD_TEST: { skipInitialRender: true },
-    location: { pathname: "/tasks/list", href: "http://example.test/tasks/list" },
+    location: {
+      pathname: "/tasks/list",
+      href: "http://example.test/tasks/list",
+      origin: "http://example.test",
+    },
   };
   const elementStub = function Element() {};
   const context = {
@@ -189,6 +193,44 @@ const helpers = loadTemporalHelpers();
   assert(queuedHtml.includes('data-temporal-action="set-title"'), "Queued state must show set-title button");
   assert(!queuedHtml.includes('data-temporal-action="rerun"'), "Queued state must not show rerun");
   assert(!queuedHtml.includes('data-temporal-action="resume"'), "Queued state must not show resume");
+})();
+
+(function testResolveArtifactUploadTargetDropsCredentialsForCrossOriginUrls() {
+  const sameOrigin = helpers.resolveArtifactUploadTarget("/api/artifacts/art_1/content");
+  assert.strictEqual(sameOrigin.url, "/api/artifacts/art_1/content");
+  assert.strictEqual(sameOrigin.credentials, "include");
+
+  const sameOriginAbsolute = helpers.resolveArtifactUploadTarget(
+    "http://example.test/api/artifacts/art_1/content",
+  );
+  assert.strictEqual(sameOriginAbsolute.credentials, "include");
+
+  const crossOrigin = helpers.resolveArtifactUploadTarget(
+    "https://uploads.example.test/object",
+  );
+  assert.strictEqual(crossOrigin.url, "https://uploads.example.test/object");
+  assert.strictEqual(crossOrigin.credentials, "omit");
+})();
+
+(function testBuildArtifactUploadHeadersHonorsRequiredHeaders() {
+  const fromRequired = helpers.buildArtifactUploadHeaders(
+    {
+      required_headers: {
+        "x-amz-acl": "private",
+        "content-type": "text/plain; charset=utf-8",
+      },
+    },
+    "text/plain; charset=utf-8",
+  );
+  assert.strictEqual(fromRequired["x-amz-acl"], "private");
+  assert.strictEqual(fromRequired["content-type"], "text/plain; charset=utf-8");
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(fromRequired, "Content-Type"),
+    false,
+  );
+
+  const fallback = helpers.buildArtifactUploadHeaders({}, "text/plain; charset=utf-8");
+  assert.strictEqual(fallback["Content-Type"], "text/plain; charset=utf-8");
 })();
 
 (function testTemporalRowsKeepTaskAndRunIdentifiersDistinct() {
