@@ -454,7 +454,7 @@ class MoonMindAgentRun:
                     manager_handle = await self._ensure_manager_and_signal(
                         manager_id,
                         runtime_id,
-                        request_slot=False,
+                        request_slot=True,
                     )
                     profile_count = await self._sync_manager_profiles(
                         manager_handle=manager_handle,
@@ -466,14 +466,6 @@ class MoonMindAgentRun:
                             type="ProfileResolutionError",
                             non_retryable=True,
                         )
-
-                    await manager_handle.signal(
-                        "request_slot",
-                        {
-                            "requester_workflow_id": workflow.info().workflow_id,
-                            "runtime_id": runtime_id,
-                        },
-                    )
 
                     # Wait indefinitely for an auth profile slot.
                     # Awaiting time does not count against the execution timeout;
