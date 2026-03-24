@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser, RuntimeOutputParser
+from moonmind.workflows.temporal.runtime.self_heal import FailureClass, is_failure_retryable
 
 
 class ManagedRuntimeStrategy(ABC):
@@ -137,8 +138,7 @@ class ManagedRuntimeStrategy(ABC):
         """
         if not failure_class:
             return False
-            
-        from moonmind.workflows.temporal.runtime.self_heal import FailureClass, is_failure_retryable
+
         try:
             fc = FailureClass(failure_class)
             return is_failure_retryable(fc)
