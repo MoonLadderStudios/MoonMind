@@ -45,20 +45,14 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.auth.env_shaping import (
     OAUTH_CLEARED_VARS,
+    _should_filter_base_env_var,
     shape_environment_for_api_key,
     shape_environment_for_oauth,
 )
 
 logger = logging.getLogger(__name__)
 
-_BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
-    "password",
-    "token",
-    "secret",
-    "credential",
-    "api_key",
-    "private_key",
-)
+
 # GitHub CLI authentication is required for workflows like pr-resolver.
 # Only the *key names* are propagated through workflow/activity payloads; the
 # values are injected at launch time by the agent-runtime activity worker.
@@ -76,13 +70,6 @@ SlotReleaseFunc = Callable[..., Awaitable[Any]]
 CooldownReportFunc = Callable[..., Awaitable[Any]]
 RunLauncherFunc = Callable[..., Awaitable[Any]]
 
-
-def _should_filter_base_env_var(key: str) -> bool:
-    normalized_key = str(key or "").strip()
-    if not normalized_key:
-        return False
-    lowered = normalized_key.lower()
-    return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
 
 
 def _derive_pr_resolver_failure(
@@ -475,7 +462,5 @@ __all__ = [
     "SlotRequestFunc",
     "SlotReleaseFunc",
     "CooldownReportFunc",
-    "shape_environment_for_api_key",
-    "shape_environment_for_oauth",
-    "OAUTH_CLEARED_VARS",
+
 ]

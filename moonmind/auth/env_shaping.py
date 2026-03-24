@@ -7,6 +7,7 @@ and environment overrides.
 
 from __future__ import annotations
 
+# GitHub CLI authentication is required for workflows like pr-resolver.
 # Env-var prefixes / names cleared when shaping OAuth environments (DOC-REQ-007).
 # These are the sensitive keys that must NOT appear in child-process environments.
 OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
@@ -21,6 +22,22 @@ OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
         "GH_TOKEN",
     }
 )
+_BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
+    "password",
+    "token",
+    "secret",
+    "credential",
+    "api_key",
+    "private_key",
+)
+
+
+def _should_filter_base_env_var(key: str) -> bool:
+    normalized_key = str(key or "").strip()
+    if not normalized_key:
+        return False
+    lowered = normalized_key.lower()
+    return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
 
 
 def shape_environment_for_oauth(
@@ -67,4 +84,5 @@ __all__ = [
     "OAUTH_CLEARED_VARS",
     "shape_environment_for_oauth",
     "shape_environment_for_api_key",
+    "_should_filter_base_env_var",
 ]

@@ -27,12 +27,14 @@ from api_service.db.models import (
     ManagedAgentAuthProfile,
     ManagedAgentRateLimitPolicy,
 )
-from moonmind.workflows.adapters.managed_agent_adapter import (
-    ManagedAgentAdapter,
-    ProfileResolutionError,
+from moonmind.auth.env_shaping import (
     OAUTH_CLEARED_VARS,
     shape_environment_for_api_key,
     shape_environment_for_oauth,
+)
+from moonmind.workflows.adapters.managed_agent_adapter import (
+    ManagedAgentAdapter,
+    ProfileResolutionError,
 )
 from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore,

@@ -297,7 +297,7 @@ Because of that, they must be launched asynchronously and supervised durably.
 The managed path should follow the same conceptual lifecycle as the external path:
 
 1. `ManagedAgentAdapter.start(...)` persists a durable run record.
-2. A runtime launcher starts the CLI runtime as a subprocess or equivalent managed execution unit. This is facilitated by the `ManagedRuntimeStrategy` pattern and its registry `RUNTIME_STRATEGIES`.
+2. A runtime launcher (delegating to a **managed runtime strategy**) starts the CLI runtime as a subprocess or equivalent managed execution unit. This is facilitated by the `ManagedRuntimeStrategy` pattern and its registry `RUNTIME_STRATEGIES`.
 3. A supervisor tracks process/container state, heartbeats, and output streams.
 4. On completion or interruption, the supervisor writes final state into the durable run record.
 5. MoonMind converts supervisor events into workflow Signals or Updates for the waiting `MoonMind.AgentRun` workflow.
