@@ -125,10 +125,12 @@ class UpdateRecurringTaskRequest(BaseModel):
     policy: Optional[dict[str, Any]] = Field(None, alias="policy")
 
 
+from moonmind.workflows.temporal.client import TemporalClientAdapter
+
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> RecurringTasksService:
-    return RecurringTasksService(session)
+    return RecurringTasksService(session, temporal_client_adapter=TemporalClientAdapter())
 
 
 def _serialize_definition(
