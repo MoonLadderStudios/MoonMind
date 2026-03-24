@@ -51,6 +51,19 @@ async def test_run_integration_stage_poll_driven_completion(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         captured.append((activity_type, payload))
+        if activity_type == "artifact.read":
+            import json
+            return json.dumps({
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test", 
+                    "created_at": "2024-01-01T00:00:00Z", 
+                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}],
+                "edges": []
+            }).encode("utf-8")
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
         if activity_type == "integration.jules.status":
@@ -70,10 +83,11 @@ async def test_run_integration_stage_poll_driven_completion(
         plan_ref="plan-1",
     )
     
-    # Expected activity calls: start, status
-    assert len(captured) == 2
-    assert captured[0][0] == "integration.jules.start"
-    assert captured[1][0] == "integration.jules.status"
+    # Expected activity calls: artifact.read, start, status
+    assert len(captured) == 3
+    assert captured[0][0] == "artifact.read"
+    assert captured[1][0] == "integration.jules.start"
+    assert captured[2][0] == "integration.jules.status"
     assert mock_run_workflow._external_status == "completed"
 
 
@@ -90,6 +104,19 @@ async def test_run_integration_stage_signal_driven_completion(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         captured.append((activity_type, payload))
+        if activity_type == "artifact.read":
+            import json
+            return json.dumps({
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test", 
+                    "created_at": "2024-01-01T00:00:00Z", 
+                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}],
+                "edges": []
+            }).encode("utf-8")
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
         return {}
@@ -100,13 +127,6 @@ async def test_run_integration_stage_signal_driven_completion(
             "correlation_id": "ext-1",
             "normalized_status": "completed"
         })
-        # the lambda cond() would now be True since external_event sets _resume_requested = True 
-        # (wait, external_event calls _resume_requested? Let's check. 
-        # external_event does NOT set _resume_requested directly, it calls resume() usually. 
-        # run.py line 1358: external_event... oh wait, external_event just sets _external_status.
-        # Who sets _resume_requested? 
-        # Wait, if external_event just sets _external_status, does it break the loop?)
-        # Let's just simulate the effect.
         mock_run_workflow._resume_requested = True
         return
 
@@ -118,9 +138,10 @@ async def test_run_integration_stage_signal_driven_completion(
         plan_ref="plan-1",
     )
     
-    # Expected activity calls: start only, because it woke up via signal and skipped polling
-    assert len(captured) == 1
-    assert captured[0][0] == "integration.jules.start"
+    # Expected activity calls: artifact.read, start only, because it woke up via signal and skipped polling
+    assert len(captured) == 2
+    assert captured[0][0] == "artifact.read"
+    assert captured[1][0] == "integration.jules.start"
     assert mock_run_workflow._external_status == "completed"
 
 
@@ -137,6 +158,19 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         captured.append((activity_type, payload))
+        if activity_type == "artifact.read":
+            import json
+            return json.dumps({
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test", 
+                    "created_at": "2024-01-01T00:00:00Z", 
+                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}],
+                "edges": []
+            }).encode("utf-8")
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1"}
         if activity_type == "integration.jules.fetch_result":
@@ -166,13 +200,82 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
         plan_ref="plan-1",
     )
     
-    # Expected activity calls: start, fetch_result, merge_pr
-    assert len(captured) == 3
-    assert captured[0][0] == "integration.jules.start"
-    assert captured[1][0] == "integration.jules.fetch_result"
-    assert captured[2][0] == "integration.jules.merge_pr"
+    # Expected activity calls: fetch plan, start, fetch_result, merge_pr
+    assert len(captured) == 4
+    assert captured[0][0] == "artifact.read"
+    assert captured[1][0] == "integration.jules.start"
+    assert captured[2][0] == "integration.jules.fetch_result"
+    assert captured[3][0] == "integration.jules.merge_pr"
     
     # Verify merge_pr payload
-    merge_payload = captured[2][1]
+    merge_payload = captured[3][1]
     # No target_branch should be passed since we didn't override it
     assert merge_payload == {"pr_url": "https://github.com/org/repo/pull/123"}
+
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_multi_step_sends_messages(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, Any]]] = []
+    
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, payload))
+        if activity_type == "artifact.read":
+            import json
+            return json.dumps({
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Multi-step Test", 
+                    "created_at": "2024-01-01T00:00:00Z", 
+                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "nodes": [
+                    {"id": "step1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 1"}},
+                    {"id": "step2", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 2"}},
+                    {"id": "step3", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 3"}},
+                ],
+                "edges": [
+                    {"from": "step1", "to": "step2"},
+                    {"from": "step2", "to": "step3"}
+                ]
+            }).encode("utf-8")
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-session-123", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.send_message":
+            return {"status": "running"}
+        if activity_type == "integration.jules.status":
+            return {"normalized_status": "completed"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+    
+    start_calls = [c for c in captured if c[0] == "integration.jules.start"]
+    send_message_calls = [c for c in captured if c[0] == "integration.jules.send_message"]
+    status_calls = [c for c in captured if c[0] == "integration.jules.status"]
+    
+    assert len(start_calls) == 1
+    assert start_calls[0][1]["parameters"]["description"] == "Step 1"
+    
+    assert len(send_message_calls) == 2
+    assert send_message_calls[0][1]["prompt"] == "Step 2"
+    assert send_message_calls[1][1]["prompt"] == "Step 3"
+    
+    # 3 steps, so 3 status polls (1 for start, 2 for send_message)
+    assert len(status_calls) == 3
+    assert mock_run_workflow._external_status == "completed"

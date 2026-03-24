@@ -821,14 +821,52 @@ class MoonMindRunWorkflow:
             STATE_AWAITING_EXTERNAL, summary="Waiting for external integration."
         )
 
+        # Extract per-step instructions if a plan is available
+        step_instructions: list[str] = []
+        if plan_ref:
+            try:
+                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+                plan_payload = await workflow.execute_activity(
+                    "artifact.read",
+                    {
+                        "principal": self._principal(),
+                        "artifact_ref": plan_ref,
+                    },
+                    **self._execute_kwargs_for_route(artifact_read_route),
+                )
+                plan_dict = self._decode_json_payload(
+                    plan_payload,
+                    error_message="plan_ref must resolve to a JSON object",
+                )
+                plan_definition = parse_plan_definition(plan_dict)
+                plan_nodes_payloads = self._ordered_plan_node_payloads(
+                    nodes=plan_definition.nodes,
+                    edges=plan_definition.edges,
+                )
+                for node in plan_nodes_payloads:
+                    inputs = node.get("inputs", {})
+                    instr = inputs.get("instructions")
+                    if instr and isinstance(instr, str) and instr.strip():
+                        step_instructions.append(instr.strip())
+            except Exception as e:
+                workflow.logger.warning(
+                    f"Failed to extract step instructions for integration multi-step: {e}"
+                )
+
+        instructions_to_run = step_instructions if (step_instructions and self._integration == "jules") else [None]
+
         integration_parameters = dict(parameters)
         integration_parameters.setdefault(
             "title", self._title or "MoonMind Integration"
         )
-        integration_parameters.setdefault(
-            "description",
-            f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
-        )
+        if instructions_to_run[0]:
+            integration_parameters["description"] = instructions_to_run[0]
+        else:
+            integration_parameters.setdefault(
+                "description",
+                f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
+            )
+
         metadata = integration_parameters.get("metadata")
         if metadata is None:
             metadata = {}
@@ -855,66 +893,95 @@ class MoonMindRunWorkflow:
 
         external_id = self._get_from_result(start_result, "external_id")
         self._correlation_id = external_id
-        poll_interval_seconds = 5
-        max_poll_interval_seconds = 300
-
+        
         self._waiting_reason = "external_completion"
         self._attention_required = False
         self._update_search_attributes()
 
-        _poll_terminal = False
-
-        while not self._resume_requested and not self._cancel_requested and not _poll_terminal:
-            self._wait_cycle_count += 1
-            try:
-                await workflow.wait_condition(
-                    lambda: self._resume_requested or self._cancel_requested,
-                    timeout=timedelta(seconds=poll_interval_seconds),
-                )
-            except asyncio.TimeoutError:
-                # No external signal arrived in this interval; proceed to status polling.
-                pass
-
-            if self._resume_requested or self._cancel_requested:
+        for step_index, instruction in enumerate(instructions_to_run):
+            if self._cancel_requested:
                 break
 
-            try:
-                poll_result = await workflow.execute_activity(
-                    self._integration_activity_type("status"),
-                    {
-                        "principal": self._principal(),
-                        "external_id": external_id,
-                        "parameters": integration_parameters,
-                        "execution_ref": {
-                            "namespace": workflow.info().namespace,
-                            "workflow_id": workflow.info().workflow_id,
-                            "run_id": workflow.info().run_id,
-                            "link_type": "output.summary",
+            if step_index > 0:
+                self._resume_requested = False
+                self._external_status = "running"
+                self._update_memo()
+                workflow.logger.info(f"Jules multi-step integration: sending step {step_index + 1}/{len(instructions_to_run)}")
+                try:
+                    await workflow.execute_activity(
+                        self._integration_activity_type("send_message"),
+                        {
+                            "session_id": external_id,
+                            "prompt": instruction,
                         },
-                    },
-                    start_to_close_timeout=timedelta(minutes=5),
-                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                )
-                summary_ref = self._get_from_result(poll_result, "tracking_ref")
-                if summary_ref:
-                    self._summary_ref = summary_ref
-                    self._update_memo()
+                        start_to_close_timeout=timedelta(minutes=5),
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    )
+                except Exception as exc:
+                    workflow.logger.warning(f"Failed to send follow-up step {step_index + 1} to Jules: {exc}")
+                    self._external_status = "failed"
+                    break
 
-                status = self._get_from_result(poll_result, "normalized_status")
-                if status in ("completed", "failed", "canceled"):
-                    _poll_terminal = True
-                    self._external_status = status
-                    if status == "failed":
-                        workflow.logger.warning(f"Integration failed: {poll_result}")
-                    elif status == "canceled":
-                        self._cancel_requested = True
-            except Exception as exc:
-                workflow.logger.warning(f"Integration polling failed: {exc}")
-            finally:
-                poll_interval_seconds = min(
-                    poll_interval_seconds * 2, max_poll_interval_seconds
-                )
+            poll_interval_seconds = 5
+            max_poll_interval_seconds = 300
+            _poll_terminal = False
+
+            while not self._resume_requested and not self._cancel_requested and not _poll_terminal:
+                self._wait_cycle_count += 1
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._resume_requested or self._cancel_requested,
+                        timeout=timedelta(seconds=poll_interval_seconds),
+                    )
+                except asyncio.TimeoutError:
+                    # No external signal arrived in this interval; proceed to status polling.
+                    pass
+
+                if self._resume_requested or self._cancel_requested:
+                    break
+
+                try:
+                    poll_result = await workflow.execute_activity(
+                        self._integration_activity_type("status"),
+                        {
+                            "principal": self._principal(),
+                            "external_id": external_id,
+                            "parameters": integration_parameters,
+                            "execution_ref": {
+                                "namespace": workflow.info().namespace,
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "link_type": "output.summary",
+                            },
+                        },
+                        start_to_close_timeout=timedelta(minutes=5),
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    )
+                    summary_ref = self._get_from_result(poll_result, "tracking_ref")
+                    if summary_ref:
+                        self._summary_ref = summary_ref
+                        self._update_memo()
+
+                    status = self._get_from_result(poll_result, "normalized_status")
+                    if status in ("completed", "failed", "canceled"):
+                        _poll_terminal = True
+                        self._external_status = status
+                        if status == "failed":
+                            workflow.logger.warning(f"Integration failed: {poll_result}")
+                        elif status == "canceled":
+                            self._cancel_requested = True
+                except Exception as exc:
+                    workflow.logger.warning(f"Integration polling failed: {exc}")
+                finally:
+                    poll_interval_seconds = min(
+                        poll_interval_seconds * 2, max_poll_interval_seconds
+                    )
+
+            if self._external_status != "completed":
+                # If a step failed or was canceled, do not dispatch remaining steps
+                break
 
         self._awaiting_external = False
         self._waiting_reason = None
