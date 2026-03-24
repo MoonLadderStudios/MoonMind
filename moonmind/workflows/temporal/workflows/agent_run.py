@@ -145,6 +145,11 @@ class MoonMindAgentRun:
 
         Tries the signal. If the manager workflow doesn't exist, starts it
         via the ``auth_profile.ensure_manager`` activity and retries once.
+        
+        Note: The Temporal Python SDK does not provide a `signal_with_start`
+        method on `workflow.ExternalWorkflowHandle` objects for use inside a
+        workflow. Therefore, we use this try/catch/activity/retry pattern to
+        emulate the behavior.
         """
         manager_handle = workflow.get_external_workflow_handle(manager_id)
         signal_payload = {

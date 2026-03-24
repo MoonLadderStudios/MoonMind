@@ -35,23 +35,23 @@ This plan closes that gap through five phases of work, each independently shippa
 
 **Goal:** Fix remaining correctness gaps and add operational visibility to `MoonMind.Run`.
 
-- [ ] **1.1** Add `@workflow.query get_status` to `MoonMind.Run`
+- [x] **1.1** Add `@workflow.query get_status` to `MoonMind.Run`
   - **Files:** `run.py`
   - Return `_state`, `_paused`, `_cancel_requested`, `_step_count`, `_summary`, `_awaiting_external`, `_waiting_reason`
   - Aligns with the client's `describe_workflow`
 
-- [ ] **1.2** Refactor integration polling loop to separate "operator resume" from "poll terminal"
+- [x] **1.2** Refactor integration polling loop to separate "operator resume" from "poll terminal"
   - **Files:** `run.py` (lines 864-918)
   - Introduce a distinct `_poll_terminal` flag instead of reusing `_resume_requested` for two different intents
   - Makes loop termination easier to reason about; eliminates post-loop `_resume_requested = False` reset
   - ⚠️ Requires a `workflow.patched()` gate (see 5.3) if any in-flight workflows have integration stages
 
-- [ ] **1.3** Explore Signal-With-Start for AuthProfileManager bootstrapping
+- [x] **1.3** Explore Signal-With-Start for AuthProfileManager bootstrapping
   - **Files:** `agent_run.py` (`_ensure_manager_and_signal`)
   - Evaluate whether the Python SDK `start_workflow(..., start_signal=...)` or `signal_with_start` API can replace the current try/catch/activity/retry pattern
   - If SDK support is incomplete, document the limitation and keep the existing approach
 
-- [ ] **1.4** Define error taxonomy document
+- [x] **1.4** Define error taxonomy document
   - **Files:** New `docs/Temporal/ErrorTaxonomy.md`, modify `activity_catalog.py`
   - Map each `ApplicationError` subtype to retry vs non-retryable classification
   - Update `non_retryable_error_codes` to reference the taxonomy
