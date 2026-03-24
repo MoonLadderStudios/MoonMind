@@ -2639,6 +2639,62 @@
         : {},
     );
 
+  const resolveArtifactUploadTarget = (uploadUrl) => {
+    const raw = String(uploadUrl || "").trim();
+    if (!raw) {
+      return { url: raw, credentials: "include" };
+    }
+    try {
+      const windowOrigin =
+        window && window.location && typeof window.location.origin === "string"
+          ? String(window.location.origin).trim()
+          : "";
+      if (!windowOrigin) {
+        return { url: raw, credentials: "include" };
+      }
+      const parsed = new URL(raw, windowOrigin);
+      return {
+        url: raw,
+        credentials: parsed.origin === windowOrigin ? "include" : "omit",
+      };
+    } catch (_error) {
+      return { url: raw, credentials: "include" };
+    }
+  };
+
+  const buildArtifactUploadHeaders = (
+    upload = {},
+    defaultContentType = "text/plain; charset=utf-8",
+  ) => {
+    const requiredHeaders =
+      pick(upload, "required_headers", "requiredHeaders")
+      || {};
+    const normalizedHeaders = {};
+    if (
+      requiredHeaders &&
+      typeof requiredHeaders === "object" &&
+      !Array.isArray(requiredHeaders)
+    ) {
+      Object.entries(requiredHeaders).forEach(([headerName, headerValue]) => {
+        const normalizedName = String(headerName || "").trim();
+        const normalizedValue = String(headerValue ?? "").trim();
+        if (!normalizedName || !normalizedValue) {
+          return;
+        }
+        normalizedHeaders[normalizedName] = normalizedValue;
+      });
+    }
+    if (
+      defaultContentType &&
+      !Object.keys(normalizedHeaders).some(
+        (headerName) => headerName.toLowerCase() === "content-type",
+      )
+    ) {
+      normalizedHeaders["Content-Type"] = defaultContentType;
+    }
+    return normalizedHeaders;
+  };
+
   const createTemporalInputArtifact = async ({ instructions, repository }) => {
     const normalizedInstructions = String(instructions || "");
     const byteSize = new TextEncoder().encode(normalizedInstructions).length;
@@ -2670,9 +2726,11 @@
     const upload = pick(createResponse, "upload") || {};
     const uploadUrl = String(pick(upload, "upload_url", "uploadUrl") || "").trim()
       || endpoint("/api/artifacts/{artifactId}/content", { artifactId });
-    await fetchJson(uploadUrl, {
+    const uploadTarget = resolveArtifactUploadTarget(uploadUrl);
+    await fetchJson(uploadTarget.url, {
       method: "PUT",
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      credentials: uploadTarget.credentials,
+      headers: buildArtifactUploadHeaders(upload),
       body: normalizedInstructions,
     });
     return { artifactId };
@@ -3004,6 +3062,8 @@
       temporalWaitingReason,
       toTemporalRows,
       uploadTemporalArtifactContent,
+      resolveArtifactUploadTarget,
+      buildArtifactUploadHeaders,
       withTemporalSourceFlag,
     };
     window.__queueLayoutTest = {
