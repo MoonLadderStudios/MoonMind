@@ -8,8 +8,11 @@ import pytest
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.workflows.temporal.runtime.launcher import (
-    TMATE_FOREGROUND_RESTART_OFF,
     ManagedRuntimeLauncher,
+)
+from moonmind.workflows.temporal.runtime.tmate_session import (
+    TmateEndpoints,
+    TmateSessionManager,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -142,14 +145,6 @@ def test_build_command_per_runtime():
     assert "--effort" not in cmd
 
 
-def test_build_tmate_wrapper_script_kills_session_on_exit():
-    script = ManagedRuntimeLauncher._build_tmate_wrapper_script(
-        ["gemini", "--model", "gemini-3.1-pro-preview", "--prompt", "hi"],
-        socket_path="/tmp/moonmind/tmate/run-1.sock",
-        session_name="mm-run1",
-    )
-    assert "tmate -S /tmp/moonmind/tmate/run-1.sock kill-session -t mm-run1" in script
-    assert "exit \"$mm_rc\"" in script
 
 
 @pytest.mark.asyncio
@@ -288,60 +283,51 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
 async def test_tmate_launch_writes_config_and_exit_file_contract(
     tmp_path, monkeypatch
 ):
+    """Verify that the launcher delegates to TmateSessionManager correctly.
+
+    Since the launcher now delegates to TmateSessionManager.start(), we mock
+    the manager's start() method to verify delegation and endpoint mapping.
+    """
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
     profile = _make_profile(command_template=["gemini", "run"])
     request = _make_request()
 
     class _FakeProcess:
-        def __init__(
-            self,
-            *,
-            pid: int = 4321,
-            returncode: int = 0,
-            stdout_bytes: bytes = b"",
-        ) -> None:
+        def __init__(self, *, pid: int = 9999) -> None:
             self.pid = pid
-            self.returncode = returncode
-            self.stdout = asyncio.StreamReader()
-            self.stderr = asyncio.StreamReader()
-            self._stdout_bytes = stdout_bytes
+            self.returncode = None
 
         async def wait(self) -> int:
-            return self.returncode
+            self.returncode = 0
+            return 0
 
         async def communicate(self) -> tuple[bytes, bytes]:
-            return self._stdout_bytes, b""
+            return b"", b""
+
+    fake_process = _FakeProcess()
+    fake_endpoints = TmateEndpoints(
+        session_name="mm-tmaterun1xxxx",
+        socket_path="/tmp/moonmind/tmate/mm-tmaterun1xxxx.sock",
+        attach_ro="ssh ro",
+        attach_rw="ssh rw",
+        web_ro="web ro",
+        web_rw="web rw",
+    )
 
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.shutil.which",
-        lambda binary: "/usr/bin/tmate" if binary == "tmate" else None,
+        TmateSessionManager,
+        "is_available",
+        staticmethod(lambda: True),
     )
-    monkeypatch.setattr(launcher, "_find_existing_workspace_repo", lambda **kwargs: None)
 
-    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    async def _fake_start(self, command=None, *, env=None, cwd=None, exit_code_capture=True, timeout_seconds=30.0):
+        self._process = fake_process
+        self._endpoints = fake_endpoints
+        self._exit_code_path_value = Path("/tmp/moonmind/tmate/mm-tmaterun1xxxx.exit")
+        return fake_endpoints
 
-    async def _fake_create_subprocess_exec(*args, **kwargs):
-        calls.append((args, kwargs))
-        if args[:2] == ("tmate", "-S") and "new-session" in args:
-            return _FakeProcess(pid=9999)
-        if args[:2] == ("tmate", "-S") and "wait" in args:
-            return _FakeProcess()
-        if args[:2] == ("tmate", "-S") and "display" in args:
-            key = str(args[-1])
-            values = {
-                "#{tmate_ssh_ro}": b"ssh ro\n",
-                "#{tmate_ssh}": b"ssh rw\n",
-                "#{tmate_web_ro}": b"web ro\n",
-                "#{tmate_web}": b"web rw\n",
-            }
-            return _FakeProcess(stdout_bytes=values.get(key, b""))
-        raise AssertionError(f"Unexpected subprocess call: {args!r}")
-
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
-        _fake_create_subprocess_exec,
-    )
+    monkeypatch.setattr(TmateSessionManager, "start", _fake_start)
 
     record, process, endpoints = await launcher.launch(
         run_id="tmate-run-1",
@@ -352,26 +338,11 @@ async def test_tmate_launch_writes_config_and_exit_file_contract(
     assert record.pid == 9999
     assert process.pid == 9999
     assert endpoints is not None
-
-    config_path = Path(endpoints["tmate_config_path"])
-    assert config_path.read_text(encoding="utf-8") == (
-        TMATE_FOREGROUND_RESTART_OFF
-    )
-    assert endpoints["exit_code_path"].endswith("tmate-run-1.exit")
+    assert endpoints["tmate_session_name"] == "mm-tmaterun1xxxx"
     assert endpoints["attach_rw"] == "ssh rw"
     assert endpoints["web_rw"] == "web rw"
+    assert endpoints["exit_code_path"].endswith(".exit")
 
-    launch_call = next(args for args, _ in calls if "new-session" in args)
-    wrapped_command = str(launch_call[-1])
-    # The wrapped command should contain the actual CLI command inline
-    # (not "$@" positional args, which don't work with tmate's sh -c)
-    assert "gemini" in wrapped_command
-    assert "MM_EXIT_FILE" in wrapped_command
-
-    launch_env = next(kwargs for args, kwargs in calls if "new-session" in args)[
-        "env"
-    ]
-    assert launch_env["MM_EXIT_FILE"] == endpoints["exit_code_path"]
 
 
 @pytest.mark.asyncio

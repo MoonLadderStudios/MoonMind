@@ -291,12 +291,15 @@ def _classify_comment_actionability(
     comment: dict,
     *,
     include_bot_review_comments: bool = False,
+    head_commit_sha: str | None = None,
 ) -> tuple[bool, str]:
     """Determine whether a comment requires action.
 
     Actionability rules are intentionally simple and deterministic:
     - Ignore comments with empty bodies.
     - Ignore review comments only when explicitly marked resolved/outdated.
+    - Treat bot review comments on a *previous* commit as stale when the HEAD
+      commit differs (the fix was already pushed).
     - Treat issue comments and review bodies as actionable.
     - Treat review comments as actionable except resolved/outdated threads and
       bot-authored comments (unless explicitly enabled).
@@ -314,6 +317,15 @@ def _classify_comment_actionability(
             return False, "thread_resolved"
         if comment.get("thread_outdated", False):
             return False, "thread_outdated"
+        # Bot review comments left on a previous commit are stale — the agent
+        # already pushed a fix and the bot cannot re-evaluate its own feedback.
+        if (
+            head_commit_sha
+            and is_bot_user(comment.get("user") or "")
+            and comment.get("commit_id")
+            and str(comment["commit_id"]).strip() != head_commit_sha
+        ):
+            return False, "stale_bot_comment"
         if not include_bot_review_comments and is_bot_user(comment.get("user") or ""):
             return False, "bot_review_comment_excluded"
         return True, "actionable"
@@ -338,34 +350,83 @@ def _is_comment_actionable(
     comment: dict,
     *,
     include_bot_review_comments: bool = False,
+    head_commit_sha: str | None = None,
 ) -> bool:
     actionable, _ = _classify_comment_actionability(
         comment,
         include_bot_review_comments=include_bot_review_comments,
+        head_commit_sha=head_commit_sha,
     )
     return actionable
 
 
-def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
-    """Load comment IDs that have been locally marked as addressed or not-applicable."""
-    path = ledger_path or Path("artifacts/pr_resolver_addressed_comments.json")
-    if not path.exists():
-        return set()
-    try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return set()
-    if not isinstance(entries, list):
-        return set()
+_LEDGER_CANDIDATE_PATHS = [
+    Path("artifacts/pr_resolver_addressed_comments.json"),
+    Path("var/pr_comments/comment-resolution-ledger.json"),
+]
+_ACCEPTED_DISPOSITIONS = {"addressed", "not-applicable"}
+
+
+def _extract_ids_from_entries(entries: list, *, id_keys: tuple[str, ...] = ("id", "comment_id")) -> set[int]:
+    """Extract comment IDs from a list of ledger entry dicts.
+
+    Accepts both ``disposition`` and ``status`` field names, and both
+    ``id`` and ``comment_id`` key names to maximise compatibility.
+    """
     ids: set[int] = set()
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        disposition = str(entry.get("disposition") or "").strip().lower()
-        if disposition in {"addressed", "not-applicable"}:
-            cid = entry.get("id")
+        disposition = (
+            str(entry.get("disposition") or entry.get("status") or "")
+            .strip()
+            .lower()
+        )
+        if disposition not in _ACCEPTED_DISPOSITIONS:
+            continue
+        for key in id_keys:
+            cid = entry.get(key)
             if isinstance(cid, int):
                 ids.add(cid)
+                break
+    return ids
+
+
+def _load_addressed_comment_ids(ledger_path: Path | None = None) -> set[int]:
+    """Load comment IDs that have been locally marked as addressed or not-applicable.
+
+    Searches multiple candidate paths and accepts both array and object-wrapped
+    ledger formats so that different agent skill outputs are all recognised.
+    """
+    candidates: list[Path] = []
+    if ledger_path:
+        candidates.append(ledger_path)
+    candidates.extend(_LEDGER_CANDIDATE_PATHS)
+
+    # Also glob var/pr_comments/ for any JSON files.
+    pr_comments_dir = Path("var/pr_comments")
+    if pr_comments_dir.is_dir():
+        for p in sorted(pr_comments_dir.glob("*.json")):
+            if p not in candidates:
+                candidates.append(p)
+
+    ids: set[int] = set()
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        # Array format: [{"id": ..., "disposition": ...}, ...]
+        if isinstance(payload, list):
+            ids.update(_extract_ids_from_entries(payload))
+        # Object format: {"resolutions": [...]} or {"comments": [...]}
+        elif isinstance(payload, dict):
+            for key in ("resolutions", "comments"):
+                nested = payload.get(key)
+                if isinstance(nested, list):
+                    ids.update(_extract_ids_from_entries(nested))
     return ids
 
 
@@ -374,6 +435,7 @@ def summarize_comments(
     *,
     include_bot_review_comments: bool = True,
     addressed_comment_ids: set[int] | None = None,
+    head_commit_sha: str | None = None,
 ) -> dict:
     review_comments = [c for c in comments if c.get("type") == "review_comment"]
     issue_comments = [c for c in comments if c.get("type") == "issue_comment"]
@@ -397,6 +459,7 @@ def summarize_comments(
             actionable, reason = _classify_comment_actionability(
                 comment,
                 include_bot_review_comments=include_bot_review_comments,
+                head_commit_sha=head_commit_sha,
             )
         if actionable:
             actionable_comments.append(comment)
@@ -787,6 +850,7 @@ def main():
         comments,
         include_bot_review_comments=True,
         addressed_comment_ids=addressed_ids,
+        head_commit_sha=head_sha,
     )
 
     # 4. Construct Snapshot

@@ -80,9 +80,11 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
         workspace_path: Path,
         request: Any,
     ) -> None:
-        """Write task instruction to .gemini/instruction.md if present."""
-        if getattr(request, "instruction_ref", None):
-            gemini_dir = workspace_path / ".gemini"
-            gemini_dir.mkdir(parents=True, exist_ok=True)
-            instruction_file = gemini_dir / "instruction.md"
-            instruction_file.write_text(request.instruction_ref)
+        """Write .gemini/instruction.md in the workspace."""
+        if not getattr(request, "instruction_ref", None):
+            return
+
+        gemini_dir = workspace_path / ".gemini"
+        gemini_dir.mkdir(parents=True, exist_ok=True)
+        instruction_path = gemini_dir / "instruction.md"
+        instruction_path.write_text(request.instruction_ref, encoding="utf-8")

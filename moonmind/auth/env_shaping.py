@@ -1,9 +1,16 @@
-"""Shared environment shaping helpers for managed runtimes and OAuth flows."""
+"""Environment shaping helpers for OAuth and API-key modes.
+
+These helpers are shared across managed runtime strategies and the OAuth
+Session orchestrator to ensure consistent handling of sensitive credentials
+and environment overrides.
+"""
 
 from __future__ import annotations
 
 # GitHub CLI authentication is required for workflows like pr-resolver.
-_OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
+# Env-var prefixes / names cleared when shaping OAuth environments (DOC-REQ-007).
+# These are the sensitive keys that must NOT appear in child-process environments.
+OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
     {
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
@@ -33,7 +40,7 @@ def _should_filter_base_env_var(key: str) -> bool:
     return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
 
 
-def _shape_environment_for_oauth(
+def shape_environment_for_oauth(
     base_env: dict[str, str],
     *,
     volume_mount_path: str | None,
@@ -44,14 +51,14 @@ def _shape_environment_for_oauth(
     volume mount path is provided.  Does NOT expose secrets.
     """
     env = dict(base_env)
-    for key in _OAUTH_CLEARED_VARS:
+    for key in OAUTH_CLEARED_VARS:
         env.pop(key, None)
     if volume_mount_path:
         env["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
     return env
 
 
-def _shape_environment_for_api_key(
+def shape_environment_for_api_key(
     base_env: dict[str, str],
     *,
     api_key_ref: str | None,
@@ -64,7 +71,7 @@ def _shape_environment_for_api_key(
     is delegated to the runtime launcher (out of scope for Phase 5).
     """
     env = dict(base_env)
-    for key in _OAUTH_CLEARED_VARS:
+    for key in OAUTH_CLEARED_VARS:
         env.pop(key, None)
     if api_key_ref:
         # Pass only the reference, never the real value.
@@ -72,3 +79,10 @@ def _shape_environment_for_api_key(
     if account_label:
         env["MANAGED_ACCOUNT_LABEL"] = account_label
     return env
+
+__all__ = [
+    "OAUTH_CLEARED_VARS",
+    "shape_environment_for_oauth",
+    "shape_environment_for_api_key",
+    "_should_filter_base_env_var",
+]

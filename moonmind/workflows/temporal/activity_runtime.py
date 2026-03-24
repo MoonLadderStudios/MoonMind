@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
-from moonmind.schemas.jules_models import JulesIntegrationMergePRResult
+from moonmind.schemas.jules_models import JulesIntegrationMergePRResult, JulesIntegrationCreatePRResult
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -224,6 +224,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
     "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
+    "integration.jules.create_pr": ("integrations", "integration_jules_create_pr"),
     "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
     "integration.jules.list_activities": ("integrations", "integration_jules_list_activities"),
     "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
@@ -1915,6 +1916,22 @@ class TemporalIntegrationActivities:
                 )
 
         return await client.merge_pull_request(pr_url=pr_url)
+
+    async def integration_jules_create_pr(
+        self, payload: dict
+    ) -> "JulesIntegrationCreatePRResult":
+        """Create a PR natively via GitHub API."""
+        client = self._client_factory()
+
+        repo = payload.get("repo") or ""
+        head = payload.get("head") or ""
+        base = payload.get("base") or ""
+        title = payload.get("title") or ""
+        body = payload.get("body") or ""
+
+        return await client.create_pull_request(
+            repo=repo, head=head, base=base, title=title, body=body
+        )
 
     async def integration_jules_send_message(
         self,

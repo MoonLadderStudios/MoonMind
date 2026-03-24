@@ -60,10 +60,10 @@ def _raise_temporal_artifact_http(error: Exception) -> None:
         ) from error
     if isinstance(error, TemporalArtifactValidationError):
         lowered = str(error).lower()
-        status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
         code = "invalid_artifact_payload"
         if "max bytes" in lowered:
-            status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            status_code = status.HTTP_413_CONTENT_TOO_LARGE
             code = "artifact_too_large"
         raise HTTPException(
             status_code=status_code,

@@ -28,9 +28,9 @@ from api_service.db.models import (
     ManagedAgentRateLimitPolicy,
 )
 from moonmind.auth.env_shaping import (
-    _OAUTH_CLEARED_VARS,
-    _shape_environment_for_api_key,
-    _shape_environment_for_oauth,
+    OAUTH_CLEARED_VARS,
+    shape_environment_for_api_key,
+    shape_environment_for_oauth,
 )
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
@@ -101,9 +101,9 @@ def test_shape_environment_for_oauth_clears_sensitive_vars():
         "OPENAI_API_KEY": "openai-key",
         "PATH": "/usr/bin",
     }
-    shaped = _shape_environment_for_oauth(base, volume_mount_path="/mnt/auth")
+    shaped = shape_environment_for_oauth(base, volume_mount_path="/mnt/auth")
     # Sensitive keys must be absent.
-    for key in _OAUTH_CLEARED_VARS:
+    for key in OAUTH_CLEARED_VARS:
         assert key not in shaped, f"Expected {key} to be cleared"
     assert shaped["HOME"] == "/home/user"
     assert shaped["MANAGED_AUTH_VOLUME_PATH"] == "/mnt/auth"
@@ -111,7 +111,7 @@ def test_shape_environment_for_oauth_clears_sensitive_vars():
 
 def test_shape_environment_for_oauth_without_mount_path():
     base = {"HOME": "/home/user", "GEMINI_API_KEY": "secret"}
-    shaped = _shape_environment_for_oauth(base, volume_mount_path=None)
+    shaped = shape_environment_for_oauth(base, volume_mount_path=None)
     assert "MANAGED_AUTH_VOLUME_PATH" not in shaped
     assert "GEMINI_API_KEY" not in shaped
 
@@ -123,7 +123,7 @@ def test_shape_environment_for_oauth_clears_github_cli_tokens():
         "GITHUB_TOKEN": "github-token",
         "OPENAI_API_KEY": "secret",
     }
-    shaped = _shape_environment_for_oauth(base, volume_mount_path=None)
+    shaped = shape_environment_for_oauth(base, volume_mount_path=None)
     assert "GH_TOKEN" not in shaped
     assert "GITHUB_TOKEN" not in shaped
     assert "OPENAI_API_KEY" not in shaped
@@ -131,7 +131,7 @@ def test_shape_environment_for_oauth_clears_github_cli_tokens():
 
 def test_shape_environment_for_api_key_sets_ref():
     base = {"HOME": "/home/user"}
-    shaped = _shape_environment_for_api_key(
+    shaped = shape_environment_for_api_key(
         base, api_key_ref="secrets/my-api-key", account_label="ci-bot"
     )
     assert shaped["MANAGED_API_KEY_REF"] == "secrets/my-api-key"
@@ -141,7 +141,7 @@ def test_shape_environment_for_api_key_sets_ref():
 
 def test_shape_environment_for_api_key_without_ref():
     base = {"HOME": "/home/user"}
-    shaped = _shape_environment_for_api_key(base, api_key_ref=None, account_label=None)
+    shaped = shape_environment_for_api_key(base, api_key_ref=None, account_label=None)
     assert "MANAGED_API_KEY_REF" not in shaped
     assert "MANAGED_ACCOUNT_LABEL" not in shaped
 

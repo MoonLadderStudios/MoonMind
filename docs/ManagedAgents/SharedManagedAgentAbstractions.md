@@ -380,8 +380,8 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 - [x] Wire launcher subprocess env through `strategy.shape_environment()` (launcher line 419)
 - [x] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per UniversalTmateOAuth.md alignment)
 - [x] Clean up `agent_runtime_env_keys` in `settings.py` if confirmed dead config
-- [ ] Remove dead imports and unused code from adapter and launcher
+- [x] Remove dead imports and unused code from adapter and launcher
 - [x] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference the managed runtime strategy pattern
 - [x] Move this file to `docs/ManagedAgents/SharedManagedAgentAbstractions.md`
 
-**Output**: **Complete.** The hook in `launch()` is live and strategies now prepare workspaces and shape environments correctly. Env helpers have been factored out, dead configuration cleaned, and docs updated.
+**Output**: **Complete.** Per-runtime workspace preparation, shared env factoring, settings cleanup, and documentation updates have all been completed successfully.

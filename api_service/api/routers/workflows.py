@@ -133,7 +133,7 @@ def _normalize_affinity_key(raw: str | None) -> str | None:
 
     if not _AFFINITY_KEY_PATTERN.fullmatch(candidate):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_affinity_key",
                 "message": (
@@ -358,7 +358,7 @@ async def list_workflow_runs(
             status_enum = models.WorkflowRunStatus(status)
         except ValueError as exc:  # pragma: no cover - FastAPI should validate enum
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"code": "invalid_status", "message": str(exc)},
             ) from exc
 
@@ -386,7 +386,7 @@ async def list_workflow_runs(
         )
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_cursor",
                 "message": "Invalid cursor token",

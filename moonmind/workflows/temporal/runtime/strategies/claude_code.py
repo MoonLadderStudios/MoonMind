@@ -51,7 +51,9 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         workspace_path: Path,
         request: Any,
     ) -> None:
-        """Write task instruction to CLAUDE.md if present."""
-        if getattr(request, "instruction_ref", None):
-            claude_md = workspace_path / "CLAUDE.md"
-            claude_md.write_text(request.instruction_ref)
+        """Write CLAUDE.md in the workspace."""
+        if not getattr(request, "instruction_ref", None):
+            return
+
+        instruction_path = workspace_path / "CLAUDE.md"
+        instruction_path.write_text(request.instruction_ref, encoding="utf-8")

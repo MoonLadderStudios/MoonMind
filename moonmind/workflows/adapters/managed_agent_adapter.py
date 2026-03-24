@@ -33,11 +33,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from moonmind.auth.env_shaping import (
-    _shape_environment_for_api_key,
-    _shape_environment_for_oauth,
-    _should_filter_base_env_var,
-)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -48,8 +43,15 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.auth.env_shaping import (
+    OAUTH_CLEARED_VARS,
+    _should_filter_base_env_var,
+    shape_environment_for_api_key,
+    shape_environment_for_oauth,
+)
 
 logger = logging.getLogger(__name__)
+
 
 # GitHub CLI authentication is required for workflows like pr-resolver.
 # Only the *key names* are propagated through workflow/activity payloads; the
@@ -67,6 +69,7 @@ SlotRequestFunc = Callable[..., Awaitable[Any]]
 SlotReleaseFunc = Callable[..., Awaitable[Any]]
 CooldownReportFunc = Callable[..., Awaitable[Any]]
 RunLauncherFunc = Callable[..., Awaitable[Any]]
+
 
 
 def _derive_pr_resolver_failure(
@@ -187,12 +190,12 @@ class ManagedAgentAdapter:
             if not _should_filter_base_env_var(k)
         }
         if auth_mode == "oauth":
-            shaped_env = _shape_environment_for_oauth(
+            shaped_env = shape_environment_for_oauth(
                 base_env,
                 volume_mount_path=profile.get("volume_mount_path"),
             )
         else:
-            shaped_env = _shape_environment_for_api_key(
+            shaped_env = shape_environment_for_api_key(
                 base_env,
                 api_key_ref=profile.get("api_key_ref"),
                 account_label=profile.get("account_label"),
@@ -459,4 +462,5 @@ __all__ = [
     "SlotRequestFunc",
     "SlotReleaseFunc",
     "CooldownReportFunc",
+
 ]

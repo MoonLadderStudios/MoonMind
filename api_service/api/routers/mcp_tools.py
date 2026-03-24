@@ -61,7 +61,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
         )
     if isinstance(exc, ToolArgumentsValidationError):
         return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "invalid_tool_arguments", "message": str(exc)},
         )
     if isinstance(exc, JulesClientError):
@@ -69,7 +69,7 @@ def _to_http_exception(exc: Exception) -> HTTPException:
             http_status = status.HTTP_429_TOO_MANY_REQUESTS
             code = "jules_rate_limited"
         elif exc.status_code is not None and 400 <= exc.status_code < 500:
-            http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+            http_status = status.HTTP_422_UNPROCESSABLE_CONTENT
             code = "jules_request_failed"
         else:
             http_status = status.HTTP_502_BAD_GATEWAY

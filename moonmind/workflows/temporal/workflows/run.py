@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
+from temporalio.workflow import ActivityCancellationType
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
@@ -379,7 +380,6 @@ class MoonMindRunWorkflow:
                 "Ensure the planning activity returns a non-None 'plan_ref'."
             )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
-        self._step_count += 1
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await workflow.execute_activity(
@@ -458,6 +458,7 @@ class MoonMindRunWorkflow:
             node_id = str(node.get("id") or "unknown")
             node_inputs = dict(node.get("inputs", {}))
 
+            self._step_count = index
             self._summary = (
                 f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
             )
@@ -473,16 +474,17 @@ class MoonMindRunWorkflow:
                             node_id=node_id,
                             tool_name=tool_name,
                         )
-                        # --- Multi-step Jules: inject session_id for continuation ---
-                        if jules_session_id and request.agent_id == "jules":
-                            request = request.model_copy(
-                                update={
-                                    "parameters": {
-                                        **request.parameters,
-                                        "jules_session_id": jules_session_id,
-                                    }
-                                }
-                            )
+                        # --- Multi-step Jules: adjust parameters for proper PR creation ---
+                        if request.agent_id == "jules":
+                            new_params = dict(request.parameters or {})
+                            if publish_mode == "pr":
+                                new_params["publishMode"] = "branch"
+                                new_params.pop("automationMode", None)
+                            if jules_session_id:
+                                new_params["jules_session_id"] = jules_session_id
+                            
+                            if new_params != (request.parameters or {}):
+                                request = request.model_copy(update={"parameters": new_params})
                         child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
                         if system_retries > 0:
                             child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
@@ -636,9 +638,44 @@ class MoonMindRunWorkflow:
                             workflow.logger.warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
                             
         if require_pull_request_url and pull_request_url is None:
-            raise ValueError(
-                "publishMode 'pr' requested but no plan step reported a GitHub pull request URL"
+            # Create PR natively since Jules publish_mode was overridden to "branch"
+            ws = parameters.get("workspaceSpec") or {}
+            head_branch = ws.get("branch") or ""
+            target_branch = parameters.get("targetBranch") or ws.get("targetBranch") or ws.get("startingBranch") or "main"
+            
+            if not self._repo or not head_branch:
+                raise ValueError(
+                    "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                )
+            
+            workflow.logger.info(
+                f"Creating PR natively from {head_branch} into {target_branch} for repo {self._repo}"
             )
+            create_payload = {
+                "repo": self._repo,
+                "head": head_branch,
+                "base": target_branch,
+                "title": self._title or "Automated changes by MoonMind",
+                "body": self._summary or "Automated changes by MoonMind.",
+            }
+            try:
+                create_result = await workflow.execute_activity(
+                    "integration.jules.create_pr",
+                    create_payload,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                )
+                pr_url = self._get_from_result(create_result, "url")
+                if pr_url:
+                    pull_request_url = pr_url
+                    workflow.logger.info(f"Natively created PR: {pull_request_url}")
+                else:
+                    raise ValueError("PR creation activity succeeded but returned no URL")
+            except Exception as e:
+                raise ValueError(
+                    f"publishMode 'pr' requested; native PR creation failed: {e}"
+                ) from e
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -748,7 +785,7 @@ class MoonMindRunWorkflow:
                 workspace_spec[ws_key] = ws_val
 
         parameters: dict[str, Any] = {}
-        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts"):
+        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts", "steps"):
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
@@ -821,14 +858,60 @@ class MoonMindRunWorkflow:
             STATE_AWAITING_EXTERNAL, summary="Waiting for external integration."
         )
 
+        # Extract per-step instructions if a plan is available
+        step_instructions: list[str] = []
+        if plan_ref:
+            try:
+                artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
+                plan_payload = await workflow.execute_activity(
+                    "artifact.read",
+                    {
+                        "principal": self._principal(),
+                        "artifact_ref": plan_ref,
+                    },
+                    **self._execute_kwargs_for_route(artifact_read_route),
+                )
+                plan_dict = self._decode_json_payload(
+                    plan_payload,
+                    error_message="plan_ref must resolve to a JSON object",
+                )
+                plan_definition = parse_plan_definition(plan_dict)
+                plan_nodes_payloads = self._ordered_plan_node_payloads(
+                    nodes=plan_definition.nodes,
+                    edges=plan_definition.edges,
+                )
+                for node in plan_nodes_payloads:
+                    inputs = node.get("inputs", {})
+                    instr = inputs.get("instructions")
+                    if instr and isinstance(instr, str) and instr.strip():
+                        step_instructions.append(instr.strip())
+            except Exception as e:
+                workflow.logger.warning(
+                    f"Failed to extract step instructions for integration multi-step: {e}"
+                )
+
+        instructions_to_run = step_instructions if (step_instructions and self._integration == "jules") else [None]
+
         integration_parameters = dict(parameters)
+        
+        # --- Multi-step Jules: adjust parameters for proper PR creation ---
+        if self._integration == "jules":
+            publish_mode = self._publish_mode(integration_parameters)
+            if publish_mode == "pr":
+                integration_parameters["publishMode"] = "branch"
+                integration_parameters.pop("automationMode", None)
+                
         integration_parameters.setdefault(
             "title", self._title or "MoonMind Integration"
         )
-        integration_parameters.setdefault(
-            "description",
-            f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
-        )
+        if instructions_to_run[0]:
+            integration_parameters["description"] = instructions_to_run[0]
+        else:
+            integration_parameters.setdefault(
+                "description",
+                f"Monitor MoonMind.Run workflow for {self._repo or 'the requested task'}.",
+            )
+
         metadata = integration_parameters.get("metadata")
         if metadata is None:
             metadata = {}
@@ -838,15 +921,17 @@ class MoonMindRunWorkflow:
         metadata.setdefault("planRef", plan_ref)
         integration_parameters["metadata"] = metadata
 
+        start_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            self._integration_activity_type("start")
+        )
         start_result = await workflow.execute_activity(
-            self._integration_activity_type("start"),
+            start_route.activity_type,
             {
                 "principal": self._principal(),
                 "parameters": integration_parameters,
             },
-            start_to_close_timeout=timedelta(minutes=5),
-            task_queue=INTEGRATIONS_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(start_route),
         )
         summary_ref = self._get_from_result(start_result, "tracking_ref")
         if summary_ref:
@@ -855,71 +940,108 @@ class MoonMindRunWorkflow:
 
         external_id = self._get_from_result(start_result, "external_id")
         self._correlation_id = external_id
-        poll_interval_seconds = 5
-        max_poll_interval_seconds = 300
-
+        
         self._waiting_reason = "external_completion"
         self._attention_required = False
         self._update_search_attributes()
 
-        _poll_terminal = False
-
-        while not self._resume_requested and not self._cancel_requested and not _poll_terminal:
-            self._wait_cycle_count += 1
-            try:
-                await workflow.wait_condition(
-                    lambda: self._resume_requested or self._cancel_requested,
-                    timeout=timedelta(seconds=poll_interval_seconds),
-                )
-            except asyncio.TimeoutError:
-                # No external signal arrived in this interval; proceed to status polling.
-                pass
-
-            if self._resume_requested or self._cancel_requested:
+        for step_index, instruction in enumerate(instructions_to_run):
+            if self._cancel_requested:
                 break
 
-            try:
-                poll_result = await workflow.execute_activity(
-                    self._integration_activity_type("status"),
-                    {
-                        "principal": self._principal(),
-                        "external_id": external_id,
-                        "parameters": integration_parameters,
-                        "execution_ref": {
-                            "namespace": workflow.info().namespace,
-                            "workflow_id": workflow.info().workflow_id,
-                            "run_id": workflow.info().run_id,
-                            "link_type": "output.summary",
+            if step_index > 0:
+                self._resume_requested = False
+                self._external_status = "running"
+                self._update_memo()
+                workflow.logger.info(f"Jules multi-step integration: sending step {step_index + 1}/{len(instructions_to_run)}")
+                try:
+                    await workflow.execute_activity(
+                        self._integration_activity_type("send_message"),
+                        {
+                            "session_id": external_id,
+                            "prompt": instruction,
                         },
-                    },
-                    start_to_close_timeout=timedelta(minutes=5),
-                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                )
-                summary_ref = self._get_from_result(poll_result, "tracking_ref")
-                if summary_ref:
-                    self._summary_ref = summary_ref
-                    self._update_memo()
+                        start_to_close_timeout=timedelta(minutes=5),
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    )
+                except Exception as exc:
+                    workflow.logger.warning(f"Failed to send follow-up step {step_index + 1} to Jules: {exc}")
+                    self._external_status = "failed"
+                    break
 
-                status = self._get_from_result(poll_result, "normalized_status")
-                if status in ("completed", "failed", "canceled"):
-                    _poll_terminal = True
-                    self._external_status = status
-                    if status == "failed":
-                        workflow.logger.warning(f"Integration failed: {poll_result}")
-                    elif status == "canceled":
-                        self._cancel_requested = True
-            except Exception as exc:
-                workflow.logger.warning(f"Integration polling failed: {exc}")
-            finally:
-                poll_interval_seconds = min(
-                    poll_interval_seconds * 2, max_poll_interval_seconds
-                )
+            poll_interval_seconds = 5
+            max_poll_interval_seconds = 300
+            _poll_terminal = False
+
+            while not self._resume_requested and not self._cancel_requested and not _poll_terminal:
+                self._wait_cycle_count += 1
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._resume_requested or self._cancel_requested,
+                        timeout=timedelta(seconds=poll_interval_seconds),
+                    )
+                except asyncio.TimeoutError:
+                    # No external signal arrived in this interval; proceed to status polling.
+                    pass
+
+                if self._resume_requested or self._cancel_requested:
+                    break
+
+                try:
+                    poll_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        self._integration_activity_type("status")
+                    )
+                    poll_result = await workflow.execute_activity(
+                        poll_route.activity_type,
+                        {
+                            "principal": self._principal(),
+                            "external_id": external_id,
+                            "parameters": integration_parameters,
+                            "execution_ref": {
+                                "namespace": workflow.info().namespace,
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "link_type": "output.summary",
+                            },
+                        },
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(poll_route),
+                    )
+                    summary_ref = self._get_from_result(poll_result, "tracking_ref")
+                    if summary_ref:
+                        self._summary_ref = summary_ref
+                        self._update_memo()
+
+                    status = self._get_from_result(poll_result, "normalized_status")
+                    if status in ("completed", "failed", "canceled"):
+                        _poll_terminal = True
+                        self._external_status = status
+                        if status == "failed":
+                            workflow.logger.warning(f"Integration failed: {poll_result}")
+                        elif status == "canceled":
+                            self._cancel_requested = True
+                except Exception as exc:
+                    workflow.logger.warning(f"Integration polling failed: {exc}")
+                finally:
+                    poll_interval_seconds = min(
+                        poll_interval_seconds * 2, max_poll_interval_seconds
+                    )
+
+            if self._external_status != "completed":
+                # If a step failed or was canceled, do not dispatch remaining steps
+                break
 
         self._awaiting_external = False
         self._waiting_reason = None
         self._attention_required = False
         self._update_search_attributes()
+
+        if self._external_status == "failed":
+            raise ValueError("Integration failed during plan execution.")
+
+        if self._external_status == "failed":
+            raise ValueError("Integration failed during plan execution.")
 
         # --- Jules branch-publish auto-merge ---
         # When publishMode is "branch" and the integration is Jules, the
@@ -935,16 +1057,18 @@ class MoonMindRunWorkflow:
         ):
             workflow.logger.info("Jules branch-publish: fetching result for PR merge")
             try:
+                fetch_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    self._integration_activity_type("fetch_result")
+                )
                 fetch_result = await workflow.execute_activity(
-                    self._integration_activity_type("fetch_result"),
+                    fetch_route.activity_type,
                     {
                         "principal": self._principal(),
                         "external_id": external_id,
                         "parameters": integration_parameters,
                     },
-                    start_to_close_timeout=timedelta(minutes=5),
-                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **self._execute_kwargs_for_route(fetch_route),
                 )
                 pr_url = (
                     self._get_from_result(fetch_result, "external_url")
@@ -989,12 +1113,14 @@ class MoonMindRunWorkflow:
                     if effective_target:
                         merge_payload["target_branch"] = effective_target
 
+                    merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "integration.jules.merge_pr"
+                    )
                     merge_result = await workflow.execute_activity(
-                        "integration.jules.merge_pr",
+                        merge_route.activity_type,
                         merge_payload,
-                        start_to_close_timeout=timedelta(minutes=2),
-                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(merge_route),
                     )
                     merged = self._get_from_result(merge_result, "merged")
                     merge_summary = (
@@ -1047,6 +1173,7 @@ class MoonMindRunWorkflow:
                     "repo": self._repo,
                     "parameters": parameters,
                 },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
             )
         except Exception as exc:
@@ -1084,6 +1211,7 @@ class MoonMindRunWorkflow:
                     "origin": origin,
                     "principal": self._principal(),
                 },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
             )
             if isinstance(submit_result, dict):

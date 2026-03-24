@@ -9539,7 +9539,7 @@
                 <label>
                   Runtime env overrides (JSON object, API key mode)
                   <textarea name="runtime_env_overrides_json" rows="8" class="wide"
-                    placeholder='{\n  "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",\n  "ANTHROPIC_MODEL": "MiniMax-M2.7",\n  "API_TIMEOUT_MS": "3000000",\n  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"\n}'></textarea>
+                    placeholder='{\n  "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",\n  "ANTHROPIC_MODEL": "MiniMax-M2.7",\n  "API_TIMEOUT_MS": "600000",\n  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"\n}'></textarea>
                 </label>
                 <label>
                   Max Parallel Runs
