@@ -8953,7 +8953,7 @@
             <form id="create-skill-form" class="stack" style="margin-top: 1rem;">
               <label>
                 Skill Name
-                <input type="text" name="name" required placeholder="e.g. MyNewSkill" pattern="^[a-zA-Z0-9_-]+$" title="Only letters, numbers, underscores, and dashes are allowed.">
+                <input type="text" name="name" required placeholder="e.g. MyNewSkill" pattern="^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$" title="Must start with a letter or number, be 1-64 characters long, and contain only letters, numbers, underscores, and dashes.">
               </label>
               <label>
                 Markdown Content (SKILL.md)
@@ -8968,7 +8968,7 @@
         `;
       } else if (state.selectedSkill) {
         const contentHtml = state.selectedSkill.markdown
-          ? `<div class="markdown-body" style="white-space: pre-wrap; font-family: monospace;">${escapeHtml(state.selectedSkill.markdown)}</div>`
+          ? `<div class="markdown-body">${marked.parse(state.selectedSkill.markdown)}</div>`
           : `<p class="small">No content available for this skill.</p>`;
 
         detailPaneHtml = `

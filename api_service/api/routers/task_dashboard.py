@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -311,7 +312,7 @@ async def list_dashboard_skills(
             skill_dir = skills_root / skill_id
             skill_file = skill_dir / "SKILL.md"
             if skill_file.exists():
-                markdown_content = skill_file.read_text(encoding="utf-8")
+                markdown_content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
         legacy_items.append(DashboardSkillOption(id=skill_id, markdown=markdown_content))
 
     return DashboardSkillListResponse(
