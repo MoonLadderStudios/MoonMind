@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from moonmind.workflows.temporal.workflows.auth_profile_manager import (
     WORKFLOW_NAME,

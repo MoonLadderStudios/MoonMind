@@ -173,8 +173,8 @@ def _scan_secrets(
                     ValidationIssue(
                         "ERROR",
                         path or "value",
-                        f"Possible raw secret detected. Use ${{ENV}} references "
-                        f"instead of embedding credentials.",
+                        "Possible raw secret detected. Use ${ENV} references "
+                        "instead of embedding credentials.",
                     )
                 )
                 return  # one finding per value

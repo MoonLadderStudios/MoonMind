@@ -33,7 +33,7 @@ class _FakeCodexCloudClient:
         return {
             "taskId": "cc-task-123",
             "status": self.create_status,
-            "url": f"https://codex-cloud.example.test/tasks/cc-task-123",
+            "url": "https://codex-cloud.example.test/tasks/cc-task-123",
         }
 
     async def get_task(self, task_id):

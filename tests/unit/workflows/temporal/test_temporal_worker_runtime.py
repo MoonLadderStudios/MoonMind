@@ -17,7 +17,6 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     external_adapter_execution_style,
 )
 from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
-from moonmind.workflows.task_proposals.service import TaskProposalService
 
 
 def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():

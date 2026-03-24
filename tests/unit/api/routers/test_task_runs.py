@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.worker_auth import _WorkerRequestAuth
-from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
+from api_service.api.routers.worker_auth import _require_worker_auth
 from api_service.auth_providers import get_current_user
 from moonmind.config.settings import settings
 

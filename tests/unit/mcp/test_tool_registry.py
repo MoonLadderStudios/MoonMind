@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-import pytest
 
 from moonmind.mcp.tool_registry import (
     QueueToolExecutionContext,

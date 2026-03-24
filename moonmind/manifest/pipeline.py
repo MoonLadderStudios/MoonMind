@@ -13,8 +13,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from moonmind.manifest.reader_adapter import PlanResult, get_adapter
-from moonmind.schemas.manifest_v0_models import ManifestV0, DataSourceConfig
+from moonmind.manifest.reader_adapter import get_adapter
+from moonmind.schemas.manifest_v0_models import ManifestV0
 
 logger = logging.getLogger(__name__)
 

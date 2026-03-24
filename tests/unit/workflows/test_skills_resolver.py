@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from moonmind.workflows.skills import resolver as resolver_module
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,

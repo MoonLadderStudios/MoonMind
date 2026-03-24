@@ -11,7 +11,6 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from api_service.auth_providers import get_current_user_optional
-from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
 from moonmind.rag.settings import RagRuntimeSettings

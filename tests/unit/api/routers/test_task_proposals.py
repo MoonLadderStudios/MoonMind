@@ -14,7 +14,6 @@ from moonmind.workflows.task_proposals.models import (
     TaskProposalReviewPriority,
     TaskProposalStatus,
 )
-from moonmind.workflows.task_proposals.service import TaskProposalValidationError
 
 
 @pytest.fixture

@@ -16,10 +16,6 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from moonmind.publish.sanitization import (
-    sanitize_metadata_footer_value,
-    sanitize_publish_subject,
-)
 from moonmind.publish.service import PublishService
 from moonmind.rag.context_pack import ContextPack
 from moonmind.rag.service import ContextRetrievalService

@@ -14,7 +14,6 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
-    ManifestRecord,
     RecurringTaskRun,
     RecurringTaskRunOutcome,
 )
