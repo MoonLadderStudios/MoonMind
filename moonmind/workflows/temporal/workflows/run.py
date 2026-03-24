@@ -474,15 +474,18 @@ class MoonMindRunWorkflow:
                             tool_name=tool_name,
                         )
                         # --- Multi-step Jules: inject session_id for continuation ---
-                        if jules_session_id and request.agent_id == "jules":
-                            request = request.model_copy(
-                                update={
-                                    "parameters": {
-                                        **request.parameters,
-                                        "jules_session_id": jules_session_id,
-                                    }
-                                }
-                            )
+                        if request.agent_id == "jules":
+                            is_last_step = index == len(ordered_nodes)
+                            new_params = dict(request.parameters or {})
+                            if not is_last_step:
+                                new_params.pop("publishMode", None)
+                                new_params.pop("automationMode", None)
+                            
+                            if jules_session_id:
+                                new_params["jules_session_id"] = jules_session_id
+                            
+                            if new_params != (request.parameters or {}):
+                                request = request.model_copy(update={"parameters": new_params})
                         child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
                         if system_retries > 0:
                             child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
