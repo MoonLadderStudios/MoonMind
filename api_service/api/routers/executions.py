@@ -544,7 +544,7 @@ def _coerce_artifact_ref(value: Any) -> str | None:
 
 def _invalid_task_request(message: str) -> HTTPException:
     return HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail={
             "code": "invalid_execution_request",
             "message": message,
@@ -833,7 +833,7 @@ async def _create_execution_from_task_request(
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_request",
                 "message": str(exc),
@@ -888,7 +888,7 @@ async def _create_execution_from_manifest_request(
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_request",
                 "message": str(exc),
@@ -986,7 +986,7 @@ def _compute_schedule_delay(
     delay = scheduled_for - now
     if delay.total_seconds() < 1:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "schedule_in_past",
                 "message": "scheduledFor must be a future datetime.",
@@ -1080,7 +1080,7 @@ async def _resolve_schedule_routing(
     if schedule.mode == "recurring":
         if session is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "code": "invalid_execution_request",
                     "message": "Recurring schedules require a database session.",
@@ -1097,7 +1097,7 @@ async def _resolve_schedule_routing(
     if schedule.mode == "once":
         if schedule.scheduled_for is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "code": "invalid_execution_request",
                     "message": "scheduledFor is required when schedule.mode is 'once'.",
@@ -1172,7 +1172,7 @@ async def create_execution(
         )
     except ValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_request",
                 "message": str(exc),
@@ -1180,7 +1180,7 @@ async def create_execution(
         ) from exc
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_request",
                 "message": str(exc),
@@ -1339,7 +1339,7 @@ async def list_executions(
 
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_execution_query",
                 "message": str(exc),
@@ -1468,7 +1468,7 @@ async def update_execution(
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_update_request",
                 "message": str(exc),
@@ -1510,7 +1510,7 @@ async def describe_manifest_status(
         return await service.describe_manifest_status(workflow_id)
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_manifest_status_request",
                 "message": str(exc),
@@ -1540,7 +1540,7 @@ async def list_manifest_node_page(
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_manifest_nodes_request",
                 "message": str(exc),
@@ -1578,7 +1578,7 @@ async def configure_integration_monitoring(
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_integration_monitoring_request",
                 "message": str(exc),
@@ -1615,7 +1615,7 @@ async def record_integration_poll(
         )
     except TemporalExecutionValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_integration_poll_request",
                 "message": str(exc),

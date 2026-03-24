@@ -131,7 +131,7 @@ async def retrieve_context_pack(
         raise
     except RetrievalBudgetExceededError as exc:
         status_code = (
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            status.HTTP_413_CONTENT_TOO_LARGE
             if exc.budget_type == "tokens"
             else status.HTTP_408_REQUEST_TIMEOUT
         )

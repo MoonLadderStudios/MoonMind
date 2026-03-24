@@ -167,7 +167,7 @@ async def upsert_manifest(
         logger.warning("Manifest upsert validation failed.", exc_info=True)
         message = str(exc).strip() or "Invalid manifest payload"
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "invalid_manifest", "message": message},
         ) from exc
     return _serialize_detail(record)
@@ -220,7 +220,7 @@ async def create_manifest_run(
         ) from exc
     except ManifestContractError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "invalid_manifest_job", "message": str(exc)},
         ) from exc
     except (
@@ -229,7 +229,7 @@ async def create_manifest_run(
         TemporalExecutionValidationError,
     ) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"code": "invalid_manifest_job", "message": str(exc)},
         ) from exc
 
