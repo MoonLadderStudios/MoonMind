@@ -71,36 +71,11 @@ class ManagedRunSupervisor:
         start_time = datetime.now(tz=UTC)
 
         try:
+            # Resolve strategy output parser for this runtime
             record = self._store.load(run_id)
             runtime_id = record.runtime_id if record else None
             strategy = get_strategy(runtime_id) if runtime_id else None
             parser = strategy.create_output_parser() if strategy else None
-
-            # Start log streaming tasks
-            stdout_task = (
-                asyncio.create_task(
-                    self._log_streamer.stream_to_artifact(
-                        process.stdout,
-                        run_id=run_id,
-                        stream_name="stdout",
-                        parser=parser,
-                    )
-                )
-                if process.stdout
-                else None
-            )
-            stderr_task = (
-                asyncio.create_task(
-                    self._log_streamer.stream_to_artifact(
-                        process.stderr,
-                        run_id=run_id,
-                        stream_name="stderr",
-                        parser=parser,
-                    )
-                )
-                if process.stderr
-                else None
-            )
 
             # Heartbeat + wait for process with timeout
             try:
@@ -118,19 +93,15 @@ class ManagedRunSupervisor:
                 timed_out = True
                 await self._terminate_process(process)
 
-            # Collect log refs and content
-            log_refs: dict[str, str] = {}
-            stdout_content = ""
-            stderr_content = ""
-            events: list[dict] = []
-            if stdout_task:
-                ref, stdout_content, stdout_events = await stdout_task
-                log_refs["stdout"] = ref
-                events.extend(stdout_events)
-            if stderr_task:
-                ref, stderr_content, stderr_events = await stderr_task
-                log_refs["stderr"] = ref
-                events.extend(stderr_events)
+            # Stream logs and parse output in one step
+            log_refs, stdout_content, stderr_content, parsed_output = (
+                await self._log_streamer.stream_and_parse(
+                    process.stdout,
+                    process.stderr,
+                    run_id=run_id,
+                    parser=parser,
+                )
+            )
 
             duration = (datetime.now(tz=UTC) - start_time).total_seconds()
 
@@ -139,7 +110,8 @@ class ManagedRunSupervisor:
                 exit_code=exit_code,
                 duration_seconds=duration,
                 log_refs=log_refs,
-                events=events,
+                parsed_output=parsed_output,
+                events=parsed_output.events,
             )
 
             # Classify exit
@@ -154,6 +126,8 @@ class ManagedRunSupervisor:
             error_message = None
             if status == "failed":
                 error_message = f"Process exited with code {exit_code}"
+                if parsed_output.error_messages:
+                    error_message += f": {parsed_output.error_messages[0]}"
             elif status == "timed_out":
                 error_message = (
                     f"Process timed out after {timeout_seconds}s"
