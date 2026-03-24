@@ -53,6 +53,7 @@ _OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
         "OPENAI_API_KEY",
         "CODEX_API_KEY",
         "GITHUB_TOKEN",
@@ -262,6 +263,18 @@ class ManagedAgentAdapter:
                 api_key_ref=profile.get("api_key_ref"),
                 account_label=profile.get("account_label"),
             )
+            runtime_env_overrides = profile.get("runtime_env_overrides") or {}
+            if isinstance(runtime_env_overrides, dict):
+                for key, value in runtime_env_overrides.items():
+                    ks = str(key).strip()
+                    if not ks:
+                        continue
+                    shaped_env[ks] = str(value) if value is not None else ""
+            api_key_env_var = profile.get("api_key_env_var")
+            if api_key_env_var and str(api_key_env_var).strip():
+                shaped_env["MANAGED_API_KEY_TARGET_ENV"] = (
+                    str(api_key_env_var).strip().upper()
+                )
         passthrough_env_keys = [
             key
             for key in _SECRET_ENV_PASSTHROUGH_KEYS

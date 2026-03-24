@@ -97,7 +97,9 @@ class UserProfile(Base):
     github_token_encrypted = Column(
         EncryptedType(Text, get_encryption_key), nullable=True
     )
-    # Add other provider keys here as needed
+    anthropic_api_key_encrypted = Column(
+        EncryptedType(Text, get_encryption_key), nullable=True
+    )
 
     user = relationship("User", back_populates="user_profile")
 
@@ -1797,6 +1799,10 @@ class ManagedAgentAuthProfile(Base):
     )
     account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     api_key_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    runtime_env_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    api_key_env_var: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     max_parallel_runs: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )

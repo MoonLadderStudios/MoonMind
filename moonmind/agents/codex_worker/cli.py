@@ -288,10 +288,11 @@ def run_preflight(env: Mapping[str, str] | None = None) -> None:
                 )
             if claude_auth_mode == "api_key":
                 anthropic_key = str(source.get("ANTHROPIC_API_KEY", "")).strip()
+                auth_token = str(source.get("ANTHROPIC_AUTH_TOKEN", "")).strip()
                 claude_key = str(source.get("CLAUDE_API_KEY", "")).strip()
-                if not anthropic_key and not claude_key:
+                if not anthropic_key and not claude_key and not auth_token:
                     raise RuntimeError(
-                        "ANTHROPIC_API_KEY or CLAUDE_API_KEY is required when "
+                        "ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or CLAUDE_API_KEY is required when "
                         "Claude runtime uses API key authentication."
                     )
             if claude_auth_mode == "oauth":

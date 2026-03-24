@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,7 @@ from api_service.db.models import (
     ManagedAgentAuthProfile,
     ManagedAgentRateLimitPolicy,
 )
+from moonmind.schemas.agent_runtime_models import _contains_sensitive_key
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +37,57 @@ class AuthProfileCreate(BaseModel):
     volume_mount_path: Optional[str] = None
     account_label: Optional[str] = None
     api_key_ref: Optional[str] = None
+    runtime_env_overrides: Optional[dict[str, str]] = None
+    api_key_env_var: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="Env var to receive the resolved API key (e.g. ANTHROPIC_AUTH_TOKEN for MiniMax).",
+    )
     max_parallel_runs: int = Field(default=1, ge=1)
+
+    @field_validator("runtime_env_overrides", mode="before")
+    @classmethod
+    def _stringify_runtime_env(
+        cls, value: object
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("runtime_env_overrides must be a JSON object")
+        out: dict[str, str] = {}
+        for raw_key, raw_val in value.items():
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            if raw_val is None:
+                out[key] = ""
+            else:
+                out[key] = str(raw_val)
+        return out
     cooldown_after_429_seconds: int = Field(default=300, ge=0)
     rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate_runtime_env(self) -> "AuthProfileCreate":
+        if self.runtime_env_overrides is not None and _contains_sensitive_key(
+            self.runtime_env_overrides
+        ):
+            raise ValueError(
+                "runtime_env_overrides must not contain credential-like key names or nested secrets"
+            )
+        if self.api_key_env_var is not None:
+            candidate = str(self.api_key_env_var).strip()
+            if not candidate:
+                self.api_key_env_var = None
+            elif not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", candidate):
+                raise ValueError(
+                    "api_key_env_var must look like an environment variable name "
+                    "(e.g. ANTHROPIC_AUTH_TOKEN)"
+                )
+            else:
+                self.api_key_env_var = candidate
+        return self
 
 
 class AuthProfileUpdate(BaseModel):
@@ -46,12 +95,58 @@ class AuthProfileUpdate(BaseModel):
     volume_mount_path: Optional[str] = None
     account_label: Optional[str] = None
     api_key_ref: Optional[str] = None
+    runtime_env_overrides: Optional[dict[str, str]] = None
+    api_key_env_var: Optional[str] = Field(
+        default=None,
+        max_length=64,
+    )
     max_parallel_runs: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("runtime_env_overrides", mode="before")
+    @classmethod
+    def _stringify_runtime_env_update(
+        cls, value: object
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("runtime_env_overrides must be a JSON object")
+        out: dict[str, str] = {}
+        for raw_key, raw_val in value.items():
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            if raw_val is None:
+                out[key] = ""
+            else:
+                out[key] = str(raw_val)
+        return out
     cooldown_after_429_seconds: Optional[int] = Field(default=None, ge=0)
     rate_limit_policy: Optional[str] = Field(
         default=None, pattern="^(backoff|queue|fail_fast)$"
     )
     enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _validate_runtime_env_update(self) -> "AuthProfileUpdate":
+        if self.runtime_env_overrides is not None and _contains_sensitive_key(
+            self.runtime_env_overrides
+        ):
+            raise ValueError(
+                "runtime_env_overrides must not contain credential-like key names or nested secrets"
+            )
+        if self.api_key_env_var is not None:
+            candidate = str(self.api_key_env_var).strip()
+            if not candidate:
+                self.api_key_env_var = None
+            elif not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", candidate):
+                raise ValueError(
+                    "api_key_env_var must look like an environment variable name "
+                    "(e.g. ANTHROPIC_AUTH_TOKEN)"
+                )
+            else:
+                self.api_key_env_var = candidate
+        return self
 
 
 class AuthProfileResponse(BaseModel):
@@ -61,6 +156,9 @@ class AuthProfileResponse(BaseModel):
     volume_ref: Optional[str]
     volume_mount_path: Optional[str]
     account_label: Optional[str]
+    api_key_ref: Optional[str] = None
+    runtime_env_overrides: Optional[dict[str, str]] = None
+    api_key_env_var: Optional[str] = None
     max_parallel_runs: int
     cooldown_after_429_seconds: int
     rate_limit_policy: str
@@ -133,6 +231,8 @@ async def create_profile(
         volume_mount_path=body.volume_mount_path,
         account_label=body.account_label,
         api_key_ref=body.api_key_ref,
+        runtime_env_overrides=body.runtime_env_overrides,
+        api_key_env_var=body.api_key_env_var,
         max_parallel_runs=body.max_parallel_runs,
         cooldown_after_429_seconds=body.cooldown_after_429_seconds,
         rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
@@ -196,6 +296,9 @@ def _row_to_dict(row: ManagedAgentAuthProfile) -> dict[str, Any]:
         "volume_ref": row.volume_ref,
         "volume_mount_path": row.volume_mount_path,
         "account_label": row.account_label,
+        "api_key_ref": row.api_key_ref,
+        "runtime_env_overrides": row.runtime_env_overrides or {},
+        "api_key_env_var": row.api_key_env_var,
         "max_parallel_runs": row.max_parallel_runs,
         "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
         "rate_limit_policy": (

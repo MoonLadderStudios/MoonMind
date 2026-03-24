@@ -30,6 +30,7 @@ def shape_agent_environment(
     if auth_mode.lower() == "oauth":
         oauth_scrubbable_keys = [
             "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
             "CLAUDE_API_KEY",     # Claude Code aliases
             "OPENAI_API_KEY",
             "GEMINI_API_KEY",

@@ -10212,6 +10212,7 @@ class CodexWorker:
                 return None
             env = dict(environ)
             env.pop("ANTHROPIC_API_KEY", None)
+            env.pop("ANTHROPIC_AUTH_TOKEN", None)
             env.pop("CLAUDE_API_KEY", None)
             return env
 
