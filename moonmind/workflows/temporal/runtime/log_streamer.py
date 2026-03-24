@@ -68,16 +68,29 @@ class RuntimeLogStreamer:
         stdout_content = ""
         stderr_content = ""
 
-        if stdout_reader:
-            ref, stdout_content = await self.stream_to_artifact(
-                stdout_reader, run_id=run_id, stream_name="stdout",
+        # Stream stdout and stderr concurrently to avoid buffer-related
+        # issues and performance regressions on heavy output processes.
+        stdout_task = (
+            asyncio.create_task(
+                self.stream_to_artifact(stdout_reader, run_id=run_id, stream_name="stdout")
             )
+            if stdout_reader
+            else None
+        )
+        stderr_task = (
+            asyncio.create_task(
+                self.stream_to_artifact(stderr_reader, run_id=run_id, stream_name="stderr")
+            )
+            if stderr_reader
+            else None
+        )
+
+        if stdout_task:
+            ref, stdout_content = await stdout_task
             log_refs["stdout"] = ref
 
-        if stderr_reader:
-            ref, stderr_content = await self.stream_to_artifact(
-                stderr_reader, run_id=run_id, stream_name="stderr",
-            )
+        if stderr_task:
+            ref, stderr_content = await stderr_task
             log_refs["stderr"] = ref
 
         effective_parser = parser or PlainTextOutputParser()
