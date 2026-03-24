@@ -83,10 +83,7 @@ async def _generate_llm_answer(prompt: str) -> str:
             "No GEMINI_API_KEY or GOOGLE_API_KEY set; falling back to "
             "default auto-answer behaviour"
         )
-        return (
-            "I'll proceed with the most reasonable default. "
-            "Please continue with the implementation."
-        )
+        return "Proceed with your recommendation."
 
     try:
         import google.generativeai as genai  # type: ignore[import-untyped]
@@ -106,10 +103,7 @@ async def _generate_llm_answer(prompt: str) -> str:
             exc_info=True,
         )
 
-    return (
-        "I'll proceed with the most reasonable default. "
-        "Please continue with the implementation."
-    )
+    return "Proceed with your recommendation."
 
 
 @activity.defn(name="integration.jules.start")
