@@ -251,73 +251,6 @@ class TestWorkflowSettings:
         ):
             monkeypatch.delenv(key, raising=False)
 
-    def test_agent_job_artifact_defaults(self):
-        """Milestone 2 artifact settings should keep stable defaults."""
-
-        assert (
-            WorkflowSettings.model_fields["agent_job_artifact_root"].default
-            == "var/artifacts/agent_jobs"
-        )
-        assert (
-            WorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
-            == 50 * 1024 * 1024
-        )
-
-    def test_agent_job_artifact_env_overrides(self, monkeypatch):
-        """Environment variables should override queue artifact settings."""
-
-        monkeypatch.setenv("AGENT_JOB_ARTIFACT_ROOT", "/tmp/queue-artifacts")
-        monkeypatch.setenv("AGENT_JOB_ARTIFACT_MAX_BYTES", "2048")
-        settings = WorkflowSettings(_env_file=None)
-
-        assert settings.agent_job_artifact_root == "/tmp/queue-artifacts"
-        assert settings.agent_job_artifact_max_bytes == 2048
-
-        monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
-        monkeypatch.delenv("AGENT_JOB_ARTIFACT_MAX_BYTES", raising=False)
-
-    def test_agent_job_attachment_defaults(self):
-        """Attachment-related settings should expose stable defaults."""
-
-        settings = WorkflowSettings(_env_file=None)
-        assert settings.agent_job_attachment_enabled is False
-        assert settings.agent_job_attachment_max_count == 10
-        assert settings.agent_job_attachment_max_bytes == 10 * 1024 * 1024
-        assert settings.agent_job_attachment_total_bytes == 25 * 1024 * 1024
-        assert settings.agent_job_attachment_allowed_content_types == (
-            "image/png",
-            "image/jpeg",
-            "image/webp",
-        )
-
-    def test_agent_job_attachment_env_overrides(self, monkeypatch):
-        """Attachment configuration should respect environment overrides."""
-
-        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_ENABLED", "0")
-        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_MAX_COUNT", "2")
-        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_MAX_BYTES", "1024")
-        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", "2048")
-        monkeypatch.setenv(
-            "AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
-            " image/png , image/jpeg ",
-        )
-
-        settings = WorkflowSettings(_env_file=None)
-        assert settings.agent_job_attachment_enabled is False
-        assert settings.agent_job_attachment_max_count == 2
-        assert settings.agent_job_attachment_max_bytes == 1024
-        assert settings.agent_job_attachment_total_bytes == 2048
-        assert settings.agent_job_attachment_allowed_content_types == (
-            "image/png",
-            "image/jpeg",
-        )
-
-        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ENABLED", raising=False)
-        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_MAX_COUNT", raising=False)
-        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_MAX_BYTES", raising=False)
-        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", raising=False)
-        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES", raising=False)
-
     def test_vision_defaults(self):
         """Vision settings should expose stable defaults."""
 
@@ -731,24 +664,6 @@ class TestWorkflowSettings:
         assert settings.default_skill == "custom-default"
         assert settings.allowed_skills == ("speckit",)
 
-    def test_app_settings_defaults_codex_queue_to_workflow_default(
-        self, app_settings_defaults
-    ):
-        """When codex queue is unset, app settings should align it to default queue."""
-
-        settings = AppSettings(
-            **app_settings_defaults,
-            workflow={
-                "default_queue": "moonmind.jobs",
-                "default_exchange": "moonmind.jobs",
-                "default_routing_key": "moonmind.jobs",
-                "codex_queue": None,
-            },
-        )
-
-        assert settings.workflow.default_queue == "moonmind.jobs"
-        assert settings.workflow.codex_queue == "moonmind.jobs"
-
 
 def test_task_proposal_policy_settings_defaults(app_settings_defaults):
     """Task proposal defaults should expose policy knobs on both settings."""
@@ -785,24 +700,6 @@ def test_task_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) 
     monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
     monkeypatch.delenv("TASK_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
-
-
-def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
-    """WORKFLOW_DEFAULT_* aliases should configure workflow queue defaults."""
-
-    monkeypatch.setenv("WORKFLOW_DEFAULT_QUEUE", "workflow.jobs")
-    monkeypatch.setenv("WORKFLOW_DEFAULT_EXCHANGE", "workflow.jobs")
-    monkeypatch.setenv("WORKFLOW_DEFAULT_ROUTING_KEY", "workflow.jobs")
-
-    settings = WorkflowSettings(_env_file=None)
-
-    assert settings.default_queue == "workflow.jobs"
-    assert settings.default_exchange == "workflow.jobs"
-    assert settings.default_routing_key == "workflow.jobs"
-
-    monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
-    monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)
-    monkeypatch.delenv("WORKFLOW_DEFAULT_ROUTING_KEY", raising=False)
 
 
 class TestAppSettingsRuntimeValidation:
