@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Iterator
+from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -195,6 +196,60 @@ def test_skills_api_returns_available_skill_ids(
     }
 
 
+
+
+def test_create_dashboard_skill_success(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    payload = {
+        "name": "MyNewSkill",
+        "markdown": "# My New Skill\n\nThis is the skill content...",
+    }
+    response = client.post("/api/tasks/skills", json=payload)
+
+    assert response.status_code == 201
+    assert response.json() == {"status": "success"}
+
+    skill_file = tmp_path / "MyNewSkill" / "SKILL.md"
+    assert skill_file.is_file()
+    assert skill_file.read_text(encoding="utf-8") == payload["markdown"]
+
+
+def test_create_dashboard_skill_invalid_name(client: TestClient) -> None:
+    payload = {
+        "name": "../MyNewSkill",
+        "markdown": "# My New Skill\n\nThis is the skill content...",
+    }
+    response = client.post("/api/tasks/skills", json=payload)
+
+    assert response.status_code == 400
+    assert "Invalid skill name" in response.json()["detail"]
+
+
+def test_create_dashboard_skill_already_exists(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.task_dashboard.settings.workflow.skills_local_mirror_root",
+        str(tmp_path),
+    )
+
+    skill_dir = tmp_path / "ExistingSkill"
+    skill_dir.mkdir()
+
+    payload = {
+        "name": "ExistingSkill",
+        "markdown": "# Existing Skill\n\nContent...",
+    }
+    response = client.post("/api/tasks/skills", json=payload)
+
+    assert response.status_code == 400
+    assert "already exists locally" in response.json()["detail"]
 
 
 def test_task_source_endpoint_returns_resolved_temporal_source(
