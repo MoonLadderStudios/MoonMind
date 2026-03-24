@@ -8,7 +8,7 @@ Each file in this directory tracks **open migration or implementation work** des
 
 | Source document | Tracker |
 |-----------------|---------|
-| `docs/plans/TaskDependenciesPlan.md` | [`plans-TaskDependenciesPlan.md`](plans-TaskDependenciesPlan.md) |
+| `docs/Tasks/TaskDependenciesPlan.md` | [`plans-TaskDependenciesPlan.md`](plans-TaskDependenciesPlan.md) |
 | `docs/Api/ExecutionsApiContract.md` | [`Api-ExecutionsApiContract.md`](Api-ExecutionsApiContract.md) |
 | `docs/CodexMcpToolsAdapter.md` | [`CodexMcpToolsAdapter.md`](CodexMcpToolsAdapter.md) |
 | `docs/Temporal/TaskExecutionCompatibilityModel.md` | [`Temporal-TaskExecutionCompatibilityModel.md`](Temporal-TaskExecutionCompatibilityModel.md) |

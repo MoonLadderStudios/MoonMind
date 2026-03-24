@@ -1,6 +1,6 @@
-# Remaining work: `docs/plans/TaskDependenciesPlan.md`
+# Remaining work: `docs/Tasks/TaskDependenciesPlan.md`
 
-**Source:** [`docs/plans/TaskDependenciesPlan.md`](../../plans/TaskDependenciesPlan.md)  
+**Source:** [`docs/Tasks/TaskDependenciesPlan.md`](../../Tasks/TaskDependenciesPlan.md)  
 **Last synced:** 2026-03-24
 
 ## Open items

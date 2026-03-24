@@ -10,7 +10,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 
 | Document | Summary |
 | -------- | ------- |
-| [`docs/plans/TaskDependenciesPlan.md`](../plans/TaskDependenciesPlan.md) | Phased implementation plan for task dependencies (backend → workflow → API → UI), with status markers. |
+| [`docs/Tasks/TaskDependenciesPlan.md`](../Tasks/TaskDependenciesPlan.md) | Phased implementation plan for task dependencies (backend → workflow → API → UI), with status markers. |
 
 ---
 
@@ -62,7 +62,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 
 | Document | Summary |
 | -------- | ------- |
-| [`docs/Tasks/TaskDependencies.md`](../Tasks/TaskDependencies.md) | §8 Implementation Plan — delegates to `docs/plans/TaskDependenciesPlan.md`; includes schema/migration requirements for dependency state. |
+| [`docs/Tasks/TaskDependencies.md`](../Tasks/TaskDependencies.md) | §8 Implementation Plan — delegates to `docs/Tasks/TaskDependenciesPlan.md`; includes schema/migration requirements for dependency state. |
 | [`docs/Tasks/TaskPresetsSystem.md`](../Tasks/TaskPresetsSystem.md) | §10 Migration Path — phased preset → plan compilation and API/table renames. |
 | [`docs/Tasks/SkillAndPlanEvolution.md`](../Tasks/SkillAndPlanEvolution.md) | Recommendations & migration strategy; implementation roadmap. |
 | [`docs/Tasks/SkillAndPlanContracts.md`](../Tasks/SkillAndPlanContracts.md) | §14 implementation checklist (minimum to ship). |

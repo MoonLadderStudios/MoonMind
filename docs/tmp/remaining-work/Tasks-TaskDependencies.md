@@ -5,7 +5,7 @@
 
 ## Open items
 
-- **§8 Implementation plan** — Delegates to [`docs/plans/TaskDependenciesPlan.md`](../../plans/TaskDependenciesPlan.md). Remaining work is Phases 2–4 there (workflow, API, UI).
+- **§8 Implementation plan** — Delegates to [`docs/Tasks/TaskDependenciesPlan.md`](../../Tasks/TaskDependenciesPlan.md). Remaining work is Phases 2–4 there (workflow, API, UI).
 - **Schema / enum** — Phase 1 enum + migration done; downstream phases still pending.
 
 See [`plans-TaskDependenciesPlan.md`](plans-TaskDependenciesPlan.md) in this folder.

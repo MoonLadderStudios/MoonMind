@@ -234,4 +234,4 @@ The Mission Control UI must be updated to support viewing and configuring task d
 
 ## 8. Implementation tracking
 
-Open migration and implementation work for this feature is recorded in [`docs/tmp/remaining-work/Tasks-TaskDependencies.md`](../tmp/remaining-work/Tasks-TaskDependencies.md) and [`docs/tmp/remaining-work/plans-TaskDependenciesPlan.md`](../tmp/remaining-work/plans-TaskDependenciesPlan.md).
+Open migration and implementation work for this feature is recorded in [`docs/tmp/remaining-work/Tasks-TaskDependencies.md`](../tmp/remaining-work/Tasks-TaskDependencies.md) and [`docs/tmp/remaining-work/plans-TaskDependenciesPlan.md`](../tmp/remaining-work/plans-TaskDependenciesPlan.md). A short entry stub with the same links lives in [`TaskDependenciesPlan.md`](TaskDependenciesPlan.md) (optional bookmark target).
