@@ -9,6 +9,20 @@ pytest.importorskip("temporalio")
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
+def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
+    import json
+    return json.dumps({
+        "plan_version": "1.0",
+        "metadata": {
+            "title": "Test", 
+            "created_at": "2024-01-01T00:00:00Z", 
+            "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
+        },
+        "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+        "nodes": nodes,
+        "edges": edges or []
+    }).encode("utf-8")
+
 
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
@@ -52,18 +66,7 @@ async def test_run_integration_stage_poll_driven_completion(
     ) -> dict[str, Any]:
         captured.append((activity_type, payload))
         if activity_type == "artifact.read":
-            import json
-            return json.dumps({
-                "plan_version": "1.0",
-                "metadata": {
-                    "title": "Test", 
-                    "created_at": "2024-01-01T00:00:00Z", 
-                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
-                },
-                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                "nodes": [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}],
-                "edges": []
-            }).encode("utf-8")
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
         if activity_type == "integration.jules.status":
@@ -105,18 +108,7 @@ async def test_run_integration_stage_signal_driven_completion(
     ) -> dict[str, Any]:
         captured.append((activity_type, payload))
         if activity_type == "artifact.read":
-            import json
-            return json.dumps({
-                "plan_version": "1.0",
-                "metadata": {
-                    "title": "Test", 
-                    "created_at": "2024-01-01T00:00:00Z", 
-                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
-                },
-                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                "nodes": [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}],
-                "edges": []
-            }).encode("utf-8")
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
         return {}
@@ -127,7 +119,6 @@ async def test_run_integration_stage_signal_driven_completion(
             "correlation_id": "ext-1",
             "normalized_status": "completed"
         })
-        mock_run_workflow._resume_requested = True
         return
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
@@ -159,18 +150,7 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     ) -> dict[str, Any]:
         captured.append((activity_type, payload))
         if activity_type == "artifact.read":
-            import json
-            return json.dumps({
-                "plan_version": "1.0",
-                "metadata": {
-                    "title": "Test", 
-                    "created_at": "2024-01-01T00:00:00Z", 
-                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
-                },
-                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                "nodes": [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}],
-                "edges": []
-            }).encode("utf-8")
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1"}
         if activity_type == "integration.jules.fetch_result":
@@ -185,7 +165,6 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
             "correlation_id": "ext-1",
             "normalized_status": "completed"
         })
-        mock_run_workflow._resume_requested = True
         return
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
@@ -227,25 +206,17 @@ async def test_run_integration_stage_multi_step_sends_messages(
     ) -> Any:
         captured.append((activity_type, payload))
         if activity_type == "artifact.read":
-            import json
-            return json.dumps({
-                "plan_version": "1.0",
-                "metadata": {
-                    "title": "Multi-step Test", 
-                    "created_at": "2024-01-01T00:00:00Z", 
-                    "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
-                },
-                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
-                "nodes": [
+            return _mock_plan_payload(
+                nodes=[
                     {"id": "step1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 1"}},
                     {"id": "step2", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 2"}},
                     {"id": "step3", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 3"}},
                 ],
-                "edges": [
+                edges=[
                     {"from": "step1", "to": "step2"},
                     {"from": "step2", "to": "step3"}
                 ]
-            }).encode("utf-8")
+            )
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-session-123", "tracking_ref": "track-1"}
         if activity_type == "integration.jules.send_message":
