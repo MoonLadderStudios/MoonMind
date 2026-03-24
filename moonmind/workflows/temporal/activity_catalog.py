@@ -386,7 +386,8 @@ def build_default_activity_catalog(
             retries=_activity_retries(
                 max_attempts=2,
                 max_interval_seconds=60,
-                non_retryable=("INVALID_INPUT",),
+                # See docs/Temporal/ErrorTaxonomy.md
+                non_retryable=("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus"),
             ),
         ),
         TemporalActivityDefinition(
@@ -692,7 +693,8 @@ def build_default_activity_catalog(
             retries=_activity_retries(
                 max_attempts=2,
                 max_interval_seconds=60,
-                non_retryable=("INVALID_INPUT",),
+                # See docs/Temporal/ErrorTaxonomy.md
+                non_retryable=("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus"),
             ),
         ),
     )
