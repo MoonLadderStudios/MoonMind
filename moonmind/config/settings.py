@@ -635,11 +635,6 @@ class WorkflowSettings(BaseSettings):
         alias="WORKFLOW_PROMPT_PACK_VERSION",
         description="Prompt pack version associated with the selected agent.",
     )
-    agent_runtime_env_keys: tuple[str, ...] = Field(
-        ("CODEX_ENV", "CODEX_MODEL", "CODEX_PROFILE", "CODEX_API_KEY"),
-        alias="WORKFLOW_AGENT_RUNTIME_ENV_KEYS",
-        description="Environment variable names forwarded to the agent runtime snapshot.",
-    )
     skills_enabled: bool = Field(
         True,
         validation_alias=AliasChoices("WORKFLOW_USE_SKILLS", "WORKFLOW_USE_SKILLS"),
@@ -967,7 +962,7 @@ class WorkflowSettings(BaseSettings):
             return stripped or None
         return value
 
-    @field_validator("allowed_agent_backends", "agent_runtime_env_keys", mode="before")
+    @field_validator("allowed_agent_backends", mode="before")
     @classmethod
     def _split_agent_csv(cls, value: Optional[str | Sequence[str]]) -> tuple[str, ...]:
         """Allow comma-delimited strings for tuple-based agent settings."""
@@ -1131,9 +1126,6 @@ class WorkflowSettings(BaseSettings):
         # Ensure tuples are deduplicated even when env provided sequences
         allowed = tuple(dict.fromkeys(self.allowed_agent_backends or ()))
         self.allowed_agent_backends = allowed
-        self.agent_runtime_env_keys = tuple(
-            dict.fromkeys(self.agent_runtime_env_keys or ())
-        )
         self.allowed_skills = tuple(dict.fromkeys(self.allowed_skills or ()))
 
         for attr in (

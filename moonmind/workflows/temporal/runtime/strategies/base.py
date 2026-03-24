@@ -83,8 +83,8 @@ class ManagedRuntimeStrategy(ABC):
         Default implementation returns a copy of *base_env* unchanged.
         Override to filter, add, or clear runtime-specific variables.
 
-        Note: The underlying helpers (``_OAUTH_CLEARED_VARS``,
-        ``_shape_environment_for_oauth``) are also used by the OAuth
+        Note: The underlying helpers (``OAUTH_CLEARED_VARS``,
+        ``shape_environment_for_oauth``) are also used by the OAuth
         Session orchestrator (``UniversalTmateOAuth.md`` §9.2).  Shared
         env-shaping logic should be factored into common utilities
         rather than duplicated.
