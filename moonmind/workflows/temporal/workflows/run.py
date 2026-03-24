@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
+from temporalio.workflow import ActivityCancellationType
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
@@ -920,15 +921,17 @@ class MoonMindRunWorkflow:
         metadata.setdefault("planRef", plan_ref)
         integration_parameters["metadata"] = metadata
 
+        start_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            self._integration_activity_type("start")
+        )
         start_result = await workflow.execute_activity(
-            self._integration_activity_type("start"),
+            start_route.activity_type,
             {
                 "principal": self._principal(),
                 "parameters": integration_parameters,
             },
-            start_to_close_timeout=timedelta(minutes=5),
-            task_queue=INTEGRATIONS_TASK_QUEUE,
-            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **self._execute_kwargs_for_route(start_route),
         )
         summary_ref = self._get_from_result(start_result, "tracking_ref")
         if summary_ref:
@@ -986,8 +989,11 @@ class MoonMindRunWorkflow:
                     break
 
                 try:
+                    poll_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        self._integration_activity_type("status")
+                    )
                     poll_result = await workflow.execute_activity(
-                        self._integration_activity_type("status"),
+                        poll_route.activity_type,
                         {
                             "principal": self._principal(),
                             "external_id": external_id,
@@ -999,9 +1005,8 @@ class MoonMindRunWorkflow:
                                 "link_type": "output.summary",
                             },
                         },
-                        start_to_close_timeout=timedelta(minutes=5),
-                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(poll_route),
                     )
                     summary_ref = self._get_from_result(poll_result, "tracking_ref")
                     if summary_ref:
@@ -1052,16 +1057,18 @@ class MoonMindRunWorkflow:
         ):
             workflow.logger.info("Jules branch-publish: fetching result for PR merge")
             try:
+                fetch_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                    self._integration_activity_type("fetch_result")
+                )
                 fetch_result = await workflow.execute_activity(
-                    self._integration_activity_type("fetch_result"),
+                    fetch_route.activity_type,
                     {
                         "principal": self._principal(),
                         "external_id": external_id,
                         "parameters": integration_parameters,
                     },
-                    start_to_close_timeout=timedelta(minutes=5),
-                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    **self._execute_kwargs_for_route(fetch_route),
                 )
                 pr_url = (
                     self._get_from_result(fetch_result, "external_url")
@@ -1106,12 +1113,14 @@ class MoonMindRunWorkflow:
                     if effective_target:
                         merge_payload["target_branch"] = effective_target
 
+                    merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "integration.jules.merge_pr"
+                    )
                     merge_result = await workflow.execute_activity(
-                        "integration.jules.merge_pr",
+                        merge_route.activity_type,
                         merge_payload,
-                        start_to_close_timeout=timedelta(minutes=2),
-                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        **self._execute_kwargs_for_route(merge_route),
                     )
                     merged = self._get_from_result(merge_result, "merged")
                     merge_summary = (
@@ -1164,6 +1173,7 @@ class MoonMindRunWorkflow:
                     "repo": self._repo,
                     "parameters": parameters,
                 },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
             )
         except Exception as exc:
@@ -1201,6 +1211,7 @@ class MoonMindRunWorkflow:
                     "origin": origin,
                     "principal": self._principal(),
                 },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
             )
             if isinstance(submit_result, dict):
