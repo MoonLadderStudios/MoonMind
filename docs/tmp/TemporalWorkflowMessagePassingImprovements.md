@@ -385,3 +385,141 @@ This plan explicitly sequences work so that (1) the system gains an authoritativ
 - Temporal Python SDK: Interceptors: `https://docs.temporal.io/develop/python/interceptors` citeturn49view3  
 - Temporal Python SDK: Enriching the UI: `https://docs.temporal.io/develop/python/enriching-ui` citeturn49view4  
 - Temporal API protocol documentation (low-level requests including signal-with-start and workflow update endpoints): `https://api-docs.temporal.io/` citeturn41search1
+
+## Phased implementation plan
+
+This section turns the recommendations above into ordered phases. Each phase has a goal, concrete deliverables, and exit criteria so progress can be reviewed without re-reading the full report. Phases build on one another: later phases assume earlier contracts and inventories exist.
+
+### Phase 1 — Discovery and authoritative inventory
+
+**Goal:** Replace inference with a code-level map of Temporal usage so every subsequent change is targeted and testable.
+
+**Deliverables**
+
+- Inventory of all `@workflow.defn` workflows, `@activity.defn` activities, task queue strings (workers and clients), `@workflow.query` / `@workflow.signal` / `@workflow.update` handlers, and child workflow relationships.
+- A short matrix mapping Mission Control and API actions to today’s Temporal operations (start, signal, query, update) and payloads.
+- Gaps list against the “missing features checklist” in this document.
+
+**Exit criteria**
+
+- Inventory is checked into repo docs or a maintained internal doc and is updateable on each release.
+- Stakeholders agree which workflow types are “job/task” orchestrators versus supporting workflows.
+
+### Phase 2 — Per-workflow message contracts
+
+**Goal:** Establish an explicit **Query / Signal / Update** contract for each job-orchestration workflow type, aligned with Temporal semantics (queries read-only; updates for validated, trackable commands; signals for fire-and-forget events).
+
+**Deliverables**
+
+- Written contract per workflow: handler names, payload shapes, validation rules, and which client paths (API vs Mission Control) use each primitive.
+- Implementation plan for **Workflow Updates** with validators for operator commands that need acceptance, rejection before history, or return values (e.g., pause, resume, replan).
+- Refactor list for any anti-patterns (e.g., mutating state or implying side effects through queries).
+
+**Exit criteria**
+
+- No intended “command” path relies solely on signals where a trackable update is required for UX or safety.
+- Query handlers are documented and reviewed as read-only and non-async.
+
+### Phase 3 — Idempotency and deduplication
+
+**Goal:** Make duplicate submissions and retries safe at the Temporal and application boundaries.
+
+**Deliverables**
+
+- Conventions for **Update IDs** and use of `workflow.current_update_info` where Continue-As-New or duplicate client retries are expected.
+- Idempotency keys at activity boundaries for non-repeatable side effects (artifacts, external APIs, billed LLM calls), with clear documentation of compensating actions where full idempotency is impossible.
+- Signal-with-start or start options documented where “exactly one logical job” per id is required.
+
+**Exit criteria**
+
+- Documented dedup story for: double-submit from UI, network retries, and workflow continuation after CAN.
+- Workflow-boundary tests cover at least one compatibility path for prior payload shapes where in-flight runs may exist (per project testing policy for Temporal contracts).
+
+### Phase 4 — Activity reliability standard
+
+**Goal:** Encode failure detection for all external and long-running work using Temporal’s activity model.
+
+**Deliverables**
+
+- Standard activity options template: timeouts (start-to-close, schedule-to-start or schedule-to-close as needed), retry policies, and `ApplicationError(non_retryable=True)` for validation failures.
+- Heartbeats for long-running activities (sandbox execution, large transfers, long LLM or tool runs).
+- Rollout across the worker fleet so no “naked” activity calls remain without documented options.
+
+**Exit criteria**
+
+- All integration-side activities use the template; exceptions are rare, named, and justified in code or docs.
+- Observable behavior matches product expectations for “stuck” and retry behavior (no silent infinite retries on bad input).
+
+### Phase 5 — Long-running scalability (child workflows and Continue-As-New)
+
+**Goal:** Keep histories bounded and isolate complex sub-runs without losing a stable job identity for Mission Control.
+
+**Deliverables**
+
+- Child workflows for separable phases (e.g., sandbox session, multi-step planning) where isolation, separate signals/queries, or history segmentation helps.
+- Continue-As-New boundaries for step-heavy or long-lived executions, with state carried forward explicitly.
+- Replay or workflow-boundary regression tests for CAN and child workflow contracts.
+
+**Exit criteria**
+
+- Worst-case history growth for a representative long task is within agreed limits or explicitly bounded by CAN.
+- Versioning/patching strategy is drafted (see Phase 6) before broad CAN rollout in production.
+
+### Phase 6 — Safe workflow evolution
+
+**Goal:** Ship workflow changes without nondeterministic replay failures for runs already in flight.
+
+**Deliverables**
+
+- Adopt patching (`patched` / `deprecate_patch`) or worker versioning for changes that affect workflow structure or event ordering.
+- Release checklist: when a change requires a patch, a version bump, or a new workflow type.
+- Documentation for operators on mixed-version workers during rollout windows.
+
+**Exit criteria**
+
+- No production deploy of workflow logic without a recorded compatibility strategy for active executions.
+- CI includes replay-style or workflow-boundary coverage for changed workflows where applicable.
+
+### Phase 7 — Worker fleet tuning and task queue strategy
+
+**Goal:** Match worker capacity, pollers, and queue topology to workload classes so latency and cost stay predictable.
+
+**Deliverables**
+
+- Task queue layout by workload class (or priority/fairness configuration) aligned with Temporal guidance.
+- Worker slot and poller settings tuned using metrics (schedule-to-start latency, backlog, saturation).
+- Runbooks for scaling workers and diagnosing queue starvation.
+
+**Exit criteria**
+
+- Measured improvement or explicit SLOs for schedule-to-start on critical queues; no unbounded growth under nominal load tests.
+
+### Phase 8 — Observability, security hardening, and UI alignment
+
+**Goal:** Operators can diagnose issues from metrics and traces; sensitive payloads are protected; Mission Control and Temporal UI show consistent, rich context.
+
+**Deliverables**
+
+- Metrics and tracing for workers, workflows, and task queues; dashboards for retries, latency, and errors.
+- Payload encryption or codec strategy where secrets or sensitive repo context transit Temporal; interceptors for auth, metadata, and consistent logging.
+- UI enrichment (Summary/Details) and parity between Mission Control and Temporal Web UI for key job fields.
+
+**Exit criteria**
+
+- On-call can answer “why is this job stuck?” using dashboards and workflow history without raw log diving only.
+- Security review sign-off on payload handling for production environments that need encryption.
+
+### Cross-phase dependencies (summary)
+
+| Phase | Depends on | Unlocks |
+| --- | --- | --- |
+| 1 | — | Accurate scope for 2–8 |
+| 2 | 1 | Clear API/UI contracts |
+| 3 | 2 | Safe retries and CAN |
+| 4 | 1 (activity list) | Reliable side effects |
+| 5 | 2, 4 | Long jobs without history blow-up |
+| 6 | 2, 5 | Safe deploys with active runs |
+| 7 | 1, 4 | Predictable throughput |
+| 8 | 1–7 (incrementally) | Production operability |
+
+This phased plan aligns with the gantt-style timeline under **Implementation timeline** above: inventory and contracts first, then reliability and scalability, then deployment safety and fleet tuning, and finally observability and security as ongoing hardening.
