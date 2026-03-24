@@ -39,9 +39,11 @@ def _module_db(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_auto_seed_creates_default_profiles(_module_db):
+async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     """When the table is empty, auto-seeding should create 3 default profiles."""
     from api_service.main import _auto_seed_auth_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     seeded = await _auto_seed_auth_profiles()
     assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
@@ -57,9 +59,11 @@ async def test_auto_seed_creates_default_profiles(_module_db):
 
 
 @pytest.mark.asyncio
-async def test_auto_seed_is_idempotent(_module_db):
+async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
     """Calling auto-seed twice should not duplicate profiles."""
     from api_service.main import _auto_seed_auth_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
 
     first = await _auto_seed_auth_profiles()
     assert len(first) == 3
@@ -87,3 +91,54 @@ async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
         result = await session.execute(select(ManagedAgentAuthProfile))
         profiles = result.scalars().all()
     assert len(profiles) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
+    """When MINIMAX_API_KEY is set, a 4th 'claude_minimax' profile should be seeded."""
+    from api_service.main import _auto_seed_auth_profiles
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+
+    seeded = await _auto_seed_auth_profiles()
+    assert "claude_code" in seeded  # seeded twice (default + minimax)
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentAuthProfile))
+        profiles = result.scalars().all()
+
+    assert len(profiles) == 4
+    profile_ids = {p.profile_id for p in profiles}
+    assert "claude_minimax" in profile_ids
+
+    # Verify MiniMax profile details.
+    mm_profile = next(p for p in profiles if p.profile_id == "claude_minimax")
+    assert mm_profile.runtime_id == "claude_code"
+    assert mm_profile.api_key_ref == "MINIMAX_API_KEY"
+    assert mm_profile.api_key_env_var == "ANTHROPIC_AUTH_TOKEN"
+    assert mm_profile.runtime_env_overrides is not None
+    assert mm_profile.runtime_env_overrides["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert mm_profile.runtime_env_overrides["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
+    assert mm_profile.runtime_env_overrides["API_TIMEOUT_MS"] == "3000000"
+    assert mm_profile.volume_ref is None
+    assert mm_profile.volume_mount_path is None
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
+    """When MINIMAX_API_KEY is absent, only the 3 default profiles are seeded."""
+    from api_service.main import _auto_seed_auth_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+
+    seeded = await _auto_seed_auth_profiles()
+    assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentAuthProfile))
+        profiles = result.scalars().all()
+
+    profile_ids = {p.profile_id for p in profiles}
+    assert "claude_minimax" not in profile_ids
+    assert len(profiles) == 3
+

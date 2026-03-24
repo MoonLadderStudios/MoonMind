@@ -443,6 +443,29 @@ async def _auto_seed_auth_profiles() -> list[str]:
         },
     ]
 
+    # Conditionally add MiniMax profile when the API key is available.
+    if os.environ.get("MINIMAX_API_KEY"):
+        _DEFAULT_PROFILES.append({
+            "profile_id": "claude_minimax",
+            "runtime_id": "claude_code",
+            "auth_mode": ManagedAgentAuthMode.API_KEY,
+            "api_key_ref": "MINIMAX_API_KEY",
+            "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
+            "runtime_env_overrides": {
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                "ANTHROPIC_MODEL": "MiniMax-M2.7",
+                "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
+                "API_TIMEOUT_MS": "3000000",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            },
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Claude Code via MiniMax (auto-seeded)",
+        })
+
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
@@ -464,9 +487,12 @@ async def _auto_seed_auth_profiles() -> list[str]:
                     profile_id=profile_def["profile_id"],
                     runtime_id=profile_def["runtime_id"],
                     auth_mode=profile_def["auth_mode"],
-                    volume_ref=profile_def["volume_ref"],
-                    volume_mount_path=profile_def["volume_mount_path"],
-                    account_label=profile_def["account_label"],
+                    volume_ref=profile_def.get("volume_ref"),
+                    volume_mount_path=profile_def.get("volume_mount_path"),
+                    account_label=profile_def.get("account_label"),
+                    api_key_ref=profile_def.get("api_key_ref"),
+                    api_key_env_var=profile_def.get("api_key_env_var"),
+                    runtime_env_overrides=profile_def.get("runtime_env_overrides"),
                     max_parallel_runs=1,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
