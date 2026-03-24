@@ -28,7 +28,7 @@ Based on direct inspection of repository source files and configuration (Docker 
 - A hybrid of:
   - **Interactive chat** (OpenAI-style `/v1/chat/completions`) with optional retrieval injection from a vector index.
   - **Document ingestion** into the vector store from sources such as entity["company","GitHub","code hosting platform"], Confluence, and Google Drive (via LlamaIndex readers).
-  - **Workflow automation** using Celery queues and durable run records (including workflow and a separate system service that produces step artifacts and persists identity/configuration snapshots).
+  - **Workflow automation** using durable Temporal-backed runs (with step artifacts and persisted identity/configuration snapshots where applicable).
 
 Even without assuming any specific production scale (repo does not specify user counts, request rates, latency SLOs, or corpus size), the architecture implies MoonMind will benefit from memory that is:
 - **Durable across sessions and runs** (project memory that survives restarts and supports “what did we decide last sprint?” queries).

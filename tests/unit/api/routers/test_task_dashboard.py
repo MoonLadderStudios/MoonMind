@@ -55,6 +55,7 @@ def client() -> Iterator[TestClient]:
 
 def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("list")
+    assert not _is_allowed_path("system")
     assert not _is_allowed_path("queue")
     assert not _is_allowed_path("queue/new")
     assert not _is_allowed_path("queue/123")
@@ -68,7 +69,7 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("schedules")
     assert _is_allowed_path("schedules/new")
     assert _is_allowed_path("settings")
-    assert _is_allowed_path("system")
+    assert _is_allowed_path("workers")
 
 
 def test_allowed_path_helper_rejects_unknown_routes() -> None:
@@ -101,7 +102,7 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/schedules",
         "/tasks/schedules/new",
         "/tasks/settings",
-        "/tasks/system",
+        "/tasks/workers",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -120,6 +121,13 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         response = client.get(path)
         assert response.status_code == 200
         assert "task-dashboard-config" in response.text
+
+
+def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
+    response = client.get("/tasks/system")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
 def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
@@ -161,7 +169,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/create, /tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-        "/tasks/schedules, /tasks/schedules/new, /tasks/system, or /tasks/settings."
+        "/tasks/schedules, /tasks/schedules/new, /tasks/workers, or /tasks/settings."
     )
 
 

@@ -9055,7 +9055,7 @@
     );
     await loadProfile();
   }
-  async function renderSystemSettingsPage() {
+  async function renderWorkerControlsPage() {
     const numberFormatter = new Intl.NumberFormat();
     const state = {
       snapshot: null,
@@ -9277,7 +9277,7 @@
         </div>
       `;
       setView(
-        "System Settings",
+        "Worker controls",
         "Pause or resume worker processing.",
         layout,
         { showAutoRefreshControls: true },
@@ -9690,7 +9690,7 @@
             setNotice(null, "");
           }
         } catch (error) {
-          console.error("system settings load failed", error);
+          console.error("worker controls load failed", error);
           if (!silent) {
             const message =
               error instanceof Error && error.message
@@ -9710,9 +9710,9 @@
     };
 
     setView(
-      "System Settings",
+      "Worker controls",
       "Manage worker pause controls and auth profiles.",
-      "<p class='loading'>Loading system controls...</p>",
+      "<p class='loading'>Loading worker controls...</p>",
       { showAutoRefreshControls: true },
     );
     await load();
@@ -9790,8 +9790,8 @@
       await renderProposalsListPage();
       return;
     }
-    if (normalizedRoute === "/tasks/system") {
-      await renderSystemSettingsPage();
+    if (normalizedRoute === "/tasks/workers") {
+      await renderWorkerControlsPage();
       return;
     }
 

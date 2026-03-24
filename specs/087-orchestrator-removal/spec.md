@@ -3,11 +3,11 @@
 **Feature Branch**: `087-orchestrator-removal`  
 **Created**: 2025-03-19  
 **Status**: Draft  
-**Input**: User description: "Fully implement the docs/tmp/OrchestratorRemovalPlan.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+**Input**: Remove the `mm-orchestrator` runtime and related code, configuration, and docs from the repository (original scratch plan lived under `docs/tmp/` and has been deleted; this spec is the retained normative source).
 
 ## Source Document Requirements
 
-Requirements extracted from `docs/tmp/OrchestratorRemovalPlan.md` (normative for this feature).
+Requirements below are normative for this feature (historically aligned with the former tmp removal plan).
 
 | ID | Source citation | Requirement summary |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ Requirements extracted from `docs/tmp/OrchestratorRemovalPlan.md` (normative for
 | **DOC-REQ-007** | §2.2 | Dedicated orchestrator service package files (other than shared dependency stubs if none remain) MUST be removed. |
 | **DOC-REQ-008** | §2.3 | Orchestrator integration, unit, and contract tests and the dedicated GitHub Actions workflow MUST be removed or replaced so CI no longer depends on the orchestrator. |
 | **DOC-REQ-009** | §2.3 | Remaining tests and scripts that reference the orchestrator MUST be updated so the suite does not require orchestrator imports or endpoints. |
-| **DOC-REQ-010** | §2.4–2.5 | Architecture and Temporal docs MUST NOT describe `mm-orchestrator` as a running component; obsolete orchestrator-specific spec/OpenAPI trees MUST be removed or superseded. |
+| **DOC-REQ-010** | §2.4���2.5 | Architecture and Temporal docs MUST NOT describe `mm-orchestrator` as a running component; obsolete orchestrator-specific spec/OpenAPI trees MUST be removed or superseded. |
 | **DOC-REQ-011** | §3 | A database migration MUST drop orchestrator-related tables safely (correct FK ordering). |
 | **DOC-REQ-012** | §4 | After removal, unit tests MUST pass and the API stack MUST start via Compose without an orchestrator container. |
 

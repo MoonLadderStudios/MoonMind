@@ -20,7 +20,6 @@ from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.resolver import list_available_skill_names
-from moonmind.workflows.skills.resolver import list_available_skill_names
 from moonmind.workflows.tasks.source_mapping import (
     TaskResolutionAmbiguousError,
     TaskResolutionNotFoundError,
@@ -50,13 +49,14 @@ _STATIC_PATHS = {
     "schedules",
     "schedules/new",
     "settings",
-    "system",
+    "workers",
 }
 
 _PATH_ALIASES = {
     "create": "new",
 }
-_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "temporal"}
+# Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
+_BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "temporal", "system"}
 
 
 class DashboardSkillOption(BaseModel):
@@ -270,7 +270,7 @@ async def task_dashboard_route(
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
                     "/tasks/create, /tasks/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/schedules/new, /tasks/system, or /tasks/settings."
+                    "/tasks/schedules, /tasks/schedules/new, /tasks/workers, or /tasks/settings."
                 ),
             },
         )
