@@ -51,7 +51,7 @@ def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
         if isinstance(exc, RPCError):
             return exc.status == getattr(StatusCode, status_name, None)
     except ImportError:
-        pass
+        pass  # gRPC/Temporal SDK not available; fall through to string match
     # Fallback: string match on the exception message.
     return status_name.lower().replace("_", " ") in str(exc).lower()
 
