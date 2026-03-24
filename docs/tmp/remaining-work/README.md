@@ -59,6 +59,6 @@ Each file in this directory tracks **open migration or implementation work** des
 | `docs/Rag/LlamaIndexManifestSystem.md` | [`Rag-LlamaIndexManifestSystem.md`](Rag-LlamaIndexManifestSystem.md) |
 | `docs/Rag/WorkflowRag.md` | [`Rag-WorkflowRag.md`](Rag-WorkflowRag.md) |
 | `docs/Memory/MemoryResearch.md` | [`Memory-MemoryResearch.md`](Memory-MemoryResearch.md) |
-| `docs/MIGRATION_GENERATION.md` | [`MIGRATION_GENERATION.md`](MIGRATION_GENERATION.md) |
+| `docs/ExternalAgents/AlembicMigrationGeneration.md` | [`ExternalAgents-AlembicMigrationGeneration.md`](ExternalAgents-AlembicMigrationGeneration.md) |
 
 **Maintenance:** When a source doc’s open work is finished, update or delete its tracker and adjust `docs/tmp/PlansOverview.md` if needed.

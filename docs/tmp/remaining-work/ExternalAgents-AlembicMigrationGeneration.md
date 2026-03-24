@@ -1,6 +1,6 @@
-# Remaining work: `docs/MIGRATION_GENERATION.md`
+# Remaining work: `docs/ExternalAgents/AlembicMigrationGeneration.md`
 
-**Source:** [`docs/MIGRATION_GENERATION.md`](../../MIGRATION_GENERATION.md)  
+**Source:** [`docs/ExternalAgents/AlembicMigrationGeneration.md`](../../ExternalAgents/AlembicMigrationGeneration.md)  
 **Last synced:** 2026-03-24
 
 ## Open items
