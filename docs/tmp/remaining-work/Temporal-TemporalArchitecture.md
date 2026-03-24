@@ -5,6 +5,6 @@
 
 ## Open items
 
-- **§7 migration phases (0–4):** Complete phase 4 (legacy decommission) per [`docs/tmp/SingleSubstrateMigration.md`](../SingleSubstrateMigration.md).
-- **§12–13 UI during migration:** Retire when Mission Control is Temporal-first and compatibility APIs are simplified.
-- **Doc refresh:** Update diagrams and phase labels when queue/worker topology is retired.
+- **§7 Substrate evolution:** Complete legacy decommission and queue-path removal per [`docs/tmp/SingleSubstrateMigration.md`](../SingleSubstrateMigration.md) (source doc no longer uses a numbered “phases 0–4” §7; evolution + cutover detail stay in that migration doc).
+- **§12–13 Visibility / public API posture:** Simplify when Mission Control is Temporal-first and compatibility adapters are retired or narrowed.
+- **Doc refresh:** Update diagrams and cross-links when queue/worker topology docs are retired; keep language consistent with **§7 Substrate evolution** in the source file.

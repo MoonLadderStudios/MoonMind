@@ -2,6 +2,13 @@
 
 Each file in this directory tracks **open migration or implementation work** described in the corresponding document under `docs/`.
 
+**Alignment with idiomatic Temporal:** Trackers should describe *remaining* work without endorsing **non-Temporal primary orchestration**, **permanent** dual queue/Temporal dispatch, or **side-channel** lifecycle control (e.g. cancel/process control outside `WorkflowHandle.cancel` / workflow code). Prefer pointing to:
+
+- [`docs/tmp/SingleSubstrateMigration.md`](../SingleSubstrateMigration.md) — single execution substrate; retire queue/system paths.
+- [`docs/tmp/TemporalSchedulingPlan.md`](../TemporalSchedulingPlan.md) and [`docs/tmp/TemporalSchedulingImprovements.md`](../TemporalSchedulingImprovements.md) — **Temporal Schedules** (and related APIs) for recurring cadence, not a long-lived bespoke DB scheduler as the end state.
+- [`docs/tmp/TemporalWorkflowExecutionImprovements.md`](../TemporalWorkflowExecutionImprovements.md) — signals/updates/queries, `ActivityCancellationType`, worker versioning, schedule reconciliation.
+- [`docs/tmp/CancellationAnalysis.md`](../CancellationAnalysis.md) — cancellation via Temporal primitives (heartbeats, `TRY_CANCEL`, etc.).
+
 **No tracker** (steady-state rewrites already done): `docs/ExternalAgents/ExternalAgentIntegrationSystem.md`, `docs/ExternalAgents/OpenClawAgentAdapter.md`, `docs/ManagedAgents/SkillGithubPrResolver.md` — see `docs/tmp/PlansOverview.md` §Declarative rewrites.
 
 **Index**

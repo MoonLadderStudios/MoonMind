@@ -7,7 +7,7 @@
 
 ### Phase 1 (Temporal alignment)
 
-- Mission Control banner uses Temporal visibility instead of queue tables for worker pause messaging (where still applicable).
+- Mission Control banner uses **Temporal Visibility** (and related APIs) instead of queue tables for worker pause messaging (where still applicable). **End state:** operator truth from Temporal, not parallel queue bookkeeping.
 - Runbooks standardized on `worker.shutdown()` for drain upgrades.
 
 ### Phase 2 (Advanced suspend)
