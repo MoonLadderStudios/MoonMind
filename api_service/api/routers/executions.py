@@ -461,9 +461,10 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         )
 
     state_actions = {
+        "scheduled": {"can_set_title", "can_update_inputs", "can_cancel"},
         "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
         "waiting_on_dependencies": {"can_set_title", "can_update_inputs", "can_cancel"},
-        "queued": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "awaiting_slot": {"can_set_title", "can_update_inputs", "can_cancel"},
         "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
         "executing": {
             "can_set_title",
@@ -473,7 +474,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         },
         "awaiting_external": {"can_approve", "can_pause", "can_resume", "can_cancel"},
         "finalizing": {"can_cancel"},
-        "succeeded": {"can_rerun"},
+        "completed": {"can_rerun"},
         "failed": {"can_rerun"},
         "canceled": {"can_rerun"},
     }
