@@ -5,6 +5,9 @@ Owners: MoonMind Engineering
 Scope: Mission Control auth UX for managed CLI runtimes
 Applies to: `codex_cli`, `gemini_cli`, `claude_code`, future `cursor_cli`
 
+> [!NOTE]
+> The shared tmate session lifecycle, `TmateSessionManager` abstraction, and self-hosted server configuration are defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md). This document covers the OAuth session UX and provider registry; tmate internals are delegated to the shared architecture.
+
 ---
 
 ## 1. Summary
@@ -177,6 +180,17 @@ A small provider-specific contract that defines:
 ### E. Profile Registrar
 
 Calls the existing auth-profile registration path after successful verification.
+
+### F. TmateSessionManager (shared)
+
+The session orchestrator delegates tmate lifecycle management to the shared `TmateSessionManager` defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4. This includes:
+
+* session creation with per-session config (including self-hosted server options)
+* readiness detection via `tmate wait tmate-ready`
+* endpoint extraction (`web_ro`, `web_rw`, `ssh_ro`, `ssh_rw`)
+* teardown and socket cleanup
+
+The same abstraction is used by `ManagedRuntimeLauncher` for runtime session wrapping, ensuring consistent behavior across both use cases.
 
 ---
 
@@ -562,6 +576,10 @@ tmate sessions should be short-lived:
 * default 20–30 minutes
 * auto-expire if idle
 * auto-destroy after success
+
+## 14.6 Self-hosted tmate server
+
+For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.3 for configuration details.
 
 ## 14.3 Secret handling
 

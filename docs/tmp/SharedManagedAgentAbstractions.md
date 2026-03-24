@@ -215,10 +215,11 @@ cmd = strategy.build_command(profile, request)
 The following concerns stay in the **supervisor** (cross-cutting, not runtime-specific):
 
 - Process heartbeats and timeout
-- tmate session management and exit-code-file resolution
+- tmate session lifecycle via shared `TmateSessionManager` (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md)) and exit-code-file resolution
+- Endpoint persistence for live sessions via `agent_runtime.report_live_session` / `end_live_session` activities
 - SIGTERM → SIGKILL escalation
 - PID reconciliation on restart
-- Runtime file cleanup
+- Runtime file cleanup (including orphaned tmate socket GC on startup)
 
 The following are in the **strategy** (runtime-specific):
 
