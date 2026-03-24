@@ -2612,6 +2612,34 @@ class TemporalAgentRuntimeActivities:
         profile = ManagedRuntimeProfile(**profile_data)
         workspace_path = payload.get("workspace_path")
 
+        env_overrides = dict(profile.env_overrides) if profile.env_overrides else {}
+        ref = env_overrides.pop("MANAGED_API_KEY_REF", None)
+        target_raw = env_overrides.pop("MANAGED_API_KEY_TARGET_ENV", None)
+        target_env = (
+            str(target_raw).strip().upper()
+            if target_raw and str(target_raw).strip()
+            else "ANTHROPIC_API_KEY"
+        )
+
+        if ref:
+            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+                resolve_managed_api_key_reference,
+            )
+
+            try:
+                secret = await resolve_managed_api_key_reference(str(ref))
+            except ValueError as exc:
+                raise TemporalActivityRuntimeError(str(exc)) from exc
+            for key in (
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_API_KEY",
+            ):
+                env_overrides.pop(key, None)
+            env_overrides[target_env] = secret
+
+        profile = profile.model_copy(update={"env_overrides": env_overrides})
+
         # Idempotency check handled in launcher
         record, process, endpoints = await self._run_launcher.launch(
             run_id=run_id,

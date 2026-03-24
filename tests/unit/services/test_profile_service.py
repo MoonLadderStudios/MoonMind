@@ -35,6 +35,7 @@ async def test_userprofile_read_populates_from_encrypted():
         user_id=uuid.uuid4(),
         openai_api_key_encrypted="secret-openai",
         google_api_key_encrypted="secret-google",
+        anthropic_api_key_encrypted="secret-anthropic",
     )
 
     from api_service.api.schemas import UserProfileRead
@@ -43,3 +44,4 @@ async def test_userprofile_read_populates_from_encrypted():
 
     assert read_schema.openai_api_key == "secret-openai"
     assert read_schema.google_api_key == "secret-google"
+    assert read_schema.anthropic_api_key == "secret-anthropic"

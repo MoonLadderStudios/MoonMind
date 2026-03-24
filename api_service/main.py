@@ -598,6 +598,7 @@ async def startup_event():
                             profile_update = UserProfileUpdate(
                                 google_api_key=settings.google.google_api_key,
                                 openai_api_key=settings.openai.openai_api_key,
+                                anthropic_api_key=settings.anthropic.anthropic_api_key,
                             )
                             profile = await profile_service.update_profile(
                                 db_session=db_session,
