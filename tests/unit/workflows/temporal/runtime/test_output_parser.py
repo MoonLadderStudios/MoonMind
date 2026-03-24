@@ -28,6 +28,10 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 
 
 class TestPlainTextOutputParser:
+    def test_parse_stream_chunk_returns_empty(self) -> None:
+        parser = PlainTextOutputParser()
+        assert parser.parse_stream_chunk("line1\nline2") == []
+
     def test_empty_output(self) -> None:
         parser = PlainTextOutputParser()
         result = parser.parse("", "")
@@ -58,6 +62,14 @@ class TestPlainTextOutputParser:
 
 
 class TestNdjsonOutputParser:
+    def test_parse_stream_chunk(self) -> None:
+        parser = NdjsonOutputParser()
+        chunk = '{"type": "progress"}\ninvalid\n{"type": "done"}'
+        events = parser.parse_stream_chunk(chunk)
+        assert len(events) == 2
+        assert events[0]["type"] == "progress"
+        assert events[1]["type"] == "done"
+
     def test_empty_output(self) -> None:
         parser = NdjsonOutputParser()
         result = parser.parse("", "")

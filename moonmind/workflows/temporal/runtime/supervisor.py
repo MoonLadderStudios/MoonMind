@@ -71,6 +71,11 @@ class ManagedRunSupervisor:
         start_time = datetime.now(tz=UTC)
 
         try:
+            record = self._store.load(run_id)
+            runtime_id = record.runtime_id if record else None
+            strategy = get_strategy(runtime_id) if runtime_id else None
+            parser = strategy.create_output_parser() if strategy else None
+
             # Start log streaming tasks
             stdout_task = (
                 asyncio.create_task(
@@ -78,6 +83,7 @@ class ManagedRunSupervisor:
                         process.stdout,
                         run_id=run_id,
                         stream_name="stdout",
+                        parser=parser,
                     )
                 )
                 if process.stdout
@@ -89,6 +95,7 @@ class ManagedRunSupervisor:
                         process.stderr,
                         run_id=run_id,
                         stream_name="stderr",
+                        parser=parser,
                     )
                 )
                 if process.stderr
@@ -115,12 +122,15 @@ class ManagedRunSupervisor:
             log_refs: dict[str, str] = {}
             stdout_content = ""
             stderr_content = ""
+            events: list[dict] = []
             if stdout_task:
-                ref, stdout_content = await stdout_task
+                ref, stdout_content, stdout_events = await stdout_task
                 log_refs["stdout"] = ref
+                events.extend(stdout_events)
             if stderr_task:
-                ref, stderr_content = await stderr_task
+                ref, stderr_content, stderr_events = await stderr_task
                 log_refs["stderr"] = ref
+                events.extend(stderr_events)
 
             duration = (datetime.now(tz=UTC) - start_time).total_seconds()
 
@@ -129,10 +139,8 @@ class ManagedRunSupervisor:
                 exit_code=exit_code,
                 duration_seconds=duration,
                 log_refs=log_refs,
+                events=events,
             )
-
-            record = self._store.load(run_id)
-            runtime_id = record.runtime_id if record else None
 
             # Classify exit
             status, failure_class = self._classify_exit(
