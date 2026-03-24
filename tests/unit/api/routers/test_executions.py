@@ -957,3 +957,34 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
         cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
         assert cancel_response.status_code == 403
         assert cancel_response.json()["detail"]["code"] == "actions_disabled"
+
+
+def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
+    """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""
+    from api_service.db.models import TemporalExecutionCloseStatus
+
+    record = SimpleNamespace(
+        close_status=TemporalExecutionCloseStatus.CANCELED,
+        search_attributes={"mm_entry": "run"},
+        memo={},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.CANCELED,
+        workflow_id="mm:canceled-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        created_at="2026-03-24T00:00:00Z",
+        started_at="2026-03-24T00:00:00Z",
+        updated_at="2026-03-24T00:00:00Z",
+        closed_at="2026-03-24T00:00:00Z",
+        integration_state=None,
+    )
+
+    payload = _serialize_execution(record)
+
+    assert payload.status == "canceled"
+    assert payload.dashboard_status == "canceled"
+    assert payload.temporal_status == "canceled"
+
