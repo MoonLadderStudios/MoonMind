@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+import os
+import signal
 import api_service.db.models  # noqa: F401  # Preload models to break circular import cycle
 
 import pytest
@@ -78,3 +80,36 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
     asyncio.run(_run_test_with_keepalive())
     return True
+
+# ── atexit cleanup for orphaned Temporal test-server processes ──────────────
+#
+# ``WorkflowEnvironment.start_time_skipping()`` spawns a ``temporal-test-server``
+# child process.  Under pytest-xdist the worker process may exit before the
+# async context manager's ``__aexit__`` runs, leaving the server alive.
+# The parent pytest process then hangs waiting for the worker pipe to drain.
+#
+# An ``atexit`` handler fires on interpreter shutdown *inside each worker*,
+# early enough to kill the orphaned child before the pipe blocks.
+import atexit
+import subprocess
+
+
+def _kill_owned_temporal_servers() -> None:
+    """Terminate ``temporal-test-server`` subprocesses owned by this process."""
+    my_pid = os.getpid()
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-P", str(my_pid), "-f", "temporal-test-server"],
+            text=True,
+        )
+        for line in out.strip().splitlines():
+            pid = int(line.strip())
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        pass
+
+
+atexit.register(_kill_owned_temporal_servers)
