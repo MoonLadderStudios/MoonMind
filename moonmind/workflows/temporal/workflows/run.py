@@ -1014,9 +1014,9 @@ class MoonMindRunWorkflow:
                         self._update_memo()
 
                     status = self._get_from_result(poll_result, "normalized_status")
-                    if status in ("completed", "failed", "canceled"):
+                    if status in ("completed", "failed", "canceled", "awaiting_feedback"):
                         _poll_terminal = True
-                        self._external_status = status
+                        self._external_status = "completed" if status == "awaiting_feedback" else status
                         if status == "failed":
                             workflow.logger.warning(f"Integration failed: {poll_result}")
                         elif status == "canceled":
@@ -1524,9 +1524,10 @@ class MoonMindRunWorkflow:
             "completed",
             "failed",
             "canceled",
+            "awaiting_feedback",
         ):
             if normalized_status:
-                self._external_status = normalized_status
+                self._external_status = "completed" if normalized_status == "awaiting_feedback" else normalized_status
             elif event_type == "completed":
                 self._external_status = "completed"
 

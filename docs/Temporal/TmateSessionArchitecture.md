@@ -8,12 +8,13 @@ Last Updated: 2026-03-24
 
 ## 1. Purpose
 
-This document is the single authoritative reference for tmate session management in MoonMind. It consolidates design decisions previously scattered across `LiveTaskManagement.md` (§4) and `UniversalTmateOAuth.md` (§6–9), and defines the shared `TmateSessionManager` abstraction that both use cases will consume.
+This document is the single authoritative reference for tmate session management in MoonMind. It consolidates design decisions previously scattered across `LiveTaskManagement.md` (§4) and `TmateArchitecture.md` (§4–8), and defines the shared `TmateSessionManager` abstraction that both use cases will consume.
 
 ### Related Documents
 
 - `docs/Temporal/LiveTaskManagement.md` — live log tailing and terminal handoff UX
-- `docs/ManagedAgents/UniversalTmateOAuth.md` — OAuth auth session UX and provider registry
+- `docs/ManagedAgents/TmateArchitecture.md` — tmate as a tool, Mission Control integration, OAuth session UX, and provider registry
+- `docs/Security/AuthProfiles.md` — auth profile management, OAuth volumes, and profile assignment
 - `docs/tmp/SharedManagedAgentAbstractions.md` — strategy pattern and supervisor boundary
 
 ---

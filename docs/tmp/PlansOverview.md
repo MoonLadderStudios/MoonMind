@@ -75,7 +75,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | Document | Summary |
 | -------- | ------- |
 | [`docs/ManagedAgents/SecretStore.md`](../ManagedAgents/SecretStore.md) | §9 Implementation Plan (Vault → workflow refs → observability → remove bridge); initial rollout non-goals. |
-| [`docs/ManagedAgents/UniversalTmateOAuth.md`](../ManagedAgents/UniversalTmateOAuth.md) | §18 MVP implementation sequence (four phases). |
+| [`docs/ManagedAgents/TmateArchitecture.md`](../ManagedAgents/TmateArchitecture.md) | §16 MVP implementation sequence (four phases). |
 | [`docs/ManagedAgents/CursorCli.md`](../ManagedAgents/CursorCli.md) | §13 Implementation Plan (binary through testing). |
 | [`docs/ManagedAgents/DockerOutOfDocker.md`](../ManagedAgents/DockerOutOfDocker.md) | DOOD “plan” for generic container runner (desired state). |
 | [`docs/ManagedAgents/ManagedAgentsAuthentication.md`](../ManagedAgents/ManagedAgentsAuthentication.md) | §8 Migration Path — phases for profiles, registry, multi-volume, queuing, dedicated fleet. |

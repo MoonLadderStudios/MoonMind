@@ -45,7 +45,7 @@ Each file in this directory tracks **open migration or implementation work** des
 | `docs/Tasks/SkillAndPlanContracts.md` | [`Tasks-SkillAndPlanContracts.md`](Tasks-SkillAndPlanContracts.md) |
 | `docs/Tasks/ImageSystem.md` | [`Tasks-ImageSystem.md`](Tasks-ImageSystem.md) |
 | `docs/ManagedAgents/SecretStore.md` | [`ManagedAgents-SecretStore.md`](ManagedAgents-SecretStore.md) |
-| `docs/ManagedAgents/UniversalTmateOAuth.md` | [`ManagedAgents-UniversalTmateOAuth.md`](ManagedAgents-UniversalTmateOAuth.md) |
+| `docs/ManagedAgents/TmateArchitecture.md` | [`ManagedAgents-UniversalTmateOAuth.md`](ManagedAgents-UniversalTmateOAuth.md) |
 | `docs/ManagedAgents/CursorCli.md` | [`ManagedAgents-CursorCli.md`](ManagedAgents-CursorCli.md) |
 | `docs/ManagedAgents/DockerOutOfDocker.md` | [`ManagedAgents-DockerOutOfDocker.md`](ManagedAgents-DockerOutOfDocker.md) |
 | `docs/ManagedAgents/ManagedAgentsAuthentication.md` | [`ManagedAgents-ManagedAgentsAuthentication.md`](ManagedAgents-ManagedAgentsAuthentication.md) |

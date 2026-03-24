@@ -108,7 +108,7 @@ class ManagedRuntimeStrategy(ABC):
         """Override for runtimes using oauth (e.g. cursor_cli).
 
         Must align with the OAuthProviderSpec entries defined in
-        docs/ManagedAgents/UniversalTmateOAuth.md.  Both registries
+        docs/ManagedAgents/TmateArchitecture.md.  Both registries
         share the runtime_id namespace (codex_cli, gemini_cli,
         claude_code, cursor_cli).
         """
@@ -134,7 +134,7 @@ class ManagedRuntimeStrategy(ABC):
 
         Note: The underlying helpers (_OAUTH_CLEARED_VARS,
         _shape_environment_for_oauth) are also used by the OAuth
-        session orchestrator (UniversalTmateOAuth.md §9.2).  Shared
+        session orchestrator (TmateArchitecture.md §8.2).  Shared
         env-shaping logic should be factored into common utilities
         rather than duplicated.
         """
@@ -378,7 +378,7 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 - [x] Implement and verify `CursorCliStrategy.prepare_workspace()` — write `.cursor/rules/` and `.cursor/cli.json` via existing helpers
 - [x] Add workspace prep call in `launcher.py:launch()` after workspace resolution, before subprocess spawn *(calls `await strategy.prepare_workspace(...)`)*
 - [x] Wire launcher subprocess env through `strategy.shape_environment()` (launcher line 419)
-- [x] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per UniversalTmateOAuth.md alignment)
+- [x] Factor shared env-shaping helpers (`_OAUTH_CLEARED_VARS`, `_shape_environment_for_oauth`) into `moonmind/auth/env_shaping.py` for reuse by both strategies and the OAuth session orchestrator (per TmateArchitecture.md alignment)
 - [x] Clean up `agent_runtime_env_keys` in `settings.py` if confirmed dead config
 - [x] Remove dead imports and unused code from adapter and launcher
 - [x] Update `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` to reference the managed runtime strategy pattern
