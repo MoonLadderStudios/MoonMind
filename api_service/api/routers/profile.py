@@ -26,6 +26,7 @@ def _build_sanitized_response(profile) -> UserProfileReadSanitized:
         user_id=profile.user_id,
         google_api_key_set=bool(getattr(profile, "google_api_key", None)),
         openai_api_key_set=bool(getattr(profile, "openai_api_key", None)),
+        anthropic_api_key_set=bool(getattr(profile, "anthropic_api_key", None)),
     )
 
 

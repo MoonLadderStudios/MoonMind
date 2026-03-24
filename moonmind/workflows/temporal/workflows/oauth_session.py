@@ -78,6 +78,7 @@ class MoonMindOAuthSessionWorkflow:
         self._session_id: str = ""
         self._finalize_requested: bool = False
         self._cancel_requested: bool = False
+        self._container_name: str = ""
 
     # -- Signals ---------------------------------------------------------------
 
@@ -99,6 +100,7 @@ class MoonMindOAuthSessionWorkflow:
             "session_id": self._session_id,
             "finalize_requested": self._finalize_requested,
             "cancel_requested": self._cancel_requested,
+            "container_name": self._container_name,
         }
 
     # -- Main workflow ---------------------------------------------------------
@@ -109,6 +111,8 @@ class MoonMindOAuthSessionWorkflow:
         runtime_id = input_payload.get("runtime_id", "")
         _profile_id = input_payload.get("profile_id", "")  # noqa: F841 — used in Phase 2
         volume_ref = input_payload.get("volume_ref", "")
+        volume_mount_path = input_payload.get("volume_mount_path", "")
+        session_ttl = _DEFAULT_SESSION_TTL_SECONDS
 
         if not self._session_id or not runtime_id:
             raise exceptions.ApplicationError(
@@ -138,21 +142,45 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=f"Volume provisioning failed: {exc}",
             )
 
-        # Step 3: Transition to awaiting_user
-        # In Phase 1 MVP, the actual tmate container launch is deferred to
-        # when the worker fleet supports Docker socket access.  The workflow
-        # transitions to awaiting_user so the operator can manually attach.
+        # Step 3: Launch auth runner container with tmate
+        try:
+            runner_result = await workflow.execute_activity(
+                "oauth_session.start_auth_runner",
+                {
+                    "session_id": self._session_id,
+                    "runtime_id": runtime_id,
+                    "volume_ref": volume_ref,
+                    "volume_mount_path": volume_mount_path,
+                    "session_ttl": session_ttl,
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=120),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=3),
+                    maximum_attempts=2,
+                ),
+            )
+            self._container_name = runner_result.get("container_name", "")
+        except Exception as exc:
+            await self._mark_failed(f"Failed to start auth runner: {exc}")
+            return OAuthSessionOutput(
+                session_id=self._session_id,
+                status="failed",
+                failure_reason=f"Auth runner launch failed: {exc}",
+            )
+
+        # Step 4: Transition to tmate_ready then awaiting_user
+        await self._update_status("tmate_ready")
         await self._update_status("awaiting_user")
 
-        # Step 4: Wait for finalize, cancel, or session timeout
-        session_ttl = _DEFAULT_SESSION_TTL_SECONDS
+        # Step 5: Wait for finalize, cancel, or session timeout
         try:
             await workflow.wait_condition(
                 lambda: self._finalize_requested or self._cancel_requested,
                 timeout=timedelta(seconds=session_ttl),
             )
         except TimeoutError:
-            # Session expired
+            await self._stop_auth_runner()
             await self._update_status("expired")
             return OAuthSessionOutput(
                 session_id=self._session_id,
@@ -161,6 +189,7 @@ class MoonMindOAuthSessionWorkflow:
             )
 
         if self._cancel_requested:
+            await self._stop_auth_runner()
             await self._update_status("cancelled")
             return OAuthSessionOutput(
                 session_id=self._session_id,
@@ -168,12 +197,13 @@ class MoonMindOAuthSessionWorkflow:
                 failure_reason=None,
             )
 
-        # Step 5: Finalize — verify and register
+        # Step 6: Finalize — verify and register
         await self._update_status("verifying")
 
         # The actual verification + profile registration happens in the
         # finalize API endpoint (already implemented in oauth_sessions.py).
-        # The workflow just needs to mark succeeded.
+        # The workflow just needs to mark succeeded and clean up.
+        await self._stop_auth_runner()
         await self._update_status("completed")
 
         return OAuthSessionOutput(
@@ -202,6 +232,31 @@ class MoonMindOAuthSessionWorkflow:
                 "Failed to update session %s status to %s",
                 self._session_id,
                 status,
+                exc_info=True,
+            )
+
+    async def _stop_auth_runner(self) -> None:
+        """Stop the auth runner container (best-effort)."""
+        if not self._container_name:
+            return
+        try:
+            await workflow.execute_activity(
+                "oauth_session.stop_auth_runner",
+                {
+                    "session_id": self._session_id,
+                    "container_name": self._container_name,
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    maximum_attempts=2,
+                ),
+            )
+        except Exception:
+            workflow.logger.warning(
+                "Failed to stop auth runner for session %s",
+                self._session_id,
                 exc_info=True,
             )
 

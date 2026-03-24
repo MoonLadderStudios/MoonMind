@@ -47,6 +47,8 @@ class AuthProfileManagerInput(TypedDict, total=False):
     profiles: list[dict[str, Any]]
     leases: dict[str, list[str]]
     cooldowns: dict[str, str]
+    lease_granted_at: dict[str, dict[str, str]]
+    pending_requests: list[dict[str, str]]
 
 
 class AuthProfileManagerOutput(TypedDict):
@@ -340,6 +342,16 @@ class MoonMindAuthProfileManagerWorkflow:
         leases_data = input_payload.get("leases", {})
         cooldowns_data = input_payload.get("cooldowns", {})
         lease_times_data = input_payload.get("lease_granted_at", {})
+        pending_data = input_payload.get("pending_requests", [])
+
+        self._pending_requests = [
+            PendingRequest(
+                requester_workflow_id=req.get("requester_workflow_id", ""),
+                runtime_id=req.get("runtime_id", "")
+            )
+            for req in pending_data
+            if req.get("requester_workflow_id")
+        ]
 
         for p in profiles_data:
             pid = p["profile_id"]
@@ -506,6 +518,13 @@ class MoonMindAuthProfileManagerWorkflow:
             "leases": leases,
             "lease_granted_at": lease_times,
             "cooldowns": cooldowns,
+            "pending_requests": [
+                {
+                    "requester_workflow_id": r.requester_workflow_id,
+                    "runtime_id": r.runtime_id,
+                }
+                for r in self._pending_requests
+            ],
         }
 
     async def _load_profiles_from_db(self) -> None:

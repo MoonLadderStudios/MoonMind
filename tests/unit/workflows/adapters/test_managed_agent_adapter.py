@@ -278,6 +278,60 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     assert "OPENAI_API_KEY" not in env_overrides
 
 
+async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
+    profiles = [
+        {
+            "profile_id": "minimax",
+            "auth_mode": "api_key",
+            "api_key_ref": "MINIMAX_API_KEY",
+            "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
+            "runtime_env_overrides": {
+                "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                "ANTHROPIC_MODEL": "MiniMax-M2.7",
+            },
+            "command_template": ["claude"],
+        }
+    ]
+    captured_payload: dict[str, Any] = {}
+
+    async def _run_launcher(**kwargs: Any):
+        payload = kwargs.get("payload")
+        if isinstance(payload, dict):
+            captured_payload.update(payload)
+        return {"status": "launching"}
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-mm",
+        runtime_id="claude_code",
+        run_launcher=_run_launcher,
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="minimax",
+        correlationId="corr-mm",
+        idempotencyKey="idem-mm",
+    )
+    await adapter.start(request)
+
+    profile_payload = captured_payload.get("profile") or {}
+    env_overrides = profile_payload.get("env_overrides") or profile_payload.get(
+        "envOverrides"
+    )
+    assert isinstance(env_overrides, dict)
+    assert env_overrides.get("MANAGED_API_KEY_REF") == "MINIMAX_API_KEY"
+    assert env_overrides.get("MANAGED_API_KEY_TARGET_ENV") == "ANTHROPIC_AUTH_TOKEN"
+    assert env_overrides.get("ANTHROPIC_BASE_URL") == "https://api.minimax.io/anthropic"
+    assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
+
+
 async def test_resolve_profile_raises_when_not_found():
     profiles = [{"profile_id": "exists", "auth_mode": "api_key"}]
 

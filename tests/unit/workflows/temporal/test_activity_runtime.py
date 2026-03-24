@@ -193,6 +193,69 @@ async def test_artifact_activity_create_returns_ref_and_upload_descriptor(
             assert upload.mode == "single_put"
 
 
+async def test_artifact_activity_create_maps_legacy_name_to_metadata(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalArtifactActivities(service)
+
+            artifact_ref, _upload = await activities.artifact_create(
+                principal="user-1",
+                content_type="application/json",
+                name="reports/run_summary.json",
+                metadata_json={"artifact_kind": "summary"},
+            )
+            artifact, _links, _pinned, _policy = await service.get_metadata(
+                artifact_id=artifact_ref.artifact_id,
+                principal="user-1",
+            )
+
+            assert artifact.metadata_json["name"] == "reports/run_summary.json"
+            assert artifact.metadata_json["artifact_kind"] == "summary"
+
+
+async def test_artifact_create_binding_accepts_legacy_name_payload(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalArtifactActivities(service)
+            catalog = build_default_activity_catalog()
+            bindings = {
+                binding.activity_type: binding
+                for binding in build_activity_bindings(
+                    catalog,
+                    artifact_activities=activities,
+                    fleets=(ARTIFACTS_FLEET,),
+                )
+            }
+
+            artifact_ref, _upload = await bindings["artifact.create"].handler(
+                {
+                    "principal": "user-1",
+                    "content_type": "application/json",
+                    "name": "reports/run_summary.json",
+                    "metadata_json": {"artifact_kind": "summary"},
+                }
+            )
+            artifact, _links, _pinned, _policy = await service.get_metadata(
+                artifact_id=artifact_ref.artifact_id,
+                principal="user-1",
+            )
+
+            assert artifact.metadata_json["name"] == "reports/run_summary.json"
+            assert artifact.metadata_json["artifact_kind"] == "summary"
+
+
 async def test_plan_validate_accepts_temporal_registry_artifact_ids(tmp_path: Path):
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:

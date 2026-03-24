@@ -284,6 +284,9 @@ def build_default_activity_catalog(
     """Return the canonical Temporal activity catalog for MoonMind."""
 
     cfg = temporal_settings or settings.temporal
+    
+    # See docs/Temporal/ErrorTaxonomy.md
+    NON_RETRYABLE_ERRORS = ("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus")
 
     activities = (
         TemporalActivityDefinition(
@@ -386,7 +389,7 @@ def build_default_activity_catalog(
             retries=_activity_retries(
                 max_attempts=2,
                 max_interval_seconds=60,
-                non_retryable=("INVALID_INPUT",),
+                non_retryable=NON_RETRYABLE_ERRORS,
             ),
         ),
         TemporalActivityDefinition(
@@ -692,7 +695,7 @@ def build_default_activity_catalog(
             retries=_activity_retries(
                 max_attempts=2,
                 max_interval_seconds=60,
-                non_retryable=("INVALID_INPUT",),
+                non_retryable=NON_RETRYABLE_ERRORS,
             ),
         ),
     )

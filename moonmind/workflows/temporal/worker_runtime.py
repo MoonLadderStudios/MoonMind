@@ -244,15 +244,63 @@ def _build_runtime_planner():
             .isoformat()
             .replace("+00:00", "Z")
         )
-        node_id = str(task_payload.get("id") or "node-1").strip() or "node-1"
         failure_mode = str(
             parameter_payload.get("failurePolicy") or "FAIL_FAST"
         ).strip()
         if failure_mode not in {"FAIL_FAST", "CONTINUE"}:
             failure_mode = "FAIL_FAST"
 
-        nodes: list[dict[str, Any]] = [
-            {
+        # --- Expand task.steps[] into multiple plan nodes ---
+        raw_steps = task_payload.get("steps")
+        has_multi_steps = (
+            isinstance(raw_steps, list)
+            and len(raw_steps) > 1
+            and all(isinstance(s, Mapping) for s in raw_steps)
+        )
+
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, str]] = []
+
+        if has_multi_steps:
+            prev_step_id: str | None = None
+            for idx, step_entry in enumerate(raw_steps):
+                step_instructions = str(step_entry.get("instructions") or "").strip()
+                if not step_instructions:
+                    step_instructions = instructions  # fall back to task-level
+
+                step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
+                step_node_inputs: dict[str, Any] = {
+                    **node_inputs,
+                    "instructions": step_instructions,
+                }
+
+                # Per-step tool/skill override
+                step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
+                    step_entry.get("skill")
+                )
+                step_tool_name = str(
+                    step_tool.get("name") or step_tool.get("id") or ""
+                ).strip()
+                step_runtime = runtime_mode
+                if step_tool_name:
+                    step_runtime = step_tool_name
+
+                nodes.append({
+                    "id": step_id,
+                    "tool": {
+                        "type": "agent_runtime",
+                        "name": step_runtime,
+                        "version": "1.0",
+                    },
+                    "inputs": step_node_inputs,
+                })
+
+                if prev_step_id:
+                    edges.append({"from": prev_step_id, "to": step_id})
+                prev_step_id = step_id
+        else:
+            node_id = str(task_payload.get("id") or "node-1").strip() or "node-1"
+            nodes.append({
                 "id": node_id,
                 "tool": {
                     "type": "agent_runtime",
@@ -260,19 +308,17 @@ def _build_runtime_planner():
                     "version": "1.0",
                 },
                 "inputs": node_inputs,
-            }
-        ]
+            })
 
+        # Append PR creation instructions to the last node so the agent
+        # creates the PR in the same workspace where the changes were made.
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-            # Append PR creation instructions to the primary node so the
-            # agent creates the PR in the same workspace where the changes
-            # were made.  A separate node would run in a fresh checkout with
-            # no changes to publish.
             pr_suffix = (
                 "\n\nAfter completing the changes above, create a GitHub "
                 "pull request with the changes using `gh pr create`."
             )
-            node_inputs["instructions"] = instructions + pr_suffix
+            last_inputs = nodes[-1]["inputs"]
+            last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
 
         return {
             "plan_version": "1.0",
@@ -286,7 +332,7 @@ def _build_runtime_planner():
             },
             "policy": {"failure_mode": failure_mode, "max_concurrency": 1},
             "nodes": nodes,
-            "edges": [],
+            "edges": edges,
         }
 
     return _runtime_planner

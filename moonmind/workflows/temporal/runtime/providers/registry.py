@@ -35,6 +35,16 @@ OAUTH_PROVIDERS: dict[str, OAuthProviderSpec] = {
         success_check="claude_config_exists",
         account_label_prefix="Claude",
     ),
+    "cursor_cli": OAuthProviderSpec(
+        runtime_id="cursor_cli",
+        auth_mode="oauth",
+        session_transport="tmate",
+        default_volume_name="cursor_auth_volume",
+        default_mount_path="/home/app/.cursor",
+        bootstrap_command=["bash", "/tools/auth-tmate-bootstrap-cursor.sh"],
+        success_check="cursor_config_exists",
+        account_label_prefix="Cursor",
+    ),
 }
 
 

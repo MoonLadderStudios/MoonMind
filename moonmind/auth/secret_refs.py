@@ -193,6 +193,19 @@ class VaultSecretResolver:
             raise SecretReferenceError("vault response missing kv-v2 data object")
         return secret_data
 
+    async def resolve_plain_kv_value(self, ref: str) -> str:
+        """Read a single string field from a ``vault://`` KV-v2 reference."""
+
+        parsed = parse_vault_reference(ref, allowed_mounts=self._allowed_mounts)
+        secret_data = await self._read_secret(parsed)
+        raw = secret_data.get(parsed.field)
+        value = str(raw or "").strip()
+        if not value:
+            raise SecretReferenceError(
+                f"vault field '{parsed.field}' is missing or empty for {parsed.normalized_ref}"
+            )
+        return value
+
 
 __all__ = [
     "ParsedVaultReference",

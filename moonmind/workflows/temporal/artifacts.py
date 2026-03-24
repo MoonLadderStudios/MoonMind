@@ -1920,7 +1920,20 @@ class TemporalArtifactActivities:
     async def artifact_create(
         self, *, principal: str, **kwargs: Any
     ) -> tuple[ArtifactRef, ArtifactUploadDescriptor]:
-        artifact, upload = await self._service.create(principal=principal, **kwargs)
+        normalized_kwargs = dict(kwargs)
+        legacy_name = str(normalized_kwargs.pop("name", "") or "").strip()
+        if legacy_name:
+            metadata_json = normalized_kwargs.get("metadata_json")
+            if isinstance(metadata_json, Mapping):
+                metadata = dict(metadata_json)
+            else:
+                metadata = {}
+            metadata.setdefault("name", legacy_name)
+            normalized_kwargs["metadata_json"] = metadata
+        artifact, upload = await self._service.create(
+            principal=principal,
+            **normalized_kwargs,
+        )
         return build_artifact_ref(artifact), upload
 
     async def artifact_read(
@@ -2081,6 +2094,9 @@ class TemporalArtifactActivities:
                     "volume_ref": row.volume_ref,
                     "volume_mount_path": row.volume_mount_path,
                     "account_label": row.account_label,
+                    "api_key_ref": row.api_key_ref,
+                    "runtime_env_overrides": row.runtime_env_overrides or {},
+                    "api_key_env_var": row.api_key_env_var,
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,
@@ -2145,6 +2161,34 @@ class TemporalArtifactActivities:
 
         payload = request if isinstance(request, dict) else dict(kwargs)
         return await _ensure_volume(payload)
+
+    async def oauth_session_start_auth_runner(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.start_auth_runner`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_start_auth_runner as _start_auth_runner,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _start_auth_runner(payload)
+
+    async def oauth_session_stop_auth_runner(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.stop_auth_runner`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_stop_auth_runner as _stop_auth_runner,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _stop_auth_runner(payload)
 
     async def oauth_session_update_status(
         self,

@@ -11,6 +11,7 @@ def test_shape_agent_environment_oauth():
     """Test that API keys are explicitly scrubbed when auth_mode is oauth."""
     base_env = {
         "ANTHROPIC_API_KEY": "secret1",
+        "ANTHROPIC_AUTH_TOKEN": "secret1b",
         "CLAUDE_API_KEY": "secret2",
         "OPENAI_API_KEY": "secret3",
         "GEMINI_API_KEY": "secret4",
@@ -22,6 +23,7 @@ def test_shape_agent_environment_oauth():
     
     # Assert API keys are set to empty string
     assert shaped["ANTHROPIC_API_KEY"] == ""
+    assert shaped["ANTHROPIC_AUTH_TOKEN"] == ""
     assert shaped["CLAUDE_API_KEY"] == ""
     assert shaped["OPENAI_API_KEY"] == ""
     assert shaped["GEMINI_API_KEY"] == ""

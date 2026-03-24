@@ -501,9 +501,9 @@ def test_run_preflight_gemini_runtime_verifies_gemini_not_codex(monkeypatch) -> 
 
 
 def test_run_preflight_claude_runtime_requires_api_key(monkeypatch) -> None:
-    """Claude runtime should fail fast when ANTHROPIC_API_KEY is missing."""
+    """Claude runtime should fail fast when no Claude API credential env is set."""
 
-    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(RuntimeError, match="ANTHROPIC_AUTH_TOKEN"):
         cli.run_preflight(
             env={
                 "MOONMIND_WORKER_RUNTIME": "claude",
@@ -536,6 +536,39 @@ def test_run_preflight_claude_runtime_verifies_version_with_key(monkeypatch) -> 
             "MOONMIND_WORKER_RUNTIME": "claude",
             "DEFAULT_EMBEDDING_PROVIDER": "ollama",
             "ANTHROPIC_API_KEY": "test-key",
+        }
+    )
+
+    assert verifications == ["claude"]
+    assert calls == [
+        ["/usr/bin/claude", "--version"],
+    ]
+
+
+def test_run_preflight_claude_runtime_accepts_anthropic_auth_token(monkeypatch) -> None:
+    """Claude Code third-party (e.g. MiniMax) may use ANTHROPIC_AUTH_TOKEN only."""
+
+    calls: list[list[str]] = []
+    verifications: list[str] = []
+
+    def fake_verify(name: str) -> str:
+        verifications.append(name)
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(list(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(cli, "verify_cli_is_executable", fake_verify)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli.run_preflight(
+        env={
+            "MOONMIND_WORKER_RUNTIME": "claude",
+            "DEFAULT_EMBEDDING_PROVIDER": "ollama",
+            "ANTHROPIC_AUTH_TOKEN": "minimax-token",
         }
     )
 

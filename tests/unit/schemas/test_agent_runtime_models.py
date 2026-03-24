@@ -112,6 +112,20 @@ def test_managed_runtime_profile_rejects_other_sensitive_env_override_keys() -> 
         )
 
 
+def test_managed_runtime_profile_allows_managed_launch_metadata_keys() -> None:
+    profile = ManagedRuntimeProfile(
+        profileId="claude_mm",
+        runtimeId="claude_code",
+        commandTemplate=["claude"],
+        envOverrides={
+            "MANAGED_API_KEY_REF": "MINIMAX_API_KEY",
+            "MANAGED_API_KEY_TARGET_ENV": "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+        },
+    )
+    assert profile.env_overrides["MANAGED_API_KEY_TARGET_ENV"] == "ANTHROPIC_AUTH_TOKEN"
+
+
 def test_managed_runtime_profile_allows_secret_passthrough_key_names() -> None:
     profile = ManagedRuntimeProfile(
         profileId="gemini_oauth_profile",

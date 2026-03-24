@@ -2639,6 +2639,62 @@
         : {},
     );
 
+  const resolveArtifactUploadTarget = (uploadUrl) => {
+    const raw = String(uploadUrl || "").trim();
+    if (!raw) {
+      return { url: raw, credentials: "include" };
+    }
+    try {
+      const windowOrigin =
+        window && window.location && typeof window.location.origin === "string"
+          ? String(window.location.origin).trim()
+          : "";
+      if (!windowOrigin) {
+        return { url: raw, credentials: "include" };
+      }
+      const parsed = new URL(raw, windowOrigin);
+      return {
+        url: raw,
+        credentials: parsed.origin === windowOrigin ? "include" : "omit",
+      };
+    } catch (_error) {
+      return { url: raw, credentials: "include" };
+    }
+  };
+
+  const buildArtifactUploadHeaders = (
+    upload = {},
+    defaultContentType = "text/plain; charset=utf-8",
+  ) => {
+    const requiredHeaders =
+      pick(upload, "required_headers", "requiredHeaders")
+      || {};
+    const normalizedHeaders = {};
+    if (
+      requiredHeaders &&
+      typeof requiredHeaders === "object" &&
+      !Array.isArray(requiredHeaders)
+    ) {
+      Object.entries(requiredHeaders).forEach(([headerName, headerValue]) => {
+        const normalizedName = String(headerName || "").trim();
+        const normalizedValue = String(headerValue ?? "").trim();
+        if (!normalizedName || !normalizedValue) {
+          return;
+        }
+        normalizedHeaders[normalizedName] = normalizedValue;
+      });
+    }
+    if (
+      defaultContentType &&
+      !Object.keys(normalizedHeaders).some(
+        (headerName) => headerName.toLowerCase() === "content-type",
+      )
+    ) {
+      normalizedHeaders["Content-Type"] = defaultContentType;
+    }
+    return normalizedHeaders;
+  };
+
   const createTemporalInputArtifact = async ({ instructions, repository }) => {
     const normalizedInstructions = String(instructions || "");
     const byteSize = new TextEncoder().encode(normalizedInstructions).length;
@@ -2670,9 +2726,11 @@
     const upload = pick(createResponse, "upload") || {};
     const uploadUrl = String(pick(upload, "upload_url", "uploadUrl") || "").trim()
       || endpoint("/api/artifacts/{artifactId}/content", { artifactId });
-    await fetchJson(uploadUrl, {
+    const uploadTarget = resolveArtifactUploadTarget(uploadUrl);
+    await fetchJson(uploadTarget.url, {
       method: "PUT",
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      credentials: uploadTarget.credentials,
+      headers: buildArtifactUploadHeaders(upload),
       body: normalizedInstructions,
     });
     return { artifactId };
@@ -3004,6 +3062,8 @@
       temporalWaitingReason,
       toTemporalRows,
       uploadTemporalArtifactContent,
+      resolveArtifactUploadTarget,
+      buildArtifactUploadHeaders,
       withTemporalSourceFlag,
     };
     window.__queueLayoutTest = {
@@ -9241,6 +9301,7 @@
         try {
           const response = await fetch("/me", {
             method: "PUT",
+            credentials: "include",
             headers: {
               "Content-Type": "application/json",
             },
@@ -9267,6 +9328,7 @@
     async function loadProfile() {
       try {
         const response = await fetch("/me", {
+          credentials: "include",
           headers: {
             "Accept": "application/json"
           }
@@ -9462,7 +9524,22 @@
                 <label>
                   API Key Ref
                   <input type="text" name="api_key_ref" maxlength="120"
-                         placeholder="Secret reference (API key mode only)" />
+                         placeholder="Worker env var name (e.g. MINIMAX_API_KEY) or vault:// ref" />
+                </label>
+                <label>
+                  API key target env (Claude Code)
+                  <input type="text" name="api_key_env_var" maxlength="64"
+                         placeholder="ANTHROPIC_API_KEY (default) or ANTHROPIC_AUTH_TOKEN for MiniMax" />
+                </label>
+                <p class="form-caption">
+                  For MiniMax M2.7 via Claude Code, set target to <code>ANTHROPIC_AUTH_TOKEN</code>,
+                  point <strong>API Key Ref</strong> at a worker env var that holds your MiniMax key,
+                  and paste non-secret Claude Code env below (e.g. <code>ANTHROPIC_BASE_URL</code>, model names).
+                </p>
+                <label>
+                  Runtime env overrides (JSON object, API key mode)
+                  <textarea name="runtime_env_overrides_json" rows="8" class="wide"
+                    placeholder='{\n  "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",\n  "ANTHROPIC_MODEL": "MiniMax-M2.7",\n  "API_TIMEOUT_MS": "3000000",\n  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"\n}'></textarea>
                 </label>
                 <label>
                   Max Parallel Runs
@@ -9673,6 +9750,7 @@
               <th>Profile ID</th>
               <th>Runtime</th>
               <th>Auth Mode</th>
+              <th>Key env</th>
               <th>Max Runs</th>
               <th>Cooldown</th>
               <th>Enabled</th>
@@ -9685,6 +9763,7 @@
                 <td>${escapeHtml(p.profile_id)}</td>
                 <td>${escapeHtml(p.runtime_id || "-")}</td>
                 <td>${escapeHtml(p.auth_mode || "-")}</td>
+                <td>${escapeHtml(p.api_key_env_var || "—")}</td>
                 <td>${p.max_parallel_runs ?? "-"}</td>
                 <td>${p.cooldown_after_429_seconds ?? "-"}s</td>
                 <td>${p.enabled ? "✅" : "❌"}</td>
@@ -9871,12 +9950,34 @@
       createForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const formData = new FormData(createForm);
+        const rawEnvJson = String(formData.get("runtime_env_overrides_json") || "").trim();
+        let runtime_env_overrides = undefined;
+        if (rawEnvJson) {
+          try {
+            runtime_env_overrides = JSON.parse(rawEnvJson);
+          } catch (err) {
+            setNotice("error", "Runtime env overrides must be valid JSON.");
+            syncDynamicView();
+            return;
+          }
+          if (
+            typeof runtime_env_overrides !== "object"
+            || runtime_env_overrides === null
+            || Array.isArray(runtime_env_overrides)
+          ) {
+            setNotice("error", "Runtime env overrides must be a JSON object.");
+            syncDynamicView();
+            return;
+          }
+        }
         const payload = {
           profile_id: String(formData.get("profile_id") || "").trim(),
           runtime_id: String(formData.get("runtime_id") || "").trim() || undefined,
           auth_mode: String(formData.get("auth_mode") || "oauth"),
           volume_ref: String(formData.get("volume_ref") || "").trim() || undefined,
           api_key_ref: String(formData.get("api_key_ref") || "").trim() || undefined,
+          api_key_env_var: String(formData.get("api_key_env_var") || "").trim() || undefined,
+          runtime_env_overrides,
           max_parallel_runs: Number(formData.get("max_parallel_runs")) || 1,
           cooldown_after_429_seconds: Number(formData.get("cooldown_after_429_seconds")) || 60,
           rate_limit_policy: String(formData.get("rate_limit_policy") || "backoff"),

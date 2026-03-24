@@ -16,6 +16,8 @@ def _manager_profile_payload(row: ManagedAgentAuthProfile) -> dict[str, Any]:
         "volume_mount_path": row.volume_mount_path,
         "account_label": row.account_label,
         "api_key_ref": row.api_key_ref,
+        "runtime_env_overrides": row.runtime_env_overrides or {},
+        "api_key_env_var": row.api_key_env_var,
         "max_parallel_runs": row.max_parallel_runs,
         "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
         "rate_limit_policy": (
