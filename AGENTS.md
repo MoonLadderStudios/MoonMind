@@ -7,7 +7,14 @@ Read relevant documents in the following order before implementing tasks:
 1. **Constitution:** `.specify/memory/constitution.md` for non-negotiable principles and constraints
 2. **Standards:** Code style and guidance in `README.md`
 3. **Spec:** `specs/<feature-id>/spec.md`, then `plan.md`, then `tasks.md`
-4. **Docs:** `Docs/*.md` as needed for system architecture
+4. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs tmp** below).
+5. **Migration / implementation backlog (when relevant):** `docs/tmp/remaining-work/` and `docs/tmp/PlansOverview.md` for plan-shaped or in-flight work tied to canonical docs.
+
+## Documentation: canonical vs `docs/tmp`
+
+- **Canonical docs** (`docs/` except `docs/tmp/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
+- **Migration and implementation notes** belong under **`docs/tmp/`** (e.g. per-doc trackers in `docs/tmp/remaining-work/`, indexes in `docs/tmp/PlansOverview.md`) so they can be **removed when the work completes** without rewriting the canonical spec.
+- Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
 
 ## Spec Numbering
 

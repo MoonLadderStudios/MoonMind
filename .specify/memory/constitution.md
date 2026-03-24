@@ -207,6 +207,19 @@ Non-negotiable rules:
 
 Rationale: Specs are how MoonMind stays maintainable while evolving quickly.
 
+### XII. Canonical Documentation Separates Desired State from Migration Backlog
+
+MoonMind MUST keep long-lived documentation readable as **what the system is for and how it should behave**, not as a running construction diary.
+
+Non-negotiable rules:
+
+- Documentation under `docs/` **outside** `docs/tmp/` MUST focus on **declarative, desired-state** descriptions: architecture, contracts, operator-visible behavior, and target semantics (including Temporal-native orchestration where that is the product direction).
+- **Migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs** MUST be recorded under **`docs/tmp/`** (for example `docs/tmp/remaining-work/` trackers linked from the canonical source doc, and indexes such as `docs/tmp/PlansOverview.md`), not embedded as the primary framing of canonical docs.
+- When a migration or implementation effort completes, **remove or archive** the corresponding `docs/tmp` material rather than leaving obsolete plan sections in canonical files.
+- Canonical docs that still have open migration work MUST **point** to the tmp tracker (or equivalent) instead of duplicating volatile checklists inline.
+
+Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in disposable scratch space that can be deleted when done.
+
 ## Non-Negotiable Product & Operational Constraints
 
 - **Security / secret hygiene**:
