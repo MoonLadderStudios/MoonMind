@@ -1920,7 +1920,20 @@ class TemporalArtifactActivities:
     async def artifact_create(
         self, *, principal: str, **kwargs: Any
     ) -> tuple[ArtifactRef, ArtifactUploadDescriptor]:
-        artifact, upload = await self._service.create(principal=principal, **kwargs)
+        normalized_kwargs = dict(kwargs)
+        legacy_name = str(normalized_kwargs.pop("name", "") or "").strip()
+        if legacy_name:
+            metadata_json = normalized_kwargs.get("metadata_json")
+            if isinstance(metadata_json, Mapping):
+                metadata = dict(metadata_json)
+            else:
+                metadata = {}
+            metadata.setdefault("name", legacy_name)
+            normalized_kwargs["metadata_json"] = metadata
+        artifact, upload = await self._service.create(
+            principal=principal,
+            **normalized_kwargs,
+        )
         return build_artifact_ref(artifact), upload
 
     async def artifact_read(
