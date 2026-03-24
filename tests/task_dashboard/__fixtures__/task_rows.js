@@ -19,6 +19,7 @@ const baseTaskRow = Object.freeze({
   closeStatus: null,
   title: "Temporal Task",
   createdAt: "2026-02-23T12:00:00Z",
+  scheduledFor: "2026-02-23T12:00:00Z",
   startedAt: "2026-02-23T12:05:00Z",
   finishedAt: null,
   updatedAt: "2026-02-23T12:05:00Z",

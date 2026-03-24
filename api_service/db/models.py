@@ -935,8 +935,11 @@ class TemporalExecutionCanonicalRecord(Base):
     last_update_response: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
     )
-    started_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -1101,8 +1104,11 @@ class TemporalExecutionRecord(Base):
         default=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY,
         server_default=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY.value,
     )
-    started_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

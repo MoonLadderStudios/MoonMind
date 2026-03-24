@@ -218,7 +218,20 @@ async def sync_execution_projection(
         )
         session.add(projection)
     else:
+        temporal_metadata_missing = not payload.get("memo") and not payload.get("search_attributes")
         for field, value in payload.items():
+            if temporal_metadata_missing and field not in (
+                "run_id",
+                "state",
+                "close_status",
+                "started_at",
+                "updated_at",
+                "closed_at",
+                "workflow_id",
+                "namespace",
+                "workflow_type",
+            ):
+                continue
             setattr(projection, field, value)
         projection.projection_version = max(previous_version + 1, 1)
         projection.last_synced_at = synced_at

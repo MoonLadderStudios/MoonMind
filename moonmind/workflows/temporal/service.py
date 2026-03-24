@@ -67,6 +67,13 @@ NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FINALIZING,
 }
 
+_RUNNING_STATES: set[MoonMindWorkflowState] = {
+    MoonMindWorkflowState.PLANNING,
+    MoonMindWorkflowState.EXECUTING,
+    MoonMindWorkflowState.AWAITING_EXTERNAL,
+    MoonMindWorkflowState.FINALIZING,
+}
+
 TERMINAL_STATE_TO_CLOSE_STATUS: dict[
     MoonMindWorkflowState, TemporalExecutionCloseStatus
 ] = {
@@ -334,7 +341,8 @@ class TemporalExecutionService:
             create_idempotency_key=idempotency_key,
             last_update_idempotency_key=None,
             last_update_response=None,
-            started_at=now,
+            created_at=now,
+            started_at=None,
             updated_at=now,
             closed_at=None,
         )
@@ -1510,6 +1518,10 @@ class TemporalExecutionService:
             record.close_status = None
             record.closed_at = None
 
+        # Populate started_at on first transition to a running state.
+        if state in _RUNNING_STATES and record.started_at is None:
+            record.started_at = _utc_now()
+
         record.state = state
         if state is not MoonMindWorkflowState.AWAITING_EXTERNAL:
             self._clear_waiting_metadata(record)
@@ -2320,6 +2332,7 @@ class TemporalExecutionService:
                 if isinstance(source.last_update_response, dict)
                 else None
             ),
+            "created_at": source.created_at,
             "started_at": source.started_at,
             "updated_at": source.updated_at,
             "closed_at": source.closed_at,

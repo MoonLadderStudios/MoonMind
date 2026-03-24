@@ -444,7 +444,8 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         )
 
         original_run_id = created.run_id
-        original_started_at = created.started_at
+        # After creation, started_at is None until a running-state transition.
+        assert created.started_at is None
         workflow_id = created.workflow_id
         response = await service.update_execution(
             workflow_id=workflow_id,
@@ -466,7 +467,8 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         assert response["continue_as_new_cause"] == "manual_rerun"
         assert refreshed.workflow_id == workflow_id
         assert refreshed.run_id != original_run_id
-        assert refreshed.started_at == original_started_at
+        # started_at now gets populated on first running-state transition
+        assert refreshed.started_at is not None
         assert refreshed.rerun_count == 1
         assert refreshed.memo["continue_as_new_cause"] == "manual_rerun"
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id

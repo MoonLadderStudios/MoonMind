@@ -153,7 +153,7 @@ function createProposalRow(overrides = {}) {
   const expectedKeys = [
     "runtimeMode",
     "skillId",
-    "createdAt",
+    "scheduledFor",
     "startedAt",
     "finishedAt",
   ];
@@ -221,10 +221,10 @@ function createProposalRow(overrides = {}) {
 })();
 
 (function testRenderQueueTableWithDescSortStateAddsAriaSortDescending() {
-  const sortState = { field: "createdAt", direction: "desc" };
+  const sortState = { field: "scheduledFor", direction: "desc" };
   const html = renderTaskTable([createTaskRow()], sortState);
-  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on createdAt column');
-  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on createdAt column');
+  assert(html.includes('aria-sort="descending"'), 'Expected descending aria-sort on scheduledFor column');
+  assert(html.includes('class="sortable-header sort-desc"'), 'Expected sort-desc class on scheduledFor column');
   assert(html.includes('\u25bc'), 'Expected descending indicator \u25bc');
 })();
 
@@ -292,6 +292,18 @@ function createProposalRow(overrides = {}) {
   assert.strictEqual(sorted[0].rawStatus, 'failed');
   assert.strictEqual(sorted[1].rawStatus, 'running');
   assert.strictEqual(sorted[2].rawStatus, 'completed');
+})();
+
+(function testSortRowsByColumnScheduledForFallsBackToCreatedAt() {
+  const rows = [
+    createTaskRow({ id: 'job-a', scheduledFor: null, createdAt: '2026-03-10T00:00:00Z' }),
+    createTaskRow({ id: 'job-b', scheduledFor: null, createdAt: '2026-03-12T00:00:00Z' }),
+    createTaskRow({ id: 'job-c', scheduledFor: '2026-03-15T00:00:00Z', createdAt: '2026-03-08T00:00:00Z' }),
+  ];
+  const sorted = sortRowsByColumn(rows, 'scheduledFor', 'desc');
+  assert.strictEqual(sorted[0].id, 'job-c', 'Explicit scheduledFor should sort first when newest');
+  assert.strictEqual(sorted[1].id, 'job-b', 'Null scheduledFor should fall back to createdAt');
+  assert.strictEqual(sorted[2].id, 'job-a', 'Oldest createdAt should sort last');
 })();
 
 (function testSortRowsByColumnDoesNotMutateOriginalArray() {

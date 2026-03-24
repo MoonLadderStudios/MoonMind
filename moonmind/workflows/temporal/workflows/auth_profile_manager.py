@@ -311,7 +311,9 @@ class MoonMindAuthProfileManagerWorkflow:
             self._evict_expired_leases()
 
             # Check continue-as-new threshold.
-            if self._event_count >= _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW:
+            # We use get_current_history_length() to account for timer loops
+            # that don't increment self._event_count, or server suggestions.
+            if workflow.info().get_current_history_length() >= _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW or workflow.info().is_continue_as_new_suggested():
                 workflow.continue_as_new(self._build_continue_as_new_input())
 
             # Reset event flag and wait for new signals or periodic wake-up.

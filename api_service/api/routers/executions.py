@@ -423,7 +423,7 @@ def _serialize_execution(
         counts=_manifest_attr(manifest_status, "counts"),
         artifacts_count=len(record.artifact_refs or []),
         scheduled_for=getattr(record, "scheduled_for", None),
-        created_at=record.started_at,
+        created_at=getattr(record, "created_at", None) or record.started_at,
         actions=actions,
         debug_fields=debug_fields,
         redirect_path=f"/tasks/{record.workflow_id}?source=temporal",

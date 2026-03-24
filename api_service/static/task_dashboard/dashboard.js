@@ -194,7 +194,6 @@
       ? systemConfig.temporalCompatibility
       : {};
   const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
-  const WORKFLOWS_WITHOUT_LIVE_LOGS = ["MoonMind.ManifestIngest", "MoonMind.AuthProfileManager"];
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
   );
@@ -2480,9 +2479,9 @@
       tableSection: "primary",
     },
     {
-      key: "createdAt",
-      label: "Created",
-      render: (row) => escapeHtml(formatTimestamp(row.createdAt)),
+      key: "scheduledFor",
+      label: "Scheduled",
+      render: (row) => escapeHtml(formatTimestamp(row.scheduledFor || row.createdAt)),
       tableSection: "timeline",
     },
     {
@@ -3229,6 +3228,7 @@
         attentionRequired: Boolean(pick(item, "attentionRequired")),
         title: String(pick(item, "title") || "Temporal execution").trim(),
         createdAt: pick(item, "createdAt") || pick(item, "startedAt"),
+        scheduledFor: pick(item, "scheduledFor"),
         startedAt: pick(item, "startedAt"),
         finishedAt: pick(item, "closedAt"),
         updatedAt,
@@ -3266,7 +3266,7 @@
     });
   }
 
-  const TIMESTAMP_SORT_FIELDS = new Set(["createdAt", "startedAt", "finishedAt"]);
+  const TIMESTAMP_SORT_FIELDS = new Set(["scheduledFor", "createdAt", "startedAt", "finishedAt"]);
 
   function sortRowsByColumn(rows, field, direction) {
     const dir = direction === "asc" ? 1 : -1;
@@ -3275,8 +3275,9 @@
       let leftVal;
       let rightVal;
       if (TIMESTAMP_SORT_FIELDS.has(field)) {
-        leftVal = Date.parse(left[field] || 0) || 0;
-        rightVal = Date.parse(right[field] || 0) || 0;
+        const getRawTimestamp = (row) => field === "scheduledFor" ? (row[field] || row.createdAt) : row[field];
+        leftVal = Date.parse(getRawTimestamp(left) || 0) || 0;
+        rightVal = Date.parse(getRawTimestamp(right) || 0) || 0;
         if (leftVal !== rightVal) {
           return dir * (leftVal - rightVal);
         }
@@ -3499,7 +3500,7 @@
       pageEnd: 0,
     };
     let stableListOrderIndex = new Map();
-    let columnSort = { field: "createdAt", direction: "desc" };
+    let columnSort = { field: "scheduledFor", direction: "desc" };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -6985,6 +6986,7 @@
     planning: ["rename", "cancel"],
     queued: ["rename", "cancel"],
     running: ["pause", "rename", "cancel"],
+    scheduled: ["rename", "cancel"],
     succeeded: ["rerun"],
   };
 
@@ -7542,6 +7544,7 @@
         ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
         ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
         ${pick(execution, "scheduledFor") ? `<div class="card"><strong>Scheduled For:</strong> ${escapeHtml(formatTimestamp(pick(execution, "scheduledFor")))}</div>` : ""}
+        <div class="card"><strong>Created:</strong> ${escapeHtml(formatTimestamp(pick(execution, "createdAt")))}</div>
         <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
         <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
         <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
@@ -7577,37 +7580,6 @@
       }</tbody>
         </table>
       </section>
-      ${WORKFLOWS_WITHOUT_LIVE_LOGS.includes(String(pick(execution, "workflowType") || "")) ? "" : `
-      <section id="temporal-live-logs-section">
-        <h3>Live Logs</h3>
-        <div id="temporal-live-logs-inactive">
-          <p class="small">Event logs are not streamed by default. Start tailing to see live output from this task.</p>
-          <button type="button" id="temporal-start-tailing">Start Tailing</button>
-        </div>
-        <div id="temporal-live-logs-active" style="display:none">
-          <div class="actions queue-live-output-toolbar">
-            <label class="queue-inline-toggle">
-              <input type="checkbox" id="temporal-follow-output" checked />
-              Follow output
-            </label>
-            <label class="queue-inline-filter">
-              Filter
-              <select id="temporal-output-filter">
-                <option value="all" selected>All</option>
-                <option value="stages">Stages</option>
-                <option value="logs">Logs</option>
-                <option value="warnings">Warnings/Errors</option>
-              </select>
-            </label>
-            <button type="button" class="secondary" id="temporal-copy-output">Copy</button>
-            <button type="button" class="secondary" id="temporal-stop-tailing">Stop</button>
-            <span class="small" id="temporal-live-transport-status">Live transport: Idle</span>
-          </div>
-          <pre id="temporal-live-output" class="queue-live-output"></pre>
-        </div>
-      </section>
-      <section id="temporal-live-output-section"></section>
-      `}
       ${debugFields}
     `;
   }
