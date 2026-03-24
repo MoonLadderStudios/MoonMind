@@ -379,7 +379,6 @@ class MoonMindRunWorkflow:
                 "Ensure the planning activity returns a non-None 'plan_ref'."
             )
         self._set_state(STATE_EXECUTING, summary="Executing run steps.")
-        self._step_count += 1
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await workflow.execute_activity(
@@ -458,6 +457,7 @@ class MoonMindRunWorkflow:
             node_id = str(node.get("id") or "unknown")
             node_inputs = dict(node.get("inputs", {}))
 
+            self._step_count = index
             self._summary = (
                 f"Executing plan step {index}/{len(ordered_nodes)}: {tool_name}"
             )
@@ -748,7 +748,7 @@ class MoonMindRunWorkflow:
                 workspace_spec[ws_key] = ws_val
 
         parameters: dict[str, Any] = {}
-        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts"):
+        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts", "steps"):
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
