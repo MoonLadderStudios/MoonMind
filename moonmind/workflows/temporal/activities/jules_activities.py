@@ -27,6 +27,8 @@ from moonmind.workflows.adapters.jules_client import JulesClient
 
 logger = logging.getLogger(__name__)
 
+_JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
+
 
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
@@ -83,7 +85,7 @@ async def _generate_llm_answer(prompt: str) -> str:
             "No GEMINI_API_KEY or GOOGLE_API_KEY set; falling back to "
             "default auto-answer behaviour"
         )
-        return "Proceed with your recommendation."
+        return _JULES_FALLBACK_ANSWER
 
     try:
         import google.generativeai as genai  # type: ignore[import-untyped]
