@@ -129,10 +129,16 @@ def normalize_issue_comment(comment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_review_comment(comment: dict[str, Any]) -> dict[str, Any]:
+def normalize_review_comment(
+    comment: dict[str, Any],
+    *,
+    thread_states: dict[int, dict[str, bool]] | None = None,
+) -> dict[str, Any]:
+    cid = comment.get("id")
+    ts = (thread_states or {}).get(cid, {}) if isinstance(cid, int) else {}
     return {
         "type": "review_comment",
-        "id": comment.get("id"),
+        "id": cid,
         "user": (comment.get("user") or {}).get("login"),
         "body": comment.get("body", ""),
         "created_at": comment.get("created_at"),
@@ -143,6 +149,8 @@ def normalize_review_comment(comment: dict[str, Any]) -> dict[str, Any]:
         "in_reply_to_id": comment.get("in_reply_to_id"),
         "line": comment.get("line"),
         "side": comment.get("side"),
+        "thread_resolved": ts.get("resolved", False),
+        "thread_outdated": ts.get("outdated", False),
     }
 
 
@@ -157,6 +165,100 @@ def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
         "updated_at": review.get("submitted_at") or review.get("updated_at"),
         "url": review.get("html_url"),
     }
+
+
+_REVIEW_THREADS_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          isResolved
+          isOutdated
+          comments(first: 1) {
+            nodes { databaseId }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def fetch_review_thread_states(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    token: str | None,
+) -> dict[int, dict[str, bool]]:
+    """Fetch isResolved/isOutdated for every review thread via GraphQL.
+
+    Returns a mapping from review-comment database ID to
+    ``{"resolved": bool, "outdated": bool}``.
+    """
+    if not token:
+        return {}
+
+    url = "https://api.github.com/graphql"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "moonmind-get-pr-comments",
+    }
+
+    result: dict[int, dict[str, bool]] = {}
+    cursor: str | None = None
+
+    for _ in range(20):  # pagination safety cap
+        variables: dict[str, Any] = {
+            "owner": owner,
+            "repo": repo,
+            "number": pr_number,
+        }
+        if cursor:
+            variables["cursor"] = cursor
+
+        body = json.dumps({"query": _REVIEW_THREADS_QUERY, "variables": variables})
+        request = urllib.request.Request(
+            url, data=body.encode("utf-8"), headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
+            # GraphQL enrichment is best-effort; fall back to no data.
+            return result
+
+        data = (payload.get("data") or {})
+        repo_node = data.get("repository") or {}
+        pr_node = repo_node.get("pullRequest") or {}
+        threads_node = pr_node.get("reviewThreads") or {}
+        nodes = threads_node.get("nodes") or []
+
+        for thread in nodes:
+            if not isinstance(thread, dict):
+                continue
+            is_resolved = bool(thread.get("isResolved", False))
+            is_outdated = bool(thread.get("isOutdated", False))
+            comments_nodes = (thread.get("comments") or {}).get("nodes") or []
+            for comment_node in comments_nodes:
+                if not isinstance(comment_node, dict):
+                    continue
+                db_id = comment_node.get("databaseId")
+                if isinstance(db_id, int):
+                    result[db_id] = {
+                        "resolved": is_resolved,
+                        "outdated": is_outdated,
+                    }
+
+        page_info = threads_node.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            break
+        cursor = page_info.get("endCursor")
+
+    return result
 
 
 def main() -> None:
@@ -216,9 +318,15 @@ def main() -> None:
     issue_comments_raw = fetch_paginated(f"{base}/issues/{pr_number}/comments", token)
     review_comments_raw = fetch_paginated(f"{base}/pulls/{pr_number}/comments", token)
 
+    # Fetch thread resolution state via GraphQL
+    thread_states = fetch_review_thread_states(owner, repo, pr_number, token)
+
     comments: list[dict[str, Any]] = []
     comments.extend(normalize_issue_comment(c) for c in issue_comments_raw)
-    comments.extend(normalize_review_comment(c) for c in review_comments_raw)
+    comments.extend(
+        normalize_review_comment(c, thread_states=thread_states)
+        for c in review_comments_raw
+    )
 
     if not args.exclude_reviews:
         reviews_raw = fetch_paginated(f"{base}/pulls/{pr_number}/reviews", token)
