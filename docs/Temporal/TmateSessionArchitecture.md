@@ -8,7 +8,7 @@ Last Updated: 2026-03-24
 
 ## 1. Purpose
 
-This document is the single authoritative reference for tmate session management in MoonMind. It consolidates design decisions previously scattered across `LiveTaskManagement.md` (§4) and `UniversalTmateOAuth.md` (§6–9), and defines the shared `TmateSessionManager` abstraction that both use cases consume.
+This document is the single authoritative reference for tmate session management in MoonMind. It consolidates design decisions previously scattered across `LiveTaskManagement.md` (§4) and `UniversalTmateOAuth.md` (§6–9), and defines the shared `TmateSessionManager` abstraction that both use cases will consume.
 
 ### Related Documents
 
@@ -27,7 +27,7 @@ Tmate serves two distinct roles in MoonMind:
 | **Runtime wrapping** | Every managed agent run (Gemini, Codex, Claude, Cursor) is wrapped in a tmate session to enable live log tailing and terminal handoff from Mission Control. | `ManagedRuntimeLauncher.launch()` |
 | **OAuth sessions** | Short-lived Docker containers with tmate give users an interactive terminal to complete provider OAuth login flows. | `oauth_session_activities.start_auth_runner()` |
 
-Both share identical lifecycle concerns (session creation, readiness detection, endpoint extraction, teardown) but were historically implemented independently.
+Both share identical lifecycle concerns (session creation, readiness detection, endpoint extraction, teardown) but are currently implemented independently. The `TmateSessionManager` defined in §4 is the **target abstraction** that will unify them.
 
 ---
 
@@ -49,6 +49,9 @@ DISABLED → STARTING → READY → (ENDED | REVOKED | ERROR)
 ---
 
 ## 4. Shared Abstraction: `TmateSessionManager`
+
+> [!NOTE]
+> `TmateSessionManager` is **target architecture** — it does not exist yet. Currently, `launcher.py` contains inline tmate lifecycle logic and `oauth_session_activities.py` uses a separate Docker-exec polling approach. Phase 1 of the implementation plan extracts this shared class.
 
 ### 4.1 Location
 
@@ -136,7 +139,9 @@ MOONMIND_TMATE_SERVER_RSA_FINGERPRINT=""
 MOONMIND_TMATE_SERVER_ED25519_FINGERPRINT=""
 ```
 
-### 4.4 Consumer Wiring
+### 4.4 Consumer Wiring (Target State)
+
+The following shows the intended refactoring. Neither consumer has been migrated yet.
 
 #### Runtime Wrapping (launcher.py)
 
@@ -189,6 +194,7 @@ The `workflow_live_sessions` table stores tmate endpoint metadata for running ta
 | `attach_rw_encrypted` | String | RW SSH string, encrypted at rest |
 | `web_ro` | String | Web viewer URL (RO) |
 | `web_rw_encrypted` | String | Web viewer URL (RW), encrypted |
+| `expires_at` | Timestamp | Session expiry time; NULL for sessions that live until process exit |
 | `last_heartbeat_at` | Timestamp | Updated by worker while session is alive |
 | `error_message` | String | Optional failure diagnostics |
 
@@ -255,7 +261,7 @@ The worker Docker image must include:
 
 ## 9. Implementation Phases
 
-See [implementation_plan.md](file:///Users/nsticco/.gemini/antigravity/brain/862b8c5a-6c79-47bd-8881-f6d354fafabe/implementation_plan.md) for the phased rollout plan. Summary:
+The phased rollout plan is tracked in the implementation plan artifact. Summary:
 
 1. **Phase 1**: Extract `TmateSessionManager`, wire self-hosted config, fix dead code and status enum
 2. **Phase 2**: Endpoint persistence (`workflow_live_sessions` table + API)

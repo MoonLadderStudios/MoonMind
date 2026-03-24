@@ -59,7 +59,10 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 
 ### 4.2 Session Bootstrap (ManagedRuntimeLauncher)
 
-The `ManagedRuntimeLauncher` wraps agent invocations in a tmate session using the shared `TmateSessionManager` (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) §4):
+> [!NOTE]
+> The description below is **target architecture**. Currently, `ManagedRuntimeLauncher.launch()` contains inline tmate lifecycle logic (~100 lines) that handles socket creation, config file generation, readiness waiting, and endpoint extraction directly. The target state refactors this into the shared `TmateSessionManager` (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) §4).
+
+In the target architecture, the launcher delegates tmate concerns to `TmateSessionManager`:
 
 1. **Launcher wrapping**: When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. The manager handles socket creation, config file generation (including self-hosted server settings), readiness detection, and endpoint extraction.
 2. **Endpoint persistence**: After `start()` returns `TmateEndpoints`, the launcher (or supervisor callback) invokes the `agent_runtime.report_live_session` activity to persist endpoints to the `workflow_live_sessions` table.

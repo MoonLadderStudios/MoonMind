@@ -181,16 +181,19 @@ A small provider-specific contract that defines:
 
 Calls the existing auth-profile registration path after successful verification.
 
-### F. TmateSessionManager (shared)
+### F. TmateSessionManager (shared — target architecture)
 
-The session orchestrator delegates tmate lifecycle management to the shared `TmateSessionManager` defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4. This includes:
+> [!NOTE]
+> `TmateSessionManager` does not exist yet. Currently, `oauth_session_activities.py` uses a Docker-exec polling approach with hardcoded `/tmp/tmate.sock`. The target architecture delegates tmate lifecycle management to the shared abstraction defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.
+
+In the target state, the session orchestrator will delegate tmate lifecycle management to `TmateSessionManager`. This includes:
 
 * session creation with per-session config (including self-hosted server options)
 * readiness detection via `tmate wait tmate-ready`
 * endpoint extraction (`web_ro`, `web_rw`, `ssh_ro`, `ssh_rw`)
 * teardown and socket cleanup
 
-The same abstraction is used by `ManagedRuntimeLauncher` for runtime session wrapping, ensuring consistent behavior across both use cases.
+The same abstraction will also be used by `ManagedRuntimeLauncher` for runtime session wrapping, ensuring consistent behavior across both use cases.
 
 ---
 
@@ -577,10 +580,6 @@ tmate sessions should be short-lived:
 * auto-expire if idle
 * auto-destroy after success
 
-## 14.6 Self-hosted tmate server
-
-For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.3 for configuration details.
-
 ## 14.3 Secret handling
 
 Do not send credential contents to the UI.
@@ -608,6 +607,10 @@ Store:
 * when it started
 * when it ended
 * whether it succeeded
+
+## 14.6 Self-hosted tmate server
+
+For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.3 for configuration details.
 
 ---
 
