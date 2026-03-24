@@ -63,3 +63,19 @@ class TestConcreteDefaults:
         parser = s.create_output_parser()
         from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser
         assert isinstance(parser, PlainTextOutputParser)
+
+    @pytest.mark.parametrize(
+        ("failure_class", "expected"),
+        [
+            (None, False),
+            ("not_a_real_failure_class", False),
+            ("transient_runtime", True),
+            ("stuck_no_progress", True),
+            ("deterministic_contract", False),
+            ("deterministic_policy", False),
+            ("deterministic_repo", False),
+        ],
+    )
+    def test_should_retry_exit(self, failure_class: str | None, expected: bool) -> None:
+        s = self._MinimalStrategy()
+        assert s.should_retry_exit(failure_class) is expected
