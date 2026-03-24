@@ -142,7 +142,8 @@ def test_submit_create_task_flow_successful_navigation(server):
 
             with page.expect_response(
                 lambda response: "/api/executions" in response.url
-                and response.request.method == "POST"            ) as response_info:
+                and response.request.method == "POST"
+            ) as response_info:
                 submit_button.click()
                 expect(submit_button).to_have_text("Submitting...")
             response = response_info.value
@@ -163,7 +164,8 @@ def test_submit_create_task_flow_error_restores_label(server):
             original_label = submit_button.inner_text().strip()
             with page.expect_response(
                 lambda response: "/api/executions" in response.url
-                and response.request.method == "POST"            ) as response_info:
+                and response.request.method == "POST"
+            ) as response_info:
                 submit_button.click()
                 expect(submit_button).to_have_text("Submitting...")
             response = response_info.value
