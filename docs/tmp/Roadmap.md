@@ -186,7 +186,7 @@ Remaining items within each milestone are numbered **M.N** (milestone.item) and 
 - MCP server endpoint (`/context` — `context_protocol.py`)
 - MCP tools wrapper (`mcp_tools.py`)
 - OpenAI-compatible chat API (`chat.py`)
-- Codex MCP tools adapter doc
+- Operator doc [`docs/ModelContextProtocol.md`](../ModelContextProtocol.md) (context endpoint + `/mcp` HTTP tools; supersedes removed `CodexMcpToolsAdapter.md`)
 
 ### Remaining tasks
 - [ ] **8.1** MCP Streamable HTTP Transport (2025 spec) — Current `/context` is REST-style; modern MCP uses streamable HTTP

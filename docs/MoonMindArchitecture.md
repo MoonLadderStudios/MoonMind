@@ -209,7 +209,7 @@ See: [Memory Architecture](Memory/MemoryArchitecture.md) · [Memory Research](Me
 
 MoonMind implements an MCP server endpoint at `POST /context`. This gives agent runtimes (OpenHands or others) a standardized interface to MoonMind's model routing, RAG, and policy layers — decoupling agent UX from specific model vendors.
 
-See: [Model Context Protocol](model_context_protocol.md)
+See: [Model Context Protocol](ModelContextProtocol.md)
 
 ---
 
