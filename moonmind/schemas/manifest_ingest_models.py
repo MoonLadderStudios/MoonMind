@@ -12,7 +12,7 @@ ManifestLifecycleState = Literal[
     "initializing",
     "executing",
     "finalizing",
-    "succeeded",
+    "completed",
     "failed",
     "canceled",
 ]
@@ -20,7 +20,7 @@ ManifestNodeState = Literal[
     "pending",
     "ready",
     "running",
-    "succeeded",
+    "completed",
     "failed",
     "canceled",
 ]
@@ -62,7 +62,7 @@ class ManifestNodeCountsModel(BaseModel):
     pending: int = Field(0, alias="pending", ge=0)
     ready: int = Field(0, alias="ready", ge=0)
     running: int = Field(0, alias="running", ge=0)
-    succeeded: int = Field(0, alias="succeeded", ge=0)
+    succeeded: int = Field(0, alias="completed", ge=0)
     failed: int = Field(0, alias="failed", ge=0)
     canceled: int = Field(0, alias="canceled", ge=0)
 
@@ -264,7 +264,7 @@ def manifest_node_counts_from_nodes(
             counts.ready += 1
         elif state == "running":
             counts.running += 1
-        elif state == "succeeded":
+        elif state == "completed":
             counts.succeeded += 1
         elif state == "failed":
             counts.failed += 1

@@ -69,7 +69,7 @@ class TestReviewRequest:
             "tool_version": "1.0.0",
             "tool_type": "skill",
             "inputs": {"repo_ref": "git:org/repo#branch"},
-            "execution_result": {"status": "SUCCEEDED", "outputs": {}},
+            "execution_result": {"status": "COMPLETED", "outputs": {}},
             "workflow_context": {"workflow_id": "wf-1", "plan_title": "Fix tests"},
         }
         defaults.update(overrides)
@@ -206,7 +206,7 @@ class TestBuildReviewPrompt:
             tool_version="1.0.0",
             tool_type="skill",
             inputs={"repo_ref": "git:org/repo#branch"},
-            execution_result={"status": "SUCCEEDED"},
+            execution_result={"status": "COMPLETED"},
             workflow_context={"plan_title": "Fix tests"},
         )
         prompt = build_review_prompt(req)

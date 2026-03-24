@@ -55,7 +55,7 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
     "intervention_requested": "intervention_requested",
     "collecting_results": "collecting_results",
     "completed": RunStatus.completed,
-    "succeeded": RunStatus.completed,
+    "completed": RunStatus.completed,
     "success": RunStatus.completed,
     "done": RunStatus.completed,
     "resolved": RunStatus.completed,

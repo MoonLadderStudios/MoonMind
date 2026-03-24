@@ -8,7 +8,7 @@ from typing import Literal
 JulesNormalizedStatus = Literal[
     "queued",
     "running",
-    "succeeded",
+    "completed",
     "failed",
     "canceled",
     "unknown",
@@ -17,7 +17,7 @@ JulesNormalizedStatus = Literal[
 
 JULES_DEFAULT_PROVIDER_STATUS = "pending"
 JULES_SUCCESS_PROVIDER_STATUSES = frozenset(
-    {"completed", "succeeded", "success", "done", "resolved", "finished"}
+    {"completed", "success", "done", "resolved", "finished"}
 )
 JULES_CANCELED_PROVIDER_STATUSES = frozenset({"cancelled", "canceled"})
 JULES_FAILED_PROVIDER_STATUSES = frozenset(
@@ -59,7 +59,7 @@ def normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
     provider_status_token = provider_status.lower()
 
     if provider_status_token in JULES_SUCCESS_PROVIDER_STATUSES:
-        normalized_status: JulesNormalizedStatus = "succeeded"
+        normalized_status: JulesNormalizedStatus = "completed"
     elif provider_status_token in JULES_CANCELED_PROVIDER_STATUSES:
         normalized_status = "canceled"
     elif provider_status_token in JULES_FAILED_PROVIDER_STATUSES:
@@ -77,8 +77,8 @@ def normalize_jules_status(raw_status: str | None) -> JulesStatusSnapshot:
         provider_status=provider_status,
         provider_status_token=provider_status_token,
         normalized_status=normalized_status,
-        terminal=normalized_status in {"succeeded", "failed", "canceled"},
-        succeeded=normalized_status == "succeeded",
+        terminal=normalized_status in {"completed", "failed", "canceled"},
+        succeeded=normalized_status == "completed",
         failed=normalized_status == "failed",
         canceled=normalized_status == "canceled",
     )

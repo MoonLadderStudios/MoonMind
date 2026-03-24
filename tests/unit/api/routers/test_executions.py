@@ -826,7 +826,7 @@ def test_manifest_status_route_returns_bounded_snapshot() -> None:
                 "pending": 0,
                 "ready": 1,
                 "running": 1,
-                "succeeded": 0,
+                "completed": 0,
                 "failed": 0,
                 "canceled": 0,
             },

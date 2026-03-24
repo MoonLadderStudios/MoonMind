@@ -6445,12 +6445,12 @@ async def test_run_jules_runtime_instruction_emits_canonical_events_and_records(
     assert len(records) == 1
     record = records[0]
     assert record.task_id == "task-123"
-    assert record.status == "succeeded"
+    assert record.status == "completed"
     assert record.provider_status == "completed"
     assert record.url == "https://github.com/example/repo/pull/42"
     assert record.failed is False
     assert record.error is None
-    assert record.status_history == ("queued", "running", "succeeded")
+    assert record.status_history == ("queued", "running", "completed")
     assert record.provider_status_history == ("pending", "running", "completed")
 
 
@@ -6502,7 +6502,7 @@ async def test_finish_reports_include_jules_runtime_artifact(
             step_index=0,
             total_steps=1,
             task_id="task-123",
-            status="succeeded",
+            status="completed",
             provider_status="completed",
             url="https://github.com/example/repo/pull/42",
             submitted_at=started_at.isoformat(),
@@ -6510,7 +6510,7 @@ async def test_finish_reports_include_jules_runtime_artifact(
             completed_at=finished_at.isoformat(),
             failed=False,
             error=None,
-            status_history=("queued", "running", "succeeded"),
+            status_history=("queued", "running", "completed"),
             provider_status_history=("pending", "running", "completed"),
         )
     ]
@@ -6551,10 +6551,10 @@ async def test_finish_reports_include_jules_runtime_artifact(
     assert runtime_payload["provider"] == "jules"
     assert runtime_payload["providerCancelSupported"] is False
     assert runtime_payload["taskCount"] == 1
-    assert runtime_payload["latestStatus"] == "succeeded"
+    assert runtime_payload["latestStatus"] == "completed"
     assert runtime_payload["latestProviderStatus"] == "completed"
     assert runtime_payload["tasks"][0]["taskId"] == "task-123"
-    assert runtime_payload["tasks"][0]["status"] == "succeeded"
+    assert runtime_payload["tasks"][0]["status"] == "completed"
     assert runtime_payload["tasks"][0]["providerStatus"] == "completed"
 
 
@@ -6898,7 +6898,7 @@ async def test_jules_worker_resumes_checkpoint_without_resubmitting_task(
     last_state = queue.runtime_state_updates[-1]["runtime_state"]
     assert isinstance(last_state, dict)
     assert last_state.get("externalTaskId") == "task-resume-1"
-    assert last_state.get("status") == "succeeded"
+    assert last_state.get("status") == "completed"
     assert last_state.get("providerStatus") == "completed"
 
 

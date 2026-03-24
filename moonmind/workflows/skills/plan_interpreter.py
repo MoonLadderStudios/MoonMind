@@ -66,7 +66,7 @@ class PlanProgress:
             "total_nodes": self.total_nodes,
             "pending": self.pending,
             "running": self.running,
-            "succeeded": self.succeeded,
+            "completed": self.succeeded,
             "failed": self.failed,
             "last_event": self.last_event,
             "updated_at": self.updated_at,
@@ -294,7 +294,7 @@ class PlanInterpreter:
             )
             return
 
-        if result.status == "SUCCEEDED":
+        if result.status == "COMPLETED":
             succeeded[node_id] = result
         elif result.status == "CANCELLED":
             failures[node_id] = SkillFailure(
@@ -444,7 +444,7 @@ class PlanInterpreter:
         elif skipped:
             status = "PARTIAL"
         else:
-            status = "SUCCEEDED"
+            status = "COMPLETED"
 
         progress = self._latest_progress or PlanProgress.create(
             total_nodes=len(self._plan.nodes),

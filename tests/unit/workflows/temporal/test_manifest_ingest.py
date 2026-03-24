@@ -137,7 +137,7 @@ def test_initialize_manifest_projection_sets_defaults_for_missing_fields() -> No
         "pending": 0,
         "ready": 0,
         "running": 0,
-        "succeeded": 0,
+        "completed": 0,
         "failed": 0,
         "canceled": 0,
     }
@@ -456,7 +456,7 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
         )
     )
 
-    assert result["status"] == "succeeded"
+    assert result["status"] == "completed"
     assert activity_calls[0] == (
         "manifest_read",
         {"principal": "user-1", "manifest_ref": "art_manifest_1"},
@@ -919,7 +919,7 @@ def test_manifest_workflow_dependency_ordering_blocks_dependents(
         )
     )
 
-    assert result["status"] == "succeeded"
+    assert result["status"] == "completed"
     assert child_execution_order == ["node-a", "node-b"]
 
 
@@ -1009,7 +1009,7 @@ def test_best_effort_continues_after_failures(
     # best_effort: workflow completes with failed status, but node-b still ran
     assert result["status"] == "failed"
     assert workflow_instance._nodes["node-a"]["state"] == "failed"
-    assert workflow_instance._nodes["node-b"]["state"] == "succeeded"
+    assert workflow_instance._nodes["node-b"]["state"] == "completed"
 
 
 def test_continue_and_report_is_accepted_policy_value() -> None:
@@ -1154,7 +1154,7 @@ def test_authorization_lineage_propagated_to_child(
         )
     )
 
-    assert result["status"] == "succeeded"
+    assert result["status"] == "completed"
     assert len(child_calls) == 1
 
     child_params = child_calls[0]

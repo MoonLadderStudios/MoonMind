@@ -31,7 +31,7 @@ TaskStatusFilter = (
         "running",
         "waiting",
         "awaiting_action",
-        "succeeded",
+        "completed",
         "failed",
         "cancelled",
     ]
@@ -474,7 +474,7 @@ class TaskCompatibilityService:
             allowed_keys=_ALLOWED_SEARCH_ATTRIBUTE_KEYS,
         )
         raw_state = record.state.value
-        is_terminal = row.status in {"succeeded", "failed", "cancelled"}
+        is_terminal = row.status in {"completed", "failed", "cancelled"}
         can_pause = not is_terminal and raw_state != "awaiting_external"
         can_resume = not is_terminal and raw_state == "awaiting_external"
         waiting_reason = str(memo.get("waiting_reason") or "").strip() or None
@@ -684,7 +684,7 @@ class TaskCompatibilityService:
             "queued": ("Any",),
             "running": ("Any",),
             "awaiting_action": (),
-            "succeeded": ("Any",),
+            "completed": ("Any",),
             "failed": (
                 "Any",
                 "Any",

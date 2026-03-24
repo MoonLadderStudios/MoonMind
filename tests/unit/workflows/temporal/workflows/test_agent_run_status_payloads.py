@@ -53,7 +53,7 @@ def test_coerce_external_status_payload_maps_terminal_success() -> None:
         status_payload={
             "external_id": "jules-task-003",
             "status": "COMPLETED",
-            "normalized_status": "succeeded",
+            "normalized_status": "completed",
             "provider_status": "COMPLETED",
             "terminal": True,
         },
@@ -110,10 +110,10 @@ def test_coerce_external_start_status_maps_succeeded_to_completed() -> None:
     status, normalized = workflow_instance._coerce_external_start_status(
         {
             "external_id": "jules-task-006",
-            "normalized_status": "succeeded",
+            "normalized_status": "completed",
             "provider_status": "completed",
         }
     )
 
     assert status == RunStatus.completed
-    assert normalized == "succeeded"
+    assert normalized == "completed"

@@ -145,7 +145,7 @@ async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
-    return {"status": "SUCCEEDED", "outputs": {}}
+    return {"status": "COMPLETED", "outputs": {}}
 
 
 @activity.defn(name="mm.skill.execute")
@@ -175,7 +175,7 @@ async def mock_integration_status(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_STATUS_CALLS.append(args)
     if len(INTEGRATION_STATUS_CALLS) <= 1:
         return {"normalized_status": "running"}
-    return {"normalized_status": "succeeded"}
+    return {"normalized_status": "completed"}
 
 
 @activity.defn(name="proposal.generate")

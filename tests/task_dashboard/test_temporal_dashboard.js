@@ -287,7 +287,7 @@ const helpers = loadTemporalHelpers();
 
 (function testTemporalDetailMarkupLiveLogsDefaultsToCollapsed() {
   const html = helpers.renderTemporalDetailMarkup({
-    execution: { state: "succeeded", workflowType: "MoonMind.LegacyWorkflow" },
+    execution: { state: "completed", workflowType: "MoonMind.LegacyWorkflow" },
     latestWorkflowId: "mm:wf-collapsed",
     latestRunId: "run-002",
     artifacts: { artifacts: [] },

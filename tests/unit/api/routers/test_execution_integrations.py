@@ -167,7 +167,7 @@ async def test_callback_rejects_missing_configured_token(monkeypatch):
             f"/api/integrations/jules/callbacks/{callback_key}",
             json={
                 "eventType": "completed",
-                "normalizedStatus": "succeeded",
+                "normalizedStatus": "completed",
             },
         )
 
@@ -190,12 +190,12 @@ async def test_callback_accepts_matching_bearer_token(monkeypatch):
             json={
                 "eventType": "completed",
                 "providerEventId": "evt-1",
-                "normalizedStatus": "succeeded",
+                "normalizedStatus": "completed",
             },
         )
 
     assert response.status_code == 202
-    assert response.json()["integration"]["normalizedStatus"] == "succeeded"
+    assert response.json()["integration"]["normalizedStatus"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -333,7 +333,7 @@ async def test_callback_can_capture_raw_payload_artifact(tmp_path, monkeypatch):
             json={
                 "eventType": "completed",
                 "providerEventId": "evt-artifact",
-                "normalizedStatus": "succeeded",
+                "normalizedStatus": "completed",
             },
         )
 

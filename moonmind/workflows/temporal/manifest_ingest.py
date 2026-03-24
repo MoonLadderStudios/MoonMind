@@ -921,7 +921,7 @@ class ManifestIngestWorkflow:
                 return False
             for d in set(node.get("dependencies", [])):
                 dep_node = self._nodes.get(d)
-                if not dep_node or dep_node["state"] != "succeeded":
+                if not dep_node or dep_node["state"] != "completed":
                     return False
             return True
 
@@ -964,7 +964,7 @@ class ManifestIngestWorkflow:
                     id=child_id,
                     parent_close_policy=workflow.ParentClosePolicy.REQUEST_CANCEL,
                 )
-                node["state"] = "succeeded"
+                node["state"] = "completed"
                 node["result_artifact_ref"] = child_result.get("output_artifact_ref")
             except asyncio.CancelledError as exc:
                 node["state"] = "canceled"
@@ -1032,8 +1032,8 @@ class ManifestIngestWorkflow:
                     "principal": self._activity_principal,
                     "workflow_id": self._workflow_id,
                     "state": (
-                        "succeeded"
-                        if all(n["state"] == "succeeded" for n in nodes_list)
+                        "completed"
+                        if all(n["state"] == "completed" for n in nodes_list)
                         else "failed"
                     ),
                     "phase": "completed",
@@ -1050,7 +1050,7 @@ class ManifestIngestWorkflow:
             self._summary_ref = summary_result[0]
             self._run_index_ref = summary_result[1]
 
-        final_status = "succeeded"
+        final_status = "completed"
         if any(n["state"] == "failed" for n in nodes_list):
             final_status = "failed"
 

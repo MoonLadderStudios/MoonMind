@@ -98,7 +98,7 @@ async def test_status_normalizes_provider_states():
 
     assert status.run_id == "task-abc"
     assert status.status == "completed"
-    assert status.metadata["normalizedStatus"] == "succeeded"
+    assert status.metadata["normalizedStatus"] == "completed"
 
 
 async def test_fetch_result_returns_summary():

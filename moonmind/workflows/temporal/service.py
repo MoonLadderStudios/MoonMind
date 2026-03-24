@@ -103,12 +103,12 @@ ALLOWED_WAITING_REASONS: set[str] = {
 ALLOWED_INTEGRATION_STATUSES: set[str] = {
     "queued",
     "running",
-    "succeeded",
+    "completed",
     "failed",
     "canceled",
     "unknown",
 }
-TERMINAL_INTEGRATION_STATUSES: set[str] = {"succeeded", "failed", "canceled"}
+TERMINAL_INTEGRATION_STATUSES: set[str] = {"completed", "failed", "canceled"}
 _SEEN_PROVIDER_EVENT_LIMIT = 50
 _CORRELATION_EXPIRY_DAYS = 30
 PAGINATION_ORDERING = "mm_updated_at_desc__workflow_id_desc"

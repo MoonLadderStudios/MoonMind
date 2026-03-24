@@ -252,7 +252,7 @@ async def test_update_manifest_state_returns_detail() -> None:
 
     payload = manifests_router.ManifestStateUpdateRequest(
         state_json={"docs": {"cursor": "abc"}},
-        last_run_status="succeeded",
+        last_run_status="completed",
     )
     response = await manifests_router.update_manifest_state(
         name="demo",

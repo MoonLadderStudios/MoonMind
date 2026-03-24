@@ -565,7 +565,7 @@ class MoonMindRunWorkflow:
                             "plan node execution result is missing required status field"
                         )
                     break
-                if result_status != "SUCCEEDED":
+                if result_status != "COMPLETED":
                     failure_message = self._activity_result_failure_message(
                         execution_result
                     )
@@ -596,7 +596,7 @@ class MoonMindRunWorkflow:
 
                 break
 
-            if result_status is None or result_status != "SUCCEEDED":
+            if result_status is None or result_status != "COMPLETED":
                 continue
 
             # --- Multi-step Jules: extract session_id only on success ---
@@ -783,7 +783,7 @@ class MoonMindRunWorkflow:
             diagnostics_ref = getattr(result, "diagnostics_ref", None)
             metadata = getattr(result, "metadata", {}) or {}
 
-        status = "FAILED" if failure else "SUCCEEDED"
+        status = "FAILED" if failure else "COMPLETED"
         outputs = {
             "summary": summary,
             "output_refs": output_refs,

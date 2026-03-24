@@ -188,7 +188,7 @@ class AutomationRunStatus(str, enum.Enum):
 
     QUEUED = "queued"
     IN_PROGRESS = "in_progress"
-    SUCCEEDED = "succeeded"
+    SUCCEEDED = "completed"
     FAILED = "failed"
     NO_CHANGES = "no_changes"
 
@@ -220,7 +220,7 @@ class AutomationTaskStatus(str, enum.Enum):
 
     PENDING = "pending"
     RUNNING = "running"
-    SUCCEEDED = "succeeded"
+    SUCCEEDED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
     RETRYING = "retrying"

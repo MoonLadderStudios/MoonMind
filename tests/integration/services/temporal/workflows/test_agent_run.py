@@ -210,7 +210,7 @@ async def mock_jules_status(run_id: str) -> dict:
             "observedAt": datetime.now(tz=UTC).isoformat(),
             "metadata": {
                 "providerStatus": "completed",
-                "normalizedStatus": "succeeded",
+                "normalizedStatus": "completed",
             },
         }
     return {
@@ -232,7 +232,7 @@ async def mock_jules_fetch_result(run_id: str) -> dict:
     return {
         "outputRefs": [],
         "summary": f"Jules task {run_id} completed successfully.",
-        "metadata": {"normalizedStatus": "succeeded"},
+        "metadata": {"normalizedStatus": "completed"},
     }
 
 
