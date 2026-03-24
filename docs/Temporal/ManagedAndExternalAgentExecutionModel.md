@@ -1,5 +1,7 @@
 # Managed and External Agent Execution Model
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md`](../tmp/remaining-work/Temporal-ManagedAndExternalAgentExecutionModel.md)
+
 ## 1. Objective
 
 Define a formalized, unified execution model in Temporal for delegating work to **true agent runtimes**.
@@ -433,11 +435,9 @@ This target-state queue/fleet is justified because managed agent runtimes have d
 * richer logging and intervention flows
 * stronger secrets and isolation boundaries
 
-### Migration Note
+### Target fleet layout
 
-Initial implementation may temporarily host managed-agent execution on the existing sandbox fleet if that reduces migration complexity.
-
-However, the target state should be a distinct `agent_runtime` fleet once the managed-runtime lifecycle, auth-profile enforcement, and supervision model are formalized.
+Managed agent execution is intended to run on the dedicated **`agent_runtime` fleet** (see `workers.py`, `activity_catalog.py`) with isolated activities for publishing artifacts and cancellation, rather than on ad-hoc sandbox workers.
 
 ---
 
@@ -475,69 +475,19 @@ Implementation should include a non-cancellable cleanup path, using the appropri
 
 ---
 
-## 11. Implementation Strategy
+## 11. Implemented components and remaining hardening
 
-### Phase 1 — Formalize Contracts ✅
+**Contracts and workflow:** `AgentExecutionRequest`, `AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`, and `FailureClass` in `moonmind/schemas/agent_runtime_models.py`; `AgentAdapter` in `moonmind/workflows/adapters/agent_adapter.py`; `MoonMind.AgentRun` in `moonmind/workflows/temporal/workflows/agent_run.py` (registered in `REGISTERED_TEMPORAL_WORKFLOW_TYPES`).
 
-Canonical contracts live in `moonmind/schemas/agent_runtime_models.py`:
-`AgentExecutionRequest`, `AgentRunHandle`, `AgentRunStatus`, `AgentRunResult`, `FailureClass`.
-The `AgentAdapter` protocol is in `moonmind/workflows/adapters/agent_adapter.py`.
+**Adapters:** `JulesAgentAdapter` (external) and `ManagedAgentAdapter` (managed runtime) implement the protocol.
 
-### Phase 2 — Add `MoonMind.AgentRun` ✅
+**Managed runtime layer:** `ManagedRuntimeLauncher`, `ManagedRunStore`, `ManagedRunSupervisor`, and `LogStreamer` under `moonmind/workflows/temporal/runtime/`. Legacy skill-dispatch paths were removed from `worker_runtime.py`; agent execution goes through `MoonMind.AgentRun`.
 
-`MoonMind.AgentRun` is implemented in `moonmind/workflows/temporal/workflows/agent_run.py`, registered with `@workflow.defn(name="MoonMind.AgentRun")`, and included in `REGISTERED_TEMPORAL_WORKFLOW_TYPES`.
+**Auth and fleet:** `MoonMindAuthProfileManagerWorkflow` integrates with `MoonMind.AgentRun` for profile slots and 429 handling. The `agent_runtime` fleet exposes `agent_runtime.publish_artifacts` and `agent_runtime.cancel` (`workers.py`, `activity_catalog.py`, `activity_runtime.py`).
 
-### Phase 3 — Implement Adapters ✅
+**Root workflow:** `MoonMind.Run` dispatches `tool.type == "agent_runtime"` steps to `MoonMind.AgentRun` child workflows; other steps use activities. `ManagedRunSupervisor` can signal completion via a callback wired to the workflow.
 
-Production adapters:
-- `JulesAgentAdapter` — external agent adapter for Jules
-- `ManagedAgentAdapter` — managed runtime adapter with auth-profile controls
-
-Both conform to the `AgentAdapter` protocol.
-
-### Phase 4 — Build Managed Runtime Execution Layer ✅
-
-Runtime components in `moonmind/workflows/temporal/runtime/`:
-- `ManagedRuntimeLauncher` (launcher.py)
-- `ManagedRunStore` (store.py)
-- `ManagedRunSupervisor` (supervisor.py)
-- `LogStreamer` (log_streamer.py)
-
-### Phase 4.5 — Remove Legacy Execution Path ✅
-
-The legacy `_auto_skill_handler` (CLI subprocess launcher), `_build_runtime_planner` (plan synthesizer), `SkillActivityDispatcher`, `TemporalSkillActivities`, and `TemporalPlanActivities` have been removed from `worker_runtime.py`. All agent execution now flows through `MoonMind.AgentRun`.
-
-### Phase 5 — Add Auth-Profile and Rate-Limit Controls ✅
-
-`MoonMindAuthProfileManagerWorkflow` manages auth profile slot acquisition and release. The `MoonMind.AgentRun` workflow integrates with it for 429 retry with profile rotation.
-
-### Phase 6 — Promote to Dedicated Runtime Fleet ✅
-
-The `agent_runtime` fleet is defined in `workers.py` and `activity_catalog.py` with:
-- `AGENT_RUNTIME_FLEET` and `AGENT_RUNTIME_TASK_QUEUE`
-- Activity definitions: `agent_runtime.publish_artifacts`, `agent_runtime.cancel`
-- Runtime binding metadata in `_ACTIVITY_HANDLER_ATTRS` and handler class `TemporalAgentRuntimeActivities` in `activity_runtime.py`
-
-### Phase 6.5 — Connect Root Workflow ✅
-
-`MoonMind.Run` dispatches to `MoonMind.AgentRun` as a child workflow **per step** when a plan node has `tool.type == "agent_runtime"`. The plan schema (`tool_plan_contracts.py`) accepts `"agent_runtime"` as a valid tool type. The dispatch discriminator in `_run_execution_stage()` routes agent nodes to `workflow.execute_child_workflow("MoonMind.AgentRun", ...)` and non-agent nodes to the existing `workflow.execute_activity()` path. Helper methods build the `AgentExecutionRequest` from node inputs + workflow context and map `AgentRunResult` back to the execution loop's expected format.
-
-### Phase 6.75 — Wire Supervisor → Workflow Completion Signals ✅
-
-`ManagedRunSupervisor` accepts an optional `completion_callback` — an async callable fired (best-effort) after the supervised process exits. The callback receives an `AgentRunResult`-compatible dict built from the `ManagedRunRecord` (summary, output_refs, failure_class). In production, the Temporal workflow layer wires this callback to signal `MoonMind.AgentRun` for immediate wake-up instead of waiting for the next poll cycle.
-
-`ManagedAgentAdapter.status()` and `fetch_result()` now read real state from `ManagedRunStore` when a store is provided, with stub fallback for backward compatibility.
-
-### Phase 7 — Harden Observability and HITL
-
-Add:
-
-* normalized run metrics
-* status dashboards
-* intervention surfaces
-* callback verification
-* retry/failure classification
-* operator tooling for lost/unrecoverable run handling
+**Ongoing work:** Normalized metrics, dashboards, intervention surfaces, callback verification, failure classification, and operator tooling for edge cases are tracked in the file linked at the top of this document.
 
 ---
 

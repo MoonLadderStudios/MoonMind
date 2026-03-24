@@ -1,5 +1,7 @@
 # Task Image Input System (Temporal Execution)
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-ImageSystem.md`](../tmp/remaining-work/Tasks-ImageSystem.md)
+
 ## Summary
 
 This design defines how **image attachments** are processed within MoonMind tasks using the new Temporal-based execution and Artifact storage architecture.
@@ -126,8 +128,6 @@ UI rendering consumes:
 
 ---
 
-## Rollout & Migration Notes
+## Vision pipeline (target)
 
-* **Phase 1**: Ensure `POST /artifacts` correctly accepts image MIME types and yields valid Temporal `ArtifactRef`s to workflow variables.
-* **Phase 2**: Introduce the `vision.generate_context` Temporal activity and inject its text-artifact output consistently into `mm.skill.execute` preparation phases.
-* **Phase 3**: Deprecate the legacy `with-attachments` queue ingest endpoint entirely.
+Images ingest through **`POST /artifacts`** with valid image MIME types and Temporal **`ArtifactRef`s** in workflow variables. **`vision.generate_context`** (or equivalent) produces text artifacts wired into **`mm.skill.execute`** preparation. Legacy **`with-attachments`** queue ingest is retired once Temporal paths cover all cases. Progress: [`docs/tmp/remaining-work/Tasks-ImageSystem.md`](../tmp/remaining-work/Tasks-ImageSystem.md).

@@ -1,5 +1,7 @@
 # Task Presets System
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Tasks-TaskPresetsSystem.md`](../tmp/remaining-work/Tasks-TaskPresetsSystem.md)
+
 Status: Active
 Owners: MoonMind Engineering (Task Platform + UI)
 Last Updated: 2026-03-13
@@ -500,44 +502,9 @@ StatsD counters emitted under `moonmind.task_templates.*`:
 
 ---
 
-## 10. Migration Path
+## 10. Plan-based expansion (target)
 
-### 10.1 Current state → Plan compilation
-
-The existing implementation expands presets into raw `task.steps[]` arrays. The migration to Plan-based output proceeds in phases:
-
-**Phase 1: Dual output (backward compatible)**
-
-- Expansion endpoint returns both `steps[]` (legacy) and `plan` (new).
-- Callers that understand Plans use the `plan` field; legacy callers use `steps[]`.
-- Task payload compiler continues to work with `appliedStepTemplates` for legacy paths.
-
-**Phase 2: Plan-first**
-
-- Expansion endpoint returns `plan` + `planArtifactRef` as primary output.
-- `steps[]` field deprecated but still populated for transitional consumers.
-- New UI code submits `planArtifactRef` directly to `MoonMind.Run`.
-
-**Phase 3: Plan-only**
-
-- `steps[]` field removed from expand response.
-- All preset-driven tasks flow through Plan Interpreter.
-- `appliedStepTemplates` in task payload replaced by `appliedPreset` with `planArtifactRef`.
-- API path migrated from `/api/task-step-templates` to `/api/presets`.
-
-### 10.2 Database model alignment
-
-The DB models (`TaskStepTemplate`, `TaskStepTemplateVersion`, etc.) will be renamed to `Preset` / `PresetVersion` in Phase 3, alongside the API path migration. During Phases 1-2, the existing table names are retained to avoid migration risk.
-
-### 10.3 Code changes required
-
-| Component | Current | Target |
-|-----------|---------|--------|
-| `catalog.py` expand_template() | Returns `{steps[], appliedTemplate}` | Returns `{plan, planArtifactRef, appliedPreset}` |
-| `payload.py` compile_task_payload_templates() | Merges `appliedStepTemplates` + capabilities | Merges `appliedPreset` + `planArtifactRef` |
-| `task_step_templates.py` router | Serves `/api/task-step-templates` | Phase 3: serves `/api/presets` |
-| `models.py` DB models | `TaskStepTemplate*` naming | Phase 3: `Preset*` naming |
-| Expansion service | Jinja2 → step dicts | Jinja2 → step dicts → `PlanDefinition` (new final stage) |
+**Steady-state:** preset expansion produces a **`PlanDefinition`** (and `planArtifactRef`) consumed by `MoonMind.Run`; legacy `steps[]` / `appliedStepTemplates` paths may exist only during transition. **Target API** surface is `/api/presets` with `Preset` / `PresetVersion` models; expanders and compilers align on `appliedPreset` + artifact refs. Interim dual-output and rename steps are tracked in [`docs/tmp/remaining-work/Tasks-TaskPresetsSystem.md`](../tmp/remaining-work/Tasks-TaskPresetsSystem.md).
 
 ---
 

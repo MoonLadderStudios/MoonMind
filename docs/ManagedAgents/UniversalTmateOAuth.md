@@ -1,5 +1,7 @@
 # Universal Tmate OAuth Sessions — MVP Design for MoonMind
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md)
+
 Status: **Design Draft**
 Owners: MoonMind Engineering
 Scope: Mission Control auth UX for managed CLI runtimes
@@ -681,29 +683,6 @@ That migration becomes small if the rest of the system already thinks in terms o
 
 ---
 
-## 18. MVP implementation sequence
+## 18. Delivery milestones
 
-### Phase 1
-
-* add session table
-* add OAuth Session API
-* add UI modal
-* add one tmate-backed auth runner
-* support Gemini first
-
-### Phase 2
-
-* add Codex via same session transport
-* add Claude via same session transport
-* profile registration on success
-
-### Phase 3
-
-* add cleanup job
-* add session audit history
-* add verification hardening
-* add reconnect/retry actions
-
-### Phase 4
-
-* split provider-specific drivers where worthwhile
+**MVP:** OAuth session store + API + Mission Control modal + tmate-backed runner (Gemini first), then Codex/Claude via the same transport with profile registration, then cleanup/audit/hardening/reconnect flows, then optional provider-specific driver splits. Task-level tracking: [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).

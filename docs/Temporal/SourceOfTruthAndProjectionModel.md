@@ -1,15 +1,17 @@
 # Source of Truth and Projection Model
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-SourceOfTruthAndProjectionModel.md`](../tmp/remaining-work/Temporal-SourceOfTruthAndProjectionModel.md)
+
 **Project:** MoonMind  
 **Doc type:** System architecture / read-model and consistency contract  
-**Status:** Draft (implementation-oriented)  
+**Status:** Normative bridge contract (implementation tracking in tracker)  
 **Last updated:** 2026-03-06 (America/Los_Angeles)
 
 ---
 
 ## 1. Purpose
 
-This document defines the **source-of-truth model** for Temporal-managed executions in MoonMind and the role of the app-local **projection layer** during migration.
+This document defines the **source-of-truth model** for Temporal-managed executions in MoonMind and the role of the app-local **projection layer** while compatibility surfaces coexist with Temporal.
 
 It exists to answer four questions clearly:
 

@@ -1,5 +1,7 @@
 # Workflow RAG – Agent Retrieval System
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Rag-WorkflowRag.md`](../tmp/remaining-work/Rag-WorkflowRag.md)
+
 Status: Draft
 Owners: MoonMind Engineering
 Last Updated: 2026-03-20
@@ -120,19 +122,9 @@ Agents often edit files that have not been embedded in the canonical index yet. 
 2. For each key, prefer a non-expired overlay hit over canonical hit.
 3. Sort final merged list by `(source_precedence, score desc)` where `source_precedence` is overlay first, then canonical.
 
-## Implementation Checklist
+## Worker integration
 
-- [x] Implement `moonmind rag search` CLI tool (`moonmind/rag/cli.py`, `moonmind/rag/service.py`).
-- [x] Implement `moonmind rag overlay upsert` and `moonmind rag overlay clean` commands.
-- [x] Implement `moonmind rag sync-embedding` for collection dimension validation.
-- [x] Implement per-query token/latency budgeting in `ContextRetrievalService`.
-- [x] Support `direct` and `gateway` transport modes.
-- [ ] Ship `moonmind rag` tools natively inside the `temporal-worker-sandbox` Docker image.
-- [ ] Implement `RetrieveAgentContextActivity` as a Temporal Activity wrapping `ContextRetrievalService.retrieve()`.
-- [ ] Extend `PrepareWorkspaceActivity` to validate Qdrant topology before launching the Agent container.
-- [ ] Update agent system prompts to advertise `RAG tools available`.
-- [ ] Emit observability metrics for every embed/search/upsert from the sandboxed tools.
-- [ ] Document the context pack schema (`ContextPack` format from `moonmind/rag/context_pack.py`).
+CLI tools (`moonmind rag search`, overlay upsert/clean, sync-embedding) and `ContextRetrievalService` budgeting exist. **Target:** the same capabilities are available inside sandbox workers via packaged tooling, a `RetrieveAgentContextActivity`, workspace prep validation against Qdrant, prompt hints, metrics, and published `ContextPack` documentation. Remaining steps are in [`docs/tmp/remaining-work/Rag-WorkflowRag.md`](../tmp/remaining-work/Rag-WorkflowRag.md).
 
 ## Environment Variables
 

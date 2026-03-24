@@ -1,5 +1,7 @@
 # Jules Temporal External Event Contract
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesTemporalExternalEventContract.md`](../tmp/remaining-work/ExternalAgents-JulesTemporalExternalEventContract.md)
+
 Status: Draft  
 Owner: MoonMind Platform  
 Last updated: 2026-03-06  

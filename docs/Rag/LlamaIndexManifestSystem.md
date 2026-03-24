@@ -1,5 +1,7 @@
 # Llama Index Manifest System – Schema & Operator Guide
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Rag-LlamaIndexManifestSystem.md`](../tmp/remaining-work/Rag-LlamaIndexManifestSystem.md)
+
 > **Status:** Draft v0 (Temporal-aligned)
 > **Last updated:** 2026‑03‑20
 > **Owners:** MoonMind Engineering
@@ -576,15 +578,7 @@ Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal wor
 
 ## Roadmap & Versioning
 
-* **v0.1**: ingestion + retrieval, Vector/Hybrid retrievers, basic rerankers, manual & queued runs.
-* **v0.2**: scheduled jobs, lineage view (source → chunk → node → index), richer artifacts.
-* **v0.3**: multi‑tenant policy, fine‑grained access control in retrievers.
-* **v0.4**: dataset registries, evaluation dashboards.
-
-**Versioning policy**
-
-* Backwards‑compatible additions within a `v0` minor.
-* Breaking changes bump `version` and include an upgrade script (`manifest migrate`).
+The manifest schema is **v0** with backwards‑compatible minor additions within `v0`. Breaking changes bump `version` and ship an upgrade script (`manifest migrate`). Product milestones beyond the current schema (scheduled jobs, lineage, multi‑tenant policy, dataset registries, evaluation dashboards) and legacy example migration are tracked in [`docs/tmp/remaining-work/Rag-LlamaIndexManifestSystem.md`](../tmp/remaining-work/Rag-LlamaIndexManifestSystem.md).
 
 ---
 

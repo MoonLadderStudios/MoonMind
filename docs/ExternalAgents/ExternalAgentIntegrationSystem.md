@@ -74,9 +74,7 @@ In the current codebase, this boundary is represented by:
 - `moonmind/workflows/adapters/external_adapter_registry.py`
 - provider adapters such as `jules_agent_adapter.py` and `codex_cloud_agent_adapter.py`
 
-This layer should become the **universal external adapter base**, not just a loose convention.
-
-It should own the generic external-agent rules that repeat across providers:
+The shared base class is the **universal external adapter** implementation (see §5). It owns the generic external-agent rules that repeat across providers:
 
 - validation that `agent_kind == "external"`
 - stable idempotency handling
@@ -127,55 +125,37 @@ This is the main reason the old "4-layer Jules architecture" felt inconsistent: 
 
 ## 4. Target Shape in Code
 
-The codebase already has most of the right seams, but they are not documented as one cohesive pattern yet.
+The external-agent stack is implemented as:
 
-### Already Present
-
-- shared `AgentAdapter` protocol
+- shared `AgentAdapter` protocol (`moonmind/workflows/adapters/agent_adapter.py`)
 - `MoonMind.AgentRun` child workflow
-- provider-specific adapters for Jules and Codex Cloud
-- `ExternalAdapterRegistry`
-- provider-specific HTTP clients
+- `ExternalAdapterRegistry` and `build_default_registry()`
+- provider-specific HTTP clients and adapters (Jules, Codex Cloud, OpenClaw, …)
+- **`BaseExternalAgentAdapter`** (`moonmind/workflows/adapters/base_external_agent_adapter.py`) — shared base implementation for poll-based providers
 
-### Missing Standardization
+## 5. Universal external adapter base
 
-What is still missing is a clearly named and reusable **base implementation strategy** for external adapters.
+`BaseExternalAgentAdapter` is the standard extension point for poll-oriented external providers. It supplies:
 
-Today, `JulesAgentAdapter` and `CodexCloudAgentAdapter` follow the same pattern by convention. The plan should make that pattern explicit so future providers do not copy-paste integration logic ad hoc.
+- provider descriptor/config hooks (`ProviderCapabilityDescriptor`, including `execution_style` where applicable)
+- shared helpers for correlation metadata, idempotency cache behavior, and normalized `AgentRunHandle` / `AgentRunStatus` / `AgentRunResult` construction
+- overridable hooks for provider transport (`do_start`, `do_status`, `do_fetch_result`, `do_cancel`) where the poll loop applies
 
-## 5. Proposed Universal External Adapter Plan
-
-MoonMind should implement a first-class universal external adapter base in the `moonmind/workflows/adapters/` package.
-
-Suggested shape:
-
-- `BaseExternalAgentAdapter` or `ExternalAgentAdapterBase`
-- provider descriptor/config hooks
-- shared helper methods for correlation metadata, idempotency cache behavior, and normalized contract creation
-- overridable provider hooks for `do_start`, `do_status`, `do_fetch_result`, and `do_cancel`
-
-Suggested responsibilities for the base class:
+**Base class responsibilities:**
 
 1. Validate the request is an external-agent request for the expected provider.
 2. Inject MoonMind correlation metadata consistently.
 3. Apply stable idempotency behavior.
-4. Normalize common metadata fields:
-   - `providerStatus`
-   - `normalizedStatus`
-   - `externalUrl`
-   - callback capability hints
-5. Centralize best-effort cancel semantics for providers without native cancellation.
+4. Normalize common metadata fields (`providerStatus`, `normalizedStatus`, `externalUrl`, callback hints).
+5. Centralize best-effort cancel semantics when the provider lacks hard cancellation.
 6. Keep workflow-facing contracts compact and artifact-ref-based.
 
-Suggested responsibilities for provider subclasses:
+**Subclass responsibilities:**
 
 1. Translate `AgentExecutionRequest` into provider-native transport payloads.
 2. Define provider status normalization.
-3. Extract provider result summaries and artifact-worthy snapshots.
-4. Advertise provider capabilities:
-   - callback support
-   - cancel support
-   - result-download richness
+3. Extract result summaries and artifact-worthy snapshots.
+4. Advertise capabilities (callbacks, cancel, result fetch, `execution_style` for streaming vs polling).
 
 ## 6. Jules in the Standard Model
 
@@ -196,65 +176,21 @@ Not:
 
 > Jules defines its own separate architecture.
 
-## 7. Practical Implementation Sequence
+## 7. Tooling boundaries and reference integrations
 
-This can be implemented incrementally without rewriting the execution model.
+**Tooling surfaces (MCP, REST, dashboard)** should consume the same provider transport and adapter boundaries rather than re-defining provider semantics, so status normalization, correlation rules, and runtime gating stay centralized.
 
-### Phase A: Documentation Alignment
+**`ProviderCapabilityDescriptor`** (`moonmind/schemas/agent_runtime_models.py`) describes each provider, including:
 
-Update external-agent docs so they all use the same vocabulary:
+- `supports_callbacks`, `supports_cancel`, `supports_result_fetch`
+- `provider_name`, `default_poll_hint_seconds`
+- `execution_style` (`polling` vs `streaming_gateway`) for orchestration routing in `MoonMind.AgentRun`
 
-- "Universal External Agent Stack"
-- "provider transport"
-- "universal external agent adapter"
-- "provider-specific adapter implementation"
-- "optional tooling surface"
+Poll-based adapters (e.g. Jules, Codex Cloud) extend `BaseExternalAgentAdapter` and use the standard start/status/fetch activity loop. Streaming providers (e.g. OpenClaw) register `execution_style="streaming_gateway"` and use the dedicated execute activity path documented in [`OpenClawAgentAdapter.md`](./OpenClawAgentAdapter.md).
 
-### Phase B: Extract Shared External Adapter Base ✅ COMPLETE
+**Codex Cloud** is the reference second provider on the same base pattern: settings `moonmind/codex_cloud/settings.py`, client `moonmind/workflows/adapters/codex_cloud_client.py`, adapter `CodexCloudAgentAdapter`, registry registration in `build_default_registry()`, activities under `moonmind/workflows/temporal/activities/codex_cloud_activities.py`.
 
-Shared logic is consolidated in `BaseExternalAgentAdapter` (`moonmind/workflows/adapters/base_external_agent_adapter.py`):
-
-- In-memory idempotency cache handling
-- Correlation metadata injection (`moonmind.correlationId`, `moonmind.idempotencyKey`)
-- `AgentRunHandle` / `AgentRunStatus` / `AgentRunResult` builder methods
-- Automatic `poll_hint_seconds` population from `ProviderCapabilityDescriptor`
-- Best-effort cancel fallback when `supportsCancel=False`
-
-### Phase C: Standardize Provider Capability Descriptors ✅ COMPLETE
-
-`ProviderCapabilityDescriptor` is defined in `moonmind/schemas/agent_runtime_models.py` with:
-
-- `supports_callbacks`
-- `supports_cancel`
-- `supports_result_fetch`
-- `provider_name`
-- `default_poll_hint_seconds`
-
-Both Jules and Codex Cloud adapters declare their capabilities. The base class auto-populates `poll_hint_seconds` from the descriptor and provides a cancel fallback for providers that don't support cancellation.
-
-### Phase D: Keep Tooling Surfaces Thin
-
-MCP, REST, and dashboard integration should consume the same provider transport and adapter boundaries rather than re-defining provider semantics.
-
-This keeps:
-
-- status normalization in one place
-- correlation rules in one place
-- runtime gating in one place
-
-### Phase E: Add the Next External Provider Using the Same Base ✅ PROVEN
-
-Codex Cloud was integrated as the second provider using the same base class pattern:
-
-1. settings — `moonmind/codex_cloud/settings.py`
-2. schemas/client — `moonmind/workflows/adapters/codex_cloud_client.py`
-3. provider adapter subclass — `CodexCloudAgentAdapter` extends `BaseExternalAgentAdapter`
-4. registry registration — in `build_default_registry()`
-5. Temporal activities — `moonmind/workflows/temporal/activities/codex_cloud_activities.py`
-
-No changes to `MoonMind.Run` or `MoonMind.AgentRun` were required.
-
-For a step-by-step guide to adding the next provider, see [`AddingExternalProvider.md`](AddingExternalProvider.md).
+For step-by-step addition of a new provider, see [`AddingExternalProvider.md`](AddingExternalProvider.md).
 
 ## 8. Architectural Benefits
 
@@ -274,4 +210,4 @@ The standard MoonMind model for external agents should be:
 4. `MoonMind.AgentRun` orchestration
 5. optional tooling surfaces
 
-Jules should be documented and implemented as the first provider-specific implementation of that shared external-adapter system.
+Jules remains the primary reference poll-based provider; additional providers (Codex Cloud, OpenClaw, …) follow the same adapter and registry boundaries.

@@ -1,5 +1,7 @@
 # Activity Catalog and Worker Topology
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md)
+
 Status: **Draft**
 Last updated: **2026-03-05**
 Scope: Defines **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing MoonMind's Skills and integrations on Temporal.
@@ -567,32 +569,9 @@ If using OpenTelemetry:
 
 ---
 
-## 13) Implementation sequence (for this subsystem)
+## 13) Fleet and activity layering
 
-1. Implement baseline worker fleets:
-
-   * workflow worker (`mm.workflow`)
-   * artifacts worker (`mm.activity.artifacts`)
-2. Define the first artifact activities:
-
-   * `artifact.create`, `artifact.write_complete`, `artifact.read`, `artifact.list_for_execution`, `artifact.compute_preview`, `artifact.link` *(artifact service is implemented; activity wrappers are next)*
-3. Add LLM fleet and planning activities:
-
-   * `plan.generate` routed to `mm.activity.llm`
-   * `plan.validate` as the authoritative deep-validation gate before execution
-4. Add default skill dispatch:
-
-   * `mm.skill.execute` backed by the pinned Skill Registry snapshot
-5. Add sandbox fleet:
-
-   * `sandbox.run_command` with heartbeats and strict isolation
-6. Add integrations fleet:
-
-   * `integration.jules.start/status/fetch_result` (callback-first preferred)
-7. Add lifecycle management:
-
-   * `artifact.lifecycle_sweep` scheduled via Temporal Schedule
-   * `artifact.pin` / `artifact.unpin` for retention overrides
+Worker topology is organized into **workflow**, **artifacts**, **LLM/planning**, **sandbox**, **integrations**, and **agent_runtime** fleets, with activities registered per `activity_catalog.py` and `workers.py`. New activity types must document compatibility impact before rollout. Historical sequencing notes are archived in [`docs/tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md`](../tmp/remaining-work/Temporal-ActivityCatalogAndWorkerTopology.md).
 
 ---
 

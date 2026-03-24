@@ -1,5 +1,7 @@
 # Temporal Production Routing Policy
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-RoutingPolicy.md`](../tmp/remaining-work/Temporal-RoutingPolicy.md)
+
 ## Purpose
 This document defines how backend routing is handled across the `queue`, `system`, and `temporal` execution sources.
 
@@ -15,10 +17,9 @@ Consistent with `docs/UI/MissionControlArchitecture.md`, the `temporal` source i
 Source resolution in `api_service/api/routers/task_dashboard.py` ensures deterministic outcomes for list/detail routes.
 When `source_hint` is provided, it serves as an override. Without it, the underlying engine queries each source type systematically to determine where a task resides.
 
-## Migration & Rollout
-1. Existing tasks maintain their current source (`queue`, `system`).
-2. New tasks that trigger Temporal capabilities will run under the `temporal` source.
-3. Partial enablement allows fallback to `queue` or `system` if Temporal services are unavailable or disabled by feature flags.
+## Source persistence
+
+Tasks keep their recorded source (`queue`, `system`, or `temporal`) for the lifetime of that record. New submissions use routing rules and feature flags (`TEMPORAL_DASHBOARD_SUBMIT_ENABLED`, etc.); when Temporal is disabled or unavailable, routing may fall back per deployment policy. Further cutover work is in the tracker linked above.
 
 ## Support & Debugging
 Engineers can force the resolution using the explicit `?source=temporal` (or `queue`/`system`) query string parameter if the canonical resolver fails or during testing.

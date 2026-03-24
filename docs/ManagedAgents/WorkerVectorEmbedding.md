@@ -1,5 +1,7 @@
 # Managed Agent Vector Embedding Workflow
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-WorkerVectorEmbedding.md`](../tmp/remaining-work/ManagedAgents-WorkerVectorEmbedding.md)
+
 Status: Draft
 Owners: MoonMind Engineering
 Last Updated: 2026-03-14

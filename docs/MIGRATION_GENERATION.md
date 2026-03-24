@@ -1,5 +1,7 @@
 # Generating Alembic Migrations
 
+**Process notes:** [`docs/tmp/remaining-work/MIGRATION_GENERATION.md`](tmp/remaining-work/MIGRATION_GENERATION.md)
+
 This document explains how to create new Alembic database migration scripts for this project. There are two approaches: using the API container (recommended) or using a local Python environment with the `generate_migrations.sh` script.
 
 ## Approach 1: Using the API Container (Recommended)

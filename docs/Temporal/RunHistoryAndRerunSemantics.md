@@ -1,5 +1,7 @@
 # MoonMind Run History and Rerun Semantics
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md`](../tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md)
+
 **Status:** Draft  
 **Owner:** MoonMind Platform  
 **Last updated:** 2026-03-06  
@@ -322,31 +324,11 @@ If MoonMind later needs immutable per-run read models, that should be introduced
 
 ## 12. Acceptance criteria
 
-This document is “done” when the implementation and adjacent docs align on all of the following:
+For Temporal-backed executions: **`workflowId`** is the canonical detail identity; **`taskId == workflowId`** where task-shaped IDs are used; **`RequestRerun`** is Continue-As-New for the same logical execution; detail views follow the **latest run**; manual vs automatic Continue-As-New is distinguished; v1 **does not** require a full per-run history product surface (that may come later).
 
-1. `workflowId` is the canonical detail-route identity for Temporal-backed executions.
-2. The Temporal-backed compatibility identifier bridge is fixed: `taskId == workflowId`.
-3. `RequestRerun` is documented and implemented as Continue-As-New for the same logical execution.
-4. The latest-run detail-page rule is reflected in UI and API expectations.
-5. The distinction between “same logical execution” and “new logical execution” is explicit.
-6. Continue-As-New triggers are documented for both manual rerun and lifecycle-threshold rollover.
-7. The absence of a first-class per-run history surface in v1 is explicit, not accidental.
+## 13. Related documents and backlog
 
-## 13. Follow-on docs and implementation hooks
-
-This document should feed directly into:
-
-- `docs/Temporal/SourceOfTruthAndProjectionModel.md`
-- `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/Temporal/TaskExecutionCompatibilityModel.md`
-- `docs/UI/MissionControlArchitecture.md`
-
-Recommended follow-up implementation work:
-
-- expose `rerunCount` in execution detail only if the dashboard genuinely needs it, and document clearly that it is currently a Continue-As-New counter rather than a pure manual-rerun counter
-- decide whether to add an ops-only run-history endpoint later
-- keep task/detail URLs stable even when Continue-As-New rotates the current `runId`
-- add tests that assert rerun preserves `workflowId` and rotates `runId`
+Aligns with `SourceOfTruthAndProjectionModel`, `VisibilityAndUiQueryModel`, `TaskExecutionCompatibilityModel`, and `MissionControlArchitecture`. Optional follow-ups (rerun counters in UI, ops-only history endpoints, URL stability under CAN, tests) are in [`docs/tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md`](../tmp/remaining-work/Temporal-RunHistoryAndRerunSemantics.md).
 
 ## 14. Summary
 

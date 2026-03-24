@@ -1,5 +1,7 @@
 # System Pause & Maintenance Mode
 
+**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-WorkerPauseSystem.md`](../tmp/remaining-work/Temporal-WorkerPauseSystem.md)
+
 Status: **Implemented**
 Owners: **MoonMind Engineering**
 Last Updated: **2026-03-14**
@@ -130,13 +132,6 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
 
 ---
 
-## 9. Rollout Plan
+## 9. Follow-on enhancements
 
-### Phase 1 (Temporal Alignment)
-
-* Connect the Mission Control Banner to Temporal visibility queries instead of the old queue tables.
-* Consolidate operational runbooks to strictly use `worker.shutdown()` for standard Drain upgrades.
-
-### Phase 2 (Advanced Suspend)
-
-* Add deep Quiesce mode where workflows natively use `workflow.wait_condition()` and Batch Signals to suspend active execution safely.
+**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked in [`docs/tmp/remaining-work/Temporal-WorkerPauseSystem.md`](../tmp/remaining-work/Temporal-WorkerPauseSystem.md).

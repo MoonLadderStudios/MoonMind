@@ -1,111 +1,133 @@
-# Gemini CLI Task Cancellation — Root Cause Analysis
+# Managed Agent Cancellation — Idiomatic Temporal Analysis
 
-## Summary
+This document explains how **Temporal models cancellation** (official semantics), how that maps to **slow cancel** for `gemini_cli` and other managed runs in MoonMind, and which changes stay **inside idiomatic Temporal** (no parallel “shadow” cancel paths, no workflow-side process kills on remote workers).
 
-Cancelling a `gemini_cli` managed task from Mission Control is slow because the cancel request must traverse a **5-hop pipeline** — each hop introducing latency — before the actual agent process gets killed. The cancer also cannot interrupt activities that are currently executing, meaning the workflow must wait for the current activity to complete before it can process the cancellation.
+**Code touchpoints:** [`agent_run.py`](../../moonmind/workflows/temporal/workflows/agent_run.py), [`run.py`](../../moonmind/workflows/temporal/workflows/run.py) (child workflow), [`supervisor.py`](../../moonmind/workflows/temporal/runtime/supervisor.py).
 
 ---
 
-## Cancellation Pipeline
+## Executive summary
+
+Cancellation from Mission Control is **`WorkflowHandle.cancel()`** — a **graceful** stop: Temporal records `WorkflowExecutionCancelRequested`, schedules a workflow task, and workflow code may run cleanup. It is **not** immediate like **Terminate** (which skips workflow code entirely).
+
+Slowness today comes mainly from:
+
+1. **Default activity cancellation behavior** — When the workflow is awaiting `execute_activity(...)`, cancellation of the *workflow* must interact with cancellation of the *current activity*. The default **`ActivityCancellationType.WAIT_CANCELLATION_COMPLETED`** makes the workflow wait for the activity cancellation protocol to finish; long activities without responsive **heartbeats** cannot observe cancellation quickly.
+2. **Long `start_to_close` timeouts** — Until the activity completes, fails, or responds to cancellation, the workflow may remain blocked.
+3. **Extra hops after `CancelledError`** — Cleanup (e.g. dedicated `agent_runtime.cancel` activity, auth slot signals) adds queue and RPC latency.
+4. **Product-level timing** — Supervisor graceful shutdown (`SIGTERM` wait before `SIGKILL`) is independent of Temporal but affects perceived latency.
+
+**Highest-impact, idiomatic lever:** set **`cancellation_type=ActivityCancellationType.TRY_CANCEL`** on `execute_activity` calls where MoonMind should **enter workflow cancel handling without waiting** for the activity’s cancellation to fully complete (per SDK semantics). Combine with **heartbeats + heartbeat timeouts** inside long-running activities so the worker can deliver cancellation to application code promptly.
+
+---
+
+## Idiomatic Temporal cancellation (reference)
+
+### Cancel vs terminate
+
+| Mechanism | Workflow code runs cleanup? | Typical use |
+|-----------|------------------------------|-------------|
+| **Cancel** | Yes — workflow receives cancellation and can catch `CancelledError` / `asyncio.CancelledError` | Normal operator “stop” |
+| **Terminate** | No — no workflow task; history shows `WorkflowExecutionTerminated` | Stuck workflow, broken code path |
+
+Prefer **Cancel** unless the run is truly stuck and cannot make progress through cancellation ([Interrupt a Workflow Execution — Python](https://docs.temporal.io/develop/python/cancellation)).
+
+### Child workflows
+
+A **parent** cancel request is propagated to **child** workflows per your **parent close policy** and Temporal’s rules. That implies an extra server/workflow-task round trip compared to a single workflow. This is expected; do not “fix” it with out-of-band IPC—tune **activity** behavior and **cancellation types** instead.
+
+### Activities: heartbeats are required for responsive cancellation
+
+For **regular** activities, Temporal’s documentation is explicit: to cancel an activity from the workflow side, the activity should **send heartbeats** and set a **heartbeat timeout**. Without heartbeats, the activity may not process cancellation in a timely way ([same cancellation doc](https://docs.temporal.io/develop/python/cancellation)).
+
+**Local activities** are a special case (same worker; cancellation without heartbeats is possible). They are **not** a substitute for killing a process started on another worker’s activity fleet—see *Non-goals* below.
+
+### `ActivityCancellationType` (workflow await on `execute_activity`)
+
+When a **workflow cancellation** arrives while the workflow is **blocked inside** `await workflow.execute_activity(...)`, the SDK uses an **activity cancellation type** to decide how the await resolves ([`ActivityCancellationType`](https://python.temporal.io/temporalio.workflow.ActivityCancellationType.html)):
+
+| Type | Meaning (practical) |
+|------|---------------------|
+| **`WAIT_CANCELLATION_COMPLETED`** (default) | Workflow cancellation waits for the activity cancellation sequence to complete. Activities that rarely heartbeat may appear to “block” cancellation for a long time. |
+| **`TRY_CANCEL`** | Request activity cancellation; the workflow’s await can complete with cancellation **without** waiting for the activity to finish all cleanup (exact semantics follow the SDK). Use when the workflow must run its own `CancelledError` handler (slot release, follow-up activities) even if the first activity is still winding down. |
+| **`ABANDON`** | Workflow treats itself as cancelled **without** waiting for activity cancellation to complete—can strand work; use only with strong operational justification. |
+
+MoonMind’s managed-agent path should default to explicit choices per call site (especially **`TRY_CANCEL`** on long-running `agent_runtime.*` and integration polls), not rely blindly on defaults.
+
+### Explicit activity handle cancellation (advanced)
+
+Inside workflow code, **`workflow.start_activity(...)`** returns a handle whose **`cancel()`** requests activity cancellation. That pattern is for **workflow-initiated** cancellation of a specific activity, distinct from **client-initiated workflow cancel**. Both are still fully within Temporal; they are not “bypassing” the platform.
+
+---
+
+## MoonMind: cancellation pipeline (observed)
+
+The following is a **conceptual** sequence for a managed run using `MoonMind.Run` → child `MoonMind.AgentRun`. Exact ordering should be verified against current code.
 
 ```mermaid
 sequenceDiagram
     participant UI as Mission Control
     participant API as API Service
-    participant TDB as Temporal DB
+    participant TDB as App DB projection
     participant TS as Temporal Server
-    participant RW as MoonMind.Run Workflow
-    participant AW as MoonMind.AgentRun (child)
-    participant ACT as agent_runtime.cancel Activity
+    participant RW as MoonMind.Run
+    participant AW as MoonMind.AgentRun child
+    participant ACT as Activities on mm.activity.agent_runtime
     participant SUP as ManagedRunSupervisor
-    participant PROC as Gemini CLI Process
+    participant PROC as CLI process
 
     UI->>API: POST /api/executions/{id}/cancel
-    API->>TS: handle.cancel()
-    API->>TDB: Set state = CANCELED (optimistic)
+    API->>TS: WorkflowHandle.cancel()
+    API->>TDB: optimistic CANCELED optional
     API-->>UI: HTTP 202 Accepted
-    Note over TS,RW: ⏳ Temporal schedules cancel on next workflow task
-    TS->>RW: Cancel propagated to parent
-    RW->>AW: Cancel propagated to child workflow
-    Note over AW: ⏳ BLOCKED: must wait for current activity to finish
-    AW->>AW: CancelledError raised
-    AW->>AW: Release auth slot (signal to AuthProfileManager)
-    AW->>ACT: execute_activity("agent_runtime.cancel")
-    Note over ACT: ⏳ Activity queued on mm.activity.agent_runtime
+    Note over TS,AW: Cancel propagates parent → child per policy
+    Note over AW: If inside execute_activity: activity cancel + type matters
+    AW->>AW: CancelledError in workflow
+    AW->>AW: e.g. signal AuthProfileManager release slot
+    AW->>ACT: execute_activity(agent_runtime.cancel)
     ACT->>SUP: supervisor.cancel(run_id)
-    SUP->>PROC: SIGTERM
-    Note over SUP,PROC: Wait 2s
-    SUP->>PROC: SIGKILL (if still alive)
+    SUP->>PROC: SIGTERM / SIGKILL
 ```
 
 ---
 
-## Root Causes of Slowness
+## Root causes of slowness (mapped to Temporal levers)
 
-### 1. **Activity-in-progress blocks cancellation (PRIMARY CAUSE)**
+### 1. Workflow blocked inside a long activity (primary)
 
-The `MoonMindAgentRun` workflow's main loop sits in `workflow.wait_condition()` with a `poll_interval` timeout (default **10 seconds**). However, this isn't the main problem. The real issue is that **Temporal cancellation cannot interrupt a currently-executing activity**.
+If `MoonMind.AgentRun` is awaiting **`agent_runtime.launch`**, **`integration.*.status`**, **`agent_runtime.publish_artifacts`**, etc., **workflow** cancellation cannot complete until the **activity cancellation contract** is satisfied—strongly influenced by **heartbeat** behavior, **timeouts**, and **`ActivityCancellationType`**.
 
-When a cancel is requested:
-- If the workflow is between activities (in `wait_condition`), it gets cancelled relatively quickly.
-- If the workflow is **inside** `execute_activity()` (e.g., `agent_runtime.launch`, `integration.*.status`, `agent_runtime.publish_artifacts`), Temporal must wait for that activity to **complete or time out** before the `CancelledError` is delivered.
+**Idiomatic mitigations:** `TRY_CANCEL` where appropriate, **heartbeats** in long activities, **tighter timeouts** where safe, and **retry policies** that do not extend wall time unnecessarily.
 
-Some of these activities have timeouts up to **5 minutes** (`AGENT_RUNTIME_ACTIVITY_TIMEOUT`, `INTEGRATIONS_ACTIVITY_TIMEOUT`).
+### 2. Default `WAIT_CANCELLATION_COMPLETED` on `execute_activity`
 
-> 📍 [agent_run.py:38-42](../../moonmind/workflows/temporal/workflows/agent_run.py#L38-L42)
+With the default, a **workflow** that has been asked to cancel may still **wait** for the activity side to complete cancellation processing. For minute-scale activities, that dominates latency unless activities heartbeat frequently.
 
-### 2. **Cancel activity dispatch adds queuing latency**
+**Idiomatic mitigation:** `cancellation_type=ActivityCancellationType.TRY_CANCEL` on selected `execute_activity` calls (see prioritization below).
 
-After the `CancelledError` is caught, the workflow dispatches a **new activity** (`agent_runtime.cancel`) to the `mm.activity.agent_runtime` task queue with a 1-minute timeout. If the agent-runtime worker fleet is busy or has only one worker, this activity sits in the queue waiting to be picked up.
+### 3. Follow-up cancel activity + queue contention
 
-> 📍 [agent_run.py:367-373](../../moonmind/workflows/temporal/workflows/agent_run.py#L367-L373)
+After the workflow observes cancellation, MoonMind may schedule **`agent_runtime.cancel`**. That is still **idiomatic** (activity-based cleanup). Slowness here is **worker capacity** / **task queue backlog** (`mm.activity.agent_runtime`)—fix with **scaling**, **concurrency**, and **SLOs**, not by killing processes outside Temporal.
 
-### 3. **Child workflow cancel propagation**
+### 4. Child workflow propagation
 
-For Temporal-executed tasks, the `MoonMind.Run` workflow runs `MoonMind.AgentRun` as a **child workflow**. Cancel propagation from parent to child adds another round-trip through the Temporal server. If the parent is itself blocked in an activity, the cancel doesn't even reach the child immediately.
+Parent/child cancel ordering is inherent. Prefer **correct activity cancellation** and **timeouts** over extra control-plane shortcuts.
 
-> 📍 [run.py:451-456](../../moonmind/workflows/temporal/workflows/run.py#L451-L456)
+### 5. Ordering of cleanup steps in workflow code
 
-### 4. **Auth slot release before process kill**
+If the workflow **signals** `AuthProfileManager` **before** running **`agent_runtime.cancel`**, slow paths on the manager add delay. **Within deterministic workflow rules**, consider **structuring awaits** so cleanup steps run in parallel only where safe, or reorder so process teardown is not unnecessarily gated on non-critical work—still **inside** the workflow.
 
-In the `CancelledError` handler, the workflow first tries to release the auth slot by signaling the `AuthProfileManager` workflow **before** dispatching the cancel activity. If the AuthProfileManager is slow to respond or not running, this adds delay before the actual process gets killed.
+### 6. Supervisor graceful shutdown window
 
-> 📍 [agent_run.py:345-355](../../moonmind/workflows/temporal/workflows/agent_run.py#L345-L355)
-
-### 5. **Graceful shutdown wait**
-
-The supervisor's `_terminate_process` sends `SIGTERM` and waits **2 seconds** before sending `SIGKILL`. Gemini CLI may not handle `SIGTERM` quickly (it may be in the middle of an API call or file write), so this adds 2s minimum.
-
-> 📍 [supervisor.py:197-207](../../moonmind/workflows/temporal/runtime/supervisor.py#L197-L207)
+`SIGTERM` then wait then `SIGKILL` is a **product** decision (CLI safety). It is not Temporal-specific; tune cautiously for user data integrity.
 
 ---
 
-## Recommendations
+## Recommendations (idiomatic Temporal only)
 
-### Quick Wins (no architectural change)
+### P0 — Use `TRY_CANCEL` on long `execute_activity` call sites
 
-| # | Change | Impact | File |
-|---|--------|--------|------|
-| 1 | **Enable Temporal activity cancellation** via `cancellation_type=ActivityCancellationType.TRY_CANCEL` on `execute_activity` calls in `agent_run.py`. This lets Temporal deliver cancellation to activities without waiting for them to complete. | High — eliminates the #1 bottleneck | [agent_run.py](../../moonmind/workflows/temporal/workflows/agent_run.py) |
-| 2 | **Kill the process directly from the workflow** instead of dispatching a separate activity. Use `workflow.execute_local_activity()` or send a direct signal to the supervisor, avoiding the task queue hop entirely. | Medium — eliminates queuing delay | [agent_run.py](../../moonmind/workflows/temporal/workflows/agent_run.py) |
-| 3 | **Parallelize slot release and process cancel** — run both concurrently in the `CancelledError` handler using `asyncio.gather()` instead of sequentially. | Low-Medium — shaves seconds | [agent_run.py](../../moonmind/workflows/temporal/workflows/agent_run.py) |
-| 4 | **Reduce `GRACEFUL_TERMINATE_WAIT_SECONDS`** from 2.0 to 0.5 seconds. Gemini CLI doesn't need graceful shutdown — it's a CLI tool running agent loops. | Low — but consistent 1.5s saved | [supervisor.py](../../moonmind/workflows/temporal/runtime/supervisor.py) |
-
-### Medium-Term Improvements
-
-| # | Change | Impact |
-|---|--------|--------|
-| 5 | **Add heartbeat-based cancellation** to long-running activities. Activities that check `activity.heartbeat()` and detect cancellation can self-terminate immediately. This requires modifying the activity implementations. | High |
-| 6 | **Bypass the Temporal cancel path for managed agents** — send a "cancel" signal to the supervisor directly from the API service (via a Temporal signal or a direct IPC channel), then let the workflow catch up asynchronously. The UI would see immediate feedback. | High |
-| 7 | **Add a cancel-requested flag to the workflow query handler** so the dashboard can poll/detect that cancellation is in progress and show appropriate UI feedback immediately. | UX improvement |
-
----
-
-## Which Fix to Prioritize
-
-**Fix #1 (TRY_CANCEL)** is the highest-impact, lowest-risk change. By default, Temporal activities use `WAIT_CANCELLATION_COMPLETED` mode, which means the workflow won't process the cancellation until the current activity finishes. Switching to `TRY_CANCEL` mode lets Temporal deliver `CancelledError` to the workflow immediately, even while an activity is running.
-
-In `agent_run.py`, every `execute_activity` call in the main polling loop and the launch/status calls should use:
+Apply **`ActivityCancellationType.TRY_CANCEL`** to activities in the **hot path** where workflow cancellation should **not** block on full activity cancellation completion (especially `agent_runtime.*` and integration polling loops). Example pattern:
 
 ```python
 from temporalio.workflow import ActivityCancellationType
@@ -117,4 +139,64 @@ await workflow.execute_activity(
 )
 ```
 
-Combined with **Fix #3** (parallelize slot release + cancel), this would make cancellation respond within seconds instead of potentially minutes.
+Validate behavior with **workflow tests** and, where applicable, **replay** tests—changing cancellation semantics affects in-flight histories.
+
+### P0 — Heartbeats + heartbeat timeouts in long-running activities
+
+Ensure activities that can run for minutes:
+
+- call **`activity.heartbeat(...)`** on an interval below the **heartbeat timeout**
+- set a **heartbeat timeout** on the `execute_activity` options
+
+This matches Temporal’s own guidance for cancellable activities ([cancellation doc](https://docs.temporal.io/develop/python/cancellation)).
+
+### P1 — Right-size timeouts and retries
+
+**`start_to_close`** and **`schedule_to_close`** bounds directly cap worst-case time before the workflow can leave a stuck activity. Tune them with **P0** heartbeats so “stuck” is detected without always waiting for the full timeout.
+
+### P1 — Operational: agent-runtime worker scaling
+
+If **`agent_runtime.cancel`** queues behind other work, increase **worker** throughput on **`mm.activity.agent_runtime`** or reduce exclusive long-running work occupying slots.
+
+### P2 — `workflow.query` for “cancellation in progress”
+
+Expose read-only state (e.g. `cancelling=True`) so Mission Control can show progress **without** mutating workflow state. Queries are the idiomatic read path.
+
+### P2 — Supervisor `SIGTERM` / `SIGKILL` timing
+
+After Temporal-side cancellation is sound, adjust **graceful wait** constants for CLI tools if product safety allows—this is **orthogonal** to Temporal but reduces tail latency.
+
+### P3 — Terminate only as a last resort
+
+For runs that **cannot** honor cancellation (bug, poison pill), operators may use **Terminate** via tooling. Document **when** it is appropriate; do not treat it as the normal Mission Control path.
+
+---
+
+## Non-goals (explicitly out of scope for “idiomatic Temporal”)
+
+The following were previously suggested in earlier drafts but **conflict** with keeping Temporal as the **single orchestration and lifecycle authority**:
+
+| Anti-pattern | Why avoid |
+|--------------|-----------|
+| **“Bypass Temporal cancel”** via **direct IPC** to kill a process | Splits truth: process may exit while workflow still shows running; breaks audit and child/parent semantics. |
+| **`execute_local_activity` from workflow to kill a remote agent process** | Local activities run on the **workflow worker**; managed agents run on **other** workers. This does not replace **`agent_runtime.cancel`** on the correct fleet. |
+| **Duplicate cancel channels** (API kills process, workflow learns later) | Hard to reason about; duplicates failures and billing edge cases. |
+
+**Preferred:** one **client** cancel on the **workflow** (`handle.cancel()`), **workflow** code handles `CancelledError`, **activities** cooperate via **heartbeats** and **`TRY_CANCEL`** where appropriate.
+
+---
+
+## Prioritization
+
+1. **`TRY_CANCEL`** on the right `execute_activity` sites + tests.
+2. **Heartbeats** + **heartbeat timeouts** for long activities (`agent_runtime`, integrations).
+3. **Timeout / retry** tuning and **worker** capacity for `mm.activity.agent_runtime`.
+4. **Query** for UX; **supervisor** timing tweaks last.
+
+---
+
+## References
+
+- [Interrupt a Workflow Execution — Python SDK](https://docs.temporal.io/develop/python/cancellation)
+- [Failure detection — Python SDK](https://docs.temporal.io/develop/python/failure-detection) (timeouts, heartbeats)
+- [`temporalio.workflow.ActivityCancellationType`](https://python.temporal.io/temporalio.workflow.ActivityCancellationType.html)

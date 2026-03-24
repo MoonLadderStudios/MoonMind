@@ -1,5 +1,7 @@
 # Managed Agents Authentication
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-ManagedAgentsAuthentication.md`](../tmp/remaining-work/ManagedAgents-ManagedAgentsAuthentication.md)
+
 ## 1. Overview
 
 MoonMind-managed agent runtimes (Gemini CLI, Claude Code, Codex CLI) require authenticated access to their respective model providers. This document describes the authentication model, the OAuth volume system, the auth-profile registry, and how auth profiles are assigned to child workflows spawned by `MoonMind.AgentRun`.
@@ -312,39 +314,9 @@ This state is reconstructed from active Temporal workflows on worker restart, av
 
 ---
 
-## 8. Migration Path
+## 8. Evolution path
 
-### Phase 1: Single Default Profile (Current + Minimal Change)
-
-- Each runtime has one implicit default profile backed by the existing named volume.
-- No database table needed yet; profile behavior is derived from environment variables.
-- `tools/auth-*-volume.sh` scripts provision the single default volume.
-- Existing `_resolve_*_command_env` functions continue to work unchanged.
-
-### Phase 2: Auth Profile Registry
-
-- Add `managed_agent_auth_profiles` table.
-- Add API endpoints for CRUD on profiles.
-- Add `--check` / `--list` commands to auth scripts that show registered profiles.
-- `MoonMind.Run` begins passing `execution_profile_ref` to `AgentRun` when available.
-
-### Phase 3: Multi-Volume Support
-
-- Support multiple volumes per runtime via naming convention.
-- Update auth scripts to accept `GEMINI_VOLUME_NAME` (already supported), `CODEX_VOLUME_NAME`, `CLAUDE_VOLUME_NAME`.
-- Profile selector in `AgentRun` picks from available profiles.
-
-### Phase 4: Queuing and Cooldown
-
-- Implement slot reservation and release signaling in `MoonMind.AgentRun`.
-- Implement 429-triggered cooldown with automatic profile rotation.
-- Add observability for profile utilization and queue depth.
-
-### Phase 5: Dedicated Agent Runtime Fleet
-
-- Migrate from sandbox fleet to `mm.activity.agent_runtime`.
-- Agent runtime workers mount all registered auth volumes.
-- Profile-driven volume selection replaces static environment variables.
+Authentication moves from **implicit default volumes** to a **profile registry** (`managed_agent_auth_profiles`), **multi-volume** selection, **queue/cooldown** semantics with 429 handling, and finally **dedicated `agent_runtime` workers** mounting all registered volumes. Phasing details: [`docs/tmp/remaining-work/ManagedAgents-ManagedAgentsAuthentication.md`](../tmp/remaining-work/ManagedAgents-ManagedAgentsAuthentication.md).
 
 ---
 

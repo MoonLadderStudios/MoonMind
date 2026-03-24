@@ -1,5 +1,7 @@
 # Managed Agent Git Authentication (Fast Path for Workflows)
 
+**Implementation tracking:** [`docs/tmp/remaining-work/ManagedAgents-ManagedAgentsGit.md`](../tmp/remaining-work/ManagedAgents-ManagedAgentsGit.md)
+
 Status: Proposed  
 Owners: MoonMind Engineering  
 Last Updated: 2026-03-14

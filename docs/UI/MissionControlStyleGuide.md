@@ -2,7 +2,9 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-18
+Last Updated: 2026-03-24
+
+**Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlStyleGuide.md`](../tmp/remaining-work/UI-MissionControlStyleGuide.md)
 
 ## 1. Purpose
 
@@ -660,73 +662,11 @@ The Table maps these into standard UI grids, while the Mobile Card iterates thes
 - The backend exposes these rows consistently over `GET /api/queue/jobs`.
 - UI CSS governs the CSS media queries hiding the Table at `max-width: 767px` and showing Cards instead.
 
-## 11. Migration Status
+## 11. Production baseline vs upcoming polish
 
-### Phase 1: Toolchain + generated CSS
+The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, **light visual direction**, and **dark mode** (`.dark` scope, theme toggle, no-flash boot) are the current production baseline. **Mobile refinement** (e.g. horizontal nav on narrow widths, table min-width wrappers, touch-target audit) and **glass/motion polish** (expanded `mm-glass` usage, glow/elevation tuning, subtle motion) are outstanding design work; status and checklists live in the tracker linked above.
 
-Status: Complete (2026-02-18)
-
-- Tailwind/PostCSS configs and npm scripts landed.
-- Build pipeline compiles `dashboard.tailwind.css` to `dashboard.css`.
-
-### Phase 2: Tokenization + brand refresh
-
-Status: Complete (2026-02-18)
-
-- Legacy color vars replaced with `--mm-*`.
-- Purple/cyan/pink visual direction applied in light mode.
-
-### Phase 3: Dark mode system
-
-Status: Complete (2026-02-19)
-
-- `.dark` token overrides shipped in `dashboard.tailwind.css`.
-- Theme toggle shipped in template with runtime persistence in `dashboard.js`.
-- No-flash boot script shipped in `<head>` for pre-paint theme resolution.
-- Readability and accent hierarchy validated by runtime smoke checks and unit suite.
-
-### Phase 4: Mobile refinement
-
-Status: Planned
-
-- Horizontal-scroll nav on narrow widths.
-- Table wrapper support with minimum widths.
-- Touch target and compact spacing polish.
-
-### Phase 5: Glass and motion polish
-
-Status: Planned
-
-- Expand `mm-glass` and `mm-glass-strong` usage.
-- Tune glow and elevation hierarchy.
-- Keep motion subtle (opacity/scale only). Avoid translateY rising on hover/click.
-
-## 12. Validation Checklist
-
-Current baseline:
-
-- [x] `dashboard.css` generated from `dashboard.tailwind.css`
-- [x] Semantic classes preserved for JS-rendered views
-- [x] Glass fallback provided for no-`backdrop-filter` browsers
-- [x] Light-mode visual QA completed in Chromium and Firefox
-- [x] Focus indicators remain visible with forced-colors fallback
-
-Dark mode release gate:
-
-- [x] `.dark` token overrides implemented
-- [x] Theme toggle exists and persists preference
-- [x] System preference respected when no user override exists
-- [x] No first-paint theme flash
-- [x] Tables/forms/log output remain readable in dark mode
-- [x] Purple remains primary accent; yellow/orange highlight usage is restrained and intentional
-
-Mobile release gate:
-
-- [x] Queue nav/table views remain usable on small screens without excessive wrapping (card layout shipped)
-- [x] Queue tables/cards share one responsive component and scroll without layout break
-- [ ] Touch targets meet minimum size guidelines
-
-## 13. Troubleshooting
+## 12. Troubleshooting
 
 ### Tailwind classes do not appear
 
@@ -752,7 +692,7 @@ Mobile release gate:
 2. Increase panel opacity slightly.
 3. Remove blur from high-frequency repaint regions.
 
-## 14. Related Documents
+## 13. Related Documents
 
 - `docs/UI/MissionControlArchitecture.md`
 - `specs/025-tailwind-dashboard/`
