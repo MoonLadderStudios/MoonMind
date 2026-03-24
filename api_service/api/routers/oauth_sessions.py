@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -12,24 +12,58 @@ from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, 
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
 
+_ACTIVE_SESSION_STATUSES = (
+    OAuthSessionStatus.PENDING,
+    OAuthSessionStatus.STARTING,
+    OAuthSessionStatus.TMATE_READY,
+    OAuthSessionStatus.AWAITING_USER,
+    OAuthSessionStatus.VERIFYING,
+    OAuthSessionStatus.REGISTERING_PROFILE,
+)
+_STALE_ACTIVE_SESSION_MINUTES = 45
+
+
+async def _expire_stale_active_sessions(
+    db: AsyncSession, *, profile_id: str
+) -> None:
+    """Expire stale non-terminal sessions so ghost rows don't block new starts."""
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        minutes=_STALE_ACTIVE_SESSION_MINUTES
+    )
+    result = await db.execute(
+        select(ManagedAgentOAuthSession).where(
+            ManagedAgentOAuthSession.profile_id == profile_id,
+            ManagedAgentOAuthSession.status.in_(_ACTIVE_SESSION_STATUSES),
+            ManagedAgentOAuthSession.created_at < cutoff,
+        )
+    )
+    stale_sessions = result.scalars().all()
+    if not stale_sessions:
+        return
+
+    completed_at = datetime.now(timezone.utc)
+    for stale_session in stale_sessions:
+        stale_session.status = OAuthSessionStatus.EXPIRED
+        stale_session.completed_at = completed_at
+        if not stale_session.failure_reason:
+            stale_session.failure_reason = (
+                "Session expired before new start: stale active session"
+            )
+    await db.commit()
+
 @router.post("", response_model=OAuthSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_oauth_session(
     request: CreateOAuthSessionRequest,
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ):
+    await _expire_stale_active_sessions(db, profile_id=request.profile_id)
+
     # Check for existing active session for this profile
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.profile_id == request.profile_id,
-            ManagedAgentOAuthSession.status.in_([
-                OAuthSessionStatus.PENDING,
-                OAuthSessionStatus.STARTING,
-                OAuthSessionStatus.TMATE_READY,
-                OAuthSessionStatus.AWAITING_USER,
-                OAuthSessionStatus.VERIFYING,
-                OAuthSessionStatus.REGISTERING_PROFILE,
-            ])
+            ManagedAgentOAuthSession.status.in_(_ACTIVE_SESSION_STATUSES)
         )
     )
     existing_session = result.scalars().first()
@@ -60,7 +94,18 @@ async def create_oauth_session(
     await db.refresh(new_session)
     
     from api_service.services.oauth_session_service import start_oauth_session_workflow
-    await start_oauth_session_workflow(new_session)
+
+    try:
+        await start_oauth_session_workflow(new_session)
+    except Exception as exc:
+        new_session.status = OAuthSessionStatus.FAILED
+        new_session.completed_at = datetime.now(timezone.utc)
+        new_session.failure_reason = "Failed to start OAuth session workflow"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to start OAuth session workflow. Please retry.",
+        ) from exc
 
     return OAuthSessionResponse(
         session_id=new_session.session_id,

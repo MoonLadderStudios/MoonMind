@@ -42,10 +42,13 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
             task_queue=WORKFLOW_TASK_QUEUE,
         )
         logger.info("Started OAuth session workflow %s", workflow_id)
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Failed to start OAuth session workflow for %s", session_id
         )
+        raise RuntimeError(
+            f"Failed to start OAuth session workflow {workflow_id}"
+        ) from exc
 
 
 async def cancel_oauth_session_workflow(session_id: str) -> None:
