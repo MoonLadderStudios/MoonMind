@@ -266,13 +266,13 @@ The codebase has adopted a **Strategy Pattern-based Registry** (`ManagedRuntimeS
 | Environment shaping | ✅ Done | Launcher calls `strategy.shape_environment()` |
 | Workspace preparation | ✅ Hook wired | Launcher calls `strategy.prepare_workspace()`; content exists for Cursor and Codex only |
 | Exit classification | ✅ Done | Supervisor delegates to `strategy.classify_exit()` |
-| Output parsing | ⚠️ Partial | Types exist; not integrated into log streaming |
+| Output parsing | ✅ Done | Integrated via `RuntimeLogStreamer.stream_and_parse()`; supervisor wires strategy parser |
 | Auth mode defaults | ✅ Done | Adapter reads from strategy |
 | Command template defaults | ✅ Done | Adapter reads from strategy |
 
 **Still outstanding:**
 - **Gemini/Claude** workspace prep content (no-op stubs)
-- **Output parser integration** into `RuntimeLogStreamer` for structured event streaming
+
 - **Shared env-shaping module** (`moonmind/auth/env_shaping.py`) to unify strategies and OAuth session orchestrator
 - **Adapter auth-mode fallback** still has legacy `cursor_cli → oauth` branch for unregistered runtimes
 - **`agent_runtime_env_keys` in `settings.py`** may be dead config — verify and clean up
@@ -362,9 +362,9 @@ Checkboxes reflect **implementation in the repo** as of **2026-03-22**. Run `./t
 - [x] Implement `PlainTextOutputParser` in `output_parser.py`
 - [x] Base class `create_output_parser()` returns `PlainTextOutputParser` by default
 - [x] Add unit tests for output parsers and related behavior (`test_output_parser.py`, strategy tests)
-- [ ] Integrate output parsers into `RuntimeLogStreamer.stream_to_artifact()` for structured event extraction during log streaming
+- [x] Integrate output parsers into `RuntimeLogStreamer.stream_to_artifact()` for structured event extraction during log streaming
 
-**Output**: **Mostly done.** Exit classification is fully strategy-delegated. Output parsers exist but are **not integrated into the log streaming pipeline** — `RuntimeLogStreamer` streams raw bytes without parsing.
+**Output**: ✅ **Complete.** Exit classification is fully strategy-delegated. Output parsers are integrated into the log streaming pipeline via `RuntimeLogStreamer.stream_and_parse()` — the supervisor obtains the parser from `strategy.create_output_parser()` and parsed output metadata (error messages, rate-limit flag, event count) flows into diagnostics.
 
 ---
 
