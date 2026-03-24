@@ -358,6 +358,7 @@ class MoonMindRunWorkflow:
                     "link_type": "plan",
                 },
             },
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(plan_route),
         )
         resolved_plan_ref = (
@@ -547,6 +548,7 @@ class MoonMindRunWorkflow:
                                     "node_id": node_id,
                                 },
                             },
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             **self._execute_kwargs_for_route(route),
                         )
                     except Exception:
