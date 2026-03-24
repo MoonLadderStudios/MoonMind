@@ -128,3 +128,19 @@ class ManagedRuntimeStrategy(ABC):
         See :class:`~moonmind.workflows.temporal.runtime.output_parser.RuntimeOutputParser`.
         """
         return PlainTextOutputParser()
+
+    def should_retry_exit(self, failure_class: str | None) -> bool:
+        """Determine if a failure class should trigger a self-heal retry.
+
+        Uses the shared self-heal capability to determine if an exit
+        classification warrants a retry attempt by the orchestrator.
+        """
+        if not failure_class:
+            return False
+            
+        from moonmind.workflows.temporal.runtime.self_heal import FailureClass, is_failure_retryable
+        try:
+            fc = FailureClass(failure_class)
+            return is_failure_retryable(fc)
+        except ValueError:
+            return False

@@ -63,3 +63,21 @@ class TestConcreteDefaults:
         parser = s.create_output_parser()
         from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser
         assert isinstance(parser, PlainTextOutputParser)
+
+    def test_should_retry_exit_none(self) -> None:
+        s = self._MinimalStrategy()
+        assert not s.should_retry_exit(None)
+
+    def test_should_retry_exit_invalid_class(self) -> None:
+        s = self._MinimalStrategy()
+        assert not s.should_retry_exit("not_a_real_failure_class")
+
+    def test_should_retry_exit_retryable(self) -> None:
+        s = self._MinimalStrategy()
+        # Assuming transient_runtime is retryable according to is_failure_retryable
+        assert s.should_retry_exit("transient_runtime")
+
+    def test_should_retry_exit_non_retryable(self) -> None:
+        s = self._MinimalStrategy()
+        # Assuming deterministic_contract is non-retryable
+        assert not s.should_retry_exit("deterministic_contract")
