@@ -458,7 +458,7 @@ async def _auto_seed_auth_profiles() -> list[str]:
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
-                "API_TIMEOUT_MS": "3000000",
+                "API_TIMEOUT_MS": "600000",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             },
             "volume_ref": None,

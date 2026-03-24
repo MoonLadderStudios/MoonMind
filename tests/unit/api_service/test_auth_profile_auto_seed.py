@@ -119,7 +119,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.runtime_env_overrides is not None
     assert mm_profile.runtime_env_overrides["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert mm_profile.runtime_env_overrides["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
-    assert mm_profile.runtime_env_overrides["API_TIMEOUT_MS"] == "3000000"
+    assert mm_profile.runtime_env_overrides["API_TIMEOUT_MS"] == "600000"
     assert mm_profile.volume_ref is None
     assert mm_profile.volume_mount_path is None
 
