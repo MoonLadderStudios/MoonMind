@@ -375,6 +375,7 @@ class RecurringTasksService:
             scope_ref=_clean_text(scope_ref, field_name="scopeRef"),
             target=target_payload,
             policy=policy_payload,
+            temporal_schedule_id=f"mm-schedule:{definition_id}",
             created_at=now,
             updated_at=now,
             version=1,
@@ -539,6 +540,28 @@ class RecurringTasksService:
         await self._session.refresh(run)
         await self._session.commit()
         return run
+
+    async def reconcile_schedules(self, limit: int = 100) -> int:
+        """Sweep db and reconcile temporal schedules where temporal_schedule_id is present."""
+        stmt = select(RecurringTaskDefinition).where(
+            RecurringTaskDefinition.enabled == True,
+            RecurringTaskDefinition.temporal_schedule_id.is_not(None)
+        ).limit(limit)
+        
+        result = await self._session.execute(stmt)
+        definitions = result.scalars().all()
+        reconciled = 0
+        
+        for dfn in definitions:
+            try:
+                # Basic check - just try to unpause/update to ensure it's in sync
+                # Ideally we'd describe_schedule and compare state
+                await self._adapter.unpause_schedule(definition_id=dfn.id)
+                reconciled += 1
+            except Exception as exc:
+                logger.warning(f"Reconciliation failed for {dfn.id}: {exc}")
+                
+        return reconciled
 
     async def list_runs(
         self,
