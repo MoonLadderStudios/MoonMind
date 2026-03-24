@@ -571,3 +571,52 @@ async def test_list_activities_empty_response():
     result = await client.list_activities("session-42")
     assert result.latest_agent_question is None
     assert result.activity_id is None
+
+
+# --- native PR creation tests ---
+
+
+@pytest.mark.asyncio
+async def test_create_pull_request_success():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/repos/owner/repo/pulls"
+        body = json.loads(request.content)
+        assert body["head"] == "feature-branch"
+        assert body["base"] == "main"
+        assert body["title"] == "Test PR"
+        assert body["body"] == "Test body"
+        return httpx.Response(201, json={"html_url": "https://github.com/owner/repo/pull/1"})
+
+    client = _make_client(handler)
+    result = await client.create_pull_request(
+        repo="owner/repo",
+        head="feature-branch",
+        base="main",
+        title="Test PR",
+        body="Test body",
+        github_token="fake-token"
+    )
+    assert result.created is True
+    assert result.pr_url == "https://github.com/owner/repo/pull/1"
+
+
+@pytest.mark.asyncio
+async def test_create_pull_request_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422, 
+            json={"message": "Validation Failed", "errors": [{"message": "A pull request already exists"}]}
+        )
+
+    client = _make_client(handler)
+    result = await client.create_pull_request(
+        repo="owner/repo",
+        head="feature-branch",
+        base="main",
+        title="Test PR",
+        body="Test body",
+        github_token="fake-token"
+    )
+    assert result.created is False
+    assert "HTTP 422" in result.summary

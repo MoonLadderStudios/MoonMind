@@ -310,6 +310,19 @@ class JulesIntegrationMergePRResult(BaseModel):
     summary: str = Field(..., alias="summary")
 
 
+class JulesIntegrationCreatePRResult(BaseModel):
+    """Result returned by `integration.jules.create_pr`."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    activity_name: Literal["integration.jules.create_pr"] = Field(
+        "integration.jules.create_pr", alias="activityName"
+    )
+    pr_url: Optional[str] = Field(None, alias="prUrl")
+    created: bool = Field(..., alias="created")
+    summary: str = Field(..., alias="summary")
+
+
 class JulesAgentMessage(BaseModel):
     """The ``AgentMessaged`` activity type from the Jules Activities API.
 
