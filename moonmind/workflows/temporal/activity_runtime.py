@@ -3014,9 +3014,9 @@ class TemporalAgentRuntimeActivities:
                     try:
                         self._run_store.update_status(
                             str(run_id),
-                            "cancelled",
+                            "canceled",
                             finished_at=datetime.now(tz=UTC),
-                            error_message="Cancelled via activity (no supervisor)",
+                            error_message="Canceled via activity (no supervisor)",
                         )
                         logger.info(
                             "agent_runtime.cancel marked run %s as cancelled in store",

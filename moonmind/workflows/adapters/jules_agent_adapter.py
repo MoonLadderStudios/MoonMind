@@ -34,7 +34,7 @@ _JULES_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "awaiting_feedback": "awaiting_feedback",
     "completed": "completed",
     "failed": "failed",
-    "canceled": "cancelled",
+    "canceled": "canceled",
     "unknown": "awaiting_callback",
 }
 

@@ -317,7 +317,7 @@ class ExecutionModel(BaseModel):
         "waiting",
         "completed",
         "failed",
-        "cancelled",
+        "canceled",
     ] = Field(..., alias="status")
     dashboard_status: Literal[
         "queued",
@@ -326,7 +326,7 @@ class ExecutionModel(BaseModel):
         "waiting",
         "completed",
         "failed",
-        "cancelled",
+        "canceled",
     ] = Field(..., alias="dashboardStatus")
     state: str = Field(..., alias="state")
     raw_state: str = Field(..., alias="rawState")

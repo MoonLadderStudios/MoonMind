@@ -223,7 +223,7 @@ async def test_cancel_terminates(supervisor_env):
     await supervisor.cancel("run-1")
 
     loaded = store.load("run-1")
-    assert loaded.status == "cancelled"
+    assert loaded.status == "canceled"
     assert "run-1" not in supervisor._active_processes
 
 
@@ -246,7 +246,7 @@ async def test_cancel_cleans_registered_runtime_files(supervisor_env, tmp_path):
     await supervisor.cancel("run-cancel-cleanup")
 
     loaded = store.load("run-cancel-cleanup")
-    assert loaded.status == "cancelled"
+    assert loaded.status == "canceled"
     assert not cleanup_path.exists()
 
 
@@ -258,7 +258,7 @@ async def test_cancel_without_process(supervisor_env):
     await supervisor.cancel("run-1")
 
     loaded = store.load("run-1")
-    assert loaded.status == "cancelled"
+    assert loaded.status == "canceled"
 
 
 @pytest.mark.asyncio

@@ -34,7 +34,7 @@ class RunStatus:
     awaiting_feedback = "awaiting_feedback"
     completed = "completed"
     failed = "failed"
-    cancelled = "cancelled"
+    cancelled = "canceled"
     timed_out = "timed_out"
 
 
@@ -380,7 +380,7 @@ class MoonMindAgentRun:
             "collecting_results",
             "completed",
             "failed",
-            "cancelled",
+            "canceled",
             "timed_out",
         }
         if run_status not in valid_statuses:

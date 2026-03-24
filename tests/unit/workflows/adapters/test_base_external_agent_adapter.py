@@ -95,7 +95,7 @@ class _StubAdapter(BaseExternalAgentAdapter):
         return self.build_status(
             run_id=run_id,
             agent_id="stub",
-            status="cancelled",
+            status="canceled",
             provider_status="canceled",
             normalized_status="canceled",
             extra_metadata={"cancelAccepted": True},

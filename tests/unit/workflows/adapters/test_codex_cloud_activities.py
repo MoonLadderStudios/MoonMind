@@ -137,7 +137,7 @@ async def test_codex_cloud_cancel_activity_calls_adapter():
         runId="cc-run-1",
         agentKind="external",
         agentId="codex_cloud",
-        status="cancelled",
+        status="canceled",
         metadata={"cancelAccepted": True},
     )
     mock_adapter = AsyncMock()

@@ -72,7 +72,7 @@ def _mock_cancel_status(*, run_id: str = "task-001") -> AgentRunStatus:
         runId=run_id,
         agentKind="external",
         agentId="jules",
-        status="cancelled",
+        status="canceled",
         metadata={
             "providerStatus": "canceled",
             "normalizedStatus": "canceled",

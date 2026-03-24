@@ -309,6 +309,11 @@ async def sync_temporal_executions_safely(
     tasks = [fetch_and_sync(item) for item in items]
     updated_items = list(await asyncio.gather(*tasks))
     await session.commit()
+    for obj in updated_items:
+        try:
+            await session.refresh(obj)
+        except Exception:
+            pass  # fallback to potentially stale but accessible attributes
     return updated_items
 
 

@@ -63,7 +63,7 @@ async def list_compatibility_tasks(
             "awaiting_action",
             "succeeded",
             "failed",
-            "cancelled",
+            "canceled",
         ]
         | None
     ) = Query(None, alias="status"),

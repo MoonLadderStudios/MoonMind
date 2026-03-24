@@ -185,7 +185,7 @@ class ManagedRunSupervisor:
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
             self._store.update_status(
                 run_id,
-                "cancelled",
+                "canceled",
                 finished_at=datetime.now(tz=UTC),
                 error_message="Cancelled (process not found in supervisor)",
             )
@@ -196,7 +196,7 @@ class ManagedRunSupervisor:
         self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
         self._store.update_status(
             run_id,
-            "cancelled",
+            "canceled",
             finished_at=datetime.now(tz=UTC),
             exit_code=process.returncode,
             error_message="Cancelled by supervisor",

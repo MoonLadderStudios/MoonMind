@@ -33,7 +33,7 @@ TaskStatusFilter = (
         "awaiting_action",
         "completed",
         "failed",
-        "cancelled",
+        "canceled",
     ]
     | None
 )
@@ -47,7 +47,7 @@ _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.FINALIZING: "running",
     db_models.MoonMindWorkflowState.COMPLETED: "completed",
     db_models.MoonMindWorkflowState.FAILED: "failed",
-    db_models.MoonMindWorkflowState.CANCELED: "cancelled",
+    db_models.MoonMindWorkflowState.CANCELED: "canceled",
 }
 
 _ALLOWED_SEARCH_ATTRIBUTE_KEYS = {
@@ -474,7 +474,7 @@ class TaskCompatibilityService:
             allowed_keys=_ALLOWED_SEARCH_ATTRIBUTE_KEYS,
         )
         raw_state = record.state.value
-        is_terminal = row.status in {"completed", "failed", "cancelled"}
+        is_terminal = row.status in {"completed", "failed", "canceled"}
         can_pause = not is_terminal and raw_state != "awaiting_external"
         can_resume = not is_terminal and raw_state == "awaiting_external"
         waiting_reason = str(memo.get("waiting_reason") or "").strip() or None
@@ -689,7 +689,7 @@ class TaskCompatibilityService:
                 "Any",
                 "Any",
             ),
-            "cancelled": ("Any",),
+            "canceled": ("Any",),
         }
         return mapping[status_filter]
 
@@ -710,7 +710,7 @@ class TaskCompatibilityService:
             "awaiting_action": (db_models.MoonMindWorkflowState.AWAITING_EXTERNAL,),
             "completed": (db_models.MoonMindWorkflowState.COMPLETED,),
             "failed": (db_models.MoonMindWorkflowState.FAILED,),
-            "cancelled": (db_models.MoonMindWorkflowState.CANCELED,),
+            "canceled": (db_models.MoonMindWorkflowState.CANCELED,),
         }
         return mapping[status_filter]
 

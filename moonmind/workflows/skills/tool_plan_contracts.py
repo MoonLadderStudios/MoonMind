@@ -24,7 +24,7 @@ EXPLICIT_BINDING_REASONS = frozenset(
 )
 _DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
 _LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
-OBSERVABILITY_OUTCOMES = frozenset({"completed", "failed", "cancelled", "partial"})
+OBSERVABILITY_OUTCOMES = frozenset({"completed", "failed", "canceled", "partial"})
 TOOL_FAILURE_CODES = frozenset(
     {
         "INVALID_INPUT",

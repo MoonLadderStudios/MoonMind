@@ -28,7 +28,7 @@ _CODEX_CLOUD_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "running": "running",
     "completed": "completed",
     "failed": "failed",
-    "canceled": "cancelled",
+    "canceled": "canceled",
     "unknown": "awaiting_callback",
 }
 

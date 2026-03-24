@@ -213,8 +213,8 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
             assert cancel_body["state"] == "canceled"
             assert cancel_body["temporalStatus"] == "canceled"
             assert cancel_body["closeStatus"] == "canceled"
-            assert cancel_body["dashboardStatus"] == "cancelled"
-            assert cancel_body["status"] == "cancelled"
+            assert cancel_body["dashboardStatus"] == "canceled"
+            assert cancel_body["status"] == "canceled"
 
             post_cancel_update = await client.post(
                 f"/api/executions/{workflow_id}/update",
@@ -452,7 +452,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path):
             canceled_body = canceled_only.json()
             assert canceled_body["count"] == 1
             assert canceled_body["items"][0]["state"] == "canceled"
-            assert canceled_body["items"][0]["dashboardStatus"] == "cancelled"
+            assert canceled_body["items"][0]["dashboardStatus"] == "canceled"
             assert (
                 canceled_body["items"][0]["taskId"]
                 == canceled_body["items"][0]["workflowId"]

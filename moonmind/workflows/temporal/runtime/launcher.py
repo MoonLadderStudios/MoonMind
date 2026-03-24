@@ -373,7 +373,7 @@ class ManagedRuntimeLauncher:
         if existing is not None and existing.status not in (
             "completed",
             "failed",
-            "cancelled",
+            "canceled",
             "timed_out",
         ):
             raise RuntimeError(

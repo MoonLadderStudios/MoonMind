@@ -116,7 +116,7 @@ async def test_cancel_without_supervisor_updates_store():
     mock_store.update_status.assert_called_once()
     call_args = mock_store.update_status.call_args
     assert call_args.args[0] == "run-3"
-    assert call_args.args[1] == "cancelled"
+    assert call_args.args[1] == "canceled"
 
 
 @pytest.mark.asyncio

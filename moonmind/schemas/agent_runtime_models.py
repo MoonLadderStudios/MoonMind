@@ -21,7 +21,7 @@ AgentRunState = Literal[
     "collecting_results",
     "completed",
     "failed",
-    "cancelled",
+    "canceled",
     "timed_out",
 ]
 FailureClass = Literal[
@@ -32,7 +32,7 @@ FailureClass = Literal[
 ]
 
 TERMINAL_AGENT_RUN_STATES: frozenset[AgentRunState] = frozenset(
-    {"completed", "failed", "cancelled", "timed_out"}
+    {"completed", "failed", "canceled", "timed_out"}
 )
 _SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "password",

@@ -414,7 +414,7 @@ class ManagedAgentAdapter:
             runId=run_id,
             agentKind="managed",
             agentId="managed",
-            status="cancelled",
+            status="canceled",
         )
 
     # ------------------------------------------------------------------
