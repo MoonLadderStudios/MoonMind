@@ -15,17 +15,18 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
     ``oauth-session:<session_id>``.  The workflow manages volume
     provisioning, status transitions, and session expiry.
     """
-    from moonmind.workflows.temporal.service import get_temporal_client
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.workflows.oauth_session import (
+        WORKFLOW_NAME,
+        WORKFLOW_TASK_QUEUE,
+    )
 
     session_id: str = session_model.session_id
     workflow_id = f"oauth-session:{session_id}"
 
     try:
-        client = await get_temporal_client()
-        from moonmind.workflows.temporal.workflows.oauth_session import (
-            WORKFLOW_NAME,
-            WORKFLOW_TASK_QUEUE,
-        )
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
 
         await client.start_workflow(
             WORKFLOW_NAME,
@@ -42,10 +43,13 @@ async def start_oauth_session_workflow(session_model: Any) -> None:
             task_queue=WORKFLOW_TASK_QUEUE,
         )
         logger.info("Started OAuth session workflow %s", workflow_id)
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "Failed to start OAuth session workflow for %s", session_id
         )
+        raise RuntimeError(
+            f"Failed to start OAuth session workflow {workflow_id}"
+        ) from exc
 
 
 async def cancel_oauth_session_workflow(session_id: str) -> None:
@@ -54,12 +58,13 @@ async def cancel_oauth_session_workflow(session_id: str) -> None:
     Sends a ``cancel`` signal to the workflow, allowing it to
     transition gracefully to ``cancelled`` status.
     """
-    from moonmind.workflows.temporal.service import get_temporal_client
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     workflow_id = f"oauth-session:{session_id}"
 
     try:
-        client = await get_temporal_client()
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
         handle = client.get_workflow_handle(workflow_id)
         await handle.signal("cancel")
         logger.info("Sent cancel signal to OAuth session workflow %s", workflow_id)

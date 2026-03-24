@@ -417,4 +417,109 @@ If the low/medium items are completed, MoonMind’s Temporal usage becomes signi
 If the high-effort items are completed, MoonMind also gains:
 
 * Platform-native scheduling semantics and tooling via Temporal Schedules. citeturn51search3turn51search7  
-* Safer deployment evolution via Worker Versioning and Build IDs. citeturn51search2turn51search17
+* Safer deployment evolution via Worker Versioning and Build IDs. citeturn51search2turn51search17
+
+---
+
+## Addendum: Phased Implementation Plan (March 2026 evaluation)
+
+> [!NOTE]
+> This section was produced by evaluating every recommendation above against
+> the current `main` branch.  Items marked **✅ DONE** have already been
+> implemented; items marked **🔲 OPEN** represent remaining work organized
+> into four phases.
+
+### Codebase delta analysis
+
+| # | Recommendation | Current status | Evidence |
+|---|---|---|---|
+| 1 | Add `pause`/`resume`/`cancel` signal handlers to `MoonMind.Run` | **✅ DONE** | `@workflow.signal` handlers for `pause`, `resume`, `cancel`, `approve`, and `ExternalEvent` exist at lines 1341-1412 of `run.py`. `child_state_changed` signal also implemented. |
+| 2 | Add `update_parameters` Update handler | **✅ DONE** | `@workflow.update` handlers for `update_parameters` (line 1417) and `update_title` (line 1413) exist. |
+| 3 | Add `@workflow.query` status snapshot to `MoonMind.Run` | **🔲 OPEN** | No `@workflow.query` decorator found anywhere in `run.py`. Operational visibility gap remains. |
+| 4 | Fix integration polling loop termination logic | **⚠️ PARTIALLY DONE** | Cleanup (`_resume_requested = False`, `_awaiting_external = False`, etc.) is now **outside** the `while` loop (lines 914-918), fixing the original "finally resets flag on every iteration" concern. However, the loop still uses `_resume_requested = True` as a terminal-poll exit mechanism (line 903) then resets it post-loop (line 914), which conflates "operator resume" with "poll detected terminal status." The `ExternalEvent` signal (line 1377) correctly sets `_resume_requested = True` for callback-driven exit. |
+| 5 | Replace "auto-start on missing workflow" with Signal-With-Start | **🔲 OPEN** | `agent_run.py` `_ensure_manager_and_signal()` (lines 138-178) still uses the try/catch/activity/retry-signal pattern. |
+| 6 | Migrate recurring dispatch to Temporal Schedules | **⚠️ PARTIALLY DONE** | Temporal Schedule CRUD is fully implemented in `client.py` (lines 325-618) with `schedule_mapping.py` (overlap/catchup policy mapping, spec/state builders) and `schedule_errors.py`. However, `recurring_tasks_service.py` (1363 lines) still computes cron occurrences in application code and manages dispatch as the primary execution path. The Schedule CRUD is available but not yet wired as the primary dispatch mechanism. |
+| 7 | Adopt Worker Versioning / Build IDs | **🔲 OPEN** | No `build_id`, `worker_versioning`, or `deployment_series` references found in `moonmind/workflows/temporal/`. `worker_runtime.py` constructs `Worker(...)` without any versioning kwargs. |
+| 8 | Improve observability (tracing/metrics) | **🔲 OPEN** | No OpenTelemetry, Prometheus, Sentry, or Datadog dependencies in `pyproject.toml`. Worker runtime logs fleet startup and runs a healthcheck server; workflow code logs selectively but without systematic structured fields. |
+| 9 | Add Temporal SDK workflow/signal tests | **⚠️ PARTIALLY DONE** | Unit tests exist for `MoonMind.Run` (`test_run.py`, `test_run_agent_dispatch.py`) and `MoonMind.AgentRun` (multiple test files including auto-answer, slot wait, status payloads). However, no tests exercise signal/update handler round-trips or replay determinism. |
+| 10 | Normalize error taxonomy for retries | **🔲 OPEN** | Activity retry policies use `non_retryable_error_codes` from the catalog, but no unified taxonomy exists mapping thrown `ApplicationError` types to these codes. |
+
+### Phase 1 — Quick reliability wins (Low effort, 1-2 sprints)
+
+**Goal:** Fix remaining correctness gaps and add operational visibility.
+
+| Task | Files | Notes |
+|---|---|---|
+| **1a.** Add `@workflow.query get_status` to `MoonMind.Run` | `run.py` | Return `_state`, `_paused`, `_cancel_requested`, `_step_count`, `_summary`, `_awaiting_external`, `_waiting_reason`. Aligns with the client's `describe_workflow`. |
+| **1b.** Refactor integration loop to separate "operator resume" from "poll terminal" | `run.py` (lines 864-918) | Introduce a distinct `_poll_terminal` flag instead of reusing `_resume_requested` for two different intents. This makes the loop termination property easier to reason about and eliminates the post-loop `_resume_requested = False` reset. |
+| **1c.** Explore Signal-With-Start for AuthProfileManager bootstrapping | `agent_run.py` (`_ensure_manager_and_signal`) | Evaluate whether the Python SDK `start_workflow(..., start_signal=...)` or `signal_with_start` API can replace the current try/catch/activity/retry pattern. If SDK support is incomplete, document the limitation and keep the existing approach. |
+| **1d.** Define error taxonomy document | New: `docs/Temporal/ErrorTaxonomy.md` | Map each `ApplicationError` subtype to retry vs non-retryable classification. Update `activity_catalog.py` `non_retryable_error_codes` to reference the taxonomy. |
+
+### Phase 2 — Observability and testing (Medium effort, 2-3 sprints)
+
+**Goal:** Systematic structured logging, workflow tests covering signals/updates, and replay determinism.
+
+| Task | Files | Notes |
+|---|---|---|
+| **2a.** Add structured logging context to all workflows | `run.py`, `agent_run.py`, `auth_profile_manager.py`, `manifest_ingest.py` | Standardize `extra=` fields: `workflow_id`, `run_id`, `task_queue`, `owner_id`. Use `workflow.info()` consistently. |
+| **2b.** Add signal/update round-trip unit tests | `tests/unit/workflows/temporal/workflows/` | Test `pause` → `wait_condition` unblocks on `resume`. Test `cancel` stops execution. Test `update_parameters` is acknowledged. Use Temporal Python SDK test environment (`WorkflowEnvironment.start_time_skipping()`). |
+| **2c.** Add replay determinism test harness | `tests/unit/workflows/temporal/` | Capture a workflow history JSON, then replay against current workflow code to catch non-determinism. Critical given `UnsandboxedWorkflowRunner()`. |
+| **2d.** Evaluate OpenTelemetry integration | `pyproject.toml`, `worker_runtime.py` | The Temporal Python SDK supports interceptors for tracing. Add `opentelemetry-api` + `opentelemetry-sdk` + `temporalio` tracing interceptor. Gate behind feature flag for initial rollout. |
+
+### Phase 3 — Temporal Schedules integration (High effort, 2-3 sprints)
+
+**Goal:** Wire existing `client.py` Schedule CRUD as the primary dispatch mechanism for recurring tasks.
+
+| Task | Files | Notes |
+|---|---|---|
+| **3a.** Add `temporal_schedule_id` column to `RecurringTaskDefinition` | DB migration, `api_service/db/models.py` | Nullable string. When populated, indicates the definition has a corresponding Temporal Schedule. |
+| **3b.** Create/update Temporal Schedule on definition CRUD | `recurring_tasks_service.py` | On `create_definition()`: call `TemporalClientAdapter.create_schedule()`. On `update_definition()`: call `update_schedule()`. On enable/disable: call `pause_schedule()` / `unpause_schedule()`. |
+| **3c.** Hybrid dispatch: feature-flag dual execution | `recurring_tasks_service.py` | Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` \| `"temporal"` \| `"dual"`). In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing). |
+| **3d.** Migrate existing definitions | New migration script | Iterate existing enabled definitions and call `create_schedule()` for each. Populate `temporal_schedule_id`. |
+| **3e.** Deprecate app-layer cron computation | `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py` | Once `"temporal"` mode is stable, remove `schedule_due_definitions()` polling loop and `compute_next_occurrence()` dispatch path. Keep cron validation for UI. |
+
+### Phase 4 — Worker versioning and deployment safety (High effort, 1-2 sprints)
+
+**Goal:** Enable safe rolling deploys for workflow code changes.
+
+| Task | Files | Notes |
+|---|---|---|
+| **4a.** Inject build identifier into worker startup | `worker_runtime.py` | Read `MOONMIND_BUILD_ID` (default: Git SHA) from environment. Pass to `Worker(...)` using the Python SDK's versioning API once stable (or use `workflow.patched()` gates in the interim). |
+| **4b.** Document deployment runbook | New: `docs/Temporal/WorkerDeployment.md` | Cover: version registration, compatibility matrix, rollback procedure, two-version side-by-side strategy for workflow changes. |
+| **4c.** Add `workflow.patched()` gates for in-flight compatibility | Workflow files as needed | For any workflow-shape-changing refactor (e.g., Phase 1b loop refactor), use `workflow.patched("patch-id")` to branch between old and new behavior during replay. |
+
+### Phase dependency graph
+
+```mermaid
+flowchart LR
+    P1a["1a: Query handler"]
+    P1b["1b: Integration loop refactor"]
+    P1c["1c: Signal-With-Start"]
+    P1d["1d: Error taxonomy"]
+    P2a["2a: Structured logging"]
+    P2b["2b: Signal/update tests"]
+    P2c["2c: Replay tests"]
+    P2d["2d: OpenTelemetry"]
+    P3a["3a: Schedule column"]
+    P3b["3b: Schedule CRUD wiring"]
+    P3c["3c: Hybrid dispatch"]
+    P3d["3d: Migration script"]
+    P3e["3e: Deprecate app cron"]
+    P4a["4a: Build ID injection"]
+    P4b["4b: Deployment runbook"]
+    P4c["4c: Patched gates"]
+
+    P1a --> P2b
+    P1b --> P4c
+    P1d --> P2b
+    P2b --> P2c
+    P3a --> P3b --> P3c --> P3d --> P3e
+    P4a --> P4b
+    P4c --> P4b
+```
+
+### Risk mitigation notes
+
+1. **Phase 1b (loop refactor)** requires a `workflow.patched()` gate (Phase 4c) if any `MoonMind.Run` workflows with integration stages are currently in-flight. Bundle these tasks together or verify zero in-flight integration-stage workflows before deploying.
+2. **Phase 3 (Schedules)** should run in dual mode (`"dual"`) for at least one full cron cycle before switching to `"temporal"` mode to validate schedule timing accuracy.
+3. **Phase 4 (versioning)** depends on Temporal Python SDK maturity for Worker Versioning APIs. As of `temporalio ^1.23.0`, `workflow.patched()` is the recommended approach for workflow-level compatibility; server-side task routing via Build IDs may require SDK upgrades.

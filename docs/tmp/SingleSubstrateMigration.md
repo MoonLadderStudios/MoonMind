@@ -46,7 +46,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 #### Frontend (dashboard.js)
 | Area | Legacy Reference |
 |------|-----------------|
-| Route matching | `systemDetailMatch`, `/tasks/system/` routes |
+| Route matching | Legacy `/tasks/system` removed; worker controls live at `/tasks/workers` |
 | Submit form | `validatesystemSubmission`, `normalizesystemPriority`, `showsystemFields` |
 | Source resolution | `explicitSource === "system"` branches |
 | Status maps | Consumes `queue` and `system` maps from runtime config |
@@ -66,7 +66,6 @@ The target state is clean: **Temporal owns execution truth. Period.**
 | [SourceOfTruthAndProjectionModel.md](../Temporal/SourceOfTruthAndProjectionModel.md) | Describes mixed-source as "migration stance", projection as "temporary implementation posture" |
 | [TaskExecutionCompatibilityModel.md](../Temporal/TaskExecutionCompatibilityModel.md) | Lists `queue`, `system`, `temporal` as execution sources; multi-source pagination rules |
 | [VisibilityAndUiQueryModel.md](../Temporal/VisibilityAndUiQueryModel.md) | References mixed-source pages, `queue`/`system` dashboard sources |
-| [OrchestratorRemovalPlan.md](OrchestratorRemovalPlan.md) | Partially executed plan, tracked as H.1 |
 
 ---
 
@@ -146,7 +145,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [ ] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; promote steady-state as the only contract
 - [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`system` source definitions, multi-source pagination rules; simplify to Temporal-only or archive the doc
 - [ ] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source references, retire multi-source pagination section
-- [ ] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — fully superseded
+- [x] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — fully superseded *(removed)*
 - [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/system references remain
 - [ ] **5.6** Update Roadmap: close H.1 (system removal) and mark this plan's items as done
 - [ ] **5.7** Delete this document once complete

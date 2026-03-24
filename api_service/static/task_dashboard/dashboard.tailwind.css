@@ -482,7 +482,8 @@ tr[data-proposal-id].proposal-consuming td {
   border-color: rgb(var(--mm-accent) / 0.55);
 }
 
-.status-succeeded {
+.status-succeeded,
+.status-completed {
   color: rgb(var(--mm-ok));
   background: rgb(var(--mm-ok) / 0.14);
   border-color: rgb(var(--mm-ok) / 0.55);

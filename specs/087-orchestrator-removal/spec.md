@@ -3,11 +3,11 @@
 **Feature Branch**: `087-orchestrator-removal`  
 **Created**: 2025-03-19  
 **Status**: Draft  
-**Input**: User description: "Fully implement the docs/tmp/OrchestratorRemovalPlan.md. Required deliverables include production runtime code changes (not docs/spec-only) plus validation tests."
+**Input**: Remove the `mm-orchestrator` runtime and related code, configuration, and docs from the repository (original scratch plan lived under `docs/tmp/` and has been deleted; this spec is the retained normative source).
 
 ## Source Document Requirements
 
-Requirements extracted from `docs/tmp/OrchestratorRemovalPlan.md` (normative for this feature).
+Requirements below are normative for this feature (historically aligned with the former tmp removal plan).
 
 | ID | Source citation | Requirement summary |
 | --- | --- | --- |
