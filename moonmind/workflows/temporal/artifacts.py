@@ -2149,6 +2149,34 @@ class TemporalArtifactActivities:
         payload = request if isinstance(request, dict) else dict(kwargs)
         return await _ensure_volume(payload)
 
+    async def oauth_session_start_auth_runner(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.start_auth_runner`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_start_auth_runner as _start_auth_runner,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _start_auth_runner(payload)
+
+    async def oauth_session_stop_auth_runner(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.stop_auth_runner`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_stop_auth_runner as _stop_auth_runner,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _stop_auth_runner(payload)
+
     async def oauth_session_update_status(
         self,
         request: Any = None,

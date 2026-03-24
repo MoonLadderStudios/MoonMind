@@ -35,6 +35,13 @@ class TestOAuthProviderRegistry:
         assert spec["default_volume_name"] == "claude_auth_volume"
         assert spec["default_mount_path"] == "/home/app/.claude"
 
+    def test_cursor_provider_exists(self) -> None:
+        spec = get_provider("cursor_cli")
+        assert spec is not None
+        assert spec["runtime_id"] == "cursor_cli"
+        assert spec["default_volume_name"] == "cursor_auth_volume"
+        assert spec["default_mount_path"] == "/home/app/.cursor"
+
     def test_unknown_runtime_returns_none(self) -> None:
         assert get_provider("unknown_runtime") is None
 
@@ -43,7 +50,8 @@ class TestOAuthProviderRegistry:
         assert "gemini_cli" in ids
         assert "codex_cli" in ids
         assert "claude_code" in ids
-        assert len(ids) == 3
+        assert "cursor_cli" in ids
+        assert len(ids) == 4
 
     def test_all_providers_have_required_keys(self) -> None:
         required_keys = {
