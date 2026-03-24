@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
@@ -129,7 +130,7 @@ async def oauth_session_start_auth_runner(
         "wait $TMATE_PID\n"
     ).format(
         timeout=_TMATE_READY_TIMEOUT,
-        bootstrap=" ".join(bootstrap_cmd),
+        bootstrap=shlex.join(bootstrap_cmd),
     )
 
     # Docker run: detached container with tmate + auth volume
@@ -173,11 +174,16 @@ async def oauth_session_start_auth_runner(
         await asyncio.sleep(1)
         # Try to extract tmate URLs from the container's tmate socket
         url_cmd = [
-            "docker", "exec", container_name,
-            "bash", "-c",
-            "tmate -S /tmp/tmate.sock display -p '#{tmate_web}' 2>/dev/null && "
-            "echo '---SEPARATOR---' && "
-            "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null",
+            "docker",
+            "exec",
+            container_name,
+            "bash",
+            "-c",
+            (
+                "tmate -S /tmp/tmate.sock display -p '#{tmate_web}' 2>/dev/null && "
+                "echo '---SEPARATOR---' && "
+                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null"
+            ),
         ]
         try:
             url_proc = await asyncio.create_subprocess_exec(
@@ -196,7 +202,12 @@ async def oauth_session_start_auth_runner(
                         tmate_web_url = web
                         tmate_ssh_url = ssh
                         break
-        except (asyncio.TimeoutError, Exception):
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.debug(
+                "Polling for tmate URLs failed on attempt %d: %s",
+                attempt + 1,
+                exc,
+            )
             continue
 
     if not tmate_ssh_url:
