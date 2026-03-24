@@ -28,48 +28,51 @@ This document provides a code-level map of Temporal usage in the MoonMind reposi
 
 ### MoonMind.Run
 * **Signals:**
-  * `cancel_request`: Requests cancellation of the run
-  * `pause_request`: Requests pausing the run
-  * `resume_request`: Requests resuming a paused run
-  * `approve_request`: Approves a pending operation
-  * `reject_request`: Rejects a pending operation
-  * `ExternalEvent`: For incoming webhook/callback events
+  * `cancel`: Requests cancellation of the run.
+  * `pause`: Requests pausing the run.
+  * `resume`: Requests resuming a paused run.
+  * `approve`: Approves a pending operation.
+  * `ExternalEvent`: For incoming webhook/callback events.
+  * `child_state_changed`: For child workflows to report state changes.
 * **Updates:**
-  * `update_status`: Updates internal status tracking
-  * `add_artifact`: Attaches a new artifact reference
+  * `update_title`: Updates the workflow's title.
+  * `update_parameters`: Updates the workflow's parameters.
 
 ### MoonMind.AgentRun
 * **Signals:**
-  * `completion_signal`: Notifies agent has completed (used with external webhooks)
-  * `cancel_signal`: Triggers cancellation of agent execution
+  * `completion_signal`: Notifies agent has completed (used with external webhooks).
+  * `slot_assigned`: Notifies that an auth profile slot has been assigned.
 
 ### MoonMind.AuthProfileManager
 * **Queries:**
-  * `get_status`: Returns current sync status
+  * `get_state`: Returns current sync status and slot leases.
 * **Signals:**
-  * `sync_profiles`: Pushes updated profiles payload to the manager
+  * `request_slot`: An AgentRun requests a profile slot.
+  * `release_slot`: An AgentRun releases its profile slot.
+  * `report_cooldown`: Reports a 429 cooldown on a profile.
+  * `sync_profiles`: Pushes updated profiles payload to the manager.
+  * `shutdown`: Requests a graceful shutdown of the manager.
 
 ### MoonMind.OAuthSession
 * **Queries:**
-  * `get_state`: Returns current token/session state
+  * `get_status`: Returns current token/session state.
 * **Signals:**
-  * `cancel`: Cancels the pending OAuth session
-  * `finalize`: Finalizes the OAuth session with token
+  * `cancel`: Cancels the pending OAuth session.
+  * `finalize`: Finalizes the OAuth session with a token.
 
 ### MoonMind.ManifestIngest
 * **Updates:**
-  * `UpdateManifest`: Triggers specific manifest update
-  * `SetConcurrency`: Adjusts concurrent ingestion limit
-  * `Pause` / `Resume`: Control flow
-  * `CancelNodes` / `RetryNodes`: Granular error recovery
+  * `UpdateManifest`: Triggers specific manifest update.
+  * `SetConcurrency`: Adjusts concurrent ingestion limit.
+  * `Pause` / `Resume`: Control flow.
+  * `CancelNodes` / `RetryNodes`: Granular error recovery.
 
 ## 4. Task Queues
 
 | Queue String | Usage Location | Purpose |
 |--------------|----------------|---------|
 | `mm.activity.artifacts` | Workers / clients | Used for artifact manipulation activities |
-| `mm.orchestrator` | Implicitly via WORKFLOW_TASK_QUEUE | Default for Core Workflows (Run, AgentRun) |
-| `mm.system` | Manifest / Auth processes | System-level maintenance work |
+| `mm.workflow` | Implicitly via WORKFLOW_TASK_QUEUE | Default for Core Workflows (Run, AgentRun) |
 
 ## 5. Child Workflow Relationships
 
@@ -92,4 +95,4 @@ This document provides a code-level map of Temporal usage in the MoonMind reposi
 Based on the inventory:
 * **Workflow Updates:** They ARE used in `ManifestIngest` and `MoonMind.Run` (partially). However, `AuthProfileManager` and `OAuthSession` still heavily rely on Signals for state changes.
 * **Query Safety:** Queries appear read-only but `get_status` and `get_state` handlers need manual auditing to confirm no state mutation.
-* **Child Workflows:** Used correctly (Run -> AgentRun).
+* **Child Workflows:** Used correctly (e.g., `ManifestIngest` -> `Run` and `Run` -> `AgentRun`).
