@@ -61,36 +61,52 @@ class TestEnsureManagerAutoStart:
         """There must be no bare ``manager_handle.signal("request_slot", ...)``
         between ``_ensure_manager_and_signal`` and ``slot_assigned_event``.
         All request_slot signals must go through the auto-start wrapper."""
-        source = inspect.getsource(MoonMindAgentRun.run)
-        lines = source.splitlines()
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        tree = ast.parse(source)
 
-        # Find _ensure_manager_and_signal call
-        ensure_idx = None
-        slot_wait_idx = None
-        for i, line in enumerate(lines):
-            if "_ensure_manager_and_signal" in line and ensure_idx is None:
-                ensure_idx = i
-            if "slot_assigned_event" in line and "is_set" in line:
-                slot_wait_idx = i
-                break
+        # Collect line numbers of key landmarks and bare signal calls.
+        ensure_manager_line = None
+        slot_wait_line = None
+        bare_signal_lines: list[int] = []
 
-        assert ensure_idx is not None, (
-            "Could not find _ensure_manager_and_signal in run()"
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute):
+                continue
+
+            # Landmark: self._ensure_manager_and_signal(...)
+            if func.attr == "_ensure_manager_and_signal" and ensure_manager_line is None:
+                ensure_manager_line = node.lineno
+
+            # Landmark: ...slot_assigned_event.is_set()
+            if func.attr == "is_set" and isinstance(func.value, ast.Attribute):
+                if "slot_assigned_event" in ast.dump(func.value):
+                    slot_wait_line = node.lineno
+
+            # Detect any .signal("request_slot", ...) call
+            if func.attr == "signal" and node.args:
+                first_arg = node.args[0]
+                if isinstance(first_arg, ast.Constant) and first_arg.value == "request_slot":
+                    bare_signal_lines.append(node.lineno)
+
+        assert ensure_manager_line is not None, (
+            "Could not find _ensure_manager_and_signal call in run()"
         )
-        assert slot_wait_idx is not None, (
-            "Could not find slot_assigned_event.is_set in run()"
+        assert slot_wait_line is not None, (
+            "Could not find slot_assigned_event.is_set call in run()"
         )
 
-        # Check that no bare request_slot signal exists between the two
-        region = lines[ensure_idx:slot_wait_idx]
-        bare_signals = [
-            line for line in region
-            if '"request_slot"' in line and "signal" in line
-            and "_ensure_manager_and_signal" not in line
+        # Any bare .signal("request_slot") between the two landmarks is a violation.
+        violations = [
+            ln for ln in bare_signal_lines
+            if ensure_manager_line < ln < slot_wait_line
         ]
-        assert len(bare_signals) == 0, (
-            f"Found bare manager_handle.signal('request_slot', ...) between "
-            f"_ensure_manager_and_signal and slot_assigned_event wait. "
+        assert len(violations) == 0, (
+            f"Found bare .signal('request_slot', ...) calls at lines {violations} "
+            f"between _ensure_manager_and_signal (line {ensure_manager_line}) and "
+            f"slot_assigned_event wait (line {slot_wait_line}). "
             f"All request_slot signals must go through _ensure_manager_and_signal "
-            f"for auto-start fallback. Offending lines: {bare_signals}"
+            f"for auto-start fallback."
         )
