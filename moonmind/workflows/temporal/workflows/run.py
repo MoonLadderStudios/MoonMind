@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
 from temporalio import exceptions, workflow
+from temporalio.workflow import ActivityCancellationType
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
@@ -847,6 +848,7 @@ class MoonMindRunWorkflow:
             start_to_close_timeout=timedelta(minutes=5),
             task_queue=INTEGRATIONS_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
         summary_ref = self._get_from_result(start_result, "tracking_ref")
         if summary_ref:
@@ -895,6 +897,7 @@ class MoonMindRunWorkflow:
                     start_to_close_timeout=timedelta(minutes=5),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
                     retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 summary_ref = self._get_from_result(poll_result, "tracking_ref")
                 if summary_ref:
@@ -945,6 +948,7 @@ class MoonMindRunWorkflow:
                     start_to_close_timeout=timedelta(minutes=5),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
                     retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 pr_url = (
                     self._get_from_result(fetch_result, "external_url")
@@ -995,6 +999,7 @@ class MoonMindRunWorkflow:
                         start_to_close_timeout=timedelta(minutes=2),
                         task_queue=INTEGRATIONS_TASK_QUEUE,
                         retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
                     merged = self._get_from_result(merge_result, "merged")
                     merge_summary = (
@@ -1047,6 +1052,7 @@ class MoonMindRunWorkflow:
                     "repo": self._repo,
                     "parameters": parameters,
                 },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
             )
         except Exception as exc:
@@ -1084,6 +1090,7 @@ class MoonMindRunWorkflow:
                     "origin": origin,
                     "principal": self._principal(),
                 },
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
             )
             if isinstance(submit_result, dict):
