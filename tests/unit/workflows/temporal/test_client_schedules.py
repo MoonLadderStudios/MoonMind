@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -264,7 +264,7 @@ class TestErrorWrapping:
     @pytest.mark.asyncio
     async def test_pause_not_found_wraps(self) -> None:
         handle = _mock_schedule_handle(
-            describe_side_effect=Exception("Schedule does not exist")
+            describe_side_effect=Exception("Schedule not found")
         )
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)

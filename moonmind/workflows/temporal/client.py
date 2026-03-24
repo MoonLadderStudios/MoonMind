@@ -38,6 +38,24 @@ _MOONMIND_TASK_QUEUES: tuple[str, ...] = (
 )
 
 
+def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
+    """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
+
+    Falls back to string matching if the gRPC/Temporal imports are unavailable
+    or the exception type doesn't match.
+    """
+    try:
+        from temporalio.service import RPCError
+        from grpc import StatusCode
+
+        if isinstance(exc, RPCError):
+            return exc.status == getattr(StatusCode, status_name, None)
+    except ImportError:
+        pass
+    # Fallback: string match on the exception message.
+    return status_name.lower().replace("_", " ") in str(exc).lower()
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowStartResult:
     """Result of starting a Temporal workflow."""
@@ -390,7 +408,7 @@ class TemporalClientAdapter:
             )
             return handle.id
         except Exception as exc:
-            if "already exists" in str(exc).lower():
+            if _is_rpc_status(exc, "ALREADY_EXISTS"):
                 raise ScheduleAlreadyExistsError(
                     f"Schedule {schedule_id} already exists"
                 ) from exc
@@ -399,7 +417,11 @@ class TemporalClientAdapter:
             ) from exc
 
     async def _get_schedule_handle(self, definition_id: Any) -> Any:
-        """Resolve a ``ScheduleHandle`` for the given definition, or raise."""
+        """Resolve a ``ScheduleHandle`` for the given definition, or raise.
+
+        Probes with ``describe()`` to verify the schedule exists.
+        Returns ``(handle, description)``.
+        """
         from uuid import UUID as _UUID
 
         from moonmind.workflows.temporal.schedule_errors import (
@@ -413,11 +435,10 @@ class TemporalClientAdapter:
         try:
             handle = client.get_schedule_handle(schedule_id)
             # Probe the handle to verify existence.
-            await handle.describe()
-            return handle
+            description = await handle.describe()
+            return handle, description
         except Exception as exc:
-            msg = str(exc).lower()
-            if "not found" in msg or "does not exist" in msg:
+            if _is_rpc_status(exc, "NOT_FOUND"):
                 raise ScheduleNotFoundError(
                     f"Schedule {schedule_id} not found"
                 ) from exc
@@ -435,29 +456,8 @@ class TemporalClientAdapter:
             ScheduleNotFoundError: if the schedule does not exist.
             ScheduleOperationError: on unexpected SDK failure.
         """
-        from moonmind.workflows.temporal.schedule_errors import (
-            ScheduleNotFoundError,
-            ScheduleOperationError,
-        )
-        from moonmind.workflows.temporal.schedule_mapping import make_schedule_id
-        from uuid import UUID as _UUID
-
-        client = await self.get_client()
-        schedule_id = make_schedule_id(_UUID(str(definition_id)))
-        try:
-            handle = client.get_schedule_handle(schedule_id)
-            return await handle.describe()
-        except ScheduleNotFoundError:
-            raise
-        except Exception as exc:
-            msg = str(exc).lower()
-            if "not found" in msg or "does not exist" in msg:
-                raise ScheduleNotFoundError(
-                    f"Schedule {schedule_id} not found"
-                ) from exc
-            raise ScheduleOperationError(
-                f"Failed to describe schedule {schedule_id}: {exc}"
-            ) from exc
+        _handle, description = await self._get_schedule_handle(definition_id)
+        return description
 
     async def update_schedule(
         self,
@@ -487,7 +487,7 @@ class TemporalClientAdapter:
             build_schedule_state,
         )
 
-        handle = await self._get_schedule_handle(definition_id)
+        handle, _desc = await self._get_schedule_handle(definition_id)
 
         async def _do_update(input: Any) -> Any:  # noqa: A002
             schedule = input.schedule
@@ -513,15 +513,16 @@ class TemporalClientAdapter:
                     if schedule.policy and schedule.policy.overlap
                     else "skip"
                 )
+                _CATCHUP_LAST_SECONDS = timedelta(minutes=15).total_seconds()
                 current_catchup_seconds = (
                     schedule.policy.catchup_window.total_seconds()
                     if schedule.policy and schedule.policy.catchup_window
-                    else 900
+                    else _CATCHUP_LAST_SECONDS
                 )
                 # Reverse-map current catchup seconds to mode
                 if current_catchup_seconds == 0:
                     current_catchup_mode = "none"
-                elif current_catchup_seconds <= 900:
+                elif current_catchup_seconds <= _CATCHUP_LAST_SECONDS:
                     current_catchup_mode = "last"
                 else:
                     current_catchup_mode = "all"
@@ -557,7 +558,7 @@ class TemporalClientAdapter:
         """
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
 
-        handle = await self._get_schedule_handle(definition_id)
+        handle, _desc = await self._get_schedule_handle(definition_id)
         try:
             await handle.pause()
         except Exception as exc:
@@ -574,7 +575,7 @@ class TemporalClientAdapter:
         """
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
 
-        handle = await self._get_schedule_handle(definition_id)
+        handle, _desc = await self._get_schedule_handle(definition_id)
         try:
             await handle.unpause()
         except Exception as exc:
@@ -591,7 +592,7 @@ class TemporalClientAdapter:
         """
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
 
-        handle = await self._get_schedule_handle(definition_id)
+        handle, _desc = await self._get_schedule_handle(definition_id)
         try:
             await handle.trigger()
         except Exception as exc:
@@ -608,7 +609,7 @@ class TemporalClientAdapter:
         """
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
 
-        handle = await self._get_schedule_handle(definition_id)
+        handle, _desc = await self._get_schedule_handle(definition_id)
         try:
             await handle.delete()
         except Exception as exc:
