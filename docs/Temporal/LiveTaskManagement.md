@@ -4,7 +4,7 @@
 
 Status: Draft  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-17
+Last Updated: 2026-03-24
 
 ---
 
@@ -41,6 +41,9 @@ Both capabilities are backed by a per-workflow `tmate` session (tmux-compatible)
 
 Both capabilities depend on a single `tmate` session per workflow execution.
 
+> [!NOTE]
+> The tmate session lifecycle, shared `TmateSessionManager` abstraction, self-hosted server configuration, and endpoint persistence model are defined in [TmateSessionArchitecture.md](TmateSessionArchitecture.md). This section describes the conceptual integration points; see that document for implementation details.
+
 ### 4.1 Session Lifecycle
 
 Every Temporal Managed Agent run executes inside a dedicated `tmate` session. The `agent_runtime` activity worker owns the session, exposes the RO endpoint immediately, and keeps the RW endpoint encrypted until an operator explicitly requests access.
@@ -58,12 +61,15 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 
 ### 4.2 Session Bootstrap (ManagedRuntimeLauncher)
 
-To support this for local subprocesses without Docker, the `ManagedRuntimeLauncher` (in the `agent_runtime` activity worker) will be updated to wrap the agent invocation in `tmate`:
+> [!NOTE]
+> The description below is **target architecture**. Currently, `ManagedRuntimeLauncher.launch()` contains inline tmate lifecycle logic (~100 lines) that handles socket creation, config file generation, readiness waiting, and endpoint extraction directly. The target state refactors this into the shared `TmateSessionManager` (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) §4).
 
-1. **Launcher Update**: Instead of calling `asyncio.create_subprocess_exec(['gemini', ...])` directly, the launcher wraps the command in a headless `tmate` session.
-2. **Metadata Extraction**: The launcher executes `tmate display -p` (or parses socket output) to extract the `ssh_ro`, `ssh_rw`, `web_ro`, and `web_rw` strings once the session is ready.
-3. **Database Hook**: The launcher reports these connection strings back to the Temporal system or directly to the API, storing them in a `TaskRunLiveSession` record associated with the workflow's `run_id`.
-4. **UI Restoration**: The Unified Dashboard embeds the `web_ro` URL in the Live Output panel, restoring the high-fidelity terminal UI.
+In the target architecture, the launcher delegates tmate concerns to `TmateSessionManager`:
+
+1. **Launcher wrapping**: When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. The manager handles socket creation, config file generation (including self-hosted server settings), readiness detection, and endpoint extraction.
+2. **Endpoint persistence**: After `start()` returns `TmateEndpoints`, the launcher (or supervisor callback) invokes the `agent_runtime.report_live_session` activity to persist endpoints to the `workflow_live_sessions` table.
+3. **UI embedding**: The Mission Control task detail page fetches `GET /api/workflows/{id}/live-session` and embeds the `web_ro` URL in the Live Output panel.
+4. **Teardown**: The supervisor calls `TmateSessionManager.teardown()` on process completion, and the `agent_runtime.end_live_session` activity transitions the session status to `ENDED`.
 
 ```bash
 # Conceptual wrapper executed by ManagedRuntimeLauncher
