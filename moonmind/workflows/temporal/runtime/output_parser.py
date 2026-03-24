@@ -28,6 +28,10 @@ class RuntimeOutputParser(ABC):
     def parse(self, stdout: str, stderr: str) -> ParsedOutput:
         """Parse stdout/stderr into a structured ParsedOutput."""
 
+    @abstractmethod
+    def parse_stream_chunk(self, chunk: str) -> list[dict]:
+        """Parse a chunk of streamed text and extract structured events."""
+
 
 class PlainTextOutputParser(RuntimeOutputParser):
     """Default parser that treats output as plain text.
@@ -54,6 +58,9 @@ class PlainTextOutputParser(RuntimeOutputParser):
             error_messages=error_messages,
             has_structured_output=False,
         )
+
+    def parse_stream_chunk(self, chunk: str) -> list[dict]:
+        return []
 
 
 class NdjsonOutputParser(RuntimeOutputParser):
@@ -115,3 +122,20 @@ class NdjsonOutputParser(RuntimeOutputParser):
             rate_limited=rate_limited,
             has_structured_output=len(events) > 0,
         )
+
+    def parse_stream_chunk(self, chunk: str) -> list[dict]:
+        """Extract JSON events from streamed text chunks.
+        Assumes chunk contains whole lines separated by newlines,
+        or is a single line, as buffering handles line splitting.
+        """
+        events: list[dict] = []
+        for line in chunk.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+                events.append(event)
+            except json.JSONDecodeError:
+                pass
+        return events
