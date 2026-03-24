@@ -248,7 +248,7 @@ def test_create_dashboard_skill_already_exists(
     }
     response = client.post("/api/tasks/skills", json=payload)
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "already exists locally" in response.json()["detail"]
 
 

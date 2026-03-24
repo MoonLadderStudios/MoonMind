@@ -22,6 +22,7 @@ from moonmind.config.settings import settings
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,
+    resolve_skills_local_mirror_root,
     validate_skill_name,
 )
 from moonmind.workflows.tasks.source_mapping import (
@@ -320,25 +321,16 @@ async def create_dashboard_skill(
     except SkillResolutionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    skills_root = Path(settings.workflow.skills_local_mirror_root).expanduser()
-    if not skills_root.is_absolute():
-        current = Path(__file__).resolve()
-        for parent in current.parents:
-            if (parent / "pyproject.toml").is_file() or (parent / ".git").exists():
-                skills_root = parent / skills_root
-                break
-        else:
-            skills_root = Path.cwd() / skills_root
-
+    skills_root = resolve_skills_local_mirror_root()
     skill_dir = skills_root / validated_name
 
-    if skill_dir.exists():
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Skill '{validated_name}' already exists locally.",
-        )
-
-    skill_dir.mkdir(parents=True, exist_ok=True)
+        ) from exc
     skill_file = skill_dir / "SKILL.md"
     skill_file.write_text(request.markdown, encoding="utf-8")
 
