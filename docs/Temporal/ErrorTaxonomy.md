@@ -1,6 +1,6 @@
 # Temporal Error Taxonomy
 
-This document maps `ApplicationError` subtypes and other exceptions to their classification as retryable or non-retryable in MoonMind.
+This document maps `ApplicationError` subtypes and other exceptions to their classification as retryable or non-retryable in MoonMind. **Note: This taxonomy currently specifically applies to `plan.validate` and `step.review` activities.**
 
 ## Retryable Errors
 * Transient network errors

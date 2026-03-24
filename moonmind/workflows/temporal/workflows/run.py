@@ -112,6 +112,7 @@ class MoonMindRunWorkflow:
         self._resume_requested = False
         self._parameters_updated = False
         self._updated_parameters: dict[str, Any] = {}
+        self._external_status: Optional[str] = None
 
         # Internal state
         self._wait_cycle_count = 0
@@ -903,6 +904,7 @@ class MoonMindRunWorkflow:
                 status = self._get_from_result(poll_result, "normalized_status")
                 if status in ("completed", "failed", "canceled"):
                     _poll_terminal = True
+                    self._external_status = status
                     if status == "failed":
                         workflow.logger.warning(f"Integration failed: {poll_result}")
                     elif status == "canceled":
@@ -929,7 +931,7 @@ class MoonMindRunWorkflow:
             publish_mode == "branch"
             and self._integration == "jules"
             and not self._cancel_requested
-            and status == "completed"
+            and self._external_status == "completed"
         ):
             workflow.logger.info("Jules branch-publish: fetching result for PR merge")
             try:
@@ -1395,6 +1397,11 @@ class MoonMindRunWorkflow:
             "failed",
             "canceled",
         ):
+            if normalized_status:
+                self._external_status = normalized_status
+            elif event_type == "completed":
+                self._external_status = "completed"
+
             if normalized_status == "failed":
                 safe_payload = {
                     key: value
