@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from moonmind.workflows.temporal.runtime.strategies.base import (
@@ -44,3 +45,13 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
             cmd.extend(["--prompt", request.instruction_ref])
 
         return cmd
+
+    async def prepare_workspace(
+        self,
+        workspace_path: Path,
+        request: Any,
+    ) -> None:
+        """Write task instruction to CLAUDE.md if present."""
+        if getattr(request, "instruction_ref", None):
+            claude_md = workspace_path / "CLAUDE.md"
+            claude_md.write_text(request.instruction_ref)
