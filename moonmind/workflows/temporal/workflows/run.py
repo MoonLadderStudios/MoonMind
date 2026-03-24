@@ -473,16 +473,17 @@ class MoonMindRunWorkflow:
                             node_id=node_id,
                             tool_name=tool_name,
                         )
-                        # --- Multi-step Jules: inject session_id for continuation ---
-                        if jules_session_id and request.agent_id == "jules":
-                            request = request.model_copy(
-                                update={
-                                    "parameters": {
-                                        **request.parameters,
-                                        "jules_session_id": jules_session_id,
-                                    }
-                                }
-                            )
+                        # --- Multi-step Jules: adjust parameters for proper PR creation ---
+                        if request.agent_id == "jules":
+                            new_params = dict(request.parameters or {})
+                            if publish_mode == "pr":
+                                new_params["publishMode"] = "branch"
+                                new_params.pop("automationMode", None)
+                            if jules_session_id:
+                                new_params["jules_session_id"] = jules_session_id
+                            
+                            if new_params != (request.parameters or {}):
+                                request = request.model_copy(update={"parameters": new_params})
                         child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
                         if system_retries > 0:
                             child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
@@ -636,9 +637,44 @@ class MoonMindRunWorkflow:
                             workflow.logger.warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
                             
         if require_pull_request_url and pull_request_url is None:
-            raise ValueError(
-                "publishMode 'pr' requested but no plan step reported a GitHub pull request URL"
+            # Create PR natively since Jules publish_mode was overridden to "branch"
+            ws = parameters.get("workspaceSpec") or {}
+            head_branch = ws.get("branch") or ""
+            target_branch = parameters.get("targetBranch") or ws.get("targetBranch") or ws.get("startingBranch") or "main"
+            
+            if not self._repo or not head_branch:
+                raise ValueError(
+                    "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                )
+            
+            workflow.logger.info(
+                f"Creating PR natively from {head_branch} into {target_branch} for repo {self._repo}"
             )
+            create_payload = {
+                "repo": self._repo,
+                "head": head_branch,
+                "base": target_branch,
+                "title": self._title or "Automated changes by MoonMind",
+                "body": self._summary or "Automated changes by MoonMind.",
+            }
+            try:
+                create_result = await workflow.execute_activity(
+                    "integration.jules.create_pr",
+                    create_payload,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    task_queue=INTEGRATIONS_TASK_QUEUE,
+                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                )
+                pr_url = self._get_from_result(create_result, "url")
+                if pr_url:
+                    pull_request_url = pr_url
+                    workflow.logger.info(f"Natively created PR: {pull_request_url}")
+                else:
+                    raise ValueError("PR creation activity succeeded but returned no URL")
+            except Exception as e:
+                raise ValueError(
+                    f"publishMode 'pr' requested; native PR creation failed: {e}"
+                ) from e
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 
@@ -856,6 +892,14 @@ class MoonMindRunWorkflow:
         instructions_to_run = step_instructions if (step_instructions and self._integration == "jules") else [None]
 
         integration_parameters = dict(parameters)
+        
+        # --- Multi-step Jules: adjust parameters for proper PR creation ---
+        if self._integration == "jules":
+            publish_mode = self._publish_mode(integration_parameters)
+            if publish_mode == "pr":
+                integration_parameters["publishMode"] = "branch"
+                integration_parameters.pop("automationMode", None)
+                
         integration_parameters.setdefault(
             "title", self._title or "MoonMind Integration"
         )
