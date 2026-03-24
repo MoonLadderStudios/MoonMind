@@ -9,7 +9,7 @@ from __future__ import annotations
 
 # Env-var prefixes / names cleared when shaping OAuth environments (DOC-REQ-007).
 # These are the sensitive keys that must NOT appear in child-process environments.
-_OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
+OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
     {
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
@@ -23,7 +23,7 @@ _OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
 )
 
 
-def _shape_environment_for_oauth(
+def shape_environment_for_oauth(
     base_env: dict[str, str],
     *,
     volume_mount_path: str | None,
@@ -34,14 +34,14 @@ def _shape_environment_for_oauth(
     volume mount path is provided.  Does NOT expose secrets.
     """
     env = dict(base_env)
-    for key in _OAUTH_CLEARED_VARS:
+    for key in OAUTH_CLEARED_VARS:
         env.pop(key, None)
     if volume_mount_path:
         env["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
     return env
 
 
-def _shape_environment_for_api_key(
+def shape_environment_for_api_key(
     base_env: dict[str, str],
     *,
     api_key_ref: str | None,
@@ -54,7 +54,7 @@ def _shape_environment_for_api_key(
     is delegated to the runtime launcher (out of scope for Phase 5).
     """
     env = dict(base_env)
-    for key in _OAUTH_CLEARED_VARS:
+    for key in OAUTH_CLEARED_VARS:
         env.pop(key, None)
     if api_key_ref:
         # Pass only the reference, never the real value.
@@ -64,7 +64,7 @@ def _shape_environment_for_api_key(
     return env
 
 __all__ = [
-    "_OAUTH_CLEARED_VARS",
-    "_shape_environment_for_oauth",
-    "_shape_environment_for_api_key",
+    "OAUTH_CLEARED_VARS",
+    "shape_environment_for_oauth",
+    "shape_environment_for_api_key",
 ]

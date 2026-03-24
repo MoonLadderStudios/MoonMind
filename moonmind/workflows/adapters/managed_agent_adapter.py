@@ -44,9 +44,9 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.auth.env_shaping import (
-    _OAUTH_CLEARED_VARS,
-    _shape_environment_for_api_key,
-    _shape_environment_for_oauth,
+    OAUTH_CLEARED_VARS,
+    shape_environment_for_api_key,
+    shape_environment_for_oauth,
 )
 
 logger = logging.getLogger(__name__)
@@ -203,12 +203,12 @@ class ManagedAgentAdapter:
             if not _should_filter_base_env_var(k)
         }
         if auth_mode == "oauth":
-            shaped_env = _shape_environment_for_oauth(
+            shaped_env = shape_environment_for_oauth(
                 base_env,
                 volume_mount_path=profile.get("volume_mount_path"),
             )
         else:
-            shaped_env = _shape_environment_for_api_key(
+            shaped_env = shape_environment_for_api_key(
                 base_env,
                 api_key_ref=profile.get("api_key_ref"),
                 account_label=profile.get("account_label"),
@@ -475,7 +475,7 @@ __all__ = [
     "SlotRequestFunc",
     "SlotReleaseFunc",
     "CooldownReportFunc",
-    "_shape_environment_for_api_key",
-    "_shape_environment_for_oauth",
-    "_OAUTH_CLEARED_VARS",
+    "shape_environment_for_api_key",
+    "shape_environment_for_oauth",
+    "OAUTH_CLEARED_VARS",
 ]

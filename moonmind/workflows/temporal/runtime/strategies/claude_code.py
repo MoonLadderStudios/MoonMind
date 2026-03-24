@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from moonmind.workflows.temporal.runtime.strategies.base import (
@@ -47,7 +48,7 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
 
     async def prepare_workspace(
         self,
-        workspace_path: Any,
+        workspace_path: Path,
         request: Any,
     ) -> None:
         """Write CLAUDE.md in the workspace."""
