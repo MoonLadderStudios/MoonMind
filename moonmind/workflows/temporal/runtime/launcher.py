@@ -18,13 +18,11 @@ from moonmind.schemas.agent_runtime_models import (
 )
 
 from .store import ManagedRunStore
+from .tmate_session import TmateSessionManager
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 logger = logging.getLogger(__name__)
-
-TMATE_SOCKET_DIR = Path("/tmp/moonmind/tmate")
-TMATE_FOREGROUND_RESTART_OFF = "set tmate-foreground-restart 0\n"
 
 
 class ManagedRuntimeLauncher:
@@ -163,25 +161,6 @@ class ManagedRuntimeLauncher:
                     allow_failure=True,
                 )
         return str(run_workspace)
-
-    @staticmethod
-    def _build_tmate_wrapper_script(
-        cmd: list[str],
-        *,
-        socket_path: str,
-        session_name: str,
-    ) -> str:
-        """Build a shell script that runs agent cmd and force-closes tmate session."""
-        cmd_str = shlex.join(cmd)
-        return (
-            "#!/usr/bin/env bash\n"
-            "set +e\n"
-            f"{cmd_str}\n"
-            "mm_rc=$?\n"
-            f"tmate -S {shlex.quote(socket_path)} "
-            f"kill-session -t {shlex.quote(session_name)} >/dev/null 2>&1 || true\n"
-            "exit \"$mm_rc\"\n"
-        )
 
     @staticmethod
     def _resolve_repository_source(repository: str) -> str:
@@ -423,108 +402,34 @@ class ManagedRuntimeLauncher:
             if value is None or not str(value).strip():
                 continue
             env_overrides[key] = value
-        use_tmate = shutil.which("tmate") is not None
+        use_tmate = TmateSessionManager.is_available()
         endpoints: dict[str, str] | None = None
+        tmate_manager: TmateSessionManager | None = None
 
         if use_tmate:
-            TMATE_SOCKET_DIR.mkdir(parents=True, exist_ok=True)
-            socket_path = TMATE_SOCKET_DIR / f"{run_id}.sock"
-            config_path = TMATE_SOCKET_DIR / f"{run_id}.conf"
-            exit_code_path = TMATE_SOCKET_DIR / f"{run_id}.exit"
-            for path in (socket_path, config_path, exit_code_path):
-                path.unlink(missing_ok=True)
-
-            config_path.write_text(
-                TMATE_FOREGROUND_RESTART_OFF,
-                encoding="utf-8",
-            )
-            env_overrides["MM_EXIT_FILE"] = str(exit_code_path)
-
             session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            # Build the command inline rather than via "$@" positional args.
-            # tmate passes the new-session command to sh -c as a single string,
-            # so positional args after "--" are not forwarded to the inner bash.
-            escaped_cmd = shlex.join(cmd)
-            wrapped_command = (
-                f"{escaped_cmd}\n"
-                f"rc=$?\n"
-                f"printf '%s\\n' \"$rc\" > \"$MM_EXIT_FILE\"\n"
-                f"exit 0\n"
-            )
-
-            tmate_cmd = [
-                "tmate",
-                "-S",
-                str(socket_path),
-                "-f",
-                str(config_path),
-                "-F",
-                "new-session",
-                "-A",
-                "-s",
-                session_name,
-                wrapped_command,
-            ]
-
-            process = await asyncio.create_subprocess_exec(
-                *tmate_cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            tmate_manager = TmateSessionManager(session_name=session_name)
+            tmate_endpoints = await tmate_manager.start(
+                command=cmd,
                 env=env_overrides,
                 cwd=resolved_workspace_path,
+                exit_code_capture=True,
             )
+            # The tmate manager owns the subprocess — retrieve it for the
+            # caller (supervisor) which needs the Process handle.
+            process = tmate_manager._process  # noqa: SLF001
 
             endpoints = {
-                "tmate_session_name": session_name,
-                "tmate_socket_path": str(socket_path),
-                "tmate_config_path": str(config_path),
-                "exit_code_path": str(exit_code_path),
+                "tmate_session_name": tmate_endpoints.session_name,
+                "tmate_socket_path": tmate_endpoints.socket_path,
+                "tmate_config_path": str(tmate_manager.config_path),
             }
-
-            try:
-                async def _wait_for_ready() -> None:
-                    ready_proc = await asyncio.create_subprocess_exec(
-                        "tmate",
-                        "-S",
-                        str(socket_path),
-                        "wait",
-                        "tmate-ready",
-                    )
-                    await ready_proc.wait()
-
-                await asyncio.wait_for(_wait_for_ready(), timeout=10.0)
-
-                async def get_endpoint(key: str) -> str | None:
-                    endpoint_proc = await asyncio.create_subprocess_exec(
-                        "tmate",
-                        "-S",
-                        str(socket_path),
-                        "display",
-                        "-p",
-                        f"#{{{key}}}",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, _ = await endpoint_proc.communicate()
-                    value = stdout.decode().strip()
-                    return value or None
-
-                for key, endpoint_key in (
-                    ("attach_ro", "tmate_ssh_ro"),
-                    ("attach_rw", "tmate_ssh"),
-                    ("web_ro", "tmate_web_ro"),
-                    ("web_rw", "tmate_web"),
-                ):
-                    endpoint_value = await get_endpoint(endpoint_key)
-                    if endpoint_value:
-                        endpoints[key] = endpoint_value
-            except Exception:
-                logger.warning(
-                    "Failed to fetch tmate endpoints for run_id=%s",
-                    run_id,
-                    exc_info=True,
-                )
+            if tmate_manager.exit_code_path is not None:
+                endpoints["exit_code_path"] = str(tmate_manager.exit_code_path)
+            for attr in ("attach_ro", "attach_rw", "web_ro", "web_rw"):
+                value = getattr(tmate_endpoints, attr, None)
+                if value:
+                    endpoints[attr] = value
         else:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
