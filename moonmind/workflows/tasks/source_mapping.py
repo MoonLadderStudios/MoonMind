@@ -200,10 +200,6 @@ class TaskSourceMappingService:
         if parsed_uuid is None:
             return matches
 
-        queue_job = await self._session.get("Any", parsed_uuid)
-        if queue_job is not None:
-            matches["queue"] = await self.upsert_queue_job(queue_job)
-
         return matches
 
     def _serialize_mapping(
