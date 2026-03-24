@@ -19,7 +19,12 @@ from api_service.api.routers.task_dashboard_view_model import build_runtime_conf
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.config.settings import settings
-from moonmind.workflows.skills.resolver import list_available_skill_names
+from moonmind.workflows.skills.resolver import (
+    SkillResolutionError,
+    list_available_skill_names,
+    resolve_skills_local_mirror_root,
+    validate_skill_name,
+)
 from moonmind.workflows.tasks.source_mapping import (
     TaskResolutionAmbiguousError,
     TaskResolutionNotFoundError,
@@ -57,6 +62,13 @@ _PATH_ALIASES = {
 }
 # Block legacy top-level segments (e.g. removed queue source, reserved "system" path).
 _BLOCKED_TOP_LEVEL_TASK_IDS: set[str] = {"queue", "temporal", "system"}
+
+
+class CreateSkillRequest(BaseModel):
+    """Payload for creating a new skill via the dashboard."""
+
+    name: str = Field(..., description="The name of the new skill")
+    markdown: str = Field(..., description="The markdown content of the new skill")
 
 
 class DashboardSkillOption(BaseModel):
@@ -292,6 +304,37 @@ async def list_dashboard_skills(
         },
         legacyItems=[DashboardSkillOption(id=skill_id) for skill_id in legacy_sorted],
     )
+
+
+@router.post(
+    "/api/tasks/skills",
+    status_code=201,
+)
+async def create_dashboard_skill(
+    request: CreateSkillRequest,
+    _user: User = Depends(get_current_user()),
+) -> dict[str, str]:
+    """Create a new local skill from the dashboard."""
+
+    try:
+        validated_name = validate_skill_name(request.name)
+    except SkillResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    skills_root = resolve_skills_local_mirror_root()
+    skill_dir = skills_root / validated_name
+
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{validated_name}' already exists locally.",
+        ) from exc
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(request.markdown, encoding="utf-8")
+
+    return {"status": "success"}
 
 
 @router.get(

@@ -70,7 +70,7 @@ Define the design and implementation approach for the new "Skills" tab in the Mo
 - The Markdown rendering must safely handle user-supplied content, though in this context the user is trusted.
 
 ## 7. Implementation Checklist
-- [ ] Add `POST /api/tasks/skills` backend endpoint.
+- [x] Add `POST /api/tasks/skills` backend endpoint.
 - [ ] Extend the existing `GET /api/tasks/skills` endpoint to return skill content for the detail view.
 - [ ] Add "Skills" navigation link to the UI header.
 - [ ] Implement the Skills List View in the frontend.
