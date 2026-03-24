@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import collections
 import logging
-import random
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Any, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any, Mapping
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, func, or_, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,22 +20,21 @@ from api_service.db.models import (
     RecurringTaskScopeType,
 )
 from moonmind.workflows.tasks.job_types import CANONICAL_TASK_JOB_TYPE
-from api_service.services.manifests_service import ManifestsService
-from api_service.services.task_templates.catalog import TaskTemplateCatalogService
-from moonmind.config.settings import settings
-from api_service.db.models import TemporalExecutionRecord, MoonMindWorkflowState, TemporalWorkflowType
-
-from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.recurring_tasks.cron import (
     compute_next_occurrence,
     parse_cron_expression,
     validate_timezone_name,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.schedule_errors import (
+    ScheduleAlreadyExistsError,
+    ScheduleNotFoundError,
+    ScheduleOperationError,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
-_DEFAULT_SCHEDULER_BATCH_SIZE = 50
 
 
 class RecurringTaskValidationError(ValueError):
@@ -53,12 +47,6 @@ class RecurringTaskNotFoundError(RuntimeError):
 
 class RecurringTaskAuthorizationError(RuntimeError):
     """Raised when a caller does not have access to a recurring definition."""
-
-
-@dataclass(frozen=True, slots=True)
-class RecurringDispatchResult:
-    scheduled_runs: int
-    dispatched_runs: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,8 +105,8 @@ def _normalize_policy(
     overlap_payload = payload.get("overlap")
     overlap = dict(overlap_payload) if isinstance(overlap_payload, Mapping) else {}
     overlap_mode = str(overlap.get("mode") or "skip").strip().lower()
-    if overlap_mode not in {"skip", "allow"}:
-        raise RecurringTaskValidationError("policy.overlap.mode must be skip or allow")
+    if overlap_mode not in {"skip", "allow", "buffer_one", "cancel_previous"}:
+        raise RecurringTaskValidationError("policy.overlap.mode must be skip, allow, buffer_one, or cancel_previous")
 
     max_concurrent_raw = overlap.get("maxConcurrentRuns")
     try:
@@ -260,11 +248,9 @@ def _coerce_utc(value: datetime) -> datetime:
 class RecurringTasksService:
     """CRUD and dispatch helpers for recurring definitions."""
 
-    def __init__(self, session: AsyncSession, *, execution_service: TemporalExecutionService | None = None) -> None:
+    def __init__(self, session: AsyncSession, *, temporal_client_adapter: TemporalClientAdapter | None = None) -> None:
         self._session = session
-        self._execution_service = execution_service
-        self._manifests_service = ManifestsService(session, execution_service=self._execution_service)
-        self._template_catalog = TaskTemplateCatalogService(session)
+        self._adapter = temporal_client_adapter or TemporalClientAdapter()
 
     async def list_definitions(
         self,
@@ -332,6 +318,13 @@ class RecurringTasksService:
             )
         return definition
 
+    def _expected_workflow_type_for_target_kind(self, kind: str) -> str:
+        if kind in {"queue_task", "queue_task_template"}:
+            return "MoonMind.Run"
+        elif kind == "manifest_run":
+            return "MoonMind.ManifestIngest"
+        return "MoonMind.Run"
+
     async def create_definition(
         self,
         *,
@@ -354,7 +347,7 @@ class RecurringTasksService:
         name_text = _clean_text(name, field_name="name", required=True) or ""
         target_payload = _normalize_target(_json_object(target, field_name="target"))
         policy_payload = _json_object(policy, field_name="policy")
-        _normalize_policy(
+        policy_obj = _normalize_policy(
             policy_payload,
             global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
         )
@@ -372,8 +365,9 @@ class RecurringTasksService:
             after=now,
         )
 
+        definition_id = uuid4()
         definition = RecurringTaskDefinition(
-            id=uuid4(),
+            id=definition_id,
             name=name_text,
             description=_clean_text(description, field_name="description"),
             enabled=bool(enabled),
@@ -392,6 +386,37 @@ class RecurringTasksService:
         )
         self._session.add(definition)
         await self._session.flush()
+
+        workflow_type = self._expected_workflow_type_for_target_kind(target_payload.get("kind", ""))
+        workflow_input = {
+            "title": name_text,
+            "ownerUserId": str(owner_user_id) if owner_user_id else None,
+            "system": {
+                "recurrence": {
+                    "definitionId": str(definition_id)
+                }
+            },
+            "recurringTarget": target_payload,
+        }
+        
+        try:
+            await self._adapter.create_schedule(
+                definition_id=definition_id,
+                cron_expression=cron_normalized,
+                timezone=timezone_name,
+                overlap_mode=policy_obj.overlap_mode,
+                catchup_mode=policy_obj.catchup_mode,
+                jitter_seconds=policy_obj.jitter_seconds,
+                enabled=bool(enabled),
+                note=name_text,
+                workflow_type=workflow_type,
+                workflow_input=workflow_input,
+                memo={"definitionId": str(definition_id)},
+            )
+        except Exception as exc:
+            logger.error(f"Failed to create temporal schedule for {definition_id}: {exc}")
+            raise RecurringTaskValidationError(f"Failed to create schedule: {exc}")
+
         await self._session.refresh(definition)
         await self._session.commit()
         return definition
@@ -412,6 +437,11 @@ class RecurringTasksService:
         changed_schedule = False
         now = datetime.now(UTC)
 
+        cron_normalized = cron
+        if cron is not None:
+            cron_normalized = str(cron or "").strip()
+            parse_cron_expression(cron_normalized)
+
         if name is not None:
             definition.name = _clean_text(name, field_name="name", required=True) or ""
         if description is not None:
@@ -421,9 +451,7 @@ class RecurringTasksService:
             )
         if enabled is not None:
             definition.enabled = bool(enabled)
-        if cron is not None:
-            cron_normalized = str(cron or "").strip()
-            parse_cron_expression(cron_normalized)
+        if cron_normalized is not None:
             definition.cron = cron_normalized
             changed_schedule = True
         if timezone is not None:
@@ -433,13 +461,16 @@ class RecurringTasksService:
             definition.target = _normalize_target(
                 _json_object(target, field_name="target")
             )
+        
+        policy_obj = None
         if policy is not None:
             normalized_policy_payload = _json_object(policy, field_name="policy")
-            _normalize_policy(
+            policy_obj = _normalize_policy(
                 normalized_policy_payload,
                 global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
             )
             definition.policy = normalized_policy_payload
+
         if scope_ref is not None:
             definition.scope_ref = _clean_text(scope_ref, field_name="scopeRef")
 
@@ -453,6 +484,29 @@ class RecurringTasksService:
                 after=basis,
             )
 
+        try:
+            # We don't update workflow inputs for target changes yet, since update_schedule
+            # doesn't natively support updating action/input args without recreating.
+            # Only cron, policy, state are updated in Phase 2
+            if enabled is False:
+                await self._adapter.pause_schedule(definition_id=definition.id)
+            elif enabled is True:
+                await self._adapter.unpause_schedule(definition_id=definition.id)
+                
+            await self._adapter.update_schedule(
+                definition_id=definition.id,
+                cron_expression=cron_normalized,
+                timezone=timezone,
+                overlap_mode=policy_obj.overlap_mode if policy_obj else None,
+                catchup_mode=policy_obj.catchup_mode if policy_obj else None,
+                jitter_seconds=policy_obj.jitter_seconds if policy_obj else None,
+                enabled=enabled,
+                note=name if name is not None else None,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to update temporal schedule for {definition.id}: {exc}")
+            raise RecurringTaskValidationError(f"Failed to update schedule: {exc}")
+
         definition.updated_at = now
         definition.version = int(definition.version or 0) + 1
         await self._session.flush()
@@ -465,34 +519,31 @@ class RecurringTasksService:
         definition: RecurringTaskDefinition,
     ) -> RecurringTaskRun:
         now = datetime.now(UTC)
-        scheduled_for = now
 
-        for _ in range(5):
-            run = RecurringTaskRun(
-                id=uuid4(),
-                definition_id=definition.id,
-                scheduled_for=scheduled_for,
-                trigger=RecurringTaskRunTrigger.MANUAL,
-                outcome=RecurringTaskRunOutcome.PENDING_DISPATCH,
-                dispatch_attempts=0,
-                dispatch_after=now,
-                created_at=now,
-                updated_at=now,
-            )
-            self._session.add(run)
-            try:
-                await self._session.flush()
-            except IntegrityError:
-                await self._session.rollback()
-                scheduled_for = scheduled_for + timedelta(microseconds=1)
-                continue
-            await self._session.refresh(run)
-            await self._session.commit()
-            return run
+        try:
+            await self._adapter.trigger_schedule(definition_id=definition.id)
+        except Exception as exc:
+            logger.error(f"Failed to trigger temporal schedule for {definition.id}: {exc}")
+            raise RecurringTaskValidationError(f"Failed to trigger schedule: {exc}")
 
-        raise RecurringTaskValidationError(
-            "failed to create manual run due to repeated schedule collisions"
+        # In phase 2, we can just insert a stub run for the manual invocation API
+        run = RecurringTaskRun(
+            id=uuid4(),
+            definition_id=definition.id,
+            scheduled_for=now,
+            trigger=RecurringTaskRunTrigger.MANUAL,
+            outcome=RecurringTaskRunOutcome.ENQUEUED,
+            dispatch_attempts=1,
+            dispatch_after=now,
+            created_at=now,
+            updated_at=now,
+            message="Triggered via Temporal Schedule",
         )
+        self._session.add(run)
+        await self._session.flush()
+        await self._session.refresh(run)
+        await self._session.commit()
+        return run
 
     async def list_runs(
         self,
@@ -510,851 +561,12 @@ class RecurringTasksService:
             .limit(max(1, min(int(limit), 500)))
         )
         result = await self._session.execute(stmt)
-        return list(result.scalars().all())
-
-    def _apply_for_update_lock(
-        self,
-        stmt: Select[tuple[Any]],
-    ) -> Select[tuple[Any]]:
-        bind = self._session.get_bind()
-        if bind is None:
-            return stmt
-        if bind.dialect.name == "postgresql":
-            return stmt.with_for_update(skip_locked=True)
-        return stmt
-
-    async def _insert_run_if_missing(
-        self,
-        *,
-        definition_id: UUID,
-        scheduled_for: datetime,
-        trigger: RecurringTaskRunTrigger,
-        dispatch_after: datetime,
-    ) -> int:
-        now = datetime.now(UTC)
-        values = {
-            "id": uuid4(),
-            "definition_id": definition_id,
-            "scheduled_for": _coerce_utc(scheduled_for),
-            "trigger": trigger,
-            "outcome": RecurringTaskRunOutcome.PENDING_DISPATCH,
-            "dispatch_attempts": 0,
-            "dispatch_after": _coerce_utc(dispatch_after),
-            "created_at": now,
-            "updated_at": now,
-        }
-
-        bind = self._session.get_bind()
-        dialect_name = bind.dialect.name if bind is not None else ""
-
-        if dialect_name == "postgresql":
-            stmt = pg_insert(RecurringTaskRun).values(**values)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["definition_id", "scheduled_for"]
-            )
-            result = await self._session.execute(stmt)
-            return int(result.rowcount or 0)
-
-        if dialect_name == "sqlite":
-            stmt = sqlite_insert(RecurringTaskRun).values(**values)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["definition_id", "scheduled_for"]
-            )
-            result = await self._session.execute(stmt)
-            return int(result.rowcount or 0)
-
-        existing_stmt = select(RecurringTaskRun.id).where(
-            RecurringTaskRun.definition_id == definition_id,
-            RecurringTaskRun.scheduled_for == _coerce_utc(scheduled_for),
-        )
-        existing = await self._session.execute(existing_stmt)
-        if existing.first() is not None:
-            return 0
-        self._session.add(RecurringTaskRun(**values))
-        return 1
-
-    def _compute_due_occurrences(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        now: datetime,
-        policy: RecurringPolicy,
-    ) -> tuple[list[datetime], datetime]:
-        if definition.next_run_at is None:
-            next_run = compute_next_occurrence(
-                cron=definition.cron,
-                timezone_name=definition.timezone,
-                after=now,
-            )
-            return [], next_run
-
-        due_candidates: list[datetime] = []
-        cursor = _coerce_utc(definition.next_run_at)
-        safety_limit = max(500, policy.max_backfill * 20)
-
-        while cursor < now and len(due_candidates) < safety_limit:
-            due_candidates.append(cursor)
-            cursor = compute_next_occurrence(
-                cron=definition.cron,
-                timezone_name=definition.timezone,
-                after=cursor,
-            )
-
-        if not due_candidates:
-            return [], cursor
-
-        if policy.catchup_mode == "none":
-            selected = []
-        elif policy.catchup_mode == "last":
-            selected = [due_candidates[-1]]
-        else:
-            selected = due_candidates[-policy.max_backfill :]
-
-        return selected, cursor
-
-    async def schedule_due_definitions(
-        self,
-        *,
-        now: datetime | None = None,
-        batch_size: int | None = None,
-        max_backfill: int | None = None,
-    ) -> int:
-        reference_now = _coerce_utc(now or datetime.now(UTC))
-        batch = max(1, int(batch_size or _DEFAULT_SCHEDULER_BATCH_SIZE))
-        global_backfill = max(
-            1,
-            int(max_backfill or _DEFAULT_SCHEDULER_MAX_BACKFILL),
-        )
-
-        stmt: Select[tuple[RecurringTaskDefinition]] = (
-            select(RecurringTaskDefinition)
-            .where(
-                RecurringTaskDefinition.enabled.is_(True),
-                RecurringTaskDefinition.next_run_at.is_not(None),
-                RecurringTaskDefinition.next_run_at <= reference_now,
-            )
-            .order_by(
-                RecurringTaskDefinition.next_run_at.asc(),
-                RecurringTaskDefinition.id.asc(),
-            )
-            .limit(batch)
-        )
-        stmt = self._apply_for_update_lock(stmt)
-        result = await self._session.execute(stmt)
-        due_definitions = list(result.scalars().all())
-
-        scheduled_count = 0
-        for definition in due_definitions:
-            policy = _normalize_policy(
-                definition.policy,
-                global_max_backfill=global_backfill,
-            )
-            selected_occurrences, next_future = self._compute_due_occurrences(
-                definition=definition,
-                now=reference_now,
-                policy=policy,
-            )
-
-            for scheduled_for in selected_occurrences:
-                jitter = (
-                    random.randint(0, policy.jitter_seconds)
-                    if policy.jitter_seconds
-                    else 0
-                )
-                dispatch_after = scheduled_for + timedelta(seconds=jitter)
-                inserted = await self._insert_run_if_missing(
-                    definition_id=definition.id,
-                    scheduled_for=scheduled_for,
-                    trigger=RecurringTaskRunTrigger.SCHEDULE,
-                    dispatch_after=dispatch_after,
-                )
-                scheduled_count += inserted
-
-            if selected_occurrences:
-                definition.last_scheduled_for = selected_occurrences[-1]
-            definition.next_run_at = next_future
-            definition.updated_at = reference_now
-
-        await self._session.commit()
-        return scheduled_count
-
-    async def _count_active_runs(
-        self,
-        *,
-        definition_id: UUID,
-        current_run_id: UUID,
-    ) -> int:
-        stmt: Select[tuple[RecurringTaskRun]] = select(RecurringTaskRun).where(
-            RecurringTaskRun.definition_id == definition_id,
-            RecurringTaskRun.id != current_run_id,
-            RecurringTaskRun.outcome.in_(
-                (
-                    RecurringTaskRunOutcome.PENDING_DISPATCH,
-                    RecurringTaskRunOutcome.DISPATCH_ERROR,
-                    RecurringTaskRunOutcome.ENQUEUED,
-                )
-            ),
-        )
-        rows = (await self._session.execute(stmt)).scalars().all()
-
-        queued_job_ids = {
-            row.temporal_workflow_id
-            for row in rows
-            if row.outcome is RecurringTaskRunOutcome.ENQUEUED
-            and row.temporal_workflow_id is not None
-        }
-        temporal_executions_by_id: dict[UUID, TemporalExecutionRecord] = {}
-        if queued_job_ids:
-            exec_stmt: Select[tuple[TemporalExecutionRecord]] = select(
-                TemporalExecutionRecord
-            ).where(TemporalExecutionRecord.workflow_id.in_(queued_job_ids))
-            exec_rows = (await self._session.execute(exec_stmt)).scalars().all()
-            temporal_executions_by_id = {ex.workflow_id: job for ex in exec_rows}
-
-        active = 0
-        for row in rows:
-            if row.outcome in {
-                RecurringTaskRunOutcome.PENDING_DISPATCH,
-                RecurringTaskRunOutcome.DISPATCH_ERROR,
-            }:
-                active += 1
-                continue
-
-            if row.temporal_workflow_id is None:
-                active += 1
-                continue
-
-            temporal_execution = temporal_executions_by_id.get(row.temporal_workflow_id)
-            if temporal_execution is None:
-                continue
-            if temporal_execution.status in {
-                MoonMindWorkflowState.SCHEDULED,
-                MoonMindWorkflowState.EXECUTING,
-            }:
-                active += 1
-        return active
-
-    def _recurrence_payload(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        run: RecurringTaskRun,
-    ) -> dict[str, Any]:
-        return {
-            "definitionId": str(definition.id),
-            "runId": str(run.id),
-            "scheduledFor": _coerce_utc(run.scheduled_for)
-            .isoformat()
-            .replace("+00:00", "Z"),
-        }
-
-    @staticmethod
-    def _merge_recurrence_system(
-        payload: Mapping[str, Any] | None,
-        *,
-        recurrence: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        body = dict(payload or {})
-        system_payload = body.get("system")
-        system = dict(system_payload) if isinstance(system_payload, Mapping) else {}
-        system["recurrence"] = dict(recurrence)
-        body["system"] = system
-        return body
-
-    async def _find_existing_temporal_execution_for_run(
-        self,
-        *,
-        run_id: UUID,
-        workflow_type: TemporalWorkflowType,
-        scan_limit: int = 1000,
-    ) -> TemporalExecutionRecord | None:
-        stmt = select(TemporalExecutionRecord).where(
-            TemporalExecutionRecord.workflow_type == workflow_type,
-            TemporalExecutionRecord.parameters['system']['recurrence']['runId'].astext == str(run_id)
-        ).order_by(TemporalExecutionRecord.started_at.desc(), TemporalExecutionRecord.workflow_id.desc())
-        return (await self._session.execute(stmt)).scalars().first()
-
-    @staticmethod
-    def _expected_workflow_type_for_target_kind(kind: str) -> str | None:
-        normalized_kind = str(kind or "").strip().lower()
-        if normalized_kind in {"queue_task", "queue_task_template"}:
-            return TemporalWorkflowType.RUN
-        if normalized_kind == "manifest_run":
-            return TemporalWorkflowType.MANIFEST_INGEST
-        return None
-
-    def _expected_workflow_type_for_definition(
-        self,
-        definition: RecurringTaskDefinition | None,
-    ) -> str | None:
-        if definition is None:
-            return None
-        target_payload = definition.target
-        target = dict(target_payload) if isinstance(target_payload, Mapping) else {}
-        kind = str(target.get("kind") or "").strip().lower()
-        return self._expected_workflow_type_for_target_kind(kind)
-
-    async def _bulk_fetch_active_counts(
-        self,
-        definition_ids: Sequence[UUID],
-    ) -> dict[UUID, int]:
-        active_count_by_def_id: dict[UUID, int] = collections.defaultdict(int)
-        if not definition_ids:
-            return active_count_by_def_id
-
-        active_runs_stmt = select(RecurringTaskRun).where(
-            RecurringTaskRun.definition_id.in_(definition_ids),
-            RecurringTaskRun.outcome.in_(
-                (
-                    RecurringTaskRunOutcome.PENDING_DISPATCH,
-                    RecurringTaskRunOutcome.DISPATCH_ERROR,
-                    RecurringTaskRunOutcome.ENQUEUED,
-                )
-            ),
-        )
-        active_runs_rows = (
-            (await self._session.execute(active_runs_stmt)).scalars().all()
-        )
-
-        queued_job_ids = {
-            row.temporal_workflow_id
-            for row in active_runs_rows
-            if row.outcome is RecurringTaskRunOutcome.ENQUEUED
-            and row.temporal_workflow_id is not None
-        }
-
-        temporal_executions_by_id: dict[UUID, TemporalExecutionRecord] = {}
-        if queued_job_ids:
-            exec_stmt = select(TemporalExecutionRecord).where(
-                TemporalExecutionRecord.workflow_id.in_(queued_job_ids)
-            )
-            exec_rows = (await self._session.execute(exec_stmt)).scalars().all()
-            temporal_executions_by_id = {ex.workflow_id: job for ex in exec_rows}
-
-        for row in active_runs_rows:
-            if row.outcome in {
-                RecurringTaskRunOutcome.PENDING_DISPATCH,
-                RecurringTaskRunOutcome.DISPATCH_ERROR,
-            }:
-                active_count_by_def_id[row.definition_id] += 1
-            elif row.outcome == RecurringTaskRunOutcome.ENQUEUED:
-                if row.temporal_workflow_id is None:
-                    active_count_by_def_id[row.definition_id] += 1
-                else:
-                    temporal_execution = temporal_executions_by_id.get(row.temporal_workflow_id)
-                    if temporal_execution is not None and temporal_execution.status in {
-                        MoonMindWorkflowState.SCHEDULED,
-                        MoonMindWorkflowState.EXECUTING,
-                    }:
-                        active_count_by_def_id[row.definition_id] += 1
-
-        return active_count_by_def_id
-
-    async def _bulk_fetch_existing_executions(
-        self,
-        pending_runs: Sequence[RecurringTaskRun],
-    ) -> dict[tuple[UUID, str], TemporalExecutionRecord]:
-        run_ids = [str(run.id) for run in pending_runs]
-        if not run_ids:
-            return {}
-
-        expected_workflow_types = sorted(
-            {
-                expected_workflow_type
-                for run in pending_runs
-                for expected_workflow_type in [
-                    self._expected_workflow_type_for_definition(run.definition)
-                ]
-                if expected_workflow_type is not None
-            }
-        )
-        if not expected_workflow_types:
-            return {}
-
-        job_stmt = select(TemporalExecutionRecord).where(
-            TemporalExecutionRecord.workflow_type.in_(expected_workflow_types)
-        )
-
-        bind = self._session.get_bind()
-        dialect_name = bind.dialect.name if bind is not None else ""
-        if dialect_name == "postgresql":
-            # Consider adding an expression index on this JSON path for very large
-            # agent_jobs tables; keep current semantics unchanged in this patch.
-            job_stmt = job_stmt.where(
-                TemporalExecutionRecord.parameters["system"]["recurrence"][
-                    "runId"
-                ].astext.in_(run_ids)
-            )
-        else:
-            job_stmt = job_stmt.where(
-                func.json_extract(
-                    TemporalExecutionRecord.parameters, "$.system.recurrence.runId"
-                ).in_(run_ids)
-            )
-        job_stmt = job_stmt.order_by(
-            TemporalExecutionRecord.started_at.desc(),
-            TemporalExecutionRecord.workflow_id.desc(),
-        )
-
-        jobs = (await self._session.execute(job_stmt)).scalars().all()
-        existing_executions_by_run_and_type: dict[tuple[UUID, str], TemporalExecutionRecord] = (
-            {}
-        )
-        for ex in jobs:
-            payload = dict(ex.parameters or {})
-            system_node = payload.get("system")
-            if not isinstance(system_node, Mapping):
-                continue
-            recurrence_node = system_node.get("recurrence")
-            if not isinstance(recurrence_node, Mapping):
-                continue
-            run_value = str(recurrence_node.get("runId") or "").strip()
-            if not run_value:
-                continue
-            try:
-                run_id = UUID(run_value)
-            except ValueError:
-                logger.debug(
-                    "Skipping recurring job with malformed runId in payload",
-                    extra={
-                        "job_id": str(ex.workflow_id),
-                        "workflow_type": ex.workflow_type.value,
-                        "run_id": run_value,
-                    },
-                )
-                continue
-
-            key = (run_id, ex.workflow_type.value)
-            if key not in existing_executions_by_run_and_type:
-                existing_executions_by_run_and_type[key] = ex
-
-        return existing_executions_by_run_and_type
-
-    async def _dispatch_temporal_task(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        run: RecurringTaskRun,
-        target: Mapping[str, Any],
-    ) -> TemporalExecutionRecord:
-        if self._execution_service is None:
-            raise RuntimeError("Temporal execution service is not configured")
+        runs = list(result.scalars().all())
         
-        job_payload = dict(target.get("job") or {})
-        payload = dict(job_payload.get("payload") or {})
-        payload = self._merge_recurrence_system(
-            payload,
-            recurrence=self._recurrence_payload(definition=definition, run=run),
-        )
-
-        return await self._execution_service.create_execution(
-            workflow_type=TemporalWorkflowType.RUN,
-            parameters=payload,
-            title=definition.name,
-            owner_user_id=definition.owner_user_id,
-            idempotency_key=str(run.id),
-        )
-
-    async def _dispatch_temporal_task_template(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        run: RecurringTaskRun,
-        target: Mapping[str, Any],
-    ) -> TemporalExecutionRecord:
-        template = dict(target.get("template") or {})
-        slug = str(template.get("slug") or "").strip()
-        version = str(template.get("version") or "").strip()
-        inputs = dict(template.get("inputs") or {})
-        scope = str(template.get("scope") or "global").strip().lower() or "global"
-        scope_ref_raw = template.get("scopeRef")
-        scope_ref = str(scope_ref_raw).strip() if scope_ref_raw is not None else None
-
-        expanded = await self._template_catalog.expand_template(
-            slug=slug,
-            scope=scope,
-            scope_ref=scope_ref,
-            version=version,
-            inputs=inputs,
-            context={
-                "recurrence": self._recurrence_payload(definition=definition, run=run),
-                "definition": {
-                    "id": str(definition.id),
-                    "name": definition.name,
-                    "scope": definition.scope_type.value,
-                },
-            },
-            user_id=definition.owner_user_id,
-        )
-
-        job_defaults = dict(target.get("jobDefaults") or {})
-        task_defaults = dict(target.get("taskDefaults") or {})
-
-        payload = dict(task_defaults)
-        task_payload_raw = payload.get("task")
-        task_payload = (
-            dict(task_payload_raw) if isinstance(task_payload_raw, Mapping) else {}
-        )
-
-        if not isinstance(task_payload.get("publish"), Mapping):
-            task_payload["publish"] = {"mode": "none"}
-        if not isinstance(task_payload.get("skill"), Mapping):
-            task_payload["skill"] = {"id": "auto", "args": {}}
-        if not str(task_payload.get("instructions") or "").strip():
-            task_payload["instructions"] = f"Scheduled task: {definition.name}"
-
-        task_payload["steps"] = list(expanded.get("steps") or [])
-
-        applied = []
-        existing_applied = task_payload.get("appliedStepTemplates")
-        if isinstance(existing_applied, list):
-            applied.extend(existing_applied)
-        applied_template = expanded.get("appliedTemplate")
-        if isinstance(applied_template, Mapping):
-            applied.append(dict(applied_template))
-        if applied:
-            task_payload["appliedStepTemplates"] = applied
-
-        payload["task"] = task_payload
-        payload = self._merge_recurrence_system(
-            payload,
-            recurrence=self._recurrence_payload(definition=definition, run=run),
-        )
-
-        caps: list[str] = []
-        existing_caps = payload.get("requiredCapabilities")
-        if isinstance(existing_caps, list):
-            caps.extend(
-                str(item).strip().lower() for item in existing_caps if str(item).strip()
-            )
-        expanded_caps = expanded.get("capabilities")
-        if isinstance(expanded_caps, list):
-            caps.extend(
-                str(item).strip().lower() for item in expanded_caps if str(item).strip()
-            )
-        if caps:
-            payload["requiredCapabilities"] = list(dict.fromkeys(caps))
-
-        if (
-            "repository" not in payload
-            or not str(payload.get("repository") or "").strip()
-        ):
-            payload["repository"] = str(
-                settings.workflow.github_repository or "MoonLadderStudios/MoonMind"
-            ).strip()
-
-        priority_raw = job_defaults.get("priority")
-        max_attempts_raw = job_defaults.get("maxAttempts")
-        affinity_raw = job_defaults.get("affinityKey")
-        try:
-            priority = int(priority_raw) if priority_raw is not None else 0
-        except (TypeError, ValueError):
-            priority = 0
-        try:
-            max_attempts = int(max_attempts_raw) if max_attempts_raw is not None else 3
-        except (TypeError, ValueError):
-            max_attempts = 3
-
-        affinity = str(affinity_raw).strip() if affinity_raw is not None else None
-        if affinity == "":
-            affinity = None
-
-        if self._execution_service is None:
-            raise RuntimeError("Temporal execution service is not configured")
-        return await self._execution_service.create_execution(
-            workflow_type=TemporalWorkflowType.RUN,
-            parameters=payload,
-            title=definition.name,
-            owner_user_id=definition.owner_user_id,
-            idempotency_key=str(run.id),
-        )
-
-    async def _dispatch_manifest_run(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        run: RecurringTaskRun,
-        target: Mapping[str, Any],
-    ) -> TemporalExecutionRecord:
-        name = str(target.get("name") or "").strip()
-        action = str(target.get("action") or "run").strip().lower() or "run"
-        options_payload = target.get("options")
-        options = (
-            dict(options_payload) if isinstance(options_payload, Mapping) else None
-        )
-
-        submission = await self._manifests_service.submit_manifest_run(
-            name=name,
-            action=action,
-            options=options,
-            user_id=definition.owner_user_id,
-            system_payload={
-                "recurrence": self._recurrence_payload(definition=definition, run=run)
-            },
-        )
-        if submission.job is None:
-            raise RecurringTaskValidationError(
-                "Recurring manifest_run targets require queue-backed manifest submission."
-            )
-        return submission.job
-
-    async def _dispatch_run(
-        self,
-        *,
-        definition: RecurringTaskDefinition,
-        run: RecurringTaskRun,
-        now: datetime,
-        policy: RecurringPolicy,
-        active_count: int | None = None,
-        existing_job: TemporalExecutionRecord | None = None,
-        existing_job_queried: bool = False,
-    ) -> int:
-        scheduled_for = _coerce_utc(run.scheduled_for)
-        if now - scheduled_for > timedelta(
-            seconds=max(0, policy.misfire_grace_seconds)
-        ):
-            run.outcome = RecurringTaskRunOutcome.SKIPPED
-            run.message = "Skipped due to misfire grace threshold"
-            run.updated_at = now
-            definition.last_dispatch_status = "skipped"
-            definition.last_dispatch_error = run.message[:2000]
-            definition.updated_at = now
-            return 1
-
-        if active_count is None:
-            active_count = await self._count_active_runs(
-                definition_id=definition.id,
-                current_run_id=run.id,
-            )
-
-        if active_count >= policy.max_concurrent_runs:
-            run.outcome = RecurringTaskRunOutcome.SKIPPED
-            run.message = "Skipped due to overlap policy"
-            run.updated_at = now
-            definition.last_dispatch_status = "skipped"
-            definition.last_dispatch_error = run.message[:2000]
-            definition.updated_at = now
-            return 1
-
-        target = dict(definition.target or {})
-        kind = str(target.get("kind") or "").strip().lower()
-        expected_workflow_type = self._expected_workflow_type_for_target_kind(kind)
-        if expected_workflow_type is None:
-            run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
-            run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
-            run.dispatch_after = now + timedelta(seconds=60)
-            run.message = f"Unsupported target kind: {kind or '<empty>'}"
-            run.updated_at = now
-            definition.last_dispatch_status = "error"
-            definition.last_dispatch_error = run.message[:2000]
-            definition.updated_at = now
-            return 1
-
-        if not existing_job_queried:
-            existing_job = await self._find_existing_temporal_execution_for_run(
-                run_id=run.id,
-                workflow_type=expected_workflow_type,
-            )
-
-        if existing_job is not None:
-            run.outcome = RecurringTaskRunOutcome.ENQUEUED
-            run.temporal_workflow_id = existing_job.workflow_id
-            run.temporal_run_id = existing_job.run_id
-            run.message = None
-            run.updated_at = now
-            definition.last_dispatch_status = "enqueued"
-            definition.last_dispatch_error = None
-            definition.updated_at = now
-            return 1
-
-        try:
-            if kind == "queue_task":
-                job = await self._dispatch_temporal_task(
-                    definition=definition,
-                    run=run,
-                    target=target,
-                )
-            elif kind == "queue_task_template":
-                job = await self._dispatch_temporal_task_template(
-                    definition=definition,
-                    run=run,
-                    target=target,
-                )
-            elif kind == "manifest_run":
-                job = await self._dispatch_manifest_run(
-                    definition=definition,
-                    run=run,
-                    target=target,
-                )
-            else:
-                raise RecurringTaskValidationError(
-                    f"Unsupported target kind: {kind or '<empty>'}"
-                )
-        except Exception as exc:
-            attempt = int(run.dispatch_attempts or 0) + 1
-            backoff_seconds = min(15 * (2 ** max(0, attempt - 1)), 900)
-            run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
-            run.dispatch_attempts = attempt
-            run.dispatch_after = now + timedelta(seconds=backoff_seconds)
-            run.message = "Recurring dispatch failed. See server logs for details."
-            logger.exception(
-                "Recurring run dispatch failed",
-                extra={
-                    "definition_id": str(definition.id),
-                    "run_id": str(run.id),
-                    "target_kind": kind,
-                    "attempt": attempt,
-                },
-            )
-            run.updated_at = now
-            definition.last_dispatch_status = "error"
-            definition.last_dispatch_error = run.message[:2000]
-            definition.updated_at = now
-            return 1
-
-        run.outcome = RecurringTaskRunOutcome.ENQUEUED
-        run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
-        run.temporal_workflow_id = job.workflow_id
-        run.temporal_run_id = job.run_id
-        run.message = None
-        run.updated_at = now
-        definition.last_dispatch_status = "enqueued"
-        definition.last_dispatch_error = None
-        definition.updated_at = now
-        return 1
-
-    async def dispatch_pending_runs(
-        self,
-        *,
-        now: datetime | None = None,
-        batch_size: int | None = None,
-    ) -> int:
-        reference_now = _coerce_utc(now or datetime.now(UTC))
-        batch = max(1, int(batch_size or 50))
-
-        stmt: Select[tuple[RecurringTaskRun]] = (
-            select(RecurringTaskRun)
-            .where(
-                RecurringTaskRun.outcome.in_(
-                    (
-                        RecurringTaskRunOutcome.PENDING_DISPATCH,
-                        RecurringTaskRunOutcome.DISPATCH_ERROR,
-                    )
-                ),
-                or_(
-                    RecurringTaskRun.dispatch_after.is_(None),
-                    RecurringTaskRun.dispatch_after <= reference_now,
-                ),
-            )
-            .options(selectinload(RecurringTaskRun.definition))
-            .order_by(
-                RecurringTaskRun.dispatch_after.asc().nullsfirst(),
-                RecurringTaskRun.created_at.asc(),
-                RecurringTaskRun.id.asc(),
-            )
-            .limit(batch)
-        )
-        stmt = self._apply_for_update_lock(stmt)
-        result = await self._session.execute(stmt)
-        pending_runs = list(result.scalars().all())
-
-        dispatched = 0
-        if not pending_runs:
-            return dispatched
-
-        max_backfill = 3
-
-        definition_ids = list(
-            {r.definition_id for r in pending_runs if r.definition_id}
-        )
-        active_count_by_def_id = await self._bulk_fetch_active_counts(definition_ids)
-        existing_executions_by_run_and_type = await self._bulk_fetch_existing_executions(
-            pending_runs
-        )
-
-        for run in pending_runs:
-            definition = run.definition
-            if definition is None:
-                run.outcome = RecurringTaskRunOutcome.DISPATCH_ERROR
-                run.dispatch_attempts = int(run.dispatch_attempts or 0) + 1
-                run.dispatch_after = reference_now + timedelta(seconds=60)
-                run.message = "Missing recurring definition"
-                run.updated_at = reference_now
-                dispatched += 1
-                continue
-
-            policy = _normalize_policy(
-                definition.policy,
-                global_max_backfill=max_backfill,
-            )
-
-            other_active_count = max(0, active_count_by_def_id[definition.id] - 1)
-            expected_workflow_type = self._expected_workflow_type_for_definition(definition)
-            existing_job = (
-                existing_executions_by_run_and_type.get((run.id, expected_workflow_type))
-                if expected_workflow_type is not None
-                else None
-            )
-
-            dispatched += await self._dispatch_run(
-                definition=definition,
-                run=run,
-                now=reference_now,
-                policy=policy,
-                active_count=other_active_count,
-                existing_job=existing_job,
-                existing_job_queried=True,
-            )
-
-            # Keep this in-memory count synchronized for later runs in the same
-            # batch so overlap policy checks stay accurate without re-querying.
-            if run.outcome in {
-                RecurringTaskRunOutcome.PENDING_DISPATCH,
-                RecurringTaskRunOutcome.DISPATCH_ERROR,
-            }:
-                active_count_by_def_id[definition.id] = other_active_count + 1
-            elif run.outcome == RecurringTaskRunOutcome.ENQUEUED:
-                job_status = MoonMindWorkflowState.SCHEDULED
-                if run.temporal_workflow_id:
-                    if existing_job and existing_job.workflow_id == run.temporal_workflow_id:
-                        job_status = existing_job.status
-                if job_status in {
-                    MoonMindWorkflowState.SCHEDULED,
-                    MoonMindWorkflowState.EXECUTING,
-                }:
-                    active_count_by_def_id[definition.id] = other_active_count + 1
-                else:
-                    active_count_by_def_id[definition.id] = other_active_count
-            else:  # SKIPPED
-                active_count_by_def_id[definition.id] = other_active_count
-
-        await self._session.commit()
-        return dispatched
-
-    async def run_scheduler_tick(
-        self,
-        *,
-        now: datetime | None = None,
-        batch_size: int | None = None,
-        max_backfill: int | None = None,
-    ) -> RecurringDispatchResult:
-        scheduled = await self.schedule_due_definitions(
-            now=now,
-            batch_size=batch_size,
-            max_backfill=max_backfill,
-        )
-        dispatched = await self.dispatch_pending_runs(
-            now=now,
-            batch_size=batch_size,
-        )
-        return RecurringDispatchResult(
-            scheduled_runs=scheduled,
-            dispatched_runs=dispatched,
-        )
-
+        # Temporal reconciliation could be added here in the future using adapter.describe_schedule
+        return runs
 
 __all__ = [
-    "RecurringDispatchResult",
     "RecurringTaskAuthorizationError",
     "RecurringTaskNotFoundError",
     "RecurringTaskValidationError",
