@@ -247,6 +247,24 @@ RUN mkdir -p "${HOME}/.gemini" \
     && claude --version \
     && env -u NODE_OPTIONS -u npm_config_node_options cursor-agent --version
 
+# ---------------------------------------------------------------------------
+# Frontend builder – compiles Tailwind CSS and Vite assets in a Node environment
+# so the slim Python runtime image does not need npm.
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm AS frontend-builder
+SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
+WORKDIR /build
+
+# Copy only the files needed for the frontend build
+COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /build/
+COPY frontend/ /build/frontend/
+# Tailwind scans these paths for class usage (see tailwind.config.cjs content[])
+COPY api_service/templates/task_dashboard.html /build/api_service/templates/task_dashboard.html
+COPY api_service/static/task_dashboard/ /build/api_service/static/task_dashboard/
+
+RUN npm ci && npm run dashboard:css:min && npm run ui:build
+
+# ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm
 
 ARG CODEX_CLI_VERSION
@@ -373,10 +391,8 @@ RUN if [ "${INSTALL_TEST_DEPS}" = "true" ]; then \
 COPY moonmind /app/moonmind/
 COPY api_service /app/api_service/
 
-# Build frontend assets
-COPY frontend /app/frontend/
-COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /app/
-RUN npm ci && npm run dashboard:css:min && npm run ui:build
+# Copy pre-built frontend assets from the frontend-builder stage
+COPY --from=frontend-builder /build/api_service/static/task_dashboard/ /app/api_service/static/task_dashboard/
 
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
