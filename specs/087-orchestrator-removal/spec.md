@@ -20,7 +20,7 @@ Requirements below are normative for this feature (historically aligned with the
 | **DOC-REQ-007** | §2.2 | Dedicated orchestrator service package files (other than shared dependency stubs if none remain) MUST be removed. |
 | **DOC-REQ-008** | §2.3 | Orchestrator integration, unit, and contract tests and the dedicated GitHub Actions workflow MUST be removed or replaced so CI no longer depends on the orchestrator. |
 | **DOC-REQ-009** | §2.3 | Remaining tests and scripts that reference the orchestrator MUST be updated so the suite does not require orchestrator imports or endpoints. |
-| **DOC-REQ-010** | §2.4���2.5 | Architecture and Temporal docs MUST NOT describe `mm-orchestrator` as a running component; obsolete orchestrator-specific spec/OpenAPI trees MUST be removed or superseded. |
+| **DOC-REQ-010** | §2.4–2.5 | Architecture and Temporal docs MUST NOT describe `mm-orchestrator` as a running component; obsolete orchestrator-specific spec/OpenAPI trees MUST be removed or superseded. |
 | **DOC-REQ-011** | §3 | A database migration MUST drop orchestrator-related tables safely (correct FK ordering). |
 | **DOC-REQ-012** | §4 | After removal, unit tests MUST pass and the API stack MUST start via Compose without an orchestrator container. |
 
