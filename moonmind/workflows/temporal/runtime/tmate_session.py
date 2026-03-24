@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,6 +122,11 @@ class TmateSessionManager:
         return shutil.which("tmate") is not None
 
     @property
+    def process(self) -> asyncio.subprocess.Process | None:
+        """The underlying tmate subprocess, or ``None`` if not started."""
+        return self._process
+
+    @property
     def endpoints(self) -> TmateEndpoints | None:
         """Last extracted endpoints, or ``None`` if not yet started."""
         return self._endpoints
@@ -174,15 +180,14 @@ class TmateSessionManager:
         # Write config file.
         self._write_config(conf, server_config)
 
+        # Defensive copy — avoid mutating the caller's dict.
+        env = dict(env) if env is not None else dict(os.environ)
+
         if exit_code_capture:
             self._exit_code_path_value = exit_file
-            if env is None:
-                env = dict(os.environ)
             env["MM_EXIT_FILE"] = str(exit_file)
 
         # Build the inner command string.
-        import shlex
-
         if command is None:
             inner_cmd = "bash"
         elif isinstance(command, str):
@@ -324,7 +329,11 @@ class TmateSessionManager:
             proc = await asyncio.create_subprocess_exec(
                 "tmate", "-S", str(socket_path), "wait", "tmate-ready",
             )
-            await proc.wait()
+            rc = await proc.wait()
+            if rc != 0:
+                raise RuntimeError(
+                    f"tmate wait tmate-ready exited with code {rc}"
+                )
 
         await asyncio.wait_for(_inner(), timeout=timeout)
 

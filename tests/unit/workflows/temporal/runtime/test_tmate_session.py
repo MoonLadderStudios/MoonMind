@@ -271,3 +271,121 @@ class TestEndpointKeys:
     def test_all_four_endpoint_types(self):
         """DOC-REQ-004: Must extract all four endpoint types."""
         assert len(_ENDPOINT_KEYS) == 4
+
+
+# ---------------------------------------------------------------------------
+# start() orchestration
+# ---------------------------------------------------------------------------
+
+
+class TestStart:
+    @pytest.mark.asyncio
+    async def test_start_orchestration(self, tmp_path: Path):
+        """Verify start() creates config, launches subprocess, extracts endpoints."""
+        mgr = TmateSessionManager(
+            session_name="mm-orch",
+            socket_dir=tmp_path,
+        )
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 42
+        fake_proc.returncode = None
+
+        endpoint_values = {
+            "attach_ro": "ssh ro@host",
+            "attach_rw": "ssh rw@host",
+            "web_ro": "https://host/ro",
+            "web_rw": "https://host/rw",
+        }
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.runtime.tmate_session.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=fake_proc,
+            ),
+            patch.object(
+                TmateSessionManager,
+                "_wait_ready",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                TmateSessionManager,
+                "_extract_endpoints",
+                new_callable=AsyncMock,
+                return_value=endpoint_values,
+            ),
+        ):
+            caller_env = {"EXISTING": "val"}
+            endpoints = await mgr.start(
+                command=["echo", "hello"],
+                env=caller_env,
+                cwd=tmp_path,
+            )
+
+        # Config file should have been written.
+        assert mgr.config_path.exists()
+
+        # Endpoints should be populated.
+        assert endpoints.session_name == "mm-orch"
+        assert endpoints.attach_ro == "ssh ro@host"
+        assert endpoints.web_rw == "https://host/rw"
+
+        # The process property should expose the subprocess.
+        assert mgr.process is fake_proc
+
+        # Exit code path should be set (exit_code_capture defaults to True).
+        assert mgr.exit_code_path is not None
+        assert str(mgr.exit_code_path).endswith(".exit")
+
+        # Caller's env dict must NOT have been mutated.
+        assert "MM_EXIT_FILE" not in caller_env
+
+    @pytest.mark.asyncio
+    async def test_start_graceful_on_endpoint_failure(self, tmp_path: Path):
+        """start() should return partial endpoints when extraction fails."""
+        mgr = TmateSessionManager(
+            session_name="mm-fail",
+            socket_dir=tmp_path,
+        )
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 43
+        fake_proc.returncode = None
+
+        with (
+            patch(
+                "moonmind.workflows.temporal.runtime.tmate_session.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=fake_proc,
+            ),
+            patch.object(
+                TmateSessionManager,
+                "_wait_ready",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("tmate wait failed"),
+            ),
+        ):
+            endpoints = await mgr.start(command="echo test", cwd=tmp_path)
+
+        # Should still return endpoints, just with None values.
+        assert endpoints.session_name == "mm-fail"
+        assert endpoints.attach_ro is None
+        assert endpoints.web_ro is None
+
+    @pytest.mark.asyncio
+    async def test_wait_ready_raises_on_nonzero_exit(self):
+        """_wait_ready raises RuntimeError when tmate exits non-zero."""
+        fake_proc = MagicMock()
+        fake_proc.wait = AsyncMock(return_value=1)
+
+        with patch(
+            "moonmind.workflows.temporal.runtime.tmate_session.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=fake_proc,
+        ):
+            with pytest.raises(RuntimeError, match="exited with code 1"):
+                await TmateSessionManager._wait_ready(
+                    Path("/tmp/test.sock"), timeout=5.0
+                )
+

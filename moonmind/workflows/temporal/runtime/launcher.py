@@ -417,7 +417,7 @@ class ManagedRuntimeLauncher:
             )
             # The tmate manager owns the subprocess — retrieve it for the
             # caller (supervisor) which needs the Process handle.
-            process = tmate_manager._process  # noqa: SLF001
+            process = tmate_manager.process
 
             endpoints = {
                 "tmate_session_name": tmate_endpoints.session_name,
