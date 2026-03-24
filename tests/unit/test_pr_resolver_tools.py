@@ -1015,7 +1015,6 @@ def test_load_addressed_ids_searches_multiple_paths(
     import json
 
     load_ids = pr_resolve_snapshot_module["_load_addressed_comment_ids"]
-    globals_dict = load_ids.__globals__
 
     # Write an object-format ledger
     var_dir = tmp_path / "var" / "pr_comments"
