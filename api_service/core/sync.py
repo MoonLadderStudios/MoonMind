@@ -306,8 +306,9 @@ async def sync_temporal_executions_safely(
             )
             return item
 
-    tasks = [fetch_and_sync(item) for item in items]
-    updated_items = list(await asyncio.gather(*tasks))
+    updated_items = []
+    for item in items:
+        updated_items.append(await fetch_and_sync(item))
     await session.commit()
     for obj in updated_items:
         try:

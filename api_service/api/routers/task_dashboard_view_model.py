@@ -25,7 +25,7 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
     "proposals": {
         "open": "queued",
         "promoted": "completed",
-        "dismissed": "canceled",
+        "dismissed": "cancelled",
         "accepted": "completed",
         "rejected": "failed",
     },
@@ -41,9 +41,9 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "succeeded": "completed",
         "completed": "completed",
         "failed": "failed",
-        "canceled": "canceled",
+        "canceled": "cancelled",
         # Accept British spelling from legacy data or external adapters.
-        "cancelled": "canceled",
+        "cancelled": "cancelled",
         "queued": "queued",
         "awaiting_action": "awaiting_action",
     },

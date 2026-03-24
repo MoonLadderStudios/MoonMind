@@ -69,7 +69,7 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.FINALIZING: "running",
     MoonMindWorkflowState.COMPLETED: "completed",
     MoonMindWorkflowState.FAILED: "failed",
-    MoonMindWorkflowState.CANCELED: "canceled",
+    MoonMindWorkflowState.CANCELED: "cancelled",
 }
 
 _MAX_TASK_TITLE_LENGTH = 120
