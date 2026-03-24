@@ -81,6 +81,149 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
         )
 
 
+def _make_snapshot():
+    return SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+
+def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Objective",
+                "steps": [
+                    {"id": "s1", "instructions": "Step one instructions"},
+                    {"id": "s2", "instructions": "Step two instructions"},
+                    {"id": "s3", "instructions": "Step three instructions"},
+                ],
+                "runtime": {"mode": "jules"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    nodes = plan["nodes"]
+    edges = plan["edges"]
+
+    assert len(nodes) == 3
+    assert nodes[0]["id"] == "s1"
+    assert nodes[0]["inputs"]["instructions"] == "Step one instructions"
+    assert nodes[1]["id"] == "s2"
+    assert nodes[1]["inputs"]["instructions"] == "Step two instructions"
+    assert nodes[2]["id"] == "s3"
+    assert nodes[2]["inputs"]["instructions"] == "Step three instructions"
+
+    # All nodes use agent_runtime tool type
+    for node in nodes:
+        assert node["tool"]["type"] == "agent_runtime"
+        assert node["tool"]["name"] == "jules"
+
+    # Sequential edges
+    assert len(edges) == 2
+    assert edges[0] == {"from": "s1", "to": "s2"}
+    assert edges[1] == {"from": "s2", "to": "s3"}
+
+
+def test_runtime_planner_single_step_falls_back_to_single_node():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do the thing",
+                "steps": [
+                    {"id": "only", "instructions": "Only step"},
+                ],
+                "runtime": {"mode": "jules"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    # Single-step array should use the single-node fallback path
+    assert len(plan["nodes"]) == 1
+    assert plan["edges"] == []
+    assert plan["nodes"][0]["inputs"]["instructions"] == "Do the thing"
+
+
+def test_runtime_planner_no_steps_falls_back_to_single_node():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do the thing",
+                "runtime": {"mode": "jules"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert len(plan["nodes"]) == 1
+    assert plan["edges"] == []
+    assert plan["nodes"][0]["inputs"]["instructions"] == "Do the thing"
+
+
+def test_runtime_planner_multi_step_step_fallback_instructions():
+    """When a step has no instructions, the task-level instructions are used."""
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Task-level fallback",
+                "steps": [
+                    {"id": "a", "instructions": "Explicit step A"},
+                    {"id": "b"},  # no instructions
+                ],
+                "runtime": {"mode": "jules"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert len(plan["nodes"]) == 2
+    assert plan["nodes"][0]["inputs"]["instructions"] == "Explicit step A"
+    assert plan["nodes"][1]["inputs"]["instructions"] == "Task-level fallback"
+
+
+def test_runtime_planner_multi_step_auto_generated_ids():
+    """When steps lack explicit IDs, sequential IDs are generated."""
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Objective",
+                "steps": [
+                    {"instructions": "First"},
+                    {"instructions": "Second"},
+                ],
+                "runtime": {"mode": "jules"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert plan["nodes"][0]["id"] == "step-1"
+    assert plan["nodes"][1]["id"] == "step-2"
+    assert plan["edges"] == [{"from": "step-1", "to": "step-2"}]
+
+
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")
