@@ -1,7 +1,6 @@
-import pytest
 import json
-import os
-from api_service.ui_assets import ViteAssetResolver, ui_assets
+
+from api_service.ui_assets import ViteAssetResolver
 from api_service.ui_boot import generate_boot_payload
 
 def test_vite_asset_resolver_missing_file():

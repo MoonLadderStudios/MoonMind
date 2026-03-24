@@ -2,6 +2,7 @@ import json
 import os
 from typing import Dict, Optional
 
+
 class ViteAssetResolver:
     def __init__(self, manifest_path: str):
         self.manifest_path = manifest_path
@@ -31,8 +32,10 @@ def ui_assets(entrypoint: str) -> str:
     # In full dev mode, we would proxy to vite
     # In transitional / production, read from manifest
 
-    # Path is relative to where the server runs, assuming project root
-    manifest_path = "api_service/static/task_dashboard/dist/.vite/manifest.json"
+    manifest_path = os.environ.get(
+        "VITE_MANIFEST_PATH",
+        "api_service/static/task_dashboard/dist/.vite/manifest.json",
+    )
     resolver = ViteAssetResolver(manifest_path)
     asset_info = resolver.resolve_entrypoint(entrypoint)
 

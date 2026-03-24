@@ -16,7 +16,11 @@ export function parseBootPayload(elementId = "moonmind-ui-boot"): BootPayload {
   }
 
   try {
-    const raw = JSON.parse(el.textContent || "{}");
+    const rawText = el.textContent;
+    if (!rawText || rawText.trim() === "") {
+      throw new Error(`Boot element #${elementId} has no content.`);
+    }
+    const raw = JSON.parse(rawText);
     return BootPayloadSchema.parse(raw);
   } catch (e) {
     console.error("Failed to parse boot payload:", e);
