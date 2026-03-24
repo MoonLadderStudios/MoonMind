@@ -37,7 +37,7 @@ from sqlalchemy.orm import (
     relationship,
 )
 from sqlalchemy.types import TypeDecorator
-from sqlalchemy_utils import EncryptedType
+from sqlalchemy_utils import StringEncryptedType
 
 from api_service.core.encryption import (  # Added import for get_encryption_key
     get_encryption_key,
@@ -89,16 +89,16 @@ class UserProfile(Base):
 
     # Example profile field
     google_api_key_encrypted = Column(
-        EncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(Text, get_encryption_key), nullable=True
     )
     openai_api_key_encrypted = Column(
-        EncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(Text, get_encryption_key), nullable=True
     )
     github_token_encrypted = Column(
-        EncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(Text, get_encryption_key), nullable=True
     )
     anthropic_api_key_encrypted = Column(
-        EncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(Text, get_encryption_key), nullable=True
     )
 
     user = relationship("User", back_populates="user_profile")

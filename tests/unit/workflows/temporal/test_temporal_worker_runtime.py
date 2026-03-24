@@ -223,6 +223,48 @@ def test_runtime_planner_multi_step_auto_generated_ids():
     assert plan["edges"] == [{"from": "step-1", "to": "step-2"}]
 
 
+def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "gemini_cli"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    text = plan["nodes"][-1]["inputs"]["instructions"]
+    assert "gh pr create" in text
+
+
+def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
+    """Jules uses API automationMode AUTO_CREATE_PR; do not inject gh CLI text."""
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Do work",
+                "runtime": {"mode": "jules"},
+                "publish": {"mode": "pr"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    text = plan["nodes"][-1]["inputs"]["instructions"]
+    assert text == "Do work"
+    assert "gh pr create" not in text
+
+
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")
 @patch("moonmind.workflows.temporal.worker_runtime.describe_configured_worker")

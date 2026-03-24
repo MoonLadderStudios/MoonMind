@@ -125,10 +125,12 @@ class UpdateRecurringTaskRequest(BaseModel):
     policy: Optional[dict[str, Any]] = Field(None, alias="policy")
 
 
+from moonmind.workflows.temporal.client import TemporalClientAdapter
+
 async def _get_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> RecurringTasksService:
-    return RecurringTasksService(session)
+    return RecurringTasksService(session, temporal_client_adapter=TemporalClientAdapter())
 
 
 def _serialize_definition(
@@ -244,7 +246,7 @@ def _map_error(exc: Exception) -> HTTPException:
         )
     if isinstance(exc, RecurringTaskValidationError):
         return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_recurring_task",
                 "message": str(exc),

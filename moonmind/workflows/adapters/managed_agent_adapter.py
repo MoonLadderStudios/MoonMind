@@ -43,23 +43,14 @@ from moonmind.schemas.agent_runtime_models import (
     TERMINAL_AGENT_RUN_STATES,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+from moonmind.auth.env_shaping import (
+    OAUTH_CLEARED_VARS,
+    shape_environment_for_api_key,
+    shape_environment_for_oauth,
+)
 
 logger = logging.getLogger(__name__)
 
-# Env-var prefixes / names cleared when shaping OAuth environments (DOC-REQ-007).
-# These are the sensitive keys that must NOT appear in child-process environments.
-_OAUTH_CLEARED_VARS: frozenset[str] = frozenset(
-    {
-        "GOOGLE_API_KEY",
-        "GEMINI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "OPENAI_API_KEY",
-        "CODEX_API_KEY",
-        "GITHUB_TOKEN",
-        "GH_TOKEN",
-    }
-)
 _BASE_ENV_FILTER_FRAGMENTS: tuple[str, ...] = (
     "password",
     "token",
@@ -92,47 +83,6 @@ def _should_filter_base_env_var(key: str) -> bool:
         return False
     lowered = normalized_key.lower()
     return any(fragment in lowered for fragment in _BASE_ENV_FILTER_FRAGMENTS)
-
-
-def _shape_environment_for_oauth(
-    base_env: dict[str, str],
-    *,
-    volume_mount_path: str | None,
-) -> dict[str, str]:
-    """Return env dict shaped for OAuth volume-mount mode.
-
-    Clears sensitive API-key vars and sets browser-auth helpers if a
-    volume mount path is provided.  Does NOT expose secrets.
-    """
-    env = dict(base_env)
-    for key in _OAUTH_CLEARED_VARS:
-        env.pop(key, None)
-    if volume_mount_path:
-        env["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
-    return env
-
-
-def _shape_environment_for_api_key(
-    base_env: dict[str, str],
-    *,
-    api_key_ref: str | None,
-    account_label: str | None,
-) -> dict[str, str]:
-    """Return env dict shaped for API-key mode.
-
-    The api_key_ref is a *reference* (e.g. a secret store key name), not the
-    raw credential.  The actual resolution of the reference into a real key
-    is delegated to the runtime launcher (out of scope for Phase 5).
-    """
-    env = dict(base_env)
-    for key in _OAUTH_CLEARED_VARS:
-        env.pop(key, None)
-    if api_key_ref:
-        # Pass only the reference, never the real value.
-        env["MANAGED_API_KEY_REF"] = api_key_ref
-    if account_label:
-        env["MANAGED_ACCOUNT_LABEL"] = account_label
-    return env
 
 
 def _derive_pr_resolver_failure(
@@ -253,12 +203,12 @@ class ManagedAgentAdapter:
             if not _should_filter_base_env_var(k)
         }
         if auth_mode == "oauth":
-            shaped_env = _shape_environment_for_oauth(
+            shaped_env = shape_environment_for_oauth(
                 base_env,
                 volume_mount_path=profile.get("volume_mount_path"),
             )
         else:
-            shaped_env = _shape_environment_for_api_key(
+            shaped_env = shape_environment_for_api_key(
                 base_env,
                 api_key_ref=profile.get("api_key_ref"),
                 account_label=profile.get("account_label"),
@@ -525,7 +475,7 @@ __all__ = [
     "SlotRequestFunc",
     "SlotReleaseFunc",
     "CooldownReportFunc",
-    "_shape_environment_for_api_key",
-    "_shape_environment_for_oauth",
-    "_OAUTH_CLEARED_VARS",
+    "shape_environment_for_api_key",
+    "shape_environment_for_oauth",
+    "OAUTH_CLEARED_VARS",
 ]

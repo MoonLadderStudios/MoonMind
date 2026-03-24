@@ -73,3 +73,38 @@ class TestMapAgentRunResult(unittest.TestCase):
         result = wf._map_agent_run_result(model)
         self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["outputs"]["error"], "execution_error")
+
+
+class TestBuildAgentExecutionRequest(unittest.TestCase):
+    """Verify the _build_agent_execution_request helper."""
+
+    def test_build_agent_execution_request_propagates_steps(self) -> None:
+        from unittest.mock import patch
+        
+        wf = MoonMindRunWorkflow()
+        
+        # We must mock workflow.info() because it's called inside _build_agent_execution_request
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+            
+        with patch("moonmind.workflows.temporal.workflows.run.workflow.info", return_value=MockInfo()):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "steps": [
+                        {"id": "step-1", "instructions": "Do part A"},
+                        {"id": "step-2", "instructions": "Do part B"}
+                    ],
+                    "targetRuntime": "codex",
+                    "model": "gpt-4o",
+                },
+                node_id="node-xyz",
+                tool_name="test_tool"
+            )
+        
+        self.assertEqual(request.agent_id, "codex")
+        self.assertEqual(request.parameters.get("model"), "gpt-4o")
+        self.assertEqual(request.parameters.get("steps"), [
+            {"id": "step-1", "instructions": "Do part A"},
+            {"id": "step-2", "instructions": "Do part B"}
+        ])

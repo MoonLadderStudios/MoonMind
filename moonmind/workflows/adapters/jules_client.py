@@ -511,6 +511,76 @@ class JulesClient:
                     f"GitHub update-base request failed: {exc.__class__.__name__}"
                 )
 
+    async def create_pull_request(
+        self,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+        github_token: str | None = None,
+    ) -> JulesIntegrationCreatePRResult:
+        """Create a GitHub pull request.
+
+        This is used after Jules completes a branch-publish session to
+        natively create the PR if the original publishMode was 'pr'.
+        """
+        from moonmind.schemas.jules_models import JulesIntegrationCreatePRResult
+
+        token = self._resolve_github_token(github_token)
+        if not token:
+            return JulesIntegrationCreatePRResult(
+                created=False,
+                summary="GITHUB_TOKEN is not configured; cannot create PR.",
+            )
+
+        api_url = f"https://api.github.com/repos/{repo}/pulls"
+        headers = self._github_headers(token)
+        payload = {
+            "title": title,
+            "head": head,
+            "base": base,
+            "body": body,
+        }
+
+        # Preserve transport for tests while removing base_url
+        client_kwargs = {
+            "timeout": getattr(self._client, "timeout", 30.0),
+            "transport": getattr(self._client, "_transport", None),
+        }
+        
+        async with httpx.AsyncClient(**client_kwargs) as gh_client:
+            try:
+                response = await gh_client.post(api_url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return JulesIntegrationCreatePRResult(
+                    pr_url=data.get("html_url"),
+                    created=True,
+                    summary=f"PR created successfully: {data.get('html_url')}",
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                resp_body = exc.response.text[:500] if exc.response else "(no body)"
+                logger.error(
+                    "GitHub create PR API returned HTTP %s for %s: %s",
+                    status_code, repo, resp_body,
+                )
+                return JulesIntegrationCreatePRResult(
+                    created=False,
+                    summary=f"GitHub create PR failed with HTTP {status_code} for {repo}.",
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                logger.error(
+                    "GitHub create PR request failed for %s: %s",
+                    repo, exc.__class__.__name__,
+                )
+                return JulesIntegrationCreatePRResult(
+                    created=False,
+                    summary=f"GitHub create PR request failed: {exc.__class__.__name__}",
+                )
+
     async def _post_json(self, path: str, *, json: dict[str, Any]) -> dict[str, Any]:
         return await self._request_with_retry("POST", path, json=json)
 

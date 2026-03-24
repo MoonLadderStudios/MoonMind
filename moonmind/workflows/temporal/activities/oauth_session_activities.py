@@ -23,6 +23,7 @@ from api_service.db.models import (
     ManagedAgentOAuthSession,
     OAuthSessionStatus,
 )
+from moonmind.workflows.temporal.runtime.tmate_session import _ENDPOINT_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,9 @@ async def oauth_session_start_auth_runner(
 
     for attempt in range(_TMATE_READY_TIMEOUT):
         await asyncio.sleep(1)
+        # Use the shared endpoint key mapping for consistency with TmateSessionManager.
+        web_key = _ENDPOINT_KEYS["web_rw"]
+        ssh_key = _ENDPOINT_KEYS["attach_rw"]
         # Try to extract tmate URLs from the container's tmate socket
         url_cmd = [
             "docker",
@@ -180,9 +184,9 @@ async def oauth_session_start_auth_runner(
             "bash",
             "-c",
             (
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_web}' 2>/dev/null && "
+                f"tmate -S /tmp/tmate.sock display -p '#{{{web_key}}}' 2>/dev/null && "
                 "echo '---SEPARATOR---' && "
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null"
+                f"tmate -S /tmp/tmate.sock display -p '#{{{ssh_key}}}' 2>/dev/null"
             ),
         ]
         try:

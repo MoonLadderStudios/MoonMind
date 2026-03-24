@@ -69,6 +69,10 @@ from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
+# Agent runtimes where PR creation is driven by the provider API (e.g. Jules
+# ``automationMode`` / ``AUTO_CREATE_PR``), not by appending ``gh pr create``
+# to plan instructions.
+_TOOLS_WITH_AUTO_PR_CREATION = frozenset({"jules", "jules_api"})
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
@@ -310,15 +314,20 @@ def _build_runtime_planner():
                 "inputs": node_inputs,
             })
 
-        # Append PR creation instructions to the last node so the agent
-        # creates the PR in the same workspace where the changes were made.
+        # Append PR creation instructions to the last node so CLI-based agents
+        # create the PR in the same workspace where the changes were made.
+        # Skip Jules: session creation uses Jules API ``automationMode`` =
+        # ``AUTO_CREATE_PR`` when ``publishMode`` is ``pr`` or ``branch``
+        # (see ``JulesAgentAdapter.do_start``), not shell instructions.
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-            pr_suffix = (
-                "\n\nAfter completing the changes above, create a GitHub "
-                "pull request with the changes using `gh pr create`."
-            )
-            last_inputs = nodes[-1]["inputs"]
-            last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
+            last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
+            if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
+                pr_suffix = (
+                    "\n\nAfter completing the changes above, create a GitHub "
+                    "pull request with the changes using `gh pr create`."
+                )
+                last_inputs = nodes[-1]["inputs"]
+                last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
 
         return {
             "plan_version": "1.0",

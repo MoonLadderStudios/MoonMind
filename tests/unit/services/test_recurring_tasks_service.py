@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -14,10 +15,10 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    RecurringTaskDefinition,
     RecurringTaskRun,
     RecurringTaskRunOutcome,
 )
-from api_service.services.manifests_service import ManifestsService
 from api_service.services.recurring_tasks_service import (
     RecurringTasksService,
     RecurringTaskValidationError,
@@ -45,21 +46,26 @@ async def recurring_db(tmp_path: Path):
         await engine.dispose()
 
 
-def _fixture_manifest_content() -> str:
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "manifests"
-        / "phase0"
-        / "registry.yaml"
-    )
-    return path.read_text(encoding="utf-8")
+@pytest.fixture
+def mock_temporal_adapter():
+    adapter = MagicMock()
+    adapter.create_schedule = AsyncMock(return_value="mm-schedule:id")
+    adapter.update_schedule = AsyncMock()
+    adapter.pause_schedule = AsyncMock()
+    adapter.unpause_schedule = AsyncMock()
+    adapter.trigger_schedule = AsyncMock()
+    adapter.delete_schedule = AsyncMock()
+    return adapter
 
 
-async def test_create_definition_computes_next_run(tmp_path: Path) -> None:
+async def test_create_definition_creates_temporal_schedule(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            service = RecurringTasksService(session)
+            service = RecurringTasksService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
             definition = await service.create_definition(
                 name="Daily Demo",
                 description="Nightly schedule",
@@ -96,113 +102,18 @@ async def test_create_definition_computes_next_run(tmp_path: Path) -> None:
             assert definition.next_run_at.minute == 0
             assert definition.version == 1
 
+            mock_temporal_adapter.create_schedule.assert_called_once()
+            call_kwargs = mock_temporal_adapter.create_schedule.call_args.kwargs
+            assert call_kwargs["definition_id"] == definition.id
+            assert call_kwargs["cron_expression"] == "0 6 * * *"
+            assert call_kwargs["timezone"] == "UTC"
+            assert call_kwargs["workflow_type"] == "MoonMind.Run"
 
-async def test_scheduler_tick_creates_and_dispatches_runs(tmp_path: Path) -> None:
+
+async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            service = RecurringTasksService(session)
-            manifest_service = ManifestsService(session)
-
-            await manifest_service.upsert_manifest(
-                name="demo",
-                content=_fixture_manifest_content(),
-            )
-
-            owner_id = uuid4()
-            task_definition = await service.create_definition(
-                name="Queue Task Schedule",
-                description=None,
-                enabled=True,
-                schedule_type="cron",
-                cron="* * * * *",
-                timezone="UTC",
-                scope_type="personal",
-                scope_ref=None,
-                owner_user_id=owner_id,
-                target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "priority": 0,
-                        "maxAttempts": 3,
-                        "payload": {
-                            "repository": "MoonLadderStudios/MoonMind",
-                            "targetRuntime": "codex",
-                            "task": {
-                                "instructions": "Nightly queue task",
-                                "publish": {"mode": "none"},
-                                "skill": {"id": "auto", "args": {}},
-                            },
-                        },
-                    },
-                },
-                policy={"catchup": {"mode": "last", "maxBackfill": 2}},
-            )
-            manifest_definition = await service.create_definition(
-                name="Manifest Schedule",
-                description=None,
-                enabled=True,
-                schedule_type="cron",
-                cron="* * * * *",
-                timezone="UTC",
-                scope_type="personal",
-                scope_ref=None,
-                owner_user_id=owner_id,
-                target={
-                    "kind": "manifest_run",
-                    "name": "demo",
-                    "action": "run",
-                    "options": {"dryRun": True},
-                },
-                policy={},
-            )
-
-            # Avoid minute-boundary flakes where catchup=last can select scheduled_for==now.
-            now = datetime.now(UTC).replace(second=30, microsecond=0)
-            task_definition.next_run_at = now - timedelta(minutes=1)
-            manifest_definition.next_run_at = now - timedelta(minutes=1)
-            await session.commit()
-
-            scheduled = await service.schedule_due_definitions(
-                now=now,
-                batch_size=10,
-                max_backfill=3,
-            )
-            assert scheduled >= 2
-
-            dispatched = await service.dispatch_pending_runs(now=now, batch_size=10)
-            assert dispatched >= 2
-
-            runs = (
-                (
-                    await session.execute(
-                        select(RecurringTaskRun).order_by(
-                            RecurringTaskRun.created_at.asc()
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            assert len(runs) >= 2
-            outcomes = {run.outcome for run in runs}
-            # After Phase 3.5 queue removal, queue_task dispatches succeed
-            # (routed to Temporal) but manifest_run dispatches may fail
-            # because ManifestsService depends on the removed queue backend.
-            valid_outcomes = {
-                RecurringTaskRunOutcome.ENQUEUED,
-                RecurringTaskRunOutcome.DISPATCH_ERROR,
-            }
-            assert outcomes.issubset(valid_outcomes)
-            # Verify runs were created for both definitions
-            definition_ids = {run.definition_id for run in runs}
-            assert len(definition_ids) == 2
-
-
-async def test_create_definition_rejects_invalid_policy(tmp_path: Path) -> None:
-    async with recurring_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = RecurringTasksService(session)
+            service = RecurringTasksService(session, temporal_client_adapter=mock_temporal_adapter)
             with pytest.raises(RecurringTaskValidationError):
                 await service.create_definition(
                     name="Invalid Policy",
@@ -233,160 +144,10 @@ async def test_create_definition_rejects_invalid_policy(tmp_path: Path) -> None:
                 )
 
 
-async def test_compute_due_occurrences_none_catchup_skips_backfill(
-    tmp_path: Path,
-) -> None:
+async def test_target_kind_housekeeping_is_rejected(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
-            service = RecurringTasksService(session)
-            definition = await service.create_definition(
-                name="No Catchup",
-                description=None,
-                enabled=True,
-                schedule_type="cron",
-                cron="* * * * *",
-                timezone="UTC",
-                scope_type="personal",
-                scope_ref=None,
-                owner_user_id=uuid4(),
-                target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "payload": {
-                            "repository": "MoonLadderStudios/MoonMind",
-                            "targetRuntime": "codex",
-                            "task": {
-                                "instructions": "Queue job",
-                                "publish": {"mode": "none"},
-                                "skill": {"id": "auto", "args": {}},
-                            },
-                        },
-                    },
-                },
-                policy={"catchup": {"mode": "none"}},
-            )
-
-            now = datetime.now(UTC).replace(microsecond=0)
-            definition.next_run_at = now - timedelta(minutes=3)
-            await session.commit()
-
-            scheduled = await service.schedule_due_definitions(now=now, batch_size=10)
-            assert scheduled == 0
-
-
-async def test_dispatch_pending_runs_applies_zero_misfire_grace(tmp_path: Path) -> None:
-    async with recurring_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = RecurringTasksService(session)
-            definition = await service.create_definition(
-                name="Zero Grace",
-                description=None,
-                enabled=True,
-                schedule_type="cron",
-                cron="* * * * *",
-                timezone="UTC",
-                scope_type="personal",
-                scope_ref=None,
-                owner_user_id=uuid4(),
-                target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "payload": {
-                            "repository": "MoonLadderStudios/MoonMind",
-                            "targetRuntime": "codex",
-                            "task": {
-                                "instructions": "Queue job",
-                                "publish": {"mode": "none"},
-                                "skill": {"id": "auto", "args": {}},
-                            },
-                        },
-                    },
-                },
-                policy={"misfireGraceSeconds": 0},
-            )
-            now = datetime.now(UTC).replace(microsecond=0)
-            definition.next_run_at = now - timedelta(minutes=2)
-            await session.commit()
-            await service.schedule_due_definitions(now=now, batch_size=10)
-            await service.dispatch_pending_runs(now=now, batch_size=10)
-
-            run = (
-                (
-                    await session.execute(
-                        select(RecurringTaskRun).where(
-                            RecurringTaskRun.definition_id == definition.id
-                        )
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            assert run is not None
-            assert run.outcome is RecurringTaskRunOutcome.SKIPPED
-            assert run.message == "Skipped due to misfire grace threshold"
-
-
-@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
-async def test_dispatch_pending_runs_matches_existing_job_by_type(
-    tmp_path: Path,
-) -> None:
-    async with recurring_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = RecurringTasksService(session)
-            definition = await service.create_definition(
-                name="Typed Existing Job Match",
-                description=None,
-                enabled=True,
-                schedule_type="cron",
-                cron="* * * * *",
-                timezone="UTC",
-                scope_type="personal",
-                scope_ref=None,
-                owner_user_id=uuid4(),
-                target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "payload": {
-                            "repository": "MoonLadderStudios/MoonMind",
-                            "targetRuntime": "codex",
-                            "task": {
-                                "instructions": "Queue job",
-                                "publish": {"mode": "none"},
-                                "skill": {"id": "auto", "args": {}},
-                            },
-                        },
-                    },
-                },
-                policy={},
-            )
-
-            now = datetime.now(UTC).replace(second=30, microsecond=0)
-            definition.next_run_at = now - timedelta(minutes=1)
-            await session.commit()
-
-            scheduled = await service.schedule_due_definitions(now=now, batch_size=10)
-            assert scheduled == 1
-            run = (
-                (
-                    await session.execute(
-                        select(RecurringTaskRun).where(
-                            RecurringTaskRun.definition_id == definition.id
-                        )
-                    )
-                )
-                .scalars()
-                .one()
-            )
-
-            # REMOVED: Entire fixture block using deleted queue models (AgentJob, MANIFEST_JOB_TYPE, etc.)
-
-async def test_target_kind_housekeeping_is_rejected(tmp_path: Path) -> None:
-    async with recurring_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            service = RecurringTasksService(session)
+            service = RecurringTasksService(session, temporal_client_adapter=mock_temporal_adapter)
             with pytest.raises(RecurringTaskValidationError):
                 await service.create_definition(
                     name="Housekeeping",
@@ -401,3 +162,97 @@ async def test_target_kind_housekeeping_is_rejected(tmp_path: Path) -> None:
                     target={"kind": "housekeeping", "action": "prune_artifacts"},
                     policy={},
                 )
+
+
+async def test_update_definition_updates_temporal_schedule(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringTasksService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description="Nightly schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "kind": "queue_task",
+                    "job": {
+                        "type": "task",
+                        "payload": {
+                            "task": {
+                                "instructions": "Queue job",
+                            },
+                        },
+                    },
+                },
+                policy={},
+            )
+
+            mock_temporal_adapter.create_schedule.assert_called_once()
+            mock_temporal_adapter.update_schedule.assert_not_called()
+
+            # Now update the definition
+            updated = await service.update_definition(
+                definition,
+                name="Updated Name",
+                enabled=False,
+                cron="0 12 * * *",
+            )
+
+            assert updated.name == "Updated Name"
+            assert updated.enabled is False
+            assert updated.cron == "0 12 * * *"
+            
+            mock_temporal_adapter.pause_schedule.assert_called_once_with(definition_id=definition.id)
+            mock_temporal_adapter.update_schedule.assert_called_once()
+            call_kwargs = mock_temporal_adapter.update_schedule.call_args.kwargs
+            assert call_kwargs["definition_id"] == definition.id
+            assert call_kwargs["cron_expression"] == "0 12 * * *"
+            assert call_kwargs["enabled"] is False
+
+
+async def test_create_manual_run_triggers_temporal_schedule(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringTasksService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description="Nightly schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "kind": "queue_task",
+                    "job": {
+                        "type": "task",
+                        "payload": {
+                            "task": {
+                                "instructions": "Queue job",
+                            },
+                        },
+                    },
+                },
+                policy={},
+            )
+
+            run = await service.create_manual_run(definition)
+
+            mock_temporal_adapter.trigger_schedule.assert_called_once_with(definition_id=definition.id)
+            assert run.outcome == RecurringTaskRunOutcome.ENQUEUED
+            assert run.message == "Triggered via Temporal Schedule"

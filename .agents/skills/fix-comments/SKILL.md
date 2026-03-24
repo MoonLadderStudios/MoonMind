@@ -79,3 +79,24 @@ Provide a concise report with:
 - Use `tools/get_branch_pr_comments.py` as the default retrieval path; it wraps `tools/get_pr_comments.py`.
 - If retrieval needs customization (repo/token/review-body filtering), pass through the corresponding flags supported by `tools/get_branch_pr_comments.py`.
 - Do not claim completion if compile/tests are still failing.
+
+## Comment Resolution Ledger
+
+After classifying all comments, write the ledger to **`artifacts/pr_resolver_addressed_comments.json`** (this is the path the pr-resolver snapshot reads). The format is a JSON array of objects:
+
+```json
+[
+  {
+    "id": 12345678,
+    "disposition": "addressed",
+    "rationale": "Removed unused import in commit abc1234."
+  },
+  {
+    "id": 87654321,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  }
+]
+```
+
+Accepted `disposition` values: `addressed`, `not-applicable`. The `id` field must match the comment's numeric `id` from the comments JSON. Alternatively, `comment_id` and `status` field names are also accepted for backwards compatibility.
