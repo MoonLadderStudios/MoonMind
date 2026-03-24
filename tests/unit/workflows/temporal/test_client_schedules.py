@@ -6,12 +6,14 @@ and T017 (SDK error wrapping).
 
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
+from temporalio.client import ScheduleOverlapPolicy
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.schedule_errors import (
@@ -76,7 +78,6 @@ class TestCreateSchedule:
 
     @pytest.mark.asyncio
     async def test_overlap_policy_passed_through(self) -> None:
-        from temporalio.client import ScheduleOverlapPolicy
 
         mock_handle = MagicMock()
         mock_handle.id = _SCHEDULE_ID
@@ -96,8 +97,6 @@ class TestCreateSchedule:
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:
-        from datetime import timedelta
-
         mock_handle = MagicMock()
         mock_handle.id = _SCHEDULE_ID
         mock_client = MagicMock()
@@ -173,9 +172,6 @@ class TestUpdateSchedule:
 
     @pytest.mark.asyncio
     async def test_calls_handle_update_with_all_params(self) -> None:
-        from temporalio.client import ScheduleOverlapPolicy
-        from datetime import timedelta
-
         handle = _mock_schedule_handle()
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
@@ -223,9 +219,6 @@ class TestUpdateSchedule:
 
     @pytest.mark.asyncio
     async def test_update_preserves_unprovided_fields(self) -> None:
-        from temporalio.client import ScheduleOverlapPolicy
-        from datetime import timedelta
-
         handle = _mock_schedule_handle()
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
