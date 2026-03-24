@@ -101,14 +101,12 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert temporal_dashboard["submitEnabled"] is True
     assert temporal_dashboard["debugFieldsEnabled"] is False
     assert config["statusMaps"]["temporal"]["executing"] == "running"
-    assert config["system"]["defaultQueue"]
     assert "defaultRepository" in config["system"]
     assert config["system"]["defaultTaskRuntime"] in ("codex", "gemini_cli", "claude")
     assert "defaultTaskModel" in config["system"]
     assert "defaultTaskEffort" in config["system"]
     assert "defaultTaskModelByRuntime" in config["system"]
     assert "defaultTaskEffortByRuntime" in config["system"]
-    assert config["system"]["queueEnv"] == "MOONMIND_QUEUE"
     assert config["system"]["taskSourceResolver"] == "/api/tasks/{taskId}/source"
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
     assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude"]

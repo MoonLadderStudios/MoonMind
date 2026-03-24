@@ -141,10 +141,7 @@
       ? sourceConfig.proposals
       : {};
   const runtimeCapabilitiesEndpoint =
-    String(
-      queueSourceConfig.runtimeCapabilities ||
-      "/api/queue/workers/runtime-capabilities",
-    );
+    String(queueSourceConfig.runtimeCapabilities || "");
   const runtimeCapabilitiesCacheTtlMs = 5 * 60 * 1000;
   const runtimeCapabilitiesCache = {
     payload: null,
@@ -193,7 +190,6 @@
       typeof systemConfig.temporalCompatibility === "object"
       ? systemConfig.temporalCompatibility
       : {};
-  const defaultQueueName = String(systemConfig.defaultQueue || "moonmind.jobs");
   const taskSourceResolverEndpoint = String(
     systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
   );
@@ -436,6 +432,9 @@
     return normalizedItems;
   };
   const loadRuntimeCapabilitiesFromEndpoint = async () => {
+    if (!runtimeCapabilitiesEndpoint) {
+      return {};
+    }
     const priorPayload = runtimeCapabilitiesCache.payload;
     const stale = !isRuntimeCapabilitiesCacheFresh();
     if (!stale && priorPayload !== null) {
@@ -3423,7 +3422,7 @@
   }
 
   async function renderActivePage() {
-    const activeSubtitle = `Running and queued work. Unified queue: ${defaultQueueName}.`;
+    const activeSubtitle = `Running and queued work.`;
     setView(
       "Active Tasks",
       activeSubtitle,
@@ -3897,8 +3896,8 @@
         filterState.source === "temporal"
           ? "Temporal-backed tasks with exact Temporal pagination."
           : temporalListEnabled
-            ? `Unified queue and Temporal tasks ordered by recency. Queue: ${defaultQueueName}.`
-            : `Unified queue tasks ordered by creation time. Queue: ${defaultQueueName}.`;
+            ? `Tasks ordered by recency.`
+            : `Tasks ordered by creation time.`;
       setView(
         "Tasks List",
         subtitle,
@@ -6848,7 +6847,7 @@
       );
       return;
     }
-    // Use the unified queue submit form for every supported runtime so runtime
+    // Use the submit form for every supported runtime so runtime
     // visibility toggles are consistently applied from one code path.
     renderQueueSubmitPage(normalizedRuntime);
   }

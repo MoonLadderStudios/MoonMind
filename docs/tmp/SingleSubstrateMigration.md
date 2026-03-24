@@ -105,19 +105,19 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ---
 
-### Phase 3 — Remove Queue Backend Code — **IN PROGRESS**
+### Phase 3 — Remove Queue Backend Code — **COMPLETE**
 
 **Objective:** Delete the legacy queue execution substrate code and scrub remaining queue-shaped config, tests, and UI fallbacks.
 
-**Status:** Core backend removal is done; cleanup of env keys, dashboard copy, skipped tests, and e2e mocks remains.
+**Status:** Finished. All backend code, configuration aliases, UI fallbacks, and related tests have been removed or updated.
 
 - [x] **3.1** Remove `api_service/api/routers/agent_queue.py` and its inclusion in the API router setup *(removed)*
 - [x] **3.2** Delete `moonmind/workflows/agent_queue/` module (~250 KB of service, repository, model, contract code) *(removed; shared helpers live under `moonmind/workflows/tasks/` where noted in file headers)*
 - [x] **3.3** Remove queue-related DB models and generate Alembic migration to drop queue tables *(see `b92f4891f27c_remove_legacy_queue_backend_tables.py`)*
-- [ ] **3.4** Remove or rename queue-shaped dashboard settings: `defaultQueue`, `queueEnv` in view model; align worker queue naming vs Codex `MOONMIND_QUEUE` in settings; update dashboard copy and runtime-capabilities URL config (no default `/api/queue/...` path)
+- [x] **3.4** Remove or rename queue-shaped dashboard settings: `defaultQueue`, `queueEnv` in view model; align worker queue naming vs Codex `MOONMIND_QUEUE` in settings; update dashboard copy and runtime-capabilities URL config (no default `/api/queue/...` path)
 - [x] **3.5** Remove `moonmind/workflows/system/` directory (empty except `__pycache__`)
-- [ ] **3.6** Remove `tests/unit/orchestrator_removal/` directory (e.g. migrate or drop `test_doc_req_coverage.py` once redundant)
-- [ ] **3.7** Remove or rewrite queue-related tests: skipped `test_agent_queue_artifacts.py`, JS fixtures still referencing `/api/queue/jobs`, e2e mocks for queue routes
+- [x] **3.6** Remove `tests/unit/orchestrator_removal/` directory (e.g. migrate or drop `test_doc_req_coverage.py` once redundant)
+- [x] **3.7** Remove or rewrite queue-related tests: skipped `test_agent_queue_artifacts.py`, JS fixtures still referencing `/api/queue/jobs`, e2e mocks for queue routes
 - [x] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/system exports *(no `get_agent_queue_service`; Temporal factories only)*
 
 > **Gate:** `agent_queue` and `system` workflow modules are deleted; queue tables removed from schema. Open items **3.4–3.7** finish config/test/e2e cleanup so nothing queue-shaped remains in the operator surface.

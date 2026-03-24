@@ -207,7 +207,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             ),
         },
         "system": {
-            "defaultQueue": "agent_jobs",
             "defaultRepository": default_repository,
             "defaultTaskRuntime": default_task_runtime,
             "defaultTaskModel": default_task_model,
@@ -218,7 +217,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             # Keep task proposals opt-in from the submit form so Temporal
             # remains the default execution substrate for new runs.
             "defaultProposeTasks": False,
-            "queueEnv": "MOONMIND_QUEUE",
             "taskSourceResolver": "/api/tasks/{taskId}/source",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": supported_task_runtimes,
