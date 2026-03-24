@@ -302,6 +302,320 @@ class TemporalClientAdapter:
         signaled = sum(1 for ok in results if ok)
         return signaled
 
+    # --- Temporal Schedule CRUD ---
+
+    async def create_schedule(
+        self,
+        *,
+        definition_id: Any,
+        cron_expression: str,
+        timezone: str = "UTC",
+        overlap_mode: str = "skip",
+        catchup_mode: str = "last",
+        jitter_seconds: int = 0,
+        enabled: bool = True,
+        note: str = "",
+        workflow_type: str,
+        workflow_input: Mapping[str, Any] | None = None,
+        memo: Mapping[str, Any] | None = None,
+        search_attributes: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Create a Temporal Schedule for recurring workflow execution.
+
+        Returns the schedule ID (``mm-schedule:{definition_id}``).
+
+        Raises:
+            ScheduleAlreadyExistsError: if the schedule already exists.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from uuid import UUID as _UUID
+
+        from temporalio.client import (
+            Schedule,
+            ScheduleActionStartWorkflow,
+        )
+
+        from moonmind.workflows.temporal.schedule_errors import (
+            ScheduleAlreadyExistsError,
+            ScheduleOperationError,
+        )
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+            make_schedule_id,
+            make_workflow_id_template,
+        )
+
+        client = await self.get_client()
+        definition_uuid = _UUID(str(definition_id))
+        schedule_id = make_schedule_id(definition_uuid)
+        task_queue = self._get_task_queue()
+
+        args = [workflow_input] if workflow_input is not None else []
+
+        formatted_sa = None
+        if search_attributes:
+            formatted_sa = {
+                k: v if isinstance(v, list) else [v]
+                for k, v in search_attributes.items()
+            }
+
+        try:
+            handle = await client.create_schedule(
+                schedule_id,
+                Schedule(
+                    action=ScheduleActionStartWorkflow(
+                        workflow_type,
+                        *args,
+                        id=make_workflow_id_template(definition_uuid),
+                        task_queue=task_queue,
+                        memo=memo,
+                        **({"untyped_search_attributes": formatted_sa} if formatted_sa else {}),
+                    ),
+                    spec=build_schedule_spec(
+                        cron=cron_expression,
+                        timezone=timezone,
+                        jitter_seconds=jitter_seconds,
+                    ),
+                    policy=build_schedule_policy(
+                        overlap_mode=overlap_mode,
+                        catchup_mode=catchup_mode,
+                    ),
+                    state=build_schedule_state(
+                        enabled=enabled,
+                        note=note,
+                    ),
+                ),
+            )
+            return handle.id
+        except Exception as exc:
+            if "already exists" in str(exc).lower():
+                raise ScheduleAlreadyExistsError(
+                    f"Schedule {schedule_id} already exists"
+                ) from exc
+            raise ScheduleOperationError(
+                f"Failed to create schedule {schedule_id}: {exc}"
+            ) from exc
+
+    async def _get_schedule_handle(self, definition_id: Any) -> Any:
+        """Resolve a ``ScheduleHandle`` for the given definition, or raise."""
+        from uuid import UUID as _UUID
+
+        from moonmind.workflows.temporal.schedule_errors import (
+            ScheduleNotFoundError,
+            ScheduleOperationError,
+        )
+        from moonmind.workflows.temporal.schedule_mapping import make_schedule_id
+
+        client = await self.get_client()
+        schedule_id = make_schedule_id(_UUID(str(definition_id)))
+        try:
+            handle = client.get_schedule_handle(schedule_id)
+            # Probe the handle to verify existence.
+            await handle.describe()
+            return handle
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "not found" in msg or "does not exist" in msg:
+                raise ScheduleNotFoundError(
+                    f"Schedule {schedule_id} not found"
+                ) from exc
+            raise ScheduleOperationError(
+                f"Failed to get schedule handle {schedule_id}: {exc}"
+            ) from exc
+
+    async def describe_schedule(self, *, definition_id: Any) -> Any:
+        """Describe a Temporal Schedule (next runs, recent actions, state).
+
+        Returns:
+            The ``ScheduleDescription`` from the Temporal SDK.
+
+        Raises:
+            ScheduleNotFoundError: if the schedule does not exist.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from moonmind.workflows.temporal.schedule_errors import (
+            ScheduleNotFoundError,
+            ScheduleOperationError,
+        )
+        from moonmind.workflows.temporal.schedule_mapping import make_schedule_id
+        from uuid import UUID as _UUID
+
+        client = await self.get_client()
+        schedule_id = make_schedule_id(_UUID(str(definition_id)))
+        try:
+            handle = client.get_schedule_handle(schedule_id)
+            return await handle.describe()
+        except ScheduleNotFoundError:
+            raise
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "not found" in msg or "does not exist" in msg:
+                raise ScheduleNotFoundError(
+                    f"Schedule {schedule_id} not found"
+                ) from exc
+            raise ScheduleOperationError(
+                f"Failed to describe schedule {schedule_id}: {exc}"
+            ) from exc
+
+    async def update_schedule(
+        self,
+        *,
+        definition_id: Any,
+        cron_expression: str | None = None,
+        timezone: str | None = None,
+        overlap_mode: str | None = None,
+        catchup_mode: str | None = None,
+        jitter_seconds: int | None = None,
+        enabled: bool | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Update the spec, policy, or state of an existing schedule.
+
+        Only provided (non-``None``) fields are modified; everything else
+        is preserved from the current schedule description.
+
+        Raises:
+            ScheduleNotFoundError: if the schedule does not exist.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+        )
+
+        handle = await self._get_schedule_handle(definition_id)
+
+        async def _do_update(input: Any) -> Any:  # noqa: A002
+            schedule = input.schedule
+
+            if cron_expression is not None or timezone is not None or jitter_seconds is not None:
+                current_cron = (
+                    schedule.spec.cron_expressions[0]
+                    if schedule.spec.cron_expressions
+                    else "0 0 * * *"
+                )
+                current_tz = schedule.spec.time_zone_name or "UTC"
+                current_jitter = int(schedule.spec.jitter.total_seconds()) if schedule.spec.jitter else 0
+
+                schedule.spec = build_schedule_spec(
+                    cron=cron_expression if cron_expression is not None else current_cron,
+                    timezone=timezone if timezone is not None else current_tz,
+                    jitter_seconds=jitter_seconds if jitter_seconds is not None else current_jitter,
+                )
+
+            if overlap_mode is not None or catchup_mode is not None:
+                current_overlap = (
+                    schedule.policy.overlap.name.lower()
+                    if schedule.policy and schedule.policy.overlap
+                    else "skip"
+                )
+                current_catchup_seconds = (
+                    schedule.policy.catchup_window.total_seconds()
+                    if schedule.policy and schedule.policy.catchup_window
+                    else 900
+                )
+                # Reverse-map current catchup seconds to mode
+                if current_catchup_seconds == 0:
+                    current_catchup_mode = "none"
+                elif current_catchup_seconds <= 900:
+                    current_catchup_mode = "last"
+                else:
+                    current_catchup_mode = "all"
+
+                schedule.policy = build_schedule_policy(
+                    overlap_mode=overlap_mode if overlap_mode is not None else current_overlap,
+                    catchup_mode=catchup_mode if catchup_mode is not None else current_catchup_mode,
+                )
+
+            if enabled is not None or note is not None:
+                current_paused = schedule.state.paused if schedule.state else False
+                current_note = schedule.state.note if schedule.state else ""
+                schedule.state = build_schedule_state(
+                    enabled=not current_paused if enabled is None else enabled,
+                    note=note if note is not None else current_note,
+                )
+
+            return schedule
+
+        try:
+            await handle.update(_do_update)
+        except Exception as exc:
+            raise ScheduleOperationError(
+                f"Failed to update schedule: {exc}"
+            ) from exc
+
+    async def pause_schedule(self, *, definition_id: Any) -> None:
+        """Pause a Temporal Schedule (no new runs until unpaused).
+
+        Raises:
+            ScheduleNotFoundError: if the schedule does not exist.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+
+        handle = await self._get_schedule_handle(definition_id)
+        try:
+            await handle.pause()
+        except Exception as exc:
+            raise ScheduleOperationError(
+                f"Failed to pause schedule: {exc}"
+            ) from exc
+
+    async def unpause_schedule(self, *, definition_id: Any) -> None:
+        """Unpause a Temporal Schedule.
+
+        Raises:
+            ScheduleNotFoundError: if the schedule does not exist.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+
+        handle = await self._get_schedule_handle(definition_id)
+        try:
+            await handle.unpause()
+        except Exception as exc:
+            raise ScheduleOperationError(
+                f"Failed to unpause schedule: {exc}"
+            ) from exc
+
+    async def trigger_schedule(self, *, definition_id: Any) -> None:
+        """Trigger an immediate run of the schedule.
+
+        Raises:
+            ScheduleNotFoundError: if the schedule does not exist.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+
+        handle = await self._get_schedule_handle(definition_id)
+        try:
+            await handle.trigger()
+        except Exception as exc:
+            raise ScheduleOperationError(
+                f"Failed to trigger schedule: {exc}"
+            ) from exc
+
+    async def delete_schedule(self, *, definition_id: Any) -> None:
+        """Delete a Temporal Schedule.
+
+        Raises:
+            ScheduleNotFoundError: if the schedule does not exist.
+            ScheduleOperationError: on unexpected SDK failure.
+        """
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+
+        handle = await self._get_schedule_handle(definition_id)
+        try:
+            await handle.delete()
+        except Exception as exc:
+            raise ScheduleOperationError(
+                f"Failed to delete schedule: {exc}"
+            ) from exc
+
 
 class TemporalExecutionCreatorProtocol(Protocol):
     """Protocol for the execution service used by manifest child scheduling."""
