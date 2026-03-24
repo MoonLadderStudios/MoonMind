@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.workers import REGISTERED_TEMPORAL_WORKFLOW_TYPES
 

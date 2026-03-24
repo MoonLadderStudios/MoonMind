@@ -7,7 +7,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.retrieval_gateway import (
-    RetrievalAuthContext,
     authorize_retrieval_request,
     get_retrieval_service,
     router,

@@ -6,10 +6,8 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
-from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
 from moonmind.mcp.jules_tool_registry import (

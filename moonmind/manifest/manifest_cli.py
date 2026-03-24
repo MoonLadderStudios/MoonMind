@@ -7,7 +7,6 @@ call. They follow the same pattern as ``moonmind/rag/cli.py``.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 
 from moonmind.manifest.validator import (

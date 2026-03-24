@@ -1,7 +1,6 @@
 """Unit tests for _auto_seed_auth_profiles startup function."""
 
 import asyncio
-import os
 
 import pytest
 from sqlalchemy import select

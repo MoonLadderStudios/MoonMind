@@ -1,8 +1,6 @@
 import contextlib
 
 def _build_proposal_service_factory():
-    from moonmind.workflows.task_proposals.service import TaskProposalService
-    from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
     from api_service.db.base import get_async_session_context
     
     @contextlib.asynccontextmanager
@@ -29,7 +27,6 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
-from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
 from moonmind.workflows.task_proposals.service import TaskProposalService
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -392,7 +389,6 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
-                from api_service.db.base import get_async_session_context
                 async with get_async_session_context() as session:
                     service = TemporalArtifactService(TemporalArtifactRepository(session))
                     func = getattr(service, name)

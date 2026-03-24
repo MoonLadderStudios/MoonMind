@@ -11,7 +11,6 @@ from typing import Iterator
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

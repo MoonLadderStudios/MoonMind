@@ -30,7 +30,6 @@ from moonmind.workflows.adapters.codex_cloud_client import CodexCloudClient as C
 from moonmind.codex_cloud.settings import build_codex_cloud_gate, CODEX_CLOUD_DISABLED_MESSAGE
 from moonmind.workflows.adapters.jules_client import JulesClient
 
-from api_service.db.base import get_async_session_context
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -2900,7 +2899,6 @@ class TemporalAgentRuntimeActivities:
 
     def _detect_pr_url_from_workspace(self, run_id: str) -> str | None:
         """Best-effort detection of a PR URL from the workspace git state."""
-        import re
         import subprocess
 
         if self._run_store is None:
