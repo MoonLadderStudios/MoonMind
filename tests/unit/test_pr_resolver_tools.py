@@ -887,3 +887,189 @@ def test_finalize_pr_not_found_but_merged_succeeds(
     assert payload["status"] == "merged"
     assert payload["reason"] == "already_merged"
     assert payload["merge_outcome"] == "merged"
+
+
+# ---------------------------------------------------------------------------
+# Stale-commit bot comment filtering (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def test_stale_bot_comment_on_old_commit_is_not_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Bot review comment whose commit_id != HEAD should be classified as stale."""
+    classify = pr_resolve_snapshot_module["_classify_comment_actionability"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "body": "Unused import found.",
+        "commit_id": "aaa111",
+    }
+
+    actionable, reason = classify(
+        comment,
+        include_bot_review_comments=True,
+        head_commit_sha="bbb222",
+    )
+    assert actionable is False
+    assert reason == "stale_bot_comment"
+
+
+def test_human_comment_on_old_commit_stays_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Human review comments on old commits should remain actionable."""
+    classify = pr_resolve_snapshot_module["_classify_comment_actionability"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "human-reviewer",
+        "body": "Please fix this.",
+        "commit_id": "aaa111",
+    }
+
+    actionable, reason = classify(
+        comment,
+        include_bot_review_comments=True,
+        head_commit_sha="bbb222",
+    )
+    assert actionable is True
+    assert reason == "actionable"
+
+
+def test_stale_bot_comment_with_matching_sha_stays_actionable(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Bot comment on the current HEAD commit should still be actionable."""
+    classify = pr_resolve_snapshot_module["_classify_comment_actionability"]
+
+    comment = {
+        "type": "review_comment",
+        "user": "gemini-code-assist[bot]",
+        "body": "Please fix this.",
+        "commit_id": "same_sha",
+    }
+
+    actionable, reason = classify(
+        comment,
+        include_bot_review_comments=True,
+        head_commit_sha="same_sha",
+    )
+    assert actionable is True
+    assert reason == "actionable"
+
+
+# ---------------------------------------------------------------------------
+# Ledger path/format normalization (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def test_load_addressed_ids_reads_disposition_field(
+    pr_resolve_snapshot_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """Ledger with 'disposition' field should be read correctly."""
+    import json
+
+    extract = pr_resolve_snapshot_module["_extract_ids_from_entries"]
+    entries = [
+        {"id": 100, "disposition": "addressed"},
+        {"id": 200, "disposition": "not-applicable"},
+        {"id": 300, "disposition": "deferred"},  # should be ignored
+    ]
+    ids = extract(entries)
+    assert ids == {100, 200}
+
+
+def test_load_addressed_ids_reads_status_field(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Ledger with 'status' field should also be accepted."""
+    extract = pr_resolve_snapshot_module["_extract_ids_from_entries"]
+    entries = [
+        {"id": 100, "status": "addressed"},
+        {"id": 200, "status": "not-applicable"},
+    ]
+    ids = extract(entries)
+    assert ids == {100, 200}
+
+
+def test_load_addressed_ids_reads_comment_id_key(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Ledger using 'comment_id' instead of 'id' should also work."""
+    extract = pr_resolve_snapshot_module["_extract_ids_from_entries"]
+    entries = [
+        {"comment_id": 500, "disposition": "addressed"},
+    ]
+    ids = extract(entries)
+    assert ids == {500}
+
+
+def test_load_addressed_ids_searches_multiple_paths(
+    pr_resolve_snapshot_module: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """Loader should find ledgers at both explicit path and var/pr_comments/ dir."""
+    import json
+
+    load_ids = pr_resolve_snapshot_module["_load_addressed_comment_ids"]
+
+    # Write an object-format ledger
+    var_dir = tmp_path / "var" / "pr_comments"
+    var_dir.mkdir(parents=True)
+    ledger = {
+        "resolutions": [
+            {"comment_id": 42, "status": "addressed", "rationale": "fixed"},
+        ]
+    }
+    ledger_path = var_dir / "comment-resolution-ledger.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+    # Use the explicit ledger_path parameter
+    ids = load_ids(ledger_path=ledger_path)
+    assert 42 in ids
+
+
+# ---------------------------------------------------------------------------
+# Thread-resolved enrichment (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_review_comment_with_thread_resolved_via_enrichment(
+    pr_resolve_snapshot_module: dict[str, Any],
+) -> None:
+    """Comment with thread_resolved=True (from GraphQL enrichment) should be skipped."""
+    summarize_comments = pr_resolve_snapshot_module["summarize_comments"]
+
+    comments = [
+        {
+            "type": "review_comment",
+            "id": 1,
+            "user": "gemini-code-assist[bot]",
+            "body": "Move import to top.",
+            "thread_resolved": True,
+            "commit_id": "old_sha",
+        },
+        {
+            "type": "review_comment",
+            "id": 2,
+            "user": "github-code-quality[bot]",
+            "body": "Unused import.",
+            "thread_resolved": False,
+            "commit_id": "current_sha",
+        },
+    ]
+
+    summary = summarize_comments(
+        comments,
+        include_bot_review_comments=True,
+        head_commit_sha="current_sha",
+    )
+    # Comment 1: thread_resolved → skipped
+    # Comment 2: on HEAD commit, not resolved → actionable
+    assert summary["actionableCommentCount"] == 1
+    assert summary["actionableCommentIds"] == [2]
+    assert summary["nonActionableReasonCounts"].get("thread_resolved") == 1
+
