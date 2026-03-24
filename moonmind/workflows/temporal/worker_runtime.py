@@ -265,6 +265,7 @@ def _build_runtime_planner():
         edges: list[dict[str, str]] = []
 
         if has_multi_steps:
+            prev_step_id: str | None = None
             for idx, step_entry in enumerate(raw_steps):
                 step_instructions = str(step_entry.get("instructions") or "").strip()
                 if not step_instructions:
@@ -297,18 +298,9 @@ def _build_runtime_planner():
                     "inputs": step_node_inputs,
                 })
 
-                if idx > 0:
-                    prev_id = str(raw_steps[idx - 1].get("id") or "").strip() or f"step-{idx}"
-                    edges.append({"from": prev_id, "to": step_id})
-
-            # Append PR suffix to the *last* node when publishMode is "pr"
-            if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-                pr_suffix = (
-                    "\n\nAfter completing the changes above, create a GitHub "
-                    "pull request with the changes using `gh pr create`."
-                )
-                last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
+                if prev_step_id:
+                    edges.append({"from": prev_step_id, "to": step_id})
+                prev_step_id = step_id
         else:
             node_id = str(task_payload.get("id") or "node-1").strip() or "node-1"
             nodes.append({
@@ -321,12 +313,15 @@ def _build_runtime_planner():
                 "inputs": node_inputs,
             })
 
-            if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-                pr_suffix = (
-                    "\n\nAfter completing the changes above, create a GitHub "
-                    "pull request with the changes using `gh pr create`."
-                )
-                node_inputs["instructions"] = instructions + pr_suffix
+        # Append PR creation instructions to the last node so the agent
+        # creates the PR in the same workspace where the changes were made.
+        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+            pr_suffix = (
+                "\n\nAfter completing the changes above, create a GitHub "
+                "pull request with the changes using `gh pr create`."
+            )
+            last_inputs = nodes[-1]["inputs"]
+            last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
 
         return {
             "plan_version": "1.0",
