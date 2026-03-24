@@ -42,14 +42,14 @@ This plan closes that gap and adds supporting improvements across five phases.
 > The CRUD methods already exist in `client.py` (lines 325-618). This phase focuses on
 > filling any gaps in test coverage, error handling, and policy mapping.
 
-- [ ] **1.1** Verify and complete schedule lifecycle method coverage
+- [x] **1.1** Verify and complete schedule lifecycle method coverage
   - **Files:** `moonmind/workflows/temporal/client.py`
   - Ensure all methods are present: `create_schedule()`, `describe_schedule()`, `update_schedule()`, `pause_schedule()`, `unpause_schedule()`, `trigger_schedule()`, `delete_schedule()`
   - All methods accept MoonMind-level inputs and map to Temporal SDK types
   - Schedule IDs follow convention: `mm-schedule:{definition_uuid}`
   - Workflow IDs for schedule-spawned workflows: `mm:{definition_uuid}:{schedule_time_epoch}`
 
-- [ ] **1.2** Add/complete unit tests for schedule CRUD
+- [x] **1.2** Add/complete unit tests for schedule CRUD
   - **Files:** `tests/unit/workflows/temporal/test_client_schedules.py`
   - Tests for each lifecycle method with mocked Temporal client
   - Tests for policy mapping (overlap → `ScheduleOverlapPolicy`, catchup → `catchup_window`)

@@ -75,6 +75,9 @@ class TestCreateSchedule:
         mock_client.create_schedule.assert_awaited_once()
         call_args = mock_client.create_schedule.call_args
         assert call_args[0][0] == _SCHEDULE_ID  # first positional arg
+        
+        schedule_arg = call_args[0][1]
+        assert schedule_arg.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
 
     @pytest.mark.asyncio
     async def test_overlap_policy_passed_through(self) -> None:
@@ -94,6 +97,25 @@ class TestCreateSchedule:
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
         assert schedule_arg.policy.overlap == ScheduleOverlapPolicy.ALLOW_ALL
+
+    @pytest.mark.asyncio
+    async def test_catchup_policy_passed_through(self) -> None:
+
+        mock_handle = MagicMock()
+        mock_handle.id = _SCHEDULE_ID
+        mock_client = MagicMock()
+        mock_client.create_schedule = AsyncMock(return_value=mock_handle)
+
+        adapter = _make_adapter(mock_client)
+        await adapter.create_schedule(
+            definition_id=_TEST_UUID,
+            cron_expression="0 0 * * *",
+            catchup_mode="all",
+            workflow_type="MoonMind.Run",
+        )
+
+        schedule_arg = mock_client.create_schedule.call_args[0][1]
+        assert schedule_arg.policy.catchup_window == timedelta(days=365)
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:
