@@ -260,7 +260,7 @@ _RESOLVE_PR_OBJECTIVE_PATTERN = re.compile(
 )
 _CONFLICTING_MERGE_STATES = frozenset({"DIRTY", "CONFLICTING"})
 _CONFLICTING_MERGEABLE_VALUES = frozenset({"CONFLICTING", "DIRTY", "FALSE"})
-_JULES_TERMINAL_SUCCESS_STATUSES = frozenset({"succeeded"})
+_JULES_TERMINAL_SUCCESS_STATUSES = frozenset({"completed"})
 _JULES_TERMINAL_FAILURE_STATUSES = frozenset({"failed", "canceled"})
 _JULES_PROVIDER_CANCEL_UNSUPPORTED_MESSAGE = (
     "provider-side cancellation unsupported; MoonMind canceled without remote cancel"
@@ -2157,7 +2157,7 @@ class CodexWorker:
 
             self._start_finish_stage(stage_starts, stage="finalize")
             self._finish_stage(
-                finish_stages, stage_starts, stage="finalize", status="succeeded"
+                finish_stages, stage_starts, stage="finalize", status="completed"
             )
             finish_summary = self._build_finish_summary(
                 job=job,
@@ -2335,7 +2335,7 @@ class CodexWorker:
                 failure_reason = str(exc)
                 raise
             self._finish_stage(
-                finish_stages, stage_starts, stage="prepare", status="succeeded"
+                finish_stages, stage_starts, stage="prepare", status="completed"
             )
             publish_base_branch = prepared.starting_branch
             publish_working_branch = prepared.working_branch
@@ -2387,7 +2387,7 @@ class CodexWorker:
                 finish_stages,
                 stage_starts,
                 stage="execute",
-                status="succeeded" if result.succeeded else "failed",
+                status="completed" if result.succeeded else "failed",
             )
             if not result.succeeded:
                 failure_stage = "execute"
@@ -2465,7 +2465,7 @@ class CodexWorker:
                                 finish_stages,
                                 stage_starts,
                                 stage="publish",
-                                status="succeeded",
+                                status="completed",
                             )
                         if publish_payload:
                             publish_pr_url = (
@@ -2609,7 +2609,7 @@ class CodexWorker:
                     finish_stages,
                     stage_starts,
                     stage="proposals",
-                    status="failed" if proposal_report.errors else "succeeded",
+                    status="failed" if proposal_report.errors else "completed",
                 )
 
             await _flush_staged_artifacts()
@@ -2698,7 +2698,7 @@ class CodexWorker:
     @staticmethod
     def _jules_publish_stage_status(publish_status: str) -> str:
         if publish_status == "published":
-            return "succeeded"
+            return "completed"
         if publish_status == "failed":
             return "failed"
         if publish_status == "skipped":
@@ -2866,7 +2866,7 @@ class CodexWorker:
             state.finish_stages,
             state.stage_starts,
             stage="execute",
-            status="succeeded" if succeeded else "failed",
+            status="completed" if succeeded else "failed",
         )
         state.finish_stages["publish"] = {
             "status": self._jules_publish_stage_status(state.publish_status)
@@ -2876,7 +2876,7 @@ class CodexWorker:
             state.finish_stages,
             state.stage_starts,
             stage="finalize",
-            status="succeeded",
+            status="completed",
         )
 
         jules_record = self._build_jules_runtime_record_from_state(state)
@@ -3213,7 +3213,7 @@ class CodexWorker:
         stage_starts: dict[str, float] = {}
         self._start_finish_stage(stage_starts, stage="prepare")
         self._finish_stage(
-            finish_stages, stage_starts, stage="prepare", status="succeeded"
+            finish_stages, stage_starts, stage="prepare", status="completed"
         )
         self._start_finish_stage(stage_starts, stage="execute")
         self._jules_inflight_runs[job.id] = JulesSoftwareRunState(
@@ -7995,7 +7995,7 @@ class CodexWorker:
         task_node = canonical_payload.get("task")
         task = task_node if isinstance(task_node, Mapping) else {}
         objective = str(task.get("instructions") or "").strip() or "(missing objective)"
-        status_text = "succeeded" if task_result.succeeded else "failed"
+        status_text = "completed" if task_result.succeeded else "failed"
         request_template = json.dumps(
             self._build_proposal_task_request_template(canonical_payload),
             indent=2,
@@ -8207,7 +8207,7 @@ class CodexWorker:
                 "jobId": str(job.id),
                 "repository": str(canonical_payload.get("repository") or "").strip(),
                 "runtimeMode": runtime_mode,
-                "taskStatus": "succeeded" if task_result.succeeded else "failed",
+                "taskStatus": "completed" if task_result.succeeded else "failed",
                 "taskSummary": str(task_result.summary or ""),
                 "taskError": str(task_result.error_message or ""),
                 "taskContextPath": task_context_path,
@@ -8329,7 +8329,7 @@ class CodexWorker:
                 message="task.proposalSkill.finished",
                 payload={
                     "skillId": skill_id,
-                    "succeeded": skill_result.succeeded,
+                    "completed": skill_result.succeeded,
                     "summary": skill_result.summary,
                     "error": skill_result.error_message,
                 },

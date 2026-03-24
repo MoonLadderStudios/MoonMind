@@ -79,7 +79,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
                 payload={
                     "event_type": "completed",
                     "provider_event_id": "evt-terminal",
-                    "normalized_status": "succeeded",
+                    "normalized_status": "completed",
                     "provider_status": "completed",
                 },
                 payload_artifact_ref="art_callback",
@@ -87,7 +87,7 @@ async def test_callback_first_completion_uses_single_terminal_path(
 
             assert completed.state is MoonMindWorkflowState.EXECUTING
             assert completed.awaiting_external is False
-            assert completed.integration_state["normalized_status"] == "succeeded"
+            assert completed.integration_state["normalized_status"] == "completed"
             assert "art_callback" in completed.artifact_refs
 
 
@@ -144,7 +144,7 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
             )
             finished = await service.record_integration_poll(
                 workflow_id=created.workflow_id,
-                normalized_status="succeeded",
+                normalized_status="completed",
                 provider_status="completed",
                 observed_at=None,
                 recommended_poll_seconds=None,
@@ -157,7 +157,7 @@ async def test_polling_fallback_and_continue_as_new_preserve_monitoring_identity
             assert waiting.run_id != original_run_id
             assert waiting.integration_state["correlation_id"] == "corr-poll"
             assert waiting.integration_state["external_operation_id"] == "task-poll"
-            assert finished.integration_state["normalized_status"] == "succeeded"
+            assert finished.integration_state["normalized_status"] == "completed"
             assert "art_result" in finished.artifact_refs
 
 
@@ -226,12 +226,12 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 payload={
                     "event_type": "completed",
                     "provider_event_id": "evt-terminal",
-                    "normalized_status": "succeeded",
+                    "normalized_status": "completed",
                     "provider_status": "completed",
                 },
                 payload_artifact_ref=None,
             )
-            assert terminal.integration_state["normalized_status"] == "succeeded"
+            assert terminal.integration_state["normalized_status"] == "completed"
 
             reordered = await service.ingest_integration_callback(
                 integration_name="jules",
@@ -244,7 +244,7 @@ async def test_duplicate_reordered_and_invalid_callbacks_are_safe(
                 },
                 payload_artifact_ref=None,
             )
-            assert reordered.integration_state["normalized_status"] == "succeeded"
+            assert reordered.integration_state["normalized_status"] == "completed"
             with pytest.raises(TemporalExecutionNotFoundError):
                 await service.ingest_integration_callback(
                     integration_name="jules",

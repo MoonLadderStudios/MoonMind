@@ -246,14 +246,14 @@ class JulesClient:
         provider_status = str(task.status or "").strip() or "unknown"
         normalized = normalize_jules_status(provider_status)
         if normalized == "running" and task.pull_request_url:
-            normalized = "succeeded"
+            normalized = "completed"
 
         return JulesIntegrationStatusResult(
             taskQueue=task_queue,
             externalOperationId=external_operation_id,
             normalizedStatus=normalized,
             providerStatus=provider_status,
-            terminal=normalized in {"succeeded", "failed", "canceled"},
+            terminal=normalized in {"completed", "failed", "canceled"},
             recommendedPollSeconds=recommended_poll_seconds,
             externalUrl=str(task.url or "").strip() or None,
             providerSummary={"provider": "jules"},
@@ -272,7 +272,7 @@ class JulesClient:
         provider_status = str(task.status or "").strip() or "unknown"
         normalized = normalize_jules_status(provider_status)
         if normalized == "running" and task.pull_request_url:
-            normalized = "succeeded"
+            normalized = "completed"
 
         summary = (
             f"Jules task {external_operation_id} completed with status "

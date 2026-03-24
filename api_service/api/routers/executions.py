@@ -63,13 +63,13 @@ _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.INITIALIZING: "queued",
     MoonMindWorkflowState.WAITING_ON_DEPENDENCIES: "waiting",
     MoonMindWorkflowState.PLANNING: "running",
-    MoonMindWorkflowState.AWAITING: "queued",
+    MoonMindWorkflowState.AWAITING_SLOT: "queued",
     MoonMindWorkflowState.EXECUTING: "running",
     MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
     MoonMindWorkflowState.FINALIZING: "running",
-    MoonMindWorkflowState.SUCCEEDED: "succeeded",
+    MoonMindWorkflowState.COMPLETED: "completed",
     MoonMindWorkflowState.FAILED: "failed",
-    MoonMindWorkflowState.CANCELED: "cancelled",
+    MoonMindWorkflowState.CANCELED: "canceled",
 }
 
 _MAX_TASK_TITLE_LENGTH = 120

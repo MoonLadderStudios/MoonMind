@@ -10,7 +10,7 @@ def test_normalize_jules_status_maps_success_aliases() -> None:
 
     assert snapshot.provider_status == "Completed"
     assert snapshot.provider_status_token == "completed"
-    assert snapshot.normalized_status == "succeeded"
+    assert snapshot.normalized_status == "completed"
     assert snapshot.terminal is True
     assert snapshot.succeeded is True
     assert snapshot.failed is False

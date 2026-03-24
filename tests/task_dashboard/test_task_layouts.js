@@ -284,14 +284,14 @@ function createProposalRow(overrides = {}) {
 
 (function testSortRowsByColumnSortsByStatus() {
   const rows = [
-    createTaskRow({ id: 'job-1', rawStatus: 'succeeded' }),
+    createTaskRow({ id: 'job-1', rawStatus: 'completed' }),
     createTaskRow({ id: 'job-2', rawStatus: 'failed' }),
     createTaskRow({ id: 'job-3', rawStatus: 'running' }),
   ];
   const sorted = sortRowsByColumn(rows, 'status', 'asc');
-  assert.strictEqual(sorted[0].rawStatus, 'failed');
-  assert.strictEqual(sorted[1].rawStatus, 'running');
-  assert.strictEqual(sorted[2].rawStatus, 'succeeded');
+  assert.strictEqual(sorted[0].rawStatus, 'completed');
+  assert.strictEqual(sorted[1].rawStatus, 'failed');
+  assert.strictEqual(sorted[2].rawStatus, 'running');
 })();
 
 (function testSortRowsByColumnScheduledForFallsBackToCreatedAt() {

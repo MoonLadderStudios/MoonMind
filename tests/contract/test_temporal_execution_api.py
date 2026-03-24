@@ -195,14 +195,14 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path):
                 json={
                     "eventType": "completed",
                     "providerEventId": "evt-1",
-                    "normalizedStatus": "succeeded",
+                    "normalizedStatus": "completed",
                     "providerStatus": "completed",
                 },
             )
             assert callback_response.status_code == 202
             callback_body = callback_response.json()
             assert callback_body["state"] == "executing"
-            assert callback_body["integration"]["normalizedStatus"] == "succeeded"
+            assert callback_body["integration"]["normalizedStatus"] == "completed"
 
             cancel_response = await client.post(
                 f"/api/executions/{workflow_id}/cancel",

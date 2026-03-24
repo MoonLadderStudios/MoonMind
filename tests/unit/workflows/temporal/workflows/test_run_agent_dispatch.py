@@ -113,7 +113,7 @@ class TestMapAgentRunResult(unittest.TestCase):
             "output_refs": ["ref1", "ref2"],
             "failure_class": None,
         })
-        self.assertEqual(result["status"], "SUCCEEDED")
+        self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["outputs"]["summary"], "Done")
         self.assertEqual(result["outputs"]["output_refs"], ["ref1", "ref2"])
         self.assertEqual(result["outputs"]["error"], "")
@@ -134,7 +134,7 @@ class TestMapAgentRunResult(unittest.TestCase):
         model = AgentRunResult(summary="All done", output_refs=["a"])
         wf = MoonMindRunWorkflow()
         result = wf._map_agent_run_result(model)
-        self.assertEqual(result["status"], "SUCCEEDED")
+        self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["outputs"]["summary"], "All done")
 
     def test_handles_pydantic_model_with_failure(self) -> None:
@@ -192,7 +192,7 @@ async def mock_artifact_read_agent(args: Dict[str, Any]) -> bytes:
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute_agent(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
-    return {"status": "SUCCEEDED", "outputs": {}}
+    return {"status": "COMPLETED", "outputs": {}}
 
 
 class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):

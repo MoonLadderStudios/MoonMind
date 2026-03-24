@@ -174,11 +174,11 @@ class MoonMindOAuthSessionWorkflow:
         # The actual verification + profile registration happens in the
         # finalize API endpoint (already implemented in oauth_sessions.py).
         # The workflow just needs to mark succeeded.
-        await self._update_status("succeeded")
+        await self._update_status("completed")
 
         return OAuthSessionOutput(
             session_id=self._session_id,
-            status="succeeded",
+            status="completed",
             failure_reason=None,
         )
 

@@ -289,7 +289,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     def mm_handler(inputs, _context):
         seen_inputs.update(inputs)
         return SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"test_report_artifact": "art:sha256:feed"},
             progress={"percent": 100},
         )
@@ -297,7 +297,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
     def sandbox_handler(invocation, _context):
         assert invocation.skill_name == "repo.apply_patch"
         return SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"files_changed": 1},
             progress={"percent": 100},
         )
@@ -335,7 +335,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
         )
     )
 
-    assert result_a.status == "SUCCEEDED"
+    assert result_a.status == "COMPLETED"
     assert result_b.outputs["files_changed"] == 1
     assert seen_inputs["repo_ref"] == "git:org/repo#branch"
 
@@ -349,7 +349,7 @@ def test_skill_dispatcher_accepts_tool_payload_alias():
         skill_name="repo.run_tests",
         version="1.0.0",
         handler=lambda inputs, _context: SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"test_report_artifact": inputs["repo_ref"]},
         ),
     )
@@ -366,7 +366,7 @@ def test_skill_dispatcher_accepts_tool_payload_alias():
         )
     )
 
-    assert result.status == "SUCCEEDED"
+    assert result.status == "COMPLETED"
     assert result.outputs["test_report_artifact"] == "git:org/repo#branch"
 
 
@@ -403,7 +403,7 @@ def test_skill_dispatcher_uses_default_handler_when_specific_handler_missing():
 
     dispatcher.register_default_skill_handler(
         handler=lambda inputs, _context: SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"echo_repo": inputs.get("repo_ref")},
         )
     )
@@ -416,7 +416,7 @@ def test_skill_dispatcher_uses_default_handler_when_specific_handler_missing():
         )
     )
 
-    assert result.status == "SUCCEEDED"
+    assert result.status == "COMPLETED"
     assert result.outputs["echo_repo"] == "git:org/repo#branch"
 
 
@@ -466,7 +466,7 @@ def test_plan_interpreter_continue_executes_independent_nodes():
         if invocation.id == "n1":
             return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
         return SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"files_changed": 2},
             progress={"percent": 100},
         )
@@ -503,7 +503,7 @@ def test_plan_interpreter_fail_fast_records_cancelled_in_flight_nodes():
             return SkillResult(status="FAILED", outputs={}, progress={"percent": 100})
         await asyncio.sleep(0.5)  # reduced: needs to be in-flight when n1 fails; cancel happens near-instantly
         return SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"files_changed": 2},
             progress={"percent": 100},
         )

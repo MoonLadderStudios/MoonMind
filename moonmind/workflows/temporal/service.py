@@ -49,7 +49,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
 )
 
 TERMINAL_STATES: set[MoonMindWorkflowState] = {
-    MoonMindWorkflowState.SUCCEEDED,
+    MoonMindWorkflowState.COMPLETED,
     MoonMindWorkflowState.FAILED,
     MoonMindWorkflowState.CANCELED,
 }
@@ -77,7 +77,7 @@ _RUNNING_STATES: set[MoonMindWorkflowState] = {
 TERMINAL_STATE_TO_CLOSE_STATUS: dict[
     MoonMindWorkflowState, TemporalExecutionCloseStatus
 ] = {
-    MoonMindWorkflowState.SUCCEEDED: TemporalExecutionCloseStatus.COMPLETED,
+    MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
     MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
     MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
 }
@@ -110,12 +110,12 @@ ALLOWED_WAITING_REASONS: set[str] = {
 ALLOWED_INTEGRATION_STATUSES: set[str] = {
     "queued",
     "running",
-    "succeeded",
+    "completed",
     "failed",
     "canceled",
     "unknown",
 }
-TERMINAL_INTEGRATION_STATUSES: set[str] = {"succeeded", "failed", "canceled"}
+TERMINAL_INTEGRATION_STATUSES: set[str] = {"completed", "failed", "canceled"}
 _SEEN_PROVIDER_EVENT_LIMIT = 50
 _CORRELATION_EXPIRY_DAYS = 30
 PAGINATION_ORDERING = "mm_updated_at_desc__workflow_id_desc"
@@ -1128,7 +1128,7 @@ class TemporalExecutionService:
         self._set_state(record, MoonMindWorkflowState.FINALIZING)
         self._set_state(
             record,
-            MoonMindWorkflowState.SUCCEEDED,
+            MoonMindWorkflowState.COMPLETED,
             close_status=TemporalExecutionCloseStatus.COMPLETED,
         )
         if summary:
@@ -1922,8 +1922,8 @@ class TemporalExecutionService:
             return "canceled"
         if record.state is MoonMindWorkflowState.FAILED:
             return "failed"
-        if record.state is MoonMindWorkflowState.SUCCEEDED:
-            return "succeeded"
+        if record.state is MoonMindWorkflowState.COMPLETED:
+            return "completed"
         normalized_status = self._parse_integration_status(
             state.get("normalized_status", "unknown")
         )

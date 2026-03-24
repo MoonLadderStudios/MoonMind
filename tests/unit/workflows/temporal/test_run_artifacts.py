@@ -144,7 +144,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
                     "edges": [],
                 }
             ).encode("utf-8")
-        return {"status": "SUCCEEDED", "outputs": {}}
+        return {"status": "COMPLETED", "outputs": {}}
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -254,7 +254,7 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
                     "edges": [],
                 }
             ).encode("utf-8")
-        return {"status": "SUCCEEDED", "outputs": {}}
+        return {"status": "COMPLETED", "outputs": {}}
 
     monkeypatch.setattr(
         run_workflow_module.workflow,
@@ -475,8 +475,8 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
                     "outputs": {"error": "first step failed"},
                     "progress": {"details": "intentional failure"},
                 }
-            return {"status": "SUCCEEDED", "outputs": {}}
-        return {"status": "SUCCEEDED", "outputs": {}}
+            return {"status": "COMPLETED", "outputs": {}}
+        return {"status": "COMPLETED", "outputs": {}}
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
@@ -568,7 +568,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
                 }
             ).encode("utf-8")
         return {
-            "status": "SUCCEEDED",
+            "status": "COMPLETED",
             "outputs": {"stdout_tail": "Applied requested changes."},
         }
 
@@ -664,7 +664,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
                 }
             ).encode("utf-8")
         return {
-            "status": "SUCCEEDED",
+            "status": "COMPLETED",
             "outputs": {
                 "stdout_tail": "Opened PR: https://github.com/org/repo/pull/123"
             },

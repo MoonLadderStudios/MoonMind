@@ -32,7 +32,7 @@ _JULES_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "queued": "queued",
     "running": "running",
     "awaiting_feedback": "awaiting_feedback",
-    "succeeded": "completed",
+    "completed": "completed",
     "failed": "failed",
     "canceled": "cancelled",
     "unknown": "awaiting_callback",
@@ -48,7 +48,7 @@ def _normalize_jules_task(response: JulesTaskResponse) -> str:
     """Determine normalized status, treating PR creation as success."""
     normalized = normalize_jules_status(response.status)
     if normalized == "running" and response.pull_request_url:
-        return "succeeded"
+        return "completed"
     return normalized
 
 

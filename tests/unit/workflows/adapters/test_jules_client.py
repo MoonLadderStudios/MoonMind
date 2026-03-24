@@ -99,7 +99,7 @@ async def test_get_task_success():
 async def test_normalize_jules_status_maps_terminal_and_running_states():
     assert normalize_jules_status("pending") == "queued"
     assert normalize_jules_status("in_progress") == "running"
-    assert normalize_jules_status("completed") == "succeeded"
+    assert normalize_jules_status("completed") == "completed"
     assert normalize_jules_status("canceled") == "canceled"
     assert normalize_jules_status("mystery") == "unknown"
     # Actual Jules API State enum values
@@ -110,7 +110,7 @@ async def test_normalize_jules_status_maps_terminal_and_running_states():
     assert normalize_jules_status("IN_PROGRESS") == "running"
     assert normalize_jules_status("PAUSED") == "running"
     assert normalize_jules_status("FAILED") == "failed"
-    assert normalize_jules_status("COMPLETED") == "succeeded"
+    assert normalize_jules_status("COMPLETED") == "completed"
 
 
 @pytest.mark.asyncio
@@ -229,7 +229,7 @@ async def test_fetch_and_cancel_integration_return_normalized_results():
     )
     canceled = await client.cancel_integration(external_operation_id="task-123")
 
-    assert fetched.normalized_status == "succeeded"
+    assert fetched.normalized_status == "completed"
     assert fetched.output_refs == ["art_result"]
     assert canceled.accepted is True
     assert canceled.normalized_status == "canceled"

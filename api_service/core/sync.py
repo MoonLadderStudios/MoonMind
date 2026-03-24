@@ -70,7 +70,7 @@ async def map_temporal_state_to_projection(
 
     status_map = {
         WorkflowExecutionStatus.COMPLETED: (
-            MoonMindWorkflowState.SUCCEEDED,
+            MoonMindWorkflowState.COMPLETED,
             TemporalExecutionCloseStatus.COMPLETED,
         ),
         WorkflowExecutionStatus.FAILED: (
@@ -90,7 +90,7 @@ async def map_temporal_state_to_projection(
             TemporalExecutionCloseStatus.TIMED_OUT,
         ),
         WorkflowExecutionStatus.CONTINUED_AS_NEW: (
-            MoonMindWorkflowState.SUCCEEDED,
+            MoonMindWorkflowState.COMPLETED,
             TemporalExecutionCloseStatus.COMPLETED,
         ),
     }

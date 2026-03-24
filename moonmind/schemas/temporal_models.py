@@ -35,7 +35,7 @@ from moonmind.schemas.manifest_ingest_models import (
 NormalizedIntegrationStatus = Literal[
     "queued",
     "running",
-    "succeeded",
+    "completed",
     "failed",
     "canceled",
     "unknown",
@@ -315,7 +315,7 @@ class ExecutionModel(BaseModel):
         "running",
         "awaiting_action",
         "waiting",
-        "succeeded",
+        "completed",
         "failed",
         "cancelled",
     ] = Field(..., alias="status")
@@ -324,7 +324,7 @@ class ExecutionModel(BaseModel):
         "running",
         "awaiting_action",
         "waiting",
-        "succeeded",
+        "completed",
         "failed",
         "cancelled",
     ] = Field(..., alias="dashboardStatus")

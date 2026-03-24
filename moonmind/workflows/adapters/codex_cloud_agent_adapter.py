@@ -26,7 +26,7 @@ CodexCloudClientFactory = Callable[[], CodexCloudClient]
 _CODEX_CLOUD_TO_AGENT_RUN_STATUS: dict[str, str] = {
     "queued": "queued",
     "running": "running",
-    "succeeded": "completed",
+    "completed": "completed",
     "failed": "failed",
     "canceled": "cancelled",
     "unknown": "awaiting_callback",

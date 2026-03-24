@@ -305,14 +305,14 @@ async def test_update_manifest_state_persists_checkpoint_and_run_metadata(
                 name="demo",
                 state_json={"docs": {"cursor": "abc", "docHashes": {"doc-1": "h1"}}},
                 last_run_job_id=last_job_id,
-                last_run_status="succeeded",
+                last_run_status="completed",
             )
 
             assert updated.state_json == {
                 "docs": {"cursor": "abc", "docHashes": {"doc-1": "h1"}}
             }
             assert updated.last_run_job_id == last_job_id
-            assert updated.last_run_status == "succeeded"
+            assert updated.last_run_status == "completed"
             assert updated.state_updated_at is not None
 
 

@@ -350,7 +350,7 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
                 skill_name="repo.run_tests",
                 version="1.0.0",
                 handler=lambda inputs, _context: SkillResult(
-                    status="SUCCEEDED",
+                    status="COMPLETED",
                     outputs={"ok": inputs["repo_ref"].endswith("#main")},
                     progress={"percent": 100},
                 ),
@@ -368,7 +368,7 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
                 principal="user-1",
             )
 
-            assert result.status == "SUCCEEDED"
+            assert result.status == "COMPLETED"
             assert result.outputs["ok"] is True
 
 
@@ -397,7 +397,7 @@ async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
                 skill_name="repo.run_tests",
                 version="1.0.0",
                 handler=lambda inputs, _context: SkillResult(
-                    status="SUCCEEDED",
+                    status="COMPLETED",
                     outputs={"ok": inputs["repo_ref"].endswith("#main")},
                 ),
             )
@@ -416,7 +416,7 @@ async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
                 principal="user-1",
             )
 
-            assert result.status == "SUCCEEDED"
+            assert result.status == "COMPLETED"
             assert result.outputs["ok"] is True
 
 
@@ -573,7 +573,7 @@ async def test_shared_envelope_helpers_build_compact_runtime_contracts():
         activity_type="sandbox.run_command",
         correlation_id=invocation.correlation_id,
         idempotency_key="idem-1",
-        outcome="succeeded",
+        outcome="completed",
         diagnostics_ref=result.diagnostics_ref,
         metrics_dimensions={"fleet": "sandbox"},
     )
@@ -682,7 +682,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
             assert status.status == "completed"
             assert status.provider_status == "completed"
-            assert status.normalized_status == "succeeded"
+            assert status.normalized_status == "completed"
             assert status.terminal is True
 
             fetched = await activities.integration_jules_fetch_result(
@@ -691,7 +691,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
             assert len(fetched["outputRefs"]) == 1
             assert fetched["outputRefs"][0].startswith("art_")
-            assert fetched["metadata"]["normalizedStatus"] == "succeeded"
+            assert fetched["metadata"]["normalizedStatus"] == "completed"
             # Client is now reused by the adapter (not closed per-call).
 
 
@@ -836,7 +836,7 @@ async def test_jules_status_pr_creation_forces_succeeded_normalization(
                 principal="user-1",
             )
             assert status.provider_status == "in_progress"
-            assert status.normalized_status == "succeeded"
+            assert status.normalized_status == "completed"
             assert status.terminal is True
             assert status.external_url == "https://github.com/org/repo/pull/123"
 
@@ -857,7 +857,7 @@ async def test_jules_fetch_result_accepts_request_without_principal(tmp_path: Pa
 
     assert fetched["failureClass"] is None
     assert fetched["outputRefs"] == []
-    assert fetched["metadata"]["normalizedStatus"] == "succeeded"
+    assert fetched["metadata"]["normalizedStatus"] == "completed"
     assert fetched["metadata"]["externalUrl"] == "https://github.com/org/repo/pull/456"
 
 
@@ -901,7 +901,7 @@ async def test_jules_status_accepts_legacy_positional_external_id(tmp_path: Path
             status = await activities.integration_jules_status("task-001")
             assert status.external_id == "task-001"
             assert status.provider_status == "completed"
-            assert status.normalized_status == "succeeded"
+            assert status.normalized_status == "completed"
 
 
 async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch):
@@ -1106,7 +1106,7 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
         skill_name="repo.run_tests",
         version="1.0.0",
         handler=lambda inputs, _context: SkillResult(
-            status="SUCCEEDED",
+            status="COMPLETED",
             outputs={"ok": inputs["repo_ref"].endswith("#main")},
         ),
     )
@@ -1153,7 +1153,7 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
                 }
             )
 
-            assert result.status == "SUCCEEDED"
+            assert result.status == "COMPLETED"
             assert result.outputs["ok"] is True
 
 

@@ -86,7 +86,7 @@ class _StubAdapter(BaseExternalAgentAdapter):
         return self.build_result(
             run_id=run_id,
             provider_status="completed",
-            normalized_status="succeeded",
+            normalized_status="completed",
             provider_name="Stub",
         )
 
@@ -257,7 +257,7 @@ def test_build_result_no_failure_for_succeeded():
     result = BaseExternalAgentAdapter.build_result(
         run_id="r1",
         provider_status="completed",
-        normalized_status="succeeded",
+        normalized_status="completed",
         provider_name="Test",
     )
     assert result.failure_class is None

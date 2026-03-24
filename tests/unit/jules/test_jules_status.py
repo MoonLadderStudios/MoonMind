@@ -16,12 +16,12 @@ class TestNormalizeJulesStatus:
     @pytest.mark.parametrize(
         "raw_status,expected_normalized",
         [
-            ("completed", "succeeded"),
-            ("succeeded", "succeeded"),
-            ("success", "succeeded"),
-            ("done", "succeeded"),
-            ("resolved", "succeeded"),
-            ("finished", "succeeded"),
+            ("completed", "completed"),
+            ("completed", "completed"),
+            ("success", "completed"),
+            ("done", "completed"),
+            ("resolved", "completed"),
+            ("finished", "completed"),
         ],
     )
     def test_success_statuses(self, raw_status: str, expected_normalized: str) -> None:
@@ -84,7 +84,7 @@ class TestNormalizeJulesStatus:
         assert isinstance(snapshot, JulesStatusSnapshot)
         assert snapshot.provider_status == "completed"
         assert snapshot.provider_status_token == "completed"
-        assert snapshot.normalized_status == "succeeded"
+        assert snapshot.normalized_status == "completed"
         assert snapshot.terminal is True
         assert snapshot.succeeded is True
         assert snapshot.failed is False
@@ -92,11 +92,11 @@ class TestNormalizeJulesStatus:
 
     def test_case_insensitive(self) -> None:
         snapshot = normalize_jules_status("COMPLETED")
-        assert snapshot.normalized_status == "succeeded"
+        assert snapshot.normalized_status == "completed"
 
     def test_whitespace_handling(self) -> None:
         snapshot = normalize_jules_status("  completed  ")
-        assert snapshot.normalized_status == "succeeded"
+        assert snapshot.normalized_status == "completed"
         assert snapshot.provider_status == "completed"
 
     @pytest.mark.parametrize(

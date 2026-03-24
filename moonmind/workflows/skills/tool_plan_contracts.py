@@ -15,7 +15,7 @@ ARTIFACT_REF_PREFIX = "art:sha256:"
 REGISTRY_DIGEST_PREFIX = "reg:sha256:"
 SUPPORTED_PLAN_VERSIONS = frozenset({"1.0"})
 SUPPORTED_FAILURE_MODES = frozenset({"FAIL_FAST", "CONTINUE"})
-TOOL_RESULT_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED"})
+TOOL_RESULT_STATUSES = frozenset({"COMPLETED", "FAILED", "CANCELLED"})
 SKILL_RESULT_STATUSES = TOOL_RESULT_STATUSES  # backward-compat alias
 REVIEW_VERDICTS = frozenset({"PASS", "FAIL", "INCONCLUSIVE"})
 DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
@@ -24,7 +24,7 @@ EXPLICIT_BINDING_REASONS = frozenset(
 )
 _DEFAULT_ACTIVITY_TYPE = "mm.tool.execute"
 _LEGACY_DEFAULT_ACTIVITY_TYPE = "mm.skill.execute"
-OBSERVABILITY_OUTCOMES = frozenset({"succeeded", "failed", "cancelled", "partial"})
+OBSERVABILITY_OUTCOMES = frozenset({"completed", "failed", "cancelled", "partial"})
 TOOL_FAILURE_CODES = frozenset(
     {
         "INVALID_INPUT",

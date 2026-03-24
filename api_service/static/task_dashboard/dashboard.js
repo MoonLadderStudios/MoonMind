@@ -2870,8 +2870,10 @@
     return (
       jobType === "task" &&
       (normalizedStatus === "failed" ||
+        normalizedStatus === "canceled" ||
         normalizedStatus === "cancelled" ||
         rawStatus === "failed" ||
+        rawStatus === "canceled" ||
         rawStatus === "cancelled")
     );
   };
@@ -3701,9 +3703,9 @@
       const stageStatusOptions = [
         ["queued", "queued"],
         ["running", "running"],
-        ["succeeded", "succeeded"],
+        ["completed", "completed"],
         ["failed", "failed"],
-        ["cancelled", "cancelled"],
+        ["canceled", "canceled"],
       ]
         .map(
           ([value, label]) =>
@@ -6975,7 +6977,7 @@
   const TEMPORAL_ACTION_MATRIX = {
     awaiting_external: ["approve", "pause", "resume", "cancel"],
     canceled: ["rerun"],
-    cancelled: ["rerun"],
+
     completed: ["rerun"],
     executing: ["pause", "rename", "cancel"],
     failed: ["rerun"],
@@ -9564,7 +9566,7 @@
                     a.textContent = "Open Tmate Web Terminal";
                     statusDiv.appendChild(a);
                   }
-                  if (["succeeded", "failed", "cancelled", "expired"].includes(pollData.status)) {
+                  if (["completed", "succeeded", "failed", "canceled", "cancelled", "expired"].includes(pollData.status)) {
                     clearInterval(pollInterval);
                     cancelBtn.style.display = "none";
                   }

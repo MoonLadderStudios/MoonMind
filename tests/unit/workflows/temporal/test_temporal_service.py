@@ -1732,7 +1732,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
             payload={
                 "event_type": "completed",
                 "provider_event_id": "evt-complete",
-                "normalized_status": "succeeded",
+                "normalized_status": "completed",
                 "provider_status": "completed",
             },
             payload_artifact_ref=None,
@@ -1749,7 +1749,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
             payload_artifact_ref=None,
         )
 
-        assert late.integration_state["normalized_status"] == "succeeded"
+        assert late.integration_state["normalized_status"] == "completed"
         assert "Ignored late non-terminal external event" in late.memo["summary"]
 
 

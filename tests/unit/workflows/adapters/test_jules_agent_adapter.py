@@ -108,7 +108,7 @@ async def test_status_and_fetch_result_normalize_provider_states():
 
     assert status.run_id == "task-abc"
     assert status.status == "completed"
-    assert status.metadata["normalizedStatus"] == "succeeded"
+    assert status.metadata["normalizedStatus"] == "completed"
     assert status.terminal is True
     assert result.summary is not None
     assert "completed" in result.summary
@@ -126,10 +126,10 @@ async def test_status_and_fetch_result_prefer_pull_request_url():
     result = await adapter.fetch_result("task-pr")
 
     assert status.status == "completed"
-    assert status.metadata["normalizedStatus"] == "succeeded"
+    assert status.metadata["normalizedStatus"] == "completed"
     assert status.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
     assert status.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
-    assert result.metadata["normalizedStatus"] == "succeeded"
+    assert result.metadata["normalizedStatus"] == "completed"
     assert result.metadata["externalUrl"] == "https://github.com/org/repo/pull/123"
     assert result.metadata["pullRequestUrl"] == "https://github.com/org/repo/pull/123"
 

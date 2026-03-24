@@ -22,7 +22,7 @@ async def test_step_review_activity_returns_pass():
             "tool_version": "1.0",
             "tool_type": "skill",
             "inputs": {"repo_ref": "git:org/repo#branch"},
-            "execution_result": {"status": "SUCCEEDED", "outputs": {}},
+            "execution_result": {"status": "COMPLETED", "outputs": {}},
             "workflow_context": {"plan_title": "Fix tests"},
         }
     )

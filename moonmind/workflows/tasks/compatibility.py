@@ -31,7 +31,7 @@ TaskStatusFilter = (
         "running",
         "waiting",
         "awaiting_action",
-        "succeeded",
+        "completed",
         "failed",
         "cancelled",
     ]
@@ -45,7 +45,7 @@ _TEMPORAL_STATUS_MAP: dict[db_models.MoonMindWorkflowState, str] = {
     db_models.MoonMindWorkflowState.EXECUTING: "running",
     db_models.MoonMindWorkflowState.AWAITING_EXTERNAL: "awaiting_action",
     db_models.MoonMindWorkflowState.FINALIZING: "running",
-    db_models.MoonMindWorkflowState.SUCCEEDED: "succeeded",
+    db_models.MoonMindWorkflowState.COMPLETED: "completed",
     db_models.MoonMindWorkflowState.FAILED: "failed",
     db_models.MoonMindWorkflowState.CANCELED: "cancelled",
 }
@@ -474,7 +474,7 @@ class TaskCompatibilityService:
             allowed_keys=_ALLOWED_SEARCH_ATTRIBUTE_KEYS,
         )
         raw_state = record.state.value
-        is_terminal = row.status in {"succeeded", "failed", "cancelled"}
+        is_terminal = row.status in {"completed", "failed", "cancelled"}
         can_pause = not is_terminal and raw_state != "awaiting_external"
         can_resume = not is_terminal and raw_state == "awaiting_external"
         waiting_reason = str(memo.get("waiting_reason") or "").strip() or None
@@ -684,7 +684,7 @@ class TaskCompatibilityService:
             "queued": ("Any",),
             "running": ("Any",),
             "awaiting_action": (),
-            "succeeded": ("Any",),
+            "completed": ("Any",),
             "failed": (
                 "Any",
                 "Any",
@@ -708,7 +708,7 @@ class TaskCompatibilityService:
             ),
             "waiting": (db_models.MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,),
             "awaiting_action": (db_models.MoonMindWorkflowState.AWAITING_EXTERNAL,),
-            "succeeded": (db_models.MoonMindWorkflowState.SUCCEEDED,),
+            "completed": (db_models.MoonMindWorkflowState.COMPLETED,),
             "failed": (db_models.MoonMindWorkflowState.FAILED,),
             "cancelled": (db_models.MoonMindWorkflowState.CANCELED,),
         }
