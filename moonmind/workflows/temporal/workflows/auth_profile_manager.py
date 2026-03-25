@@ -105,6 +105,7 @@ class ProfileSlotState:
     cooldown_after_429_seconds: int
     rate_limit_policy: str
     enabled: bool
+    max_lease_duration_seconds: int = _MAX_LEASE_DURATION_SECONDS
     current_leases: list[str] = field(default_factory=list)
     lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
     cooldown_until: Optional[str] = None  # ISO timestamp string or None
@@ -167,6 +168,7 @@ class ProfileSlotState:
             "cooldown_after_429_seconds": self.cooldown_after_429_seconds,
             "rate_limit_policy": self.rate_limit_policy,
             "enabled": self.enabled,
+            "max_lease_duration_seconds": self.max_lease_duration_seconds,
             "current_leases": list(self.current_leases),
             "lease_granted_at": dict(self.lease_granted_at),
             "cooldown_until": self.cooldown_until,
@@ -336,6 +338,13 @@ class MoonMindAuthProfileManagerWorkflow:
             # cancelled/terminated workflows that failed to release).
             self._evict_expired_leases()
 
+            # Verify lease holders are still running, reclaiming slots from
+            # workflows in terminal states without waiting for lease timeout.
+            await self._verify_lease_holders()
+
+            # Immediately offer any reclaimed slots to waiting requests.
+            await self._drain_queue()
+
             # Check continue-as-new threshold.
             # We use get_current_history_length() to account for timer loops
             # that don't increment self._event_count, or server suggestions.
@@ -385,6 +394,9 @@ class MoonMindAuthProfileManagerWorkflow:
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 300),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
+                max_lease_duration_seconds=p.get(
+                    "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
+                ),
                 current_leases=list(leases_data.get(pid, [])),
                 lease_granted_at=dict(lease_times_data.get(pid, {})),
                 cooldown_until=cooldowns_data.get(pid),
@@ -410,6 +422,9 @@ class MoonMindAuthProfileManagerWorkflow:
                     "rate_limit_policy", existing.rate_limit_policy
                 )
                 existing.enabled = p.get("enabled", existing.enabled)
+                existing.max_lease_duration_seconds = p.get(
+                    "max_lease_duration_seconds", existing.max_lease_duration_seconds
+                )
             else:
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
@@ -419,6 +434,9 @@ class MoonMindAuthProfileManagerWorkflow:
                     ),
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),
+                    max_lease_duration_seconds=p.get(
+                        "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
+                    ),
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).
@@ -490,13 +508,63 @@ class MoonMindAuthProfileManagerWorkflow:
         """Remove leases held longer than the max duration."""
         now = workflow.now()
         for profile in self._profiles.values():
-            evicted = profile.evict_expired_leases(now, _MAX_LEASE_DURATION_SECONDS)
+            max_duration = getattr(profile, "max_lease_duration_seconds", None) or _MAX_LEASE_DURATION_SECONDS
+            evicted = profile.evict_expired_leases(now, max_duration)
             for wf_id in evicted:
                 self._get_logger().warning(
                     "Evicted stale lease for profile %s held by %s",
                     profile.profile_id,
                     wf_id,
                 )
+
+    async def _verify_lease_holders(self) -> None:
+        """Remove leases held by workflows that are in a terminal state.
+
+        Uses the verify_lease_holders activity to check whether each lease-holding
+        workflow is still running. This allows faster reclaim of slots from
+        cancelled/terminated workflows without waiting for the lease duration timeout.
+        """
+        # Collect all workflow IDs that hold leases across all profiles.
+        all_wf_ids: list[str] = []
+        for profile in self._profiles.values():
+            all_wf_ids.extend(profile.current_leases)
+
+        if not all_wf_ids:
+            return
+
+        try:
+            result = await workflow.execute_activity(
+                "auth_profile.verify_lease_holders",
+                {"workflow_ids": all_wf_ids},
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=30),
+                    maximum_attempts=3,
+                ),
+            )
+        except Exception:
+            # If verification fails, skip this cycle rather than leaking slots.
+            self._get_logger().warning(
+                "verify_lease_holders activity failed, skipping verification cycle"
+            )
+            return
+
+        lease_statuses: dict[str, dict[str, Any]] = result or {}
+
+        for profile in list(self._profiles.values()):
+            for wf_id in list(profile.current_leases):
+                status_info = lease_statuses.get(wf_id, {})
+                if not status_info.get("running", True):
+                    profile.release(wf_id)
+                    self._get_logger().warning(
+                        "Reclaimed slot for profile %s from terminated workflow %s (status=%s)",
+                        profile.profile_id,
+                        wf_id,
+                        status_info.get("status", "UNKNOWN"),
+                    )
 
     def _clear_expired_cooldowns(self) -> None:
         """Remove cooldown markers that have expired."""
@@ -527,6 +595,7 @@ class MoonMindAuthProfileManagerWorkflow:
                     "cooldown_after_429_seconds": state.cooldown_after_429_seconds,
                     "rate_limit_policy": state.rate_limit_policy,
                     "enabled": state.enabled,
+                    "max_lease_duration_seconds": state.max_lease_duration_seconds,
                 }
             )
             if state.current_leases:
