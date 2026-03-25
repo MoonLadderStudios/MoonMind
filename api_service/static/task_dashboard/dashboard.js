@@ -4176,7 +4176,7 @@
     );
 
     const load = async () => {
-      const endpoint = "/api/tasks/list?entry=manifest&limit=200";
+      const endpoint = "/api/executions?entry=manifest&limit=200";
       const payload = await fetchJson(endpoint);
       const rows = sortRows(
         toTemporalRows(payload?.items || []).map((row) => ({
@@ -8359,7 +8359,7 @@
     startPolling(() => load(true), pollIntervals.detail);
   }
 
-  async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
+  async function resolveUnifiedTaskSource(taskId) {
     const safeTaskId = normalizeDashboardDetailSegment(taskId);
     if (!safeTaskId) {
       return { source: "", resolvedId: "" };
