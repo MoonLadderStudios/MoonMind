@@ -4,7 +4,9 @@ This document outlines the operational procedures for deploying updates to MoonM
 
 ## Version Registration
 
-MoonMind uses the Temporal Python SDK's worker versioning features. When a worker starts, it registers itself with a unique `build_id`, determined by the `MOONMIND_BUILD_ID` environment variable. If not provided, it falls back to the current Git SHA.
+MoonMind uses the Temporal Python SDK's worker versioning APIs (`build_id` on the worker). Your **Temporal Server must support worker versioning** for the namespace where MoonMind runs; if the cluster is too old or the feature is disabled for that namespace, workers may fail to start—check server release notes and namespace settings before rolling this out.
+
+When a worker starts, it registers a unique `build_id` from the `MOONMIND_BUILD_ID` environment variable. If not set, it falls back to the current Git SHA (or `"unknown"` if Git metadata is unavailable, e.g. in minimal images).
 
 ```bash
 # Example deployment
@@ -21,9 +23,9 @@ When modifying workflows, you must determine whether the changes are backwards-c
 | Change Type | Compatible? | Required Action |
 | --- | --- | --- |
 | Activity implementation (no signature change) | ✅ Yes | Normal deployment |
-| Workflow state/logic that does not affect history | ✅ Yes | Normal deployment |
+| Workflow change that alters **recorded** history (activity order, branching, new activities, different `workflow.patched` outcomes) | ❌ No | `workflow.patched` gate, worker/build routing, or new workflow type |
+| Workflow refactor that is **replay-identical** (same commands/events; verify with replay tests) | ✅ Yes | Normal deployment after validation |
 | Adding new Signals or Queries | ✅ Yes | Normal deployment |
-| **Adding/removing/reordering Activities in Workflow** | ❌ No | Requires `workflow.patched` gate or new version |
 | **Changing Activity signatures** | ❌ No | Requires new Activity name/version |
 | **Changing Workflow name or parameters** | ❌ No | Register new Workflow type |
 
@@ -36,14 +38,12 @@ For backwards-incompatible workflow changes, the safest approach is a side-by-si
 3. **Wait for completion:** Wait for all workflows using the old logic to complete.
 4. **Remove old logic:** In a subsequent release, remove the `workflow.patched` gate and the old logic.
 
-Example:
+Example (illustrative—real code lives on `MoonMindRunWorkflow`):
 ```python
 if workflow.patched("refactor-loop-1.2"):
-    # New logic
-    _poll_terminal = True
+    _poll_terminal = True  # leave poll loop via terminal flag
 else:
-    # Old logic
-    _resume_requested = True
+    self._resume_requested = True  # replay path for histories without the patch; cleared after the loop
 ```
 
 ## Rollback Procedure

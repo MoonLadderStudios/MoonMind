@@ -1110,6 +1110,8 @@ class MoonMindRunWorkflow:
 
                     status = self._get_from_result(poll_result, "normalized_status")
                     if status in ("completed", "failed", "canceled", "awaiting_feedback"):
+                        # Temporal records which branch was taken; replay without the patch marker
+                        # must follow the pre-patch control flow (else branch + clear below).
                         if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
                             _poll_terminal = True
                         else:

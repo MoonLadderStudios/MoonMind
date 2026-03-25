@@ -136,7 +136,8 @@ async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
         plan_ref="plan-1",
     )
 
-    assert INTEGRATION_POLL_LOOP_PATCH in patch_calls
+    assert patch_calls, "workflow.patched should be evaluated for integration poll completion"
+    assert set(patch_calls) == {INTEGRATION_POLL_LOOP_PATCH}
     assert mock_run_workflow._external_status == "completed"
 
 
