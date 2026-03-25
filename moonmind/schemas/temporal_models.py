@@ -261,6 +261,14 @@ class CancelExecutionRequest(BaseModel):
     graceful: bool = Field(True, alias="graceful")
 
 
+class RescheduleExecutionRequest(BaseModel):
+    """Request payload for rescheduling a deferred execution."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    scheduled_for: datetime = Field(..., alias="scheduledFor")
+
+
 class ExecutionActionCapabilityModel(BaseModel):
     """State-aware Temporal action visibility returned to the dashboard."""
 

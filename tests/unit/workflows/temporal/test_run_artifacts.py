@@ -18,7 +18,7 @@ def test_initialize_from_payload_captures_input_and_plan_refs(
         lambda self: ("user", "owner-1"),
     )
 
-    _workflow_type, _parameters, input_ref, plan_ref = (
+    _workflow_type, _parameters, input_ref, plan_ref, _scheduled_for = (
         workflow._initialize_from_payload(
             {
                 "workflowType": "MoonMind.Run",

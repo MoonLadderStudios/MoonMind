@@ -196,6 +196,11 @@ class TemporalClientAdapter:
         else:
             await handle.signal(signal_name)
 
+    async def send_reschedule_signal(self, workflow_id: str, scheduled_for: datetime) -> None:
+        """Send a reschedule signal to a delayed workflow."""
+        handle = await self.get_workflow_handle(workflow_id)
+        await handle.signal("reschedule", scheduled_for.isoformat())
+
     async def update_workflow(
         self, workflow_id: str, update_name: str, arg: Any = None
     ) -> Any:
