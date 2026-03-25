@@ -75,11 +75,11 @@ PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
 # Activity catalog constants for agent_runtime fleet routing.
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
-AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=5)
+AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=2)
 AGENT_RUNTIME_CANCEL_TIMEOUT = timedelta(minutes=1)
 AGENT_RUNTIME_STATUS_TIMEOUT = timedelta(seconds=60)
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
-INTEGRATIONS_ACTIVITY_TIMEOUT = timedelta(minutes=5)
+INTEGRATIONS_ACTIVITY_TIMEOUT = timedelta(minutes=2)
 INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
