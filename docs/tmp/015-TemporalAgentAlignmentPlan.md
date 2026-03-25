@@ -154,7 +154,7 @@ This plan closes that gap through five phases of work, each independently shippa
   - Workflows: phase progression, waiting, orchestration-level retries, HITL transitions, durable lifecycle state
 
 - [x] **4.6** Clean up naming collisions
-  - Rename "Approval Policy" → "Approval Policy" or "HITL Policy"
+  - Rename "Review Gate" → "Approval Policy" or "HITL Policy"
   - Distinguish **workflow pause** from **fleet quiesce/drain** in pause/resume docs
   - Remove any user-visible "queue" wording that implies ordering semantics
   - Avoid "dispatcher/supervisor" language for logic that is Workflow + Activity behavior

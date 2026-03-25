@@ -82,7 +82,7 @@
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Implement configuration precedence resolver in `moonmind/workflows/temporal/workflows/run.py` — merge plan-level `approval_policy`, workflow-level `initialParameters.approvalPolicy`, and `MOONMIND_REVIEW_GATE_DEFAULT_ENABLED` env var with correct precedence (DOC-REQ-013, DOC-REQ-014)
+- [ ] T023 [US3] Implement configuration precedence resolver in `moonmind/workflows/temporal/workflows/run.py` — merge plan-level `approval_policy`, workflow-level `initialParameters.approvalPolicy`, and `MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED` env var with correct precedence (DOC-REQ-013, DOC-REQ-014)
 - [ ] T024 [US3] Write unit tests for configuration precedence in `tests/unit/workflows/temporal/test_run_approval_policy.py` covering: plan-level wins, workflow-level when plan omits, env var when both omit, default off (DOC-REQ-013, DOC-REQ-014 validation)
 
 **Checkpoint**: All configuration paths resolved and tested.

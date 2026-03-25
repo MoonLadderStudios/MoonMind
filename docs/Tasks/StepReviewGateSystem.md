@@ -353,14 +353,14 @@ The `initialParameters` payload when starting a `MoonMind.Run` can include a app
 
 - Plan has `approval_policy` → use plan's config (even if `enabled: false`)
 - Plan omits `approval_policy` + workflow has `approvalPolicy` → use workflow config
-- Both omit → use `MOONMIND_REVIEW_GATE_DEFAULT_ENABLED` env var
+- Both omit → use `MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED` env var
 - All omit → approval policy is disabled
 
 > **Implementation note**: The plan parser must distinguish "plan omitted `approval_policy`" (→ `None`) from "plan explicitly set `approval_policy`" (→ `ApprovalPolicyPolicy`). Use `Optional[ApprovalPolicyPolicy]` on `PlanPolicy.approval_policy` with `None` meaning "not specified".
 
 ### 7.3 Environment Variable (Default)
 
-`MOONMIND_REVIEW_GATE_DEFAULT_ENABLED=false` — sets the system-wide default when neither plan nor workflow-level configuration is present. Off by default.
+`MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED=false` — sets the system-wide default when neither plan nor workflow-level configuration is present. Off by default.
 
 ### 7.4 Mission Control UI Toggle
 

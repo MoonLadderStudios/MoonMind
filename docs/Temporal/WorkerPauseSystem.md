@@ -31,8 +31,8 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 ### 3.1 Fleet Drain (default / recommended for upgrades)
 
-* **Mechanism**: Scale down or gracefully shut down `temporal-worker-sandbox`
-* This operates at the **fleet** level. The workflows themselves are not paused; they simply wait in the task queue for a worker to become available. and `agent_runtime` worker fleets.
+* **Mechanism**: Scale down or gracefully shut down `temporal-worker-sandbox` and `agent_runtime` worker fleets.
+* This operates at the **fleet** level. The workflows themselves are not paused; they simply wait in the task queue for a worker to become available.
 * A graceful shutdown in Temporal (`worker.shutdown()`) blocks new Activity claims immediately but lets currently executing Activities finish or hit their heartbeat timeout.
 * Operator waits until the Temporal UI shows no active workers mapping to the Task Queues → safe to restart/upgrade underlying images.
 
