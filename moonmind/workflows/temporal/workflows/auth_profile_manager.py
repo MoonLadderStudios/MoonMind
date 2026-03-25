@@ -201,6 +201,28 @@ class MoonMindAuthProfileManagerWorkflow:
       6. Uses continue-as-new to bound workflow history.
     """
 
+    def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
+        try:
+            info = workflow.info()
+        except Exception:
+            return logging.getLogger(__name__)
+
+        extra = {
+            "workflow_id": getattr(info, "workflow_id", "unknown"),
+            "run_id": getattr(info, "run_id", "unknown"),
+            "task_queue": getattr(info, "task_queue", "unknown"),
+        }
+
+        logger_to_use = workflow.logger
+        if not hasattr(logger_to_use, "isEnabledFor"):
+            logger_to_use = logging.getLogger(__name__)
+
+        try:
+            logger_to_use.isEnabledFor(logging.INFO)
+            return logging.LoggerAdapter(logger_to_use, extra=extra)
+        except Exception:
+            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+
     def __init__(self) -> None:
         self._runtime_id: Optional[str] = None
         self._profiles: dict[str, ProfileSlotState] = {}
@@ -420,7 +442,7 @@ class MoonMindAuthProfileManagerWorkflow:
                         req.requester_workflow_id, existing_profile_id
                     )
                 except Exception as e:
-                    workflow.logger.warning(
+                    self._get_logger().warning(
                         "Failed to signal existing slot to %s: %s",
                         req.requester_workflow_id,
                         e,
@@ -435,7 +457,7 @@ class MoonMindAuthProfileManagerWorkflow:
                         req.requester_workflow_id, profile.profile_id
                     )
                 except Exception as e:
-                    workflow.logger.warning(
+                    self._get_logger().warning(
                         "Failed to signal slot_assigned to %s (likely completed or dead): %s",
                         req.requester_workflow_id,
                         e,
@@ -468,7 +490,7 @@ class MoonMindAuthProfileManagerWorkflow:
         for profile in self._profiles.values():
             evicted = profile.evict_expired_leases(now, _MAX_LEASE_DURATION_SECONDS)
             for wf_id in evicted:
-                workflow.logger.warning(
+                self._get_logger().warning(
                     "Evicted stale lease for profile %s held by %s",
                     profile.profile_id,
                     wf_id,

@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from typing import Any, Optional, TypedDict
 
@@ -32,6 +33,28 @@ class ManifestIngestWorkflowOutput(TypedDict):
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindManifestIngestWorkflow:
+    def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
+        try:
+            info = workflow.info()
+        except Exception:
+            return logging.getLogger(__name__)
+
+        extra = {
+            "workflow_id": getattr(info, "workflow_id", "unknown"),
+            "run_id": getattr(info, "run_id", "unknown"),
+            "task_queue": getattr(info, "task_queue", "unknown"),
+        }
+
+        logger_to_use = workflow.logger
+        if not hasattr(logger_to_use, "isEnabledFor"):
+            logger_to_use = logging.getLogger(__name__)
+
+        try:
+            logger_to_use.isEnabledFor(logging.INFO)
+            return logging.LoggerAdapter(logger_to_use, extra=extra)
+        except Exception:
+            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+
     def __init__(self) -> None:
         self._manifest_ref: Optional[str] = None
         self._plan_ref: Optional[str] = None
@@ -39,6 +62,7 @@ class MoonMindManifestIngestWorkflow:
 
     @workflow.run
     async def run(self, input_payload: dict[str, Any]) -> ManifestIngestWorkflowOutput:
+        self._get_logger().info("Starting MoonMind.ManifestIngest workflow")
         self._manifest_ref = input_payload.get("manifest_ref")
 
         if not self._manifest_ref:
