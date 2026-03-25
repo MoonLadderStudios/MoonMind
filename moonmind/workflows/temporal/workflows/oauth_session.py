@@ -161,6 +161,24 @@ class MoonMindOAuthSessionWorkflow:
                 ),
             )
             self._container_name = runner_result.get("container_name", "")
+            tmate_web_url = runner_result.get("tmate_web_url", "")
+            tmate_ssh_url = runner_result.get("tmate_ssh_url", "")
+
+            # Store extracted URLs in DB
+            await workflow.execute_activity(
+                "oauth_session.update_session_urls",
+                {
+                    "session_id": self._session_id,
+                    "tmate_web_url": tmate_web_url,
+                    "tmate_ssh_url": tmate_ssh_url,
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=15),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    maximum_attempts=3,
+                ),
+            )
         except Exception as exc:
             await self._mark_failed(f"Failed to start auth runner: {exc}")
             return OAuthSessionOutput(
@@ -200,17 +218,61 @@ class MoonMindOAuthSessionWorkflow:
         # Step 6: Finalize — verify and register
         await self._update_status("verifying")
 
-        # The actual verification + profile registration happens in the
-        # finalize API endpoint (already implemented in oauth_sessions.py).
-        # The workflow just needs to mark succeeded and clean up.
-        await self._stop_auth_runner()
-        await self._update_status("completed")
+        try:
+            verify_result = await workflow.execute_activity(
+                "oauth_session.verify_volume",
+                {
+                    "session_id": self._session_id,
+                    "runtime_id": runtime_id,
+                    "volume_ref": volume_ref,
+                    "volume_mount_path": volume_mount_path,
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    maximum_attempts=2,
+                ),
+            )
 
-        return OAuthSessionOutput(
-            session_id=self._session_id,
-            status="completed",
-            failure_reason=None,
-        )
+            if verify_result.get("verified"):
+                await self._update_status("registering_profile")
+                await workflow.execute_activity(
+                    "oauth_session.register_profile",
+                    {"session_id": self._session_id},
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=1),
+                        maximum_attempts=3,
+                    ),
+                )
+
+                await self._stop_auth_runner()
+                await self._update_status("succeeded")
+
+                return OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="succeeded",
+                    failure_reason=None,
+                )
+            else:
+                reason = verify_result.get("reason", "unknown")
+                await self._stop_auth_runner()
+                await self._mark_failed(f"Volume verification failed: {reason}")
+                return OAuthSessionOutput(
+                    session_id=self._session_id,
+                    status="failed",
+                    failure_reason=f"Volume verification failed: {reason}",
+                )
+        except Exception as exc:
+            await self._stop_auth_runner()
+            await self._mark_failed(f"Finalize sequence failed: {exc}")
+            return OAuthSessionOutput(
+                session_id=self._session_id,
+                status="failed",
+                failure_reason=f"Finalize sequence failed: {exc}",
+            )
 
     # -- Internal helpers ------------------------------------------------------
 
