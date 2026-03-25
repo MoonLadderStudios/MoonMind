@@ -450,4 +450,4 @@ class ManagedRuntimeLauncher:
             workspace_path=resolved_workspace_path,
         )
         self._store.save(record)
-        return record, process, endpoints
+        return record, process, endpoints, tmate_manager

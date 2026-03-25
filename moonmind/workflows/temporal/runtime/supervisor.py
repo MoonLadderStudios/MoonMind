@@ -59,6 +59,7 @@ class ManagedRunSupervisor:
         timeout_seconds: int = 3600,
         exit_code_path: str | None = None,
         cleanup_paths: list[str] | None = None,
+        tmate_manager: Any | None = None,
     ) -> ManagedRunRecord:
         """Supervise a process and track heartbeat, completion, and cleanup."""
         self._active_processes[run_id] = process
@@ -160,6 +161,11 @@ class ManagedRunSupervisor:
             return record
         finally:
             self._active_processes.pop(run_id, None)
+            if tmate_manager is not None:
+                try:
+                    await tmate_manager.teardown()
+                except Exception:
+                    logger.warning("tmate_manager.teardown() failed for run_id=%s", run_id, exc_info=True)
             self._cleanup_runtime_files(self._cleanup_paths.pop(run_id, ()))
 
     async def _heartbeat_and_wait(
@@ -212,6 +218,8 @@ class ManagedRunSupervisor:
         """On startup: scan active records and mark lost PIDs as failed."""
         active_records = self._store.list_active()
         reconciled: list[ManagedRunRecord] = []
+        active_session_names = set()
+
         for record in active_records:
             if record.pid is not None and not self._pid_alive(record.pid):
                 updated = self._store.update_status(
@@ -224,6 +232,14 @@ class ManagedRunSupervisor:
                     ),
                 )
                 reconciled.append(updated)
+            elif record.pid is not None:
+                # Active session!
+                active_session_names.add(f"mm-{record.run_id.replace('-', '')[:16]}")
+
+        # GC orphaned tmate sockets for runtime wrappers
+        from .tmate_session import TmateSessionManager
+        TmateSessionManager.gc_orphaned_sockets(active_session_names)
+
         return reconciled
 
     @staticmethod

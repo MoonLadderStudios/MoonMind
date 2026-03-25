@@ -156,7 +156,7 @@ async def test_launch_spawns_process(tmp_path, monkeypatch):
     profile = _make_profile(command_template=["echo", "hello"])
     request = _make_request()
 
-    record, process, endpoints = await launcher.launch(
+    record, process, endpoints, _tmate_manager = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
@@ -210,7 +210,7 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
         _fake_create_subprocess_exec,
     )
 
-    _record, process, endpoints = await launcher.launch(
+    _record, process, endpoints, _tmate_manager = await launcher.launch(
         run_id="run-passthrough-1", request=request, profile=profile
     )
     await process.wait()
@@ -230,7 +230,7 @@ async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
     request = _make_request()
 
     # First launch
-    record, process, _ = await launcher.launch(
+    record, process, _, _ = await launcher.launch(
         run_id="run-1", request=request, profile=profile
     )
     await process.wait()
@@ -268,7 +268,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         workspace_spec={"newBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
-    record, process, _endpoints = await launcher.launch(
+    record, process, _endpoints, _tmate_manager = await launcher.launch(
         run_id="run-2",
         request=request,
         profile=profile,
@@ -329,7 +329,7 @@ async def test_tmate_launch_writes_config_and_exit_file_contract(
 
     monkeypatch.setattr(TmateSessionManager, "start", _fake_start)
 
-    record, process, endpoints = await launcher.launch(
+    record, process, endpoints, _tmate_manager = await launcher.launch(
         run_id="tmate-run-1",
         request=request,
         profile=profile,
@@ -416,7 +416,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    record, process, endpoints = await launcher.launch(
+    record, process, endpoints, _tmate_manager = await launcher.launch(
         run_id="workspace-run-1",
         request=request,
         profile=profile,
@@ -506,7 +506,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         _fake_create_subprocess_exec,
     )
 
-    _record, process, _endpoints = await launcher.launch(
+    _record, process, _endpoints, _tmate_manager = await launcher.launch(
         run_id="workspace-run-existing-branch",
         request=request,
         profile=profile,

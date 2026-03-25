@@ -156,6 +156,32 @@ class TmateSessionManager:
         """Computed config file path."""
         return self.socket_dir / f"{self.session_name}.conf"
 
+    @classmethod
+    def gc_orphaned_sockets(
+        cls,
+        active_session_names: set[str],
+        socket_dir: Path = Path("/tmp/moonmind/tmate"),
+    ) -> int:
+        """Clean up tmate socket/config files for inactive sessions."""
+        if not socket_dir.exists() or not socket_dir.is_dir():
+            return 0
+
+        removed_count = 0
+        for sock in socket_dir.glob("*.sock"):
+            session_name = sock.stem
+            if session_name not in active_session_names:
+                try:
+                    sock.unlink(missing_ok=True)
+                    conf = sock.with_suffix(".conf")
+                    conf.unlink(missing_ok=True)
+                    exit_file = sock.with_suffix(".exit")
+                    exit_file.unlink(missing_ok=True)
+                    removed_count += 1
+                except Exception:
+                    logger.debug("Failed to GC tmate session files for %s", session_name, exc_info=True)
+
+        return removed_count
+
     async def start(
         self,
         command: list[str] | str | None = None,
