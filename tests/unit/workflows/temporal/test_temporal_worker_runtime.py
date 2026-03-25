@@ -241,7 +241,9 @@ def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
     )
 
     text = plan["nodes"][-1]["inputs"]["instructions"]
-    assert "gh pr create" in text
+    assert "commit your work" in text
+    assert "Do NOT push or create a pull request" in text
+    assert "gh pr create" not in text
 
 
 def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
