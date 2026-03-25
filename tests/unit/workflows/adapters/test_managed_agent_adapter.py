@@ -749,6 +749,108 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     assert "manual_review" in result.summary
 
 
+async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "attempts_exhausted",\n'
+            '  "final_reason": "actionable_comments",\n'
+            '  "next_step": "run_fix_comments_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-blocked",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-blocked",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-pr-blocked")
+    assert result.failure_class == "user_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
+    assert "run_fix_comments_skill" in result.summary
+
+
+async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "attempts_exhausted",\n'
+            '  "final_reason": "actionable_comments",\n'
+            '  "next_step": "run_fix_comments_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-generic-failed",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Process exited with code 1",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-generic-failed",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result("run-result-pr-generic-failed")
+    assert result.failure_class == "user_error"
+    assert result.summary is not None
+    assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
+    assert "run_fix_comments_skill" in result.summary
+
+
 async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
     from datetime import UTC, datetime
 
