@@ -344,7 +344,7 @@ def _build_queue_request(
             },
             "git": {
                 "startingBranch": branch,
-                "newBranch": branch,
+                "targetBranch": branch,
             },
             "publish": {"mode": publish_mode},
         },

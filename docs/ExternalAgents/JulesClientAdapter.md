@@ -143,7 +143,7 @@ Public operations:
 - `create_task()`
 - `resolve_task()`
 - `get_task()`
-- `merge_pull_request()` — merges a Jules-created GitHub PR via the GitHub API (used for branch publish auto-merge)
+- `merge_pull_request()` — delegates to `GitHubService` for merging PRs via the GitHub API (used for branch publish auto-merge)
 
 This layer should remain transport-oriented and should not accumulate workflow semantics such as polling policy, Temporal wait behavior, or artifact publication.
 
@@ -213,7 +213,7 @@ When `publishMode == "branch"` and `integration == "jules"`:
 2. **Integration stage** — `MoonMind.Run._run_integration_stage()` polls Jules until the session reaches a terminal state.
 3. **Fetch result** — On `succeeded`, the workflow calls `integration.jules.fetch_result` to get the session data and extracts the PR URL.
 4. **Update base** *(conditional)* — If `targetBranch` is set and differs from `startingBranch`, the activity calls `JulesClient.update_pull_request_base()` to change the PR's base branch using the GitHub API.
-5. **Auto-merge** — The workflow calls `integration.jules.merge_pr`. This activity delegates to `JulesClient.merge_pull_request()`, which merges the PR via the GitHub API.
+5. **Auto-merge** — The workflow calls `repo.merge_pr`. This activity uses `GitHubService` to merge the PR via the GitHub API.
 6. **Result** — Changes land directly on the target branch. The Jules-created PR is closed automatically by GitHub upon merge.
 
 ```
@@ -248,11 +248,11 @@ The auto-merge step is **best-effort**:
 
 | Activity | Queue | Purpose |
 |----------|-------|---------|
-| `integration.jules.merge_pr` | `mm.activity.integrations` | Optionally update PR base, then merge via GitHub API |
+| `repo.merge_pr` | `mm.activity.integrations` | Optionally update PR base, then merge via GitHub API |
 
 ### 6.7 Schema
 
-`JulesIntegrationMergePRResult` (in `moonmind/schemas/jules_models.py`):
+`MergePRResult` (in `moonmind/workflows/adapters/github_service.py`):
 
 | Field | Type | Description |
 |-------|------|-------------|

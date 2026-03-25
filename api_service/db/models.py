@@ -1825,6 +1825,9 @@ class ManagedAgentAuthProfile(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+    max_lease_duration_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=7200, server_default=text("7200")
+    )
     owner_user_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid, nullable=True
     )
@@ -1917,6 +1920,69 @@ class ManagedAgentOAuthSession(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class AgentJobLiveSessionProvider(str, enum.Enum):
+    TMATE = "tmate"
+
+
+class AgentJobLiveSessionStatus(str, enum.Enum):
+    DISABLED = "disabled"
+    STARTING = "starting"
+    READY = "ready"
+    REVOKED = "revoked"
+    ENDED = "ended"
+    ERROR = "error"
+
+
+class TaskRunLiveSession(Base):
+    __tablename__ = "task_run_live_sessions"
+    __table_args__ = (
+        Index("ix_task_run_live_sessions_status_expires_at", "status", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    task_run_id: Mapped[UUID] = mapped_column(Uuid, unique=True, index=True)
+    provider: Mapped[AgentJobLiveSessionProvider] = mapped_column(
+        Enum(AgentJobLiveSessionProvider, name="agentjoblivesessionprovider")
+    )
+    status: Mapped[AgentJobLiveSessionStatus] = mapped_column(
+        Enum(AgentJobLiveSessionStatus, name="agentjoblivesessionstatus")
+    )
+    ready_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    worker_id: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
+    worker_hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tmate_session_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tmate_socket_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    attach_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attach_rw_encrypted: Mapped[Optional[str]] = mapped_column(
+        StringEncryptedType(Text, get_encryption_key), nullable=True
+    )
+    web_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    web_rw_encrypted: Mapped[Optional[str]] = mapped_column(
+        StringEncryptedType(Text, get_encryption_key), nullable=True
+    )
+    rw_granted_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=True
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 

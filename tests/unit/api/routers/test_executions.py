@@ -319,7 +319,7 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
                     },
                     "git": {
                         "startingBranch": "feature/resolve-pr",
-                        "newBranch": "codex/pr-resolver",
+                        "targetBranch": "codex/pr-resolver",
                     },
                 },
             },
@@ -344,7 +344,7 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     }
     assert initial_parameters["task"]["git"] == {
         "startingBranch": "feature/resolve-pr",
-        "newBranch": "codex/pr-resolver",
+        "targetBranch": "codex/pr-resolver",
     }
 
 

@@ -35,7 +35,7 @@ class TaskProposalTaskPreview(BaseModel):
     skill_id: Optional[str] = Field(None, alias="skillId")
     publish_mode: Optional[str] = Field(None, alias="publishMode")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
-    new_branch: Optional[str] = Field(None, alias="newBranch")
+    target_branch: Optional[str] = Field(None, alias="targetBranch")
     instructions: Optional[str] = Field(None, alias="instructions")
 
 

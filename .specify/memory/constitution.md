@@ -220,6 +220,20 @@ Non-negotiable rules:
 
 Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in disposable scratch space that can be deleted when done.
 
+### XIII. Pre-Release Velocity: Delete, Don't Deprecate
+
+MoonMind is a **pre-release project** with no external consumers. Speed of iteration and codebase clarity MUST take priority over backward compatibility with internal legacy patterns.
+
+Non-negotiable rules:
+
+- When a pattern, interface, model, activity name, or alias is superseded, the old version MUST be **removed immediately** — not preserved as a compatibility shim, fallback, or "just in case" alias.
+- Dead code, orphaned schemas, stale documentation, and unused imports MUST be deleted in the same change that introduces their replacement. Leaving them behind is a defect, not a kindness.
+- Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal-only contracts. There are no external consumers to protect.
+- Legacy artifacts (code, docs, configs) that remain after a refactor are considered **tech debt bugs**, not acceptable trade-offs. They actively harm troubleshooting by creating ambiguity about which path is live.
+- When refactoring, **track down and update every caller** — grep the codebase, update tests, update docs — in a single cohesive change. Partial migrations are worse than no migration.
+
+Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds the cost of a clean break. Every stale alias, orphaned model, or outdated doc section is a future debugging trap that wastes hours of human and agent time.
+
 ## Non-Negotiable Product & Operational Constraints
 
 - **Security / secret hygiene**:
@@ -232,9 +246,8 @@ Rationale: Canonical docs stay stable references for operators and implementers;
   - Mission Control is the primary interface for operators — its capabilities SHOULD grow alongside the orchestration layer.
 - **Compatibility & migration**:
   - Breaking changes to public APIs/contracts MUST include a migration plan.
-    - A deprecation window MUST be provided, and if not feasible, the reasoning MUST be
-      documented in the migration plan.
-  - Compatibility aliases are acceptable when they reduce operator pain, but MUST be observable and tracked.
+  - Since MoonMind is pre-release (see Principle XIII), **deprecation windows and compatibility aliases are NOT required** for internal contracts. Remove cleanly and immediately.
+  - If a future public API surface is introduced, deprecation windows MUST be defined at that time.
 
 ## Development Workflow & Quality Gates
 

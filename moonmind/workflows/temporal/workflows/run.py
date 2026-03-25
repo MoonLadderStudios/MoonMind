@@ -78,6 +78,11 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
     re.IGNORECASE,
 )
+# Replay-stable `workflow.patched` id for integration status polling terminal handling.
+# Keep in sync with docs/Temporal/WorkerDeployment.md if renamed (only before first prod deploy).
+INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
+# Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
+RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -159,6 +164,13 @@ class MoonMindRunWorkflow:
         self._proposals_generated = 0
         self._proposals_submitted = 0
         self._proposals_errors: list[str] = []
+
+        # Auth profile slot tracking for managed agent runs.
+        # Set when a child AgentRun acquires a slot so the parent can
+        # defensively release it if the child exits in a terminal state.
+        self._assigned_profile_id: Optional[str] = None
+        self._assigned_child_workflow_id: Optional[str] = None
+        self._assigned_runtime_id: Optional[str] = None
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -382,7 +394,13 @@ class MoonMindRunWorkflow:
             "initialParameters",
             "initial_parameters",
         )
-        self._repo = self._string_from_mapping(parameters, "repo")
+        ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
+        self._repo = (
+            self._string_from_mapping(parameters, "repo")
+            or self._string_from_mapping(parameters, "repository")
+            or self._string_from_mapping(ws, "repo")
+            or self._string_from_mapping(ws, "repository")
+        )
         self._integration = self._string_from_mapping(parameters, "integration")
 
         input_ref = self._optional_string(
@@ -421,19 +439,23 @@ class MoonMindRunWorkflow:
             return plan_ref
 
         plan_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.generate")
+        plan_payload_args = {
+            "principal": self._principal(),
+            "inputs_ref": input_ref,
+            "parameters": parameters,
+            "execution_ref": {
+                "namespace": workflow.info().namespace,
+                "workflow_id": workflow.info().workflow_id,
+                "run_id": workflow.info().run_id,
+                "link_type": "plan",
+            },
+        }
+        if workflow.patched("idempotency_key_phase3"):
+            plan_payload_args["idempotency_key"] = f"{workflow.info().workflow_id}_plan_generate"
+
         plan_result = await workflow.execute_activity(
             "plan.generate",
-            {
-                "principal": self._principal(),
-                "inputs_ref": input_ref,
-                "parameters": parameters,
-                "execution_ref": {
-                    "namespace": workflow.info().namespace,
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                    "link_type": "plan",
-                },
-            },
+            plan_payload_args,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(plan_route),
         )
@@ -612,18 +634,22 @@ class MoonMindRunWorkflow:
                         )
 
                     try:
+                        execute_payload = {
+                            "invocation_payload": invocation_payload,
+                            "principal": self._principal(),
+                            "registry_snapshot_ref": registry_snapshot_ref,
+                            "context": {
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "node_id": node_id,
+                            },
+                        }
+                        if workflow.patched("idempotency_key_phase3"):
+                            execute_payload["idempotency_key"] = f"{workflow.info().workflow_id}_{node_id}_execute"
+
                         execution_result = await workflow.execute_activity(
                             route.activity_type,
-                            {
-                                "invocation_payload": invocation_payload,
-                                "principal": self._principal(),
-                                "registry_snapshot_ref": registry_snapshot_ref,
-                                "context": {
-                                    "workflow_id": workflow.info().workflow_id,
-                                    "run_id": workflow.info().run_id,
-                                    "node_id": node_id,
-                                },
-                            },
+                            execute_payload,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             **self._execute_kwargs_for_route(route),
                         )
@@ -727,17 +753,17 @@ class MoonMindRunWorkflow:
             last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
             head_branch = (
                 agent_outputs.get("branch")
-                or agent_outputs.get("newBranch")
-                or ws.get("newBranch")
+                or agent_outputs.get("targetBranch")
+                or ws.get("targetBranch")
                 or ws.get("branch")
-                or last_node_inputs.get("newBranch")
+                or parameters.get("targetBranch")
+                or ws.get("targetBranch")
+                or last_node_inputs.get("targetBranch")
                 or last_node_inputs.get("branch")
                 or ""
             )
-            target_branch = (
-                parameters.get("targetBranch") 
-                or ws.get("targetBranch") 
-                or ws.get("startingBranch") 
+            base_branch = (
+                ws.get("startingBranch")
                 or last_node_inputs.get("startingBranch")
                 or "main"
             )
@@ -748,18 +774,18 @@ class MoonMindRunWorkflow:
                 )
             
             self._get_logger().info(
-                f"Creating PR natively from {head_branch} into {target_branch} for repo {self._repo}"
+                f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
             )
             create_payload = {
                 "repo": self._repo,
                 "head": head_branch,
-                "base": target_branch,
+                "base": base_branch,
                 "title": self._title or "Automated changes by MoonMind",
                 "body": self._summary or "Automated changes by MoonMind.",
             }
             try:
                 create_result = await workflow.execute_activity(
-                    "integration.jules.create_pr",
+                    "repo.create_pr",
                     create_payload,
                     start_to_close_timeout=timedelta(minutes=2),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -767,11 +793,16 @@ class MoonMindRunWorkflow:
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 pr_url = self._get_from_result(create_result, "url")
+                created = self._get_from_result(create_result, "created")
+                summary = self._get_from_result(create_result, "summary") or ""
                 if pr_url:
                     pull_request_url = pr_url
                     self._get_logger().info(f"Natively created PR: {pull_request_url}")
                 else:
-                    raise ValueError("PR creation activity succeeded but returned no URL")
+                    raise ValueError(
+                        f"PR creation activity returned no URL"
+                        f" (created={created}): {summary}"
+                    )
             except Exception as e:
                 raise ValueError(
                     f"publishMode 'pr' requested; native PR creation failed: {e}"
@@ -879,7 +910,7 @@ class MoonMindRunWorkflow:
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
-        for ws_key in ("repository", "repo", "startingBranch", "newBranch", "branch"):
+        for ws_key in ("repository", "repo", "startingBranch", "targetBranch", "branch"):
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
@@ -1116,7 +1147,12 @@ class MoonMindRunWorkflow:
 
                     status = self._get_from_result(poll_result, "normalized_status")
                     if status in ("completed", "failed", "canceled", "awaiting_feedback"):
-                        _poll_terminal = True
+                        # Temporal records which branch was taken; replay without the patch marker
+                        # must follow the pre-patch control flow (else branch + clear below).
+                        if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
+                            _poll_terminal = True
+                        else:
+                            self._resume_requested = True
                         self._external_status = "completed" if status == "awaiting_feedback" else status
                         if status == "failed":
                             self._get_logger().warning(f"Integration failed: {poll_result}")
@@ -1128,6 +1164,9 @@ class MoonMindRunWorkflow:
                     poll_interval_seconds = min(
                         poll_interval_seconds * 2, max_poll_interval_seconds
                     )
+
+            if not workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
+                self._resume_requested = False
 
             if self._external_status != "completed":
                 # If a step failed or was canceled, do not dispatch remaining steps
@@ -1187,35 +1226,35 @@ class MoonMindRunWorkflow:
 
                 if pr_url:
                     # Determine if the PR's base branch needs updating.
-                    # If targetBranch is specified and differs from
-                    # startingBranch (which Jules used as the PR base),
-                    # the activity will PATCH the PR before merging.
+                    # Jules creates the PR against startingBranch. If the
+                    # caller wants a different merge destination we PATCH
+                    # the PR base before merging.
                     ws = parameters.get("workspaceSpec") or {}
                     starting_branch = (
                         ws.get("startingBranch") or ws.get("branch") or "main"
                     )
-                    target_branch = (
-                        parameters.get("targetBranch")
-                        or ws.get("targetBranch")
+                    base_override = (
+                        parameters.get("publishBaseBranch")
+                        or ws.get("publishBaseBranch")
                     )
-                    # Only pass target_branch when it differs from starting
-                    effective_target = (
-                        target_branch
-                        if target_branch and target_branch != starting_branch
+                    # Only re-target when explicitly different from starting
+                    effective_base = (
+                        base_override
+                        if base_override and base_override != starting_branch
                         else None
                     )
 
                     self._get_logger().info(
-                        "Jules branch-publish: merging PR %s (target=%s)",
+                        "Jules branch-publish: merging PR %s (base=%s)",
                         pr_url,
-                        effective_target or starting_branch,
+                        effective_base or starting_branch,
                     )
                     merge_payload = {"pr_url": pr_url}
-                    if effective_target:
-                        merge_payload["target_branch"] = effective_target
+                    if effective_base:
+                        merge_payload["target_branch"] = effective_base
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "integration.jules.merge_pr"
+                        "repo.merge_pr"
                     )
                     merge_result = await workflow.execute_activity(
                         merge_route.activity_type,
@@ -1265,15 +1304,19 @@ class MoonMindRunWorkflow:
             proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "proposal.generate"
             )
+            generate_payload = {
+                "principal": self._principal(),
+                "workflow_id": workflow.info().workflow_id,
+                "run_id": workflow.info().run_id,
+                "repo": self._repo,
+                "parameters": parameters,
+            }
+            if workflow.patched("idempotency_key_phase3"):
+                generate_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_generate"
+
             candidates = await workflow.execute_activity(
                 "proposal.generate",
-                {
-                    "principal": self._principal(),
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                    "repo": self._repo,
-                    "parameters": parameters,
-                },
+                generate_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
             )
@@ -1304,14 +1347,18 @@ class MoonMindRunWorkflow:
                 "temporal_run_id": workflow.info().run_id,
                 "trigger_repo": self._repo or "",
             }
+            submit_payload = {
+                "candidates": candidate_list,
+                "policy": policy,
+                "origin": origin,
+                "principal": self._principal(),
+            }
+            if workflow.patched("idempotency_key_phase3"):
+                submit_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_submit"
+
             submit_result = await workflow.execute_activity(
                 "proposal.submit",
-                {
-                    "candidates": candidate_list,
-                    "policy": policy,
-                    "origin": origin,
-                    "principal": self._principal(),
-                },
+                submit_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
             )
@@ -1588,6 +1635,109 @@ class MoonMindRunWorkflow:
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
+        elif new_state in ("completed", "failed", "canceled", "timed_out"):
+            # Child has reached a terminal state. If we have an assigned profile
+            # slot, release it defensively. This is a fallback for cases where
+            # the child fails to release the slot due to cancellation or other
+            # issues.
+            if workflow.patched(RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH):
+                self._release_slot_defensive()
+
+    @workflow.signal
+    def profile_assigned(self, payload: dict) -> None:
+        """Record that a child AgentRun has acquired an auth profile slot.
+
+        The parent uses this to track which profile slot to release if the
+        child exits in a terminal state without releasing it itself.
+        """
+        self._assigned_profile_id = payload.get("profile_id")
+        self._assigned_child_workflow_id = payload.get("child_workflow_id")
+        self._assigned_runtime_id = payload.get("runtime_id")
+        self._get_logger().debug(
+            "Child workflow %s assigned profile %s",
+            self._assigned_child_workflow_id,
+            self._assigned_profile_id,
+        )
+
+    def _release_slot_defensive(self) -> None:
+        """Release the auth profile slot defensively when a child exits.
+
+        This is called when a child AgentRun exits in a terminal state but
+        may have failed to release its slot due to cancellation or other issues.
+        """
+        if not self._assigned_profile_id:
+            return
+
+        profile_id = self._assigned_profile_id
+        child_wf_id = self._assigned_child_workflow_id or "unknown"
+
+        self._get_logger().warning(
+            "Defensively releasing auth profile slot %s for child %s",
+            profile_id,
+            child_wf_id,
+        )
+
+        # Use the runtime_id passed from the child via profile_assigned signal.
+        # Fall back to inference from child_workflow_id if not available.
+        runtime_id = self._assigned_runtime_id or self._infer_runtime_from_child(child_wf_id)
+        if runtime_id:
+            manager_id = f"auth-profile-manager:{runtime_id}"
+            try:
+                manager_handle = workflow.get_external_workflow_handle(manager_id)
+                # Schedule the async signal without awaiting - best effort cleanup.
+                # The manager's verify_lease_holders will reclaim the slot if this fails.
+                asyncio.create_task(
+                    self._signal_release_slot(
+                        manager_handle, child_wf_id, profile_id
+                    )
+                )
+            except Exception:
+                self._get_logger().warning(
+                    "Failed to schedule defensive release for profile %s", profile_id
+                )
+
+        # Clear the assignment
+        self._assigned_profile_id = None
+        self._assigned_child_workflow_id = None
+        self._assigned_runtime_id = None
+
+    async def _signal_release_slot(
+        self, manager_handle: Any, child_workflow_id: str, profile_id: str
+    ) -> None:
+        """Send release_slot signal to the auth profile manager."""
+        try:
+            await manager_handle.signal(
+                "release_slot",
+                {
+                    "requester_workflow_id": child_workflow_id,
+                    "profile_id": profile_id,
+                },
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to signal release_slot for profile %s: %s", profile_id, exc
+            )
+
+    def _infer_runtime_from_child(self, child_workflow_id: str) -> Optional[str]:
+        """Infer runtime_id from child workflow ID pattern.
+
+        Child workflow ID pattern: "<parent_workflow_id>:agent:<node_id>[:retry<N>]"
+        The node_id typically indicates the agent kind (e.g., "jules", "gemini", "claude").
+        """
+        # Simple heuristic: extract from the workflow ID
+        # Format: parent_id:agent:node_id[:retry<N>]
+        parts = child_workflow_id.split(":")
+        if len(parts) >= 3:
+            node_id = parts[2]
+            # Map common node IDs to runtime IDs
+            mapping = {
+                "jules": "jules",
+                "gemini": "gemini_cli",
+                "claude": "claude_code",
+                "codex": "codex_cli",
+            }
+            return mapping.get(node_id)
+        return None
 
     @workflow.update(name="Pause")
     def pause(self) -> None:
