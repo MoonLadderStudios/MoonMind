@@ -330,11 +330,13 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.workflow"
     from moonmind.workflows.temporal.workflows.auth_profile_manager import MoonMindAuthProfileManagerWorkflow
+    from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     assert kwargs["workflows"] == [
         MoonMindRun,
         MoonMindManifestIngest,
         MoonMindAuthProfileManagerWorkflow,
         MoonMindAgentRun,
+        MoonMindOAuthSession,
     ]
     assert kwargs["activities"] == [
         resolve_external_adapter,
