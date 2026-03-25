@@ -260,6 +260,7 @@ COPY package.json package-lock.json postcss.config.cjs tailwind.config.cjs /buil
 COPY frontend/ /build/frontend/
 # Tailwind scans these paths for class usage (see tailwind.config.cjs content[])
 COPY api_service/templates/task_dashboard.html /build/api_service/templates/task_dashboard.html
+COPY api_service/templates/_navigation.html /build/api_service/templates/_navigation.html
 COPY api_service/static/task_dashboard/ /build/api_service/static/task_dashboard/
 
 RUN npm ci && npm run dashboard:css:min && npm run ui:build
