@@ -250,9 +250,9 @@ class TaskGitSelection(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     starting_branch: str | None = Field(None, alias="startingBranch")
-    new_branch: str | None = Field(None, alias="newBranch")
+    target_branch: str | None = Field(None, alias="targetBranch")
 
-    @field_validator("starting_branch", "new_branch", mode="before")
+    @field_validator("starting_branch", "target_branch", mode="before")
     @classmethod
     def _normalize_branches(cls, value: object) -> str | None:
         return _clean_optional_str(value)
@@ -894,7 +894,7 @@ def _build_task_from_codex_exec_payload(payload: Mapping[str, Any]) -> dict[str,
         },
         "git": {
             "startingBranch": _clean_optional_str(payload.get("ref")),
-            "newBranch": None,
+            "targetBranch": None,
         },
         "publish": publish_payload,
     }
@@ -989,7 +989,7 @@ def _build_task_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         },
         "git": {
             "startingBranch": ref,
-            "newBranch": None,
+            "targetBranch": None,
         },
         "publish": publish_payload,
     }
@@ -1067,7 +1067,7 @@ def build_canonical_task_view(
                     "model": None,
                     "effort": None,
                 },
-                "git": {"startingBranch": None, "newBranch": None},
+                "git": {"startingBranch": None, "targetBranch": None},
                 "publish": {
                     "mode": _normalize_publish_mode(None),
                     "prBaseBranch": None,

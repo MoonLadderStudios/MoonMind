@@ -265,7 +265,7 @@ async def test_launch_prepares_workspace_from_existing_repo(tmp_path, monkeypatc
         default_effort=None,
     )
     request = _make_request(
-        workspace_spec={"newBranch": "chore/update-pause-system-docs-16784273446666462405"}
+        workspace_spec={"targetBranch": "chore/update-pause-system-docs-16784273446666462405"}
     )
 
     record, process, _endpoints, _tmate_manager = await launcher.launch(
@@ -355,7 +355,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         workspace_spec={
             "repository": "MoonLadderStudios/MoonMind",
             "startingBranch": "main",
-            "newBranch": "feature/test",
+            "targetBranch": "feature/test",
         }
     )
 
@@ -458,7 +458,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         workspace_spec={
             "repository": "MoonLadderStudios/MoonMind",
             "startingBranch": "main",
-            "newBranch": "main",
+            "targetBranch": "main",
         }
     )
 

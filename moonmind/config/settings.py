@@ -109,7 +109,7 @@ class TemporalSettings(BaseSettings):
         ge=1,
     )
     agent_runtime_worker_concurrency: int | None = Field(
-        4,
+        16,
         validation_alias="TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY",
         ge=1,
     )

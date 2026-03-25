@@ -77,6 +77,10 @@ _EXTERNAL_STATUS_TO_RUN_STATUS: dict[str, str] = {
 
 PROVIDER_RATE_LIMIT_ERROR_CODE = "429"
 
+# Default workflow-level execution timeouts
+DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
+DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
+
 # Activity catalog constants for agent_runtime fleet routing.
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
 AGENT_RUNTIME_ACTIVITY_TIMEOUT = timedelta(minutes=2)
@@ -485,7 +489,11 @@ class MoonMindAgentRun:
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
 
-        timeout_seconds = 3600
+        timeout_seconds = (
+            DEFAULT_EXTERNAL_TIMEOUT_SECONDS
+            if request.agent_kind == "external"
+            else DEFAULT_MANAGED_TIMEOUT_SECONDS
+        )
         if request.timeout_policy and "timeout_seconds" in request.timeout_policy:
             timeout_seconds = request.timeout_policy["timeout_seconds"]
 
@@ -1041,6 +1049,7 @@ class MoonMindAgentRun:
                                 {"agent_kind": self.agent_kind, "run_id": self.run_id},
                                 task_queue=q,
                                 start_to_close_timeout=t,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                     except Exception:
                         self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
