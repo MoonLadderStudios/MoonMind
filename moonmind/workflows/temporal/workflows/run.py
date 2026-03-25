@@ -1594,6 +1594,7 @@ class MoonMindRunWorkflow:
             "state": self._state,
             "paused": self._paused,
             "cancel_requested": self._cancel_requested,
+            "canceling": self._cancel_requested and self._state != STATE_CANCELED,
             "step_count": self._step_count,
             "summary": self._summary,
             "awaiting_external": self._awaiting_external,
