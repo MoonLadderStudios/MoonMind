@@ -208,6 +208,7 @@ All MoonMind-owned Search Attributes for this query model follow these rules:
 | --- | --- | --- | --- | --- |
 | `mm_repo` | keyword | No | When execution is repo-scoped and product needs filtering | Must be bounded/stable, e.g. `owner/repo`. |
 | `mm_integration` | keyword | No | When execution is primarily tied to an external integration | Examples: `github`, `jules`. Keep bounded. |
+| `mm_scheduled_for` | datetime | No | When execution is scheduled via a start delay or Temporal Schedule | Queryable expected start time. |
 
 ### 6.4 Deferred Search Attributes
 
