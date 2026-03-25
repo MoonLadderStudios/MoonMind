@@ -568,6 +568,7 @@ class TemporalExecutionService:
 
         if (
             update_name in MANIFEST_UPDATE_NAMES
+            and update_name not in {"Pause", "Resume"}
             and record.workflow_type is not TemporalWorkflowType.MANIFEST_INGEST
         ):
             raise TemporalExecutionValidationError(
@@ -663,6 +664,37 @@ class TemporalExecutionService:
                 plan_artifact_ref=plan_artifact_ref,
                 parameters_patch=parameters_patch,
             )
+        elif update_name == "Pause":
+            record.paused = True
+            self._set_waiting_metadata(
+                record,
+                waiting_reason="operator_paused",
+                attention_required=True,
+            )
+            self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
+            self._set_wait_metadata(
+                record,
+                waiting_reason="operator_paused",
+                attention_required=True,
+            )
+            self._update_summary(record, "Execution paused.")
+            response = {"accepted": True, "applied": "async"}
+        elif update_name == "Resume":
+            record.paused = False
+            self._clear_waiting_metadata(record)
+            self._set_state(record, MoonMindWorkflowState.EXECUTING)
+            self._update_summary(record, "Execution resumed.")
+            response = {"accepted": True, "applied": "async"}
+        elif update_name == "Approve":
+            record.paused = False
+            self._clear_waiting_metadata(record)
+            self._set_state(record, MoonMindWorkflowState.EXECUTING)
+            self._update_summary(record, "Approval update received.")
+            response = {"accepted": True, "applied": "async"}
+        elif update_name == "Cancel":
+            self._set_state(record, MoonMindWorkflowState.CANCELED)
+            self._update_summary(record, "Execution canceled.")
+            response = {"accepted": True, "applied": "async"}
         else:
             raise TemporalExecutionValidationError(
                 f"Unsupported update name: {update_name}"
@@ -786,35 +818,6 @@ class TemporalExecutionService:
                     event_type=event_type,
                     payload=signal_payload,
                 )
-        elif signal_name == "Approve":
-            approval_type = signal_payload.get("approval_type")
-            if not approval_type:
-                raise TemporalExecutionValidationError(
-                    "Approve requires payload.approval_type"
-                )
-            record.paused = False
-            self._clear_waiting_metadata(record)
-            self._set_state(record, MoonMindWorkflowState.EXECUTING)
-            self._update_summary(record, "Approval signal received.")
-        elif signal_name == "Pause":
-            record.paused = True
-            self._set_waiting_metadata(
-                record,
-                waiting_reason="operator_paused",
-                attention_required=True,
-            )
-            self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
-            self._set_wait_metadata(
-                record,
-                waiting_reason="operator_paused",
-                attention_required=True,
-            )
-            self._update_summary(record, "Execution paused.")
-        elif signal_name == "Resume":
-            record.paused = False
-            self._clear_waiting_metadata(record)
-            self._set_state(record, MoonMindWorkflowState.EXECUTING)
-            self._update_summary(record, "Execution resumed.")
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()

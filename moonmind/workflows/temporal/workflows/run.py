@@ -1512,13 +1512,20 @@ class MoonMindRunWorkflow:
         elif new_state == "running":
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
 
-    @workflow.signal
+    @workflow.update(name="Pause")
     def pause(self) -> None:
         self._paused = True
         self._waiting_reason = "Paused by user"
         self._update_search_attributes()
 
-    @workflow.signal
+    @pause.validator
+    def validate_pause(self) -> None:
+        if self._paused:
+            raise ValueError("Workflow is already paused.")
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot pause a completed workflow.")
+
+    @workflow.update(name="Resume")
     def resume(self) -> None:
         self._paused = False
         self._waiting_reason = None
@@ -1526,18 +1533,38 @@ class MoonMindRunWorkflow:
             self._resume_requested = True
         self._update_search_attributes()
 
-    @workflow.signal
+    @resume.validator
+    def validate_resume(self) -> None:
+        if not self._paused and not self._awaiting_external:
+            raise ValueError("Workflow is not paused or awaiting external completion.")
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot resume a completed workflow.")
+
+    @workflow.update(name="Approve")
     def approve(self) -> None:
         self._approve_requested = True
         if self._awaiting_external:
             self._resume_requested = True
 
-    @workflow.signal
+    @approve.validator
+    def validate_approve(self) -> None:
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot approve a completed workflow.")
+
+    @workflow.update(name="Cancel")
     def cancel(self, reason: Optional[str] = None) -> None:
         self._cancel_requested = True
+        self._paused = False
         self._close_status = CLOSE_STATUS_CANCELED
         summary = f"Canceled: {reason}" if reason else "Canceled."
         self._set_state(STATE_CANCELED, summary=summary)
+
+    @cancel.validator
+    def validate_cancel(self, reason: Optional[str] = None) -> None:
+        if self._cancel_requested:
+            raise ValueError("Workflow is already canceled.")
+        if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
+            raise ValueError("Cannot cancel a completed workflow.")
 
     @workflow.signal(name="ExternalEvent")
     def external_event(self, payload: dict[str, Any]) -> None:
