@@ -40,6 +40,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionModel,
     ExecutionRefreshEnvelope,
     PollIntegrationRequest,
+    RescheduleExecutionRequest,
     ScheduleCreatedResponse,
     ScheduleParameters,
     SignalExecutionRequest,
@@ -1694,6 +1695,70 @@ async def cancel_execution(
             raw_identifier=workflow_id,
             canonical_identifier=canonical_workflow_id,
         )
+    return _serialize_execution(record)
+
+
+@router.post(
+    "/{workflow_id}/reschedule",
+    response_model=ExecutionModel,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reschedule_execution(
+    workflow_id: str,
+    payload: RescheduleExecutionRequest,
+    response: Response,
+    service: TemporalExecutionService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+    _actions_enabled: None = Depends(_ensure_actions_enabled),
+) -> ExecutionModel:
+    record = await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+
+    if record.state != MoonMindWorkflowState.SCHEDULED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "reschedule_rejected",
+                "message": f"Cannot reschedule workflow in state {record.state.value}",
+            },
+        )
+    
+    # We must enforce that the target is in the future.
+    try:
+        _compute_schedule_delay(payload.scheduled_for)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.detail,
+        ) from exc
+
+    try:
+        await get_temporal_client_adapter().send_reschedule_signal(
+            record.workflow_id, payload.scheduled_for
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "signal_failed",
+                "message": f"Temporal signal failed: {exc}",
+            },
+        ) from exc
+
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+    
+    # We shouldn't rely strictly on describing the Execution immediately because Temporal signal is async.
+    # But let's return the updated record locally updated for the user.
+    if isinstance(record, TemporalExecutionRecord):
+        record.scheduled_for = payload.scheduled_for
+        await service._session.commit()
+        await service._session.refresh(record)
+
     return _serialize_execution(record)
 
 

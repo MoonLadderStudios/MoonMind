@@ -376,6 +376,8 @@ class TemporalExecutionService:
                     "input_artifact_ref": input_artifact_ref,
                     "plan_artifact_ref": plan_artifact_ref,
                 }
+                if scheduled_for is not None:
+                    input_args["scheduled_for"] = scheduled_for.isoformat()
             elif workflow_type_enum is TemporalWorkflowType.MANIFEST_INGEST:
                 input_args = {
                     "workflow_type": "MoonMind.ManifestIngest",
@@ -390,7 +392,7 @@ class TemporalExecutionService:
                 input_args=input_args,
                 memo=memo,
                 search_attributes=search_attributes,
-                start_delay=start_delay,
+                start_delay=start_delay if workflow_type_enum is not TemporalWorkflowType.RUN else None,
             )
             start_run_id = getattr(start_result, "run_id", None)
             if (

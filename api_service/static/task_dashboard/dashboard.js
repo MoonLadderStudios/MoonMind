@@ -7504,6 +7504,9 @@
     ) {
       buttons.push('<button type="button" data-temporal-action="set-title">Set Title</button>');
     }
+    if (rawState === "scheduled") {
+      buttons.push('<button type="button" class="secondary" data-temporal-action="reschedule">Change scheduled time</button>');
+    }
     if (capabilityNode ? Boolean(pick(capabilityNode, "canCancel")) : !terminal) {
       buttons.push('<button type="button" class="queue-action queue-action-danger" data-temporal-action="cancel">Cancel</button>');
     }
@@ -8175,6 +8178,25 @@
           },
         );
         detailNotice = "Task title updated.";
+        detailNoticeLevel = "ok";
+        return;
+      }
+      if (normalizedAction === "reschedule") {
+        const currentScheduledFor = execution.scheduledFor || execution.scheduled_for || "";
+        const nextTime = window.prompt("New scheduled time (ISO 8601, e.g., 2026-03-24T12:00:00Z)", currentScheduledFor);
+        if (nextTime === null || !nextTime.trim()) {
+          return;
+        }
+        await fetchJson(
+          `/api/executions/${encodeURIComponent(detailWorkflowId)}/reschedule`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              scheduledFor: nextTime.trim(),
+            }),
+          },
+        );
+        detailNotice = "Task reschedule requested.";
         detailNoticeLevel = "ok";
         return;
       }

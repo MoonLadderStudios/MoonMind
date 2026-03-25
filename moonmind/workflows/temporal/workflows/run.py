@@ -43,6 +43,7 @@ class RunWorkflowInput(TypedDict, total=False):
     initial_parameters: dict[str, Any]
     input_artifact_ref: Optional[str]
     plan_artifact_ref: Optional[str]
+    scheduled_for: Optional[str]
 
 
 class _RunWorkflowOutputBase(TypedDict):
@@ -56,6 +57,7 @@ class RunWorkflowOutput(_RunWorkflowOutputBase, total=False):
 
 
 WORKFLOW_NAME = "MoonMind.Run"
+STATE_SCHEDULED = "scheduled"
 STATE_INITIALIZING = "initializing"
 STATE_WAITING_ON_DEPENDENCIES = "waiting_on_dependencies"
 STATE_PLANNING = "planning"
@@ -149,6 +151,9 @@ class MoonMindRunWorkflow:
         self._step_count = 0
         self._max_wait_cycles = 100
         self._max_steps = 100
+
+        self._scheduled_for: Optional[str] = None
+        self._reschedule_requested = False
 
         # Proposal tracking
         self._proposals_generated = 0
@@ -247,7 +252,7 @@ class MoonMindRunWorkflow:
     @workflow.run
     async def run(self, input_payload: RunWorkflowInput) -> RunWorkflowOutput:
         try:
-            workflow_type, parameters, input_ref, plan_ref = (
+            workflow_type, parameters, input_ref, plan_ref, scheduled_for = (
                 self._initialize_from_payload(input_payload)
             )
         except ValueError as exc:
@@ -259,6 +264,40 @@ class MoonMindRunWorkflow:
             "Starting MoonMind.Run workflow",
             extra={"workflow_type": workflow_type},
         )
+
+        if self._scheduled_for:
+            self._set_state(STATE_SCHEDULED, summary=f"Execution scheduled for {self._scheduled_for}.")
+            while True:
+                if not self._scheduled_for:
+                    break
+                
+                try:
+                    from datetime import datetime
+                    target_dt = datetime.fromisoformat(self._scheduled_for.replace("Z", "+00:00"))
+                except Exception:
+                    self._get_logger().warning(f"Invalid scheduled_for format: {self._scheduled_for}")
+                    break
+                
+                now = workflow.now()
+                delay = target_dt - now
+                if delay.total_seconds() <= 0:
+                    break
+                
+                self._reschedule_requested = False
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._reschedule_requested or self._cancel_requested,
+                        timeout=delay,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                
+                if self._cancel_requested:
+                    break
+
+        if self._cancel_requested:
+            await self._run_finalizing_stage(parameters=parameters, status="canceled", error=None)
+            return {"status": "canceled"}
 
         self._set_state(STATE_INITIALIZING, summary="Execution initialized.")
         self._set_state(STATE_PLANNING, summary="Planning execution strategy.")
@@ -315,7 +354,7 @@ class MoonMindRunWorkflow:
 
     def _initialize_from_payload(
         self, input_payload: dict[str, Any]
-    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str]]:
+    ) -> tuple[str, dict[str, Any], Optional[str], Optional[str], Optional[str]]:
         if not isinstance(input_payload, dict):
             raise ValueError("input_payload must be a dictionary")
 
@@ -355,13 +394,20 @@ class MoonMindRunWorkflow:
             "planArtifactRef",
             "plan_artifact_ref",
         )
+        scheduled_for = self._optional_string(
+            input_payload,
+            "scheduledFor",
+            "scheduled_for",
+        )
 
         if input_ref:
             self._input_ref = input_ref
         if plan_ref:
             self._plan_ref = plan_ref
+        if scheduled_for:
+            self._scheduled_for = scheduled_for
 
-        return workflow_type, parameters, input_ref, plan_ref
+        return workflow_type, parameters, input_ref, plan_ref, scheduled_for
 
     async def _run_planning_stage(
         self,
@@ -1465,6 +1511,12 @@ class MoonMindRunWorkflow:
             attributes["mm_repo"] = self._repo
         if self._integration:
             attributes["mm_integration"] = self._integration
+        if self._scheduled_for:
+            try:
+                from datetime import datetime
+                attributes["mm_scheduled_for"] = datetime.fromisoformat(self._scheduled_for.replace("Z", "+00:00"))
+            except Exception:
+                pass
 
         formatted_attributes = {
             k: v if isinstance(v, list) else [v] for k, v in attributes.items()
@@ -1536,6 +1588,13 @@ class MoonMindRunWorkflow:
         self._close_status = CLOSE_STATUS_CANCELED
         summary = f"Canceled: {reason}" if reason else "Canceled."
         self._set_state(STATE_CANCELED, summary=summary)
+
+    @workflow.signal(name="reschedule")
+    def reschedule(self, new_scheduled_for: str) -> None:
+        self._scheduled_for = new_scheduled_for
+        self._reschedule_requested = True
+        self._set_state(STATE_SCHEDULED, summary=f"Execution rescheduled for {self._scheduled_for}.")
+        self._update_search_attributes()
 
     @workflow.signal(name="ExternalEvent")
     def external_event(self, payload: dict[str, Any]) -> None:
