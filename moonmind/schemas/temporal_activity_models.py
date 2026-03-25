@@ -5,19 +5,22 @@ ensuring strict boundaries and safe serialization of binary fields.
 
 Phase 1 Policy Standards:
 1. All new activity inputs should use Pydantic v2 models.
-2. Activities should take a single structured argument (the input model) 
+2. Activities should take a single structured argument (the input model)
    to keep stubs and `execute_activity` call sites symmetrical.
-3. Avoid raw `bytes` in dicts. Use `Base64Bytes` (or explicitly encode 
-   to base64/utf-8 strings) so the JSON serializer does not accidentally 
+3. Avoid raw `bytes` in dicts. Use `Base64Bytes` (or explicitly encode
+   to base64/utf-8 strings) so the JSON serializer does not accidentally
    create a `list[int]`.
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
 from typing import Any, Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, PlainValidator
+
+from .temporal_artifact_models import ArtifactRefModel
 
 
 def _decode_b64(v: str | bytes | list[int]) -> bytes:
@@ -29,9 +32,25 @@ def _decode_b64(v: str | bytes | list[int]) -> bytes:
     if isinstance(v, bytes):
         return v
     if isinstance(v, list):
-        return bytes(v)
+        # Explicitly validate legacy list[int] input to produce clear errors instead
+        # of relying on the lower-level exceptions from bytes(v).
+        validated: list[int] = []
+        for idx, item in enumerate(v):
+            # Reject non-ints (including bools) and out-of-range values.
+            if not isinstance(item, int) or isinstance(item, bool) or not 0 <= item <= 255:
+                raise ValueError(
+                    "Expected list[int] with values in range 0-255; "
+                    f"found invalid element at index {idx}: {item!r}"
+                )
+            validated.append(item)
+        return bytes(validated)
     if isinstance(v, str):
-        return base64.b64decode(v)
+        try:
+            return base64.b64decode(v, validate=True)
+        except binascii.Error:
+            # Fallback to UTF-8 encoded string for legacy compatibility
+            # where string payloads were passed in cleartext
+            return v.encode("utf-8")
     raise ValueError(f"Expected base64 string, bytes, or list[int]; got {type(v)}")
 
 def _encode_b64(b: bytes) -> str:
@@ -53,7 +72,7 @@ class ArtifactReadInput(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    artifact_ref: str | dict[str, Any] = Field(
+    artifact_ref: str | ArtifactRefModel = Field(
         ...,
         description="The artifact ID or an artifact reference dict/model.",
     )
