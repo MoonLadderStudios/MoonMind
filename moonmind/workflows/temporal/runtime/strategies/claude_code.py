@@ -41,8 +41,11 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         if effort:
             cmd.extend(["--effort", effort])
 
+        # -p (--print) enables non-interactive mode, required for managed runs.
+        # The prompt is a positional argument in Claude CLI, not a --prompt flag.
+        cmd.append("-p")
         if request.instruction_ref:
-            cmd.extend(["--prompt", request.instruction_ref])
+            cmd.append(request.instruction_ref)
 
         return cmd
 

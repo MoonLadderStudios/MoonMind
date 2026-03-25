@@ -80,40 +80,40 @@ This plan closes that gap and adds supporting improvements across five phases.
 
 **Goal:** Replace the DB-backed scheduling/dispatch loop with Temporal Schedule reconciliation while preserving the API surface.
 
-- [ ] **2.1** Add `temporal_schedule_id` column to `RecurringTaskDefinition`
+- [x] **2.1** Add `temporal_schedule_id` column to `RecurringTaskDefinition`
   - **Files:** DB migration, `api_service/db/models.py`
   - Nullable string; when populated, indicates the definition has a corresponding Temporal Schedule
 
-- [ ] **2.2** Wire Temporal Schedule operations into definition CRUD
+- [x] **2.2** Wire Temporal Schedule operations into definition CRUD
   - **Files:** `recurring_tasks_service.py`
   - On `create_definition()`: call `TemporalClientAdapter.create_schedule()`
   - On `update_definition()`: call `update_schedule()`
   - On enable/disable: call `pause_schedule()` / `unpause_schedule()`
   - On manual run: call `trigger_schedule()`
 
-- [ ] **2.3** Add hybrid dispatch with feature flag
+- [x] **2.3** Add hybrid dispatch with feature flag
   - **Files:** `recurring_tasks_service.py`
   - Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` | `"temporal"` | `"dual"`)
   - In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing)
   - ⚠️ Run in dual mode for at least one full cron cycle before switching to `"temporal"` mode
 
-- [ ] **2.4** Migrate existing definitions to Temporal Schedules
+- [x] **2.4** Migrate existing definitions to Temporal Schedules
   - **Files:** New migration script
   - Iterate existing enabled definitions and call `create_schedule()` for each
   - Populate `temporal_schedule_id`
 
-- [ ] **2.5** Move target resolution into the workflow
+- [x] **2.5** Move target resolution into the workflow
   - Target resolution (template expansion, manifest lookup) moves from the scheduler service into the workflow
   - Schedule payload includes raw target specification
   - `MoonMind.Run` or `MoonMind.ManifestIngest` resolves the target in its initialization phase via Activities
   - Removes the scheduler's dependency on `ManifestsService` and `TaskTemplateCatalogService`
 
-- [ ] **2.6** Add reconciliation error handling
+- [x] **2.6** Add reconciliation error handling
   - If a Temporal Schedule operation fails (e.g., Temporal temporarily unavailable), the MoonMind DB update succeeds but the Temporal Schedule is stale
   - Implement a reconciliation sweep (invoked periodically or on next access) that re-applies DB state to Temporal
   - Add logs and metrics to track reconciliation mismatches
 
-- [ ] **2.7** Deprecate app-layer cron computation
+- [x] **2.7** Deprecate app-layer cron computation
   - **Files:** `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py`
   - Once `"temporal"` mode is stable, remove: `schedule_due_definitions()`, `_compute_due_occurrences()`, `_insert_run_if_missing()`, `dispatch_pending_runs()`, `_dispatch_run()`, `_dispatch_temporal_task()`, `_dispatch_temporal_task_template()`, `_dispatch_manifest_run()`, `_count_active_runs()`, `_bulk_fetch_active_counts()`, `_bulk_fetch_existing_executions()`, `_find_existing_temporal_execution_for_run()`, `run_scheduler_tick()`
   - Keep: cron/timezone validation helpers for UI, `RecurringTaskDefinition` model, CRUD methods, `/api/recurring-tasks` routes

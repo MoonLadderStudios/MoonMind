@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from datetime import timedelta
 from temporalio import workflow, activity
@@ -121,6 +122,33 @@ async def external_adapter_execution_style(agent_id: str) -> str:
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
+    def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
+        try:
+            info = workflow.info()
+        except Exception:
+            logging.getLogger(__name__).exception("Error getting workflow info in _get_logger")
+            return logging.getLogger(__name__)
+
+        extra = {
+            "workflow_id": getattr(info, "workflow_id", "unknown"),
+            "run_id": getattr(info, "run_id", "unknown"),
+            "task_queue": getattr(info, "task_queue", "unknown"),
+        }
+        owner_id = getattr(self, "_owner_id", None)
+        if owner_id:
+            extra["owner_id"] = owner_id
+
+        logger_to_use = workflow.logger
+        if not hasattr(logger_to_use, "isEnabledFor"):
+            logger_to_use = logging.getLogger(__name__)
+
+        try:
+            logger_to_use.isEnabledFor(logging.INFO)
+            return logging.LoggerAdapter(logger_to_use, extra=extra)
+        except Exception:
+            logging.getLogger(__name__).exception("Error checking logger capabilities in _get_logger")
+            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+
     def __init__(self):
         self.completion_event = asyncio.Event()
         self.slot_assigned_event = asyncio.Event()
@@ -165,7 +193,7 @@ class MoonMindAgentRun:
                 getattr(exc, "type", None) or str(exc)
             ):
                 raise
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "AuthProfileManager %s not found, auto-starting via activity",
                 manager_id,
             )
@@ -204,7 +232,7 @@ class MoonMindAgentRun:
             await manager_handle.signal("sync_profiles", {"profiles": profiles})
             return len(profiles)
         except Exception:
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "Failed to sync auth profiles for runtime_id=%s; continuing with manager state",
                 runtime_id,
                 exc_info=True,
@@ -657,7 +685,7 @@ class MoonMindAgentRun:
                                         handle_dict
                                     )
                                 except ValueError as exc:
-                                    workflow.logger.warning(str(exc))
+                                    self._get_logger().warning(str(exc))
                                     raise ApplicationError(
                                         str(exc),
                                         type="UnsupportedStatus",
@@ -765,7 +793,7 @@ class MoonMindAgentRun:
                                 if not aa_enabled or self._auto_answer_count >= aa_max:
                                     # Opt-out or max cycles exhausted → escalate
                                     self.run_status = "intervention_requested"
-                                    workflow.logger.warning(
+                                    self._get_logger().warning(
                                         "Jules auto-answer %s for session %s (count=%d, max=%d)",
                                         "disabled" if not aa_enabled else "exhausted",
                                         self.run_id,
@@ -803,14 +831,14 @@ class MoonMindAgentRun:
                                     if isinstance(answer_result, dict) and answer_result.get("answered"):
                                         self._answered_activity_ids.add(act_id)
                                         self._auto_answer_count += 1
-                                        workflow.logger.info(
+                                        self._get_logger().info(
                                             "Jules auto-answer #%d sent for session %s (activity %s)",
                                             self._auto_answer_count,
                                             self.run_id,
                                             act_id,
                                         )
                                     else:
-                                        workflow.logger.warning(
+                                        self._get_logger().warning(
                                             "Jules auto-answer failed for session %s: %s",
                                             self.run_id,
                                             answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
@@ -917,7 +945,7 @@ class MoonMindAgentRun:
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
-                    workflow.logger.warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
+                    self._get_logger().warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
             return AgentRunResult(failure_class="execution_error")
 
         except CancelledError:
@@ -934,7 +962,7 @@ class MoonMindAgentRun:
                         await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                     except Exception:
                         # Errors are intentionally ignored to avoid masking the original cancellation
-                        workflow.logger.warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
+                        self._get_logger().warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
                 
                 tasks.append(asyncio.shield(_release_slot()))
 
@@ -957,7 +985,7 @@ class MoonMindAgentRun:
                                 start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
                             )
                     except Exception:
-                        workflow.logger.warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
+                        self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
                 
                 tasks.append(asyncio.shield(_cancel_agent()))
 
@@ -974,5 +1002,5 @@ class MoonMindAgentRun:
                     manager_handle = workflow.get_external_workflow_handle(manager_id)
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
                 except Exception:
-                    workflow.logger.warning("Failed to release slot on unexpected exception, which may lead to a leak.", exc_info=True)
+                    self._get_logger().warning("Failed to release slot on unexpected exception, which may lead to a leak.", exc_info=True)
             raise

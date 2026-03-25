@@ -7,6 +7,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from temporalio import activity
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -172,6 +173,11 @@ class ManagedRunSupervisor:
                 )
                 return exit_code
             except asyncio.TimeoutError:
+                try:
+                    activity.heartbeat({"run_id": run_id})
+                except Exception as e:
+                    # Activity heartbeat failures are non-fatal for the supervisor loop
+                    logger.debug("Activity heartbeat failed: %s", e)
                 self._store.update_status(
                     run_id,
                     "running",

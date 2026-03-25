@@ -62,24 +62,24 @@ This plan closes that gap through five phases of work, each independently shippa
 
 **Goal:** Systematic structured logging, workflow tests covering signals/updates, and replay determinism.
 
-- [ ] **2.1** Add structured logging context to all workflows
+- [x] **2.1** Add structured logging context to all workflows
   - **Files:** `run.py`, `agent_run.py`, `auth_profile_manager.py`, `manifest_ingest.py`
   - Standardize `extra=` fields: `workflow_id`, `run_id`, `task_queue`, `owner_id`
   - Use `workflow.info()` consistently
 
-- [ ] **2.2** Add signal/update round-trip unit tests
+- [x] **2.2** Add signal/update round-trip unit tests
   - **Files:** `tests/unit/workflows/temporal/workflows/`
   - Test `pause` → `wait_condition` unblocks on `resume`
   - Test `cancel` stops execution
   - Test `update_parameters` is acknowledged
   - Use Temporal Python SDK test environment (`WorkflowEnvironment.start_time_skipping()`)
 
-- [ ] **2.3** Add replay determinism test harness
+- [x] **2.3** Add replay determinism test harness
   - **Files:** `tests/unit/workflows/temporal/`
   - Capture a workflow history JSON, then replay against current workflow code to catch non-determinism
   - Critical given `UnsandboxedWorkflowRunner()`
 
-- [ ] **2.4** Evaluate OpenTelemetry integration
+- [x] **2.4** Evaluate OpenTelemetry integration
   - **Files:** `pyproject.toml`, `worker_runtime.py`
   - The Temporal Python SDK supports interceptors for tracing
   - Add `opentelemetry-api` + `opentelemetry-sdk` + `temporalio` tracing interceptor

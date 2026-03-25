@@ -267,6 +267,11 @@ class WorkflowSettings(BaseSettings):
         "specs",
         validation_alias=AliasChoices("WORKFLOW_TASKS_ROOT", "WORKFLOW_TASKS_ROOT"),
     )
+    recurring_dispatch_engine: str = Field(
+        "app",
+        validation_alias=AliasChoices("RECURRING_DISPATCH_ENGINE"),
+        description="Engine for recurring schedules: 'app', 'temporal', or 'dual'",
+    )
     artifacts_root: str = Field(
         "var/artifacts/workflows",
         validation_alias=AliasChoices(
