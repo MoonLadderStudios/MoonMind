@@ -149,8 +149,9 @@ The target state is clean: **Temporal owns execution truth. Period.**
 - [ ] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source references, retire multi-source pagination section
 - [x] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — fully superseded *(removed)*
 - [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/system references remain
-- [ ] **5.6** Update Roadmap: close H.1 (system removal) and mark this plan's items as done
-- [ ] **5.7** Delete this document once complete
+- [ ] **5.6** Update `docs/Temporal/TemporalArchitecture.md` (legacy decommission, simplify visibility/API posture, update diagrams/cross-links when queue/worker docs retire) *(formerly tracked in 020-Temporal-TemporalArchitecture.md)*
+- [ ] **5.7** Update Roadmap: close H.1 (system removal) and mark this plan's items as done
+- [ ] **5.8** Delete this document once complete
 
 ---
 
