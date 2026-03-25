@@ -26,7 +26,7 @@ SUPPORTED_UPDATE_NAMES = (
     "Cancel",
     "Approve",
 )
-SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Approve", "Pause", "Resume")
+SUPPORTED_SIGNAL_NAMES = ("ExternalEvent",)
 
 from moonmind.schemas.manifest_ingest_models import (
     ManifestExecutionPolicyModel,

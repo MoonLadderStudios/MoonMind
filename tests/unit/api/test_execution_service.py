@@ -171,11 +171,10 @@ async def test_action_validation_relies_on_temporal(
     with pytest.raises(TemporalExecutionValidationError) as exc:
         await service.signal_execution(
             workflow_id="mm:123",
-            signal_name="Pause",
+            signal_name="ExternalEvent",
             payload={},
             payload_artifact_ref=None,
         )
-
     assert "Temporal signal failed: Temporal workflow is already closed" in str(
         exc.value
     )

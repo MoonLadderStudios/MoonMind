@@ -590,7 +590,7 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path
         with pytest.raises(TemporalExecutionValidationError) as exc_info:
             await service.update_execution(
                 workflow_id=created.workflow_id,
-                update_name="Pause",
+                update_name="UpdateManifest",
                 input_artifact_ref=None,
                 plan_artifact_ref=None,
                 parameters_patch=None,
@@ -623,11 +623,9 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path)
             idempotency_key=None,
         )
 
-        await service.signal_execution(
+        await service.update_execution(
             workflow_id=created.workflow_id,
-            signal_name="Pause",
-            payload=None,
-            payload_artifact_ref=None,
+            update_name="Pause",
         )
 
         rerun = await service.update_execution(
@@ -701,22 +699,18 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
             idempotency_key=None,
         )
 
-        await service.signal_execution(
+        await service.update_execution(
             workflow_id=created.workflow_id,
-            signal_name="Pause",
-            payload=None,
-            payload_artifact_ref=None,
+            update_name="Pause",
         )
         paused = await service.describe_execution(created.workflow_id)
         assert paused.state is MoonMindWorkflowState.AWAITING_EXTERNAL
         assert paused.memo["waiting_reason"] == "operator_paused"
         assert paused.memo["attention_required"] is True
 
-        await service.signal_execution(
+        await service.update_execution(
             workflow_id=created.workflow_id,
-            signal_name="Resume",
-            payload=None,
-            payload_artifact_ref=None,
+            update_name="Resume",
         )
         resumed = await service.describe_execution(created.workflow_id)
         assert resumed.state is MoonMindWorkflowState.EXECUTING
