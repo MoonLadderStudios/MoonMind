@@ -241,8 +241,24 @@ def _build_runtime_planner():
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
             if not node_inputs.get("newBranch") and not node_inputs.get("branch"):
+                import re
                 import uuid
-                node_inputs["newBranch"] = f"auto-{str(uuid.uuid4())[:8]}"
+
+                desc_source = str(
+                    task_payload.get("title")
+                    or parameter_payload.get("title")
+                    or selected_skill_name
+                    or ""
+                ).strip()
+
+                if desc_source:
+                    clean_desc = re.sub(r"[^a-z0-9]+", "-", desc_source.lower()).strip("-")
+                    clean_desc = clean_desc[:40].strip("-")
+                    prefix = f"{clean_desc}-" if clean_desc else ""
+                else:
+                    prefix = ""
+
+                node_inputs["newBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
 
         # --- Assemble plan ---
         title = str(
