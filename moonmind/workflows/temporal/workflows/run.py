@@ -739,14 +739,14 @@ class MoonMindRunWorkflow:
                 or agent_outputs.get("newBranch")
                 or ws.get("newBranch")
                 or ws.get("branch")
+                or parameters.get("targetBranch")
+                or ws.get("targetBranch")
                 or last_node_inputs.get("newBranch")
                 or last_node_inputs.get("branch")
                 or ""
             )
-            target_branch = (
-                parameters.get("targetBranch") 
-                or ws.get("targetBranch") 
-                or ws.get("startingBranch") 
+            base_branch = (
+                ws.get("startingBranch")
                 or last_node_inputs.get("startingBranch")
                 or "main"
             )
@@ -757,12 +757,12 @@ class MoonMindRunWorkflow:
                 )
             
             self._get_logger().info(
-                f"Creating PR natively from {head_branch} into {target_branch} for repo {self._repo}"
+                f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
             )
             create_payload = {
                 "repo": self._repo,
                 "head": head_branch,
-                "base": target_branch,
+                "base": base_branch,
                 "title": self._title or "Automated changes by MoonMind",
                 "body": self._summary or "Automated changes by MoonMind.",
             }
@@ -1209,32 +1209,32 @@ class MoonMindRunWorkflow:
 
                 if pr_url:
                     # Determine if the PR's base branch needs updating.
-                    # If targetBranch is specified and differs from
-                    # startingBranch (which Jules used as the PR base),
-                    # the activity will PATCH the PR before merging.
+                    # Jules creates the PR against startingBranch. If the
+                    # caller wants a different merge destination we PATCH
+                    # the PR base before merging.
                     ws = parameters.get("workspaceSpec") or {}
                     starting_branch = (
                         ws.get("startingBranch") or ws.get("branch") or "main"
                     )
-                    target_branch = (
-                        parameters.get("targetBranch")
-                        or ws.get("targetBranch")
+                    base_override = (
+                        parameters.get("publishBaseBranch")
+                        or ws.get("publishBaseBranch")
                     )
-                    # Only pass target_branch when it differs from starting
-                    effective_target = (
-                        target_branch
-                        if target_branch and target_branch != starting_branch
+                    # Only re-target when explicitly different from starting
+                    effective_base = (
+                        base_override
+                        if base_override and base_override != starting_branch
                         else None
                     )
 
                     self._get_logger().info(
-                        "Jules branch-publish: merging PR %s (target=%s)",
+                        "Jules branch-publish: merging PR %s (base=%s)",
                         pr_url,
-                        effective_target or starting_branch,
+                        effective_base or starting_branch,
                     )
                     merge_payload = {"pr_url": pr_url}
-                    if effective_target:
-                        merge_payload["target_branch"] = effective_target
+                    if effective_base:
+                        merge_payload["target_branch"] = effective_base
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                         "repo.merge_pr"

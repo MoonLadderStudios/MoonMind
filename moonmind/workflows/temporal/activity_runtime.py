@@ -2812,7 +2812,7 @@ class TemporalAgentRuntimeActivities:
                         current_branch = branch_res.stdout.strip()
                         target_branch = (
                             request.parameters.get("publishBaseBranch")
-                            or request.parameters.get("targetBranch")
+                            or request.parameters.get("startingBranch")
                             or "main"
                         )
                         protected = {"main", "master", target_branch}
