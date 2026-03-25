@@ -150,7 +150,7 @@ class TestClaudeCodeBuildCommand:
         profile = _make_profile(command_template=["claude"])
         request = _make_request(instruction_ref="Refactor this")
         cmd = s.build_command(profile, request)
-        assert cmd == ["claude", "--prompt", "Refactor this"]
+        assert cmd == ["claude", "-p", "Refactor this"]
 
     def test_with_model_and_effort(self) -> None:
         s = ClaudeCodeStrategy()
@@ -165,7 +165,7 @@ class TestClaudeCodeBuildCommand:
             "claude",
             "--model", "claude-4-opus",
             "--effort", "high",
-            "--prompt", "Do it",
+            "-p", "Do it",
         ]
 
     def test_param_override(self) -> None:
@@ -187,7 +187,7 @@ class TestClaudeCodeBuildCommand:
         profile = _make_profile(command_template=["claude"])
         request = _make_request()
         cmd = s.build_command(profile, request)
-        assert cmd == ["claude"]
+        assert cmd == ["claude", "-p"]
 
 
 # ---------------------------------------------------------------------------
