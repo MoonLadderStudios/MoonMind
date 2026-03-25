@@ -2945,6 +2945,10 @@ class TemporalAgentRuntimeActivities:
                 "run_store is required for agent_runtime.status"
             )
         run_id, agent_id = self._agent_runtime_request_identifiers(request)
+
+        from temporalio import activity
+        activity.heartbeat(f"Checking status for run_id {run_id}")
+
         record = self._run_store.load(run_id)
         if record is None:
             status = AgentRunStatus(
