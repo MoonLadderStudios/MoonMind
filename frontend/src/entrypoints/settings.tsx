@@ -16,7 +16,7 @@ interface Notice {
   text: string;
 }
 
-function UserSettingsPage(_props: { payload: BootPayload }) {
+function UserSettingsPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
 
