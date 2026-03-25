@@ -141,7 +141,7 @@ await workflow.execute_activity(
 
 Validate behavior with **workflow tests** and, where applicable, **replay** tests—changing cancellation semantics affects in-flight histories.
 
-### P0 — Heartbeats + heartbeat timeouts in long-running activities
+### ~~P0 — Heartbeats + heartbeat timeouts in long-running activities~~ (Done)
 
 Ensure activities that can run for minutes:
 
