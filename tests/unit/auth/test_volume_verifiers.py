@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -95,8 +95,6 @@ class TestVerifyVolumeCredentials:
     async def test_successful_verification(self) -> None:
         """Simulate Docker run finding credentials."""
         mock_process = AsyncMock()
-        # Mock communicate as a regular sync function so wait_for won't leave a dangling coroutine
-        from unittest.mock import MagicMock
         mock_process.communicate = MagicMock(return_value="dummy")
         mock_process.returncode = 0
 
@@ -105,6 +103,7 @@ class TestVerifyVolumeCredentials:
             return_value=mock_process,
         ), patch(
             "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
             return_value=(
                 b"FOUND:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
                 b"",
@@ -122,7 +121,6 @@ class TestVerifyVolumeCredentials:
     async def test_no_credentials_found(self) -> None:
         """Simulate Docker run finding no credentials."""
         mock_process = AsyncMock()
-        from unittest.mock import MagicMock
         mock_process.communicate = MagicMock(return_value="dummy")
         mock_process.returncode = 0
 
@@ -131,6 +129,7 @@ class TestVerifyVolumeCredentials:
             return_value=mock_process,
         ), patch(
             "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            new_callable=AsyncMock,
             return_value=(
                 b"MISSING:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
                 b"",

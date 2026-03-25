@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Now proceed with other imports
@@ -243,8 +244,6 @@ def _load_or_create_vector_index(app_state):
                 "Failed to initialize critical components (storage_context or service_context) for VectorStoreIndex."
             )
 
-
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
