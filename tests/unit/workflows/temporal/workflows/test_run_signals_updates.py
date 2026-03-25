@@ -1,12 +1,10 @@
 import asyncio
-from datetime import timedelta
-from typing import Any
 import pytest
 
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
-from temporalio.client import WorkflowHandle
 
+from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
@@ -60,12 +58,11 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
 @pytest.fixture
 def mock_run_environment(monkeypatch):
     monkeypatch.setattr(MoonMindRunWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1"))
-    import moonmind.workflows.temporal.workflows.run as run_module
-    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
     
     # Mock upsert_search_attributes since test env rejects unknown ones
-    monkeypatch.setattr(run_module.workflow, "upsert_search_attributes", lambda attr: None)
-    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda memo: None)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
     
     # Mock complex stages to avoid payload validation errors during signal testing
     async def fake_planning_stage(*args, **kwargs): return "ref-123"

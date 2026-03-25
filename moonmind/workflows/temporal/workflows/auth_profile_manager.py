@@ -205,6 +205,7 @@ class MoonMindAuthProfileManagerWorkflow:
         try:
             info = workflow.info()
         except Exception:
+            logging.getLogger(__name__).exception("Error getting workflow info in _get_logger")
             return logging.getLogger(__name__)
 
         extra = {
@@ -221,6 +222,7 @@ class MoonMindAuthProfileManagerWorkflow:
             logger_to_use.isEnabledFor(logging.INFO)
             return logging.LoggerAdapter(logger_to_use, extra=extra)
         except Exception:
+            logging.getLogger(__name__).exception("Error checking logger capabilities in _get_logger")
             return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
 
     def __init__(self) -> None:

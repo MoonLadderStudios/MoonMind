@@ -3,7 +3,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner, Replayer
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from tests.unit.workflows.temporal.workflows.test_run_signals_updates import mock_run_environment, fake_execute_activity
+from tests.unit.workflows.temporal.workflows.test_run_signals_updates import mock_run_environment
 
 @pytest.mark.asyncio
 async def test_workflow_determinism_replay(mock_run_environment):
