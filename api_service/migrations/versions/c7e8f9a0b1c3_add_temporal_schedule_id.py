@@ -1,6 +1,6 @@
-"""add_temporal_schedule_id
+"""add temporal_schedule_id to recurring_task_definitions
 
-Revision ID: g0h1i2j3k4l5
+Revision ID: c7e8f9a0b1c3
 Revises: f9d1b627d0eb
 Create Date: 2026-03-24 12:00:00.000000
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'g0h1i2j3k4l5'
+revision: str = 'c7e8f9a0b1c3'
 down_revision: Union[str, None] = 'f9d1b627d0eb'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

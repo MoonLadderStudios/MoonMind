@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 from uuid import UUID, uuid4
 
@@ -26,6 +26,12 @@ from moonmind.workflows.recurring_tasks.cron import (
     validate_timezone_name,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.schedule_errors import (
+    ScheduleAdapterError,
+    ScheduleAlreadyExistsError,
+    ScheduleNotFoundError,
+    ScheduleOperationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +164,32 @@ def _normalize_policy(
         misfire_grace_seconds=misfire_grace,
         jitter_seconds=jitter_seconds,
     )
+
+
+def _overlap_mode_from_temporal(overlap: object | None) -> str:
+    if overlap is None:
+        return "skip"
+    raw = str(getattr(overlap, "name", overlap) or "").strip().upper()
+    return {
+        "SKIP": "skip",
+        "ALLOW_ALL": "allow",
+        "BUFFER_ONE": "buffer_one",
+        "CANCEL_OTHER": "cancel_previous",
+    }.get(raw, "skip")
+
+
+def _catchup_mode_from_temporal_window(catchup_window: object | None) -> str:
+    if catchup_window is None:
+        return "last"
+    total_seconds = getattr(catchup_window, "total_seconds", None)
+    if total_seconds is None:
+        return "last"
+    secs = float(total_seconds())
+    if secs == 0:
+        return "none"
+    if secs <= timedelta(minutes=15).total_seconds():
+        return "last"
+    return "all"
 
 
 def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -541,26 +573,153 @@ class RecurringTasksService:
         await self._session.commit()
         return run
 
+    def _workflow_bundle_for_definition(
+        self, dfn: RecurringTaskDefinition
+    ) -> tuple[str, dict[str, Any]]:
+        target_payload = (
+            dict(dfn.target) if isinstance(dfn.target, Mapping) else {}
+        )
+        kind = str(target_payload.get("kind") or "")
+        workflow_type = self._expected_workflow_type_for_target_kind(kind)
+        name_text = dfn.name or ""
+        workflow_input: dict[str, Any] = {
+            "title": name_text,
+            "ownerUserId": str(dfn.owner_user_id) if dfn.owner_user_id else None,
+            "system": {"recurrence": {"definitionId": str(dfn.id)}},
+            "recurringTarget": target_payload,
+        }
+        return workflow_type, workflow_input
+
+    async def _recreate_temporal_schedule(
+        self, dfn: RecurringTaskDefinition, policy_obj: RecurringPolicy
+    ) -> None:
+        workflow_type, workflow_input = self._workflow_bundle_for_definition(dfn)
+        try:
+            await self._adapter.create_schedule(
+                definition_id=dfn.id,
+                cron_expression=dfn.cron,
+                timezone=dfn.timezone,
+                overlap_mode=policy_obj.overlap_mode,
+                catchup_mode=policy_obj.catchup_mode,
+                jitter_seconds=policy_obj.jitter_seconds,
+                enabled=bool(dfn.enabled),
+                note=dfn.name or "",
+                workflow_type=workflow_type,
+                workflow_input=workflow_input,
+                memo={"definitionId": str(dfn.id)},
+            )
+        except ScheduleAlreadyExistsError:
+            await self._adapter.update_schedule(
+                definition_id=dfn.id,
+                cron_expression=dfn.cron,
+                timezone=dfn.timezone,
+                overlap_mode=policy_obj.overlap_mode,
+                catchup_mode=policy_obj.catchup_mode,
+                jitter_seconds=policy_obj.jitter_seconds,
+                enabled=bool(dfn.enabled),
+                note=dfn.name or "",
+            )
+
     async def reconcile_schedules(self, limit: int = 100) -> int:
         """Sweep db and reconcile temporal schedules where temporal_schedule_id is present."""
         stmt = select(RecurringTaskDefinition).where(
             RecurringTaskDefinition.enabled == True,
             RecurringTaskDefinition.temporal_schedule_id.is_not(None)
         ).limit(limit)
-        
+
         result = await self._session.execute(stmt)
         definitions = result.scalars().all()
         reconciled = 0
-        
+
         for dfn in definitions:
             try:
-                # Basic check - just try to unpause/update to ensure it's in sync
-                # Ideally we'd describe_schedule and compare state
-                await self._adapter.unpause_schedule(definition_id=dfn.id)
+                policy_src = dfn.policy if isinstance(dfn.policy, Mapping) else None
+                try:
+                    policy_obj = _normalize_policy(
+                        policy_src,
+                        global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
+                    )
+                except RecurringTaskValidationError as exc:
+                    logger.warning(
+                        "Skipping reconcile for %s: invalid policy: %s", dfn.id, exc
+                    )
+                    continue
+
+                try:
+                    desc = await self._adapter.describe_schedule(definition_id=dfn.id)
+                except ScheduleNotFoundError:
+                    await self._recreate_temporal_schedule(dfn, policy_obj)
+                    reconciled += 1
+                    continue
+                except ScheduleOperationError as exc:
+                    logger.warning("describe_schedule failed for %s: %s", dfn.id, exc)
+                    continue
+
+                sched = getattr(desc, "schedule", None)
+                if sched is None:
+                    logger.warning(
+                        "Reconcile: missing schedule on description for %s", dfn.id
+                    )
+                    continue
+
+                spec = sched.spec
+                pol = sched.policy
+                st = sched.state
+
+                temporal_cron = (
+                    str(spec.cron_expressions[0]).strip()
+                    if spec and spec.cron_expressions
+                    else ""
+                )
+                temporal_tz = (spec.time_zone_name or "UTC") if spec else "UTC"
+                temporal_jitter = (
+                    int(spec.jitter.total_seconds())
+                    if spec and getattr(spec, "jitter", None)
+                    else 0
+                )
+
+                overlap_src = pol.overlap if pol else None
+                temporal_overlap = _overlap_mode_from_temporal(overlap_src)
+
+                catchup_td = pol.catchup_window if pol else None
+                temporal_catchup = _catchup_mode_from_temporal_window(catchup_td)
+
+                temporal_enabled = not (st.paused if st else False)
+                temporal_note = (st.note or "") if st else ""
+
+                db_cron = str(dfn.cron or "").strip()
+                db_tz = str(dfn.timezone or "UTC")
+
+                mismatch = (
+                    temporal_cron != db_cron
+                    or temporal_tz != db_tz
+                    or temporal_overlap != policy_obj.overlap_mode
+                    or temporal_catchup != policy_obj.catchup_mode
+                    or temporal_jitter != policy_obj.jitter_seconds
+                    or temporal_enabled != bool(dfn.enabled)
+                    or temporal_note.strip() != (dfn.name or "").strip()
+                )
+
+                if mismatch:
+                    await self._adapter.update_schedule(
+                        definition_id=dfn.id,
+                        cron_expression=dfn.cron,
+                        timezone=dfn.timezone,
+                        overlap_mode=policy_obj.overlap_mode,
+                        catchup_mode=policy_obj.catchup_mode,
+                        jitter_seconds=policy_obj.jitter_seconds,
+                        enabled=bool(dfn.enabled),
+                        note=dfn.name or "",
+                    )
                 reconciled += 1
+
+            except ScheduleAdapterError as exc:
+                logger.warning("Reconciliation adapter error for %s: %s", dfn.id, exc)
             except Exception as exc:
-                logger.warning(f"Reconciliation failed for {dfn.id}: {exc}")
-                
+                logger.exception(
+                    "Unexpected reconciliation error for %s: %s", dfn.id, exc
+                )
+
         return reconciled
 
     async def list_runs(
