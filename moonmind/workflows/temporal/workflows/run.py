@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Mapping
 from datetime import timedelta
@@ -82,6 +83,34 @@ _MANAGED_AGENT_IDS = frozenset(
 
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
+    def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
+        try:
+            info = workflow.info()
+        except Exception:
+            logging.getLogger(__name__).exception("Error getting workflow info in _get_logger")
+            return logging.getLogger(__name__)
+
+        extra = {
+            "workflow_id": getattr(info, "workflow_id", "unknown"),
+            "run_id": getattr(info, "run_id", "unknown"),
+            "task_queue": getattr(info, "task_queue", "unknown"),
+        }
+        owner_id = getattr(self, "_owner_id", None)
+        if owner_id:
+            extra["owner_id"] = owner_id
+
+        # In tests, workflow.logger might be mocked or we might be outside the event loop
+        logger_to_use = workflow.logger
+        if not hasattr(logger_to_use, "isEnabledFor"):
+            logger_to_use = logging.getLogger(__name__)
+
+        try:
+            logger_to_use.isEnabledFor(logging.INFO)
+            return logging.LoggerAdapter(logger_to_use, extra=extra)
+        except Exception:
+            logging.getLogger(__name__).exception("Error checking logger capabilities in _get_logger")
+            return logging.LoggerAdapter(logging.getLogger(__name__), extra=extra)
+
     def __init__(self) -> None:
         self._state = STATE_INITIALIZING
         self._owner_type: Optional[str] = None
@@ -226,7 +255,7 @@ class MoonMindRunWorkflow:
                 str(exc),
                 non_retryable=True,
             ) from exc
-        workflow.logger.info(
+        self._get_logger().info(
             "Starting MoonMind.Run workflow",
             extra={"workflow_type": workflow_type},
         )
@@ -577,7 +606,7 @@ class MoonMindRunWorkflow:
                     
                     if failure_message == "system_error" and system_retries < 3:
                         system_retries += 1
-                        workflow.logger.info(
+                        self._get_logger().info(
                             f"Retrying plan node {node_id} after system_error "
                             f"(attempt {system_retries} of 3)"
                         )
@@ -637,7 +666,7 @@ class MoonMindRunWorkflow:
                             if pr_match:
                                 pull_request_url = pr_match.group(0)
                         except Exception as e:
-                            workflow.logger.warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
+                            self._get_logger().warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
                             
         if require_pull_request_url and pull_request_url is None:
             # Create PR natively since Jules publish_mode was overridden to "branch"
@@ -650,7 +679,7 @@ class MoonMindRunWorkflow:
                     "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
                 )
             
-            workflow.logger.info(
+            self._get_logger().info(
                 f"Creating PR natively from {head_branch} into {target_branch} for repo {self._repo}"
             )
             create_payload = {
@@ -671,7 +700,7 @@ class MoonMindRunWorkflow:
                 pr_url = self._get_from_result(create_result, "url")
                 if pr_url:
                     pull_request_url = pr_url
-                    workflow.logger.info(f"Natively created PR: {pull_request_url}")
+                    self._get_logger().info(f"Natively created PR: {pull_request_url}")
                 else:
                     raise ValueError("PR creation activity succeeded but returned no URL")
             except Exception as e:
@@ -888,7 +917,7 @@ class MoonMindRunWorkflow:
                     if instr and isinstance(instr, str) and instr.strip():
                         step_instructions.append(instr.strip())
             except Exception as e:
-                workflow.logger.warning(
+                self._get_logger().warning(
                     f"Failed to extract step instructions for integration multi-step: {e}"
                 )
 
@@ -955,7 +984,7 @@ class MoonMindRunWorkflow:
                 self._resume_requested = False
                 self._external_status = "running"
                 self._update_memo()
-                workflow.logger.info(f"Jules multi-step integration: sending step {step_index + 1}/{len(instructions_to_run)}")
+                self._get_logger().info(f"Jules multi-step integration: sending step {step_index + 1}/{len(instructions_to_run)}")
                 try:
                     await workflow.execute_activity(
                         self._integration_activity_type("send_message"),
@@ -968,7 +997,7 @@ class MoonMindRunWorkflow:
                         retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
                     )
                 except Exception as exc:
-                    workflow.logger.warning(f"Failed to send follow-up step {step_index + 1} to Jules: {exc}")
+                    self._get_logger().warning(f"Failed to send follow-up step {step_index + 1} to Jules: {exc}")
                     self._external_status = "failed"
                     break
 
@@ -1020,11 +1049,11 @@ class MoonMindRunWorkflow:
                         _poll_terminal = True
                         self._external_status = "completed" if status == "awaiting_feedback" else status
                         if status == "failed":
-                            workflow.logger.warning(f"Integration failed: {poll_result}")
+                            self._get_logger().warning(f"Integration failed: {poll_result}")
                         elif status == "canceled":
                             self._cancel_requested = True
                 except Exception as exc:
-                    workflow.logger.warning(f"Integration polling failed: {exc}")
+                    self._get_logger().warning(f"Integration polling failed: {exc}")
                 finally:
                     poll_interval_seconds = min(
                         poll_interval_seconds * 2, max_poll_interval_seconds
@@ -1057,7 +1086,7 @@ class MoonMindRunWorkflow:
             and not self._cancel_requested
             and self._external_status == "completed"
         ):
-            workflow.logger.info("Jules branch-publish: fetching result for PR merge")
+            self._get_logger().info("Jules branch-publish: fetching result for PR merge")
             try:
                 fetch_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                     self._integration_activity_type("fetch_result")
@@ -1106,7 +1135,7 @@ class MoonMindRunWorkflow:
                         else None
                     )
 
-                    workflow.logger.info(
+                    self._get_logger().info(
                         "Jules branch-publish: merging PR %s (target=%s)",
                         pr_url,
                         effective_target or starting_branch,
@@ -1129,20 +1158,20 @@ class MoonMindRunWorkflow:
                         self._get_from_result(merge_result, "summary") or ""
                     )
                     if merged:
-                        workflow.logger.info(
+                        self._get_logger().info(
                             "Jules branch-publish: PR merged: %s", merge_summary
                         )
                     else:
-                        workflow.logger.warning(
+                        self._get_logger().warning(
                             "Jules branch-publish: merge failed: %s", merge_summary
                         )
                 else:
-                    workflow.logger.warning(
+                    self._get_logger().warning(
                         "Jules branch-publish: no PR URL found in result; "
                         "skipping auto-merge"
                     )
             except Exception as exc:
-                workflow.logger.warning(
+                self._get_logger().warning(
                     "Jules branch-publish auto-merge failed (best-effort): %s",
                     exc,
                     exc_info=True,
@@ -1179,7 +1208,7 @@ class MoonMindRunWorkflow:
                 **self._execute_kwargs_for_route(proposal_route),
             )
         except Exception as exc:
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "Proposal generation failed (best-effort): %s", exc
             )
             self._proposals_errors.append(f"generation failed: {str(exc)[:200]}")
@@ -1223,7 +1252,7 @@ class MoonMindRunWorkflow:
                 errors = submit_result.get("errors") or []
                 self._proposals_errors.extend(errors)
         except Exception as exc:
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "Proposal submission failed (best-effort): %s", exc
             )
             self._proposals_errors.append(f"submission failed: {str(exc)[:200]}")
@@ -1233,7 +1262,7 @@ class MoonMindRunWorkflow:
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
         try:
-            workflow.logger.info("Generating finish summary.")
+            self._get_logger().info("Generating finish summary.")
 
             # Map Temporal status back to FinishOutcome code
             code = "FAILED" if status == "failed" else "NO_CHANGES"
@@ -1304,7 +1333,7 @@ class MoonMindRunWorkflow:
             )
             self._summary_ref = self._get_from_result(artifact_ref, "artifact_id") or ""
         except Exception as exc:
-            workflow.logger.warning(f"Failed to generate finish summary: {exc}")
+            self._get_logger().warning(f"Failed to generate finish summary: {exc}")
 
     def _set_state(self, state: str, summary: Optional[str] = None) -> None:
 
@@ -1423,7 +1452,7 @@ class MoonMindRunWorkflow:
         try:
             workflow.upsert_memo(memo)
         except Exception as exc:
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "Failed to upsert memo",
                 extra={"error": str(exc)},
             )
@@ -1445,7 +1474,7 @@ class MoonMindRunWorkflow:
             workflow.upsert_search_attributes(formatted_attributes)
         except Exception as exc:
             # During basic tests search attributes might not be registered
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "Failed to upsert search attributes",
                 extra={"error": str(exc)},
             )
@@ -1467,7 +1496,7 @@ class MoonMindRunWorkflow:
         try:
             workflow.upsert_memo(memo_dict)
         except Exception as exc:
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "Failed to upsert memo",
                 extra={"error": str(exc)},
             )
@@ -1514,7 +1543,7 @@ class MoonMindRunWorkflow:
             self._correlation_id is None
             or payload.get("correlation_id") != self._correlation_id
         ):
-            workflow.logger.warning(
+            self._get_logger().warning(
                 "ExternalEvent signal rejected: missing or mismatched correlation_id"
             )
             return
@@ -1545,7 +1574,7 @@ class MoonMindRunWorkflow:
                         "correlation_id",
                     )
                 }
-                workflow.logger.warning(f"Integration failed: {safe_payload}")
+                self._get_logger().warning(f"Integration failed: {safe_payload}")
             elif normalized_status == "canceled":
                 self._cancel_requested = True
             self._resume_requested = True
