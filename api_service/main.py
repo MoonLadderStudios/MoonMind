@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)  # Get logger after configuration
 
 import os  # For path operations
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Now proceed with other imports
@@ -48,10 +49,8 @@ _ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lowe
 if _ENABLE_TEST_UI_ROUTE:
     from api_service.test_ui_route import router as test_ui_router
 
-from api_service.api.routers.task_compatibility import (
-    router as task_compatibility_router,
-)
 from api_service.api.routers.task_dashboard import router as task_dashboard_router
+from api_service.api.routers.task_runs import router as task_runs_router
 from api_service.api.routers.task_proposals import router as task_proposals_router
 from api_service.api.routers.task_step_templates import (
     router as task_step_templates_router,
@@ -247,12 +246,21 @@ def _load_or_create_vector_index(app_state):
             )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    await startup_event()
+    yield
+    # Shutdown logic
+    teardown_providers()
+
 app = FastAPI(
     title="MoonMind API",
     description="API for MoonMind - LLM-powered documentation search and chat interface",
     version="0.1.0",
     docs_url="/docs",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 # Setup templates
@@ -326,8 +334,8 @@ app.include_router(automation_router)
 
 app.include_router(task_proposals_router)
 app.include_router(recurring_tasks_router)
+app.include_router(task_runs_router, prefix="/api")
 app.include_router(task_dashboard_router)
-app.include_router(task_compatibility_router)
 app.include_router(task_step_templates_router)
 app.include_router(temporal_artifacts_router)
 if _ENABLE_TEST_UI_ROUTE:
@@ -556,7 +564,6 @@ async def ensure_auth_profile_managers_started():
         logger.error(f"Error ensuring AuthProfileManager workflows: {e}", exc_info=True)
 
 
-@app.on_event("startup")
 async def startup_event():
     """Defines the application's startup events."""
     logger.info("Executing application startup events...")
@@ -661,7 +668,6 @@ async def startup_event():
     logger.info("Application startup events completed.")
 
 
-@app.on_event("shutdown")
 def teardown_providers():
     """
     Optional: If your providers need explicit cleanup, do it here.

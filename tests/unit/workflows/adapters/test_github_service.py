@@ -1,0 +1,161 @@
+"""Tests for GitHubService (repo.create_pr / repo.merge_pr)."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
+
+from moonmind.workflows.adapters.github_service import (
+    CreatePRResult,
+    GitHubService,
+    MergePRResult,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _mock_response(status_code: int, json_body: dict) -> httpx.Response:
+    """Build a mock httpx response."""
+    return httpx.Response(
+        status_code,
+        json=json_body,
+        request=httpx.Request("POST", "https://api.github.com/test"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# create_pull_request
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_pr_success(monkeypatch):
+    """Successful PR creation returns created=True and the URL."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        return_value=_mock_response(201, {"html_url": "https://github.com/o/r/pull/42"})
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert isinstance(result, CreatePRResult)
+    assert result.created is True
+    assert result.url == "https://github.com/o/r/pull/42"
+
+
+@pytest.mark.asyncio
+async def test_create_pr_missing_token(monkeypatch):
+    """Missing GITHUB_TOKEN should return created=False gracefully."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    svc = GitHubService()
+    result = await svc.create_pull_request(
+        repo="o/r", head="feature", base="main", title="T", body="B",
+    )
+
+    assert isinstance(result, CreatePRResult)
+    assert result.created is False
+    assert "GITHUB_TOKEN" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_create_pr_http_error(monkeypatch):
+    """HTTP 422 from GitHub should return created=False."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")
+
+    mock_resp = _mock_response(422, {"message": "Validation Failed"})
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(side_effect=httpx.HTTPStatusError(
+        "422", request=mock_resp.request, response=mock_resp,
+    ))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert result.created is False
+    assert "422" in result.summary
+
+
+# ---------------------------------------------------------------------------
+# merge_pull_request
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_success(monkeypatch):
+    """Successful merge returns merged=True and SHA."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake_token")
+
+    mock_client = AsyncMock()
+    mock_client.put = AsyncMock(
+        return_value=_mock_response(200, {"merged": True, "sha": "abc123"})
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.merge_pull_request(
+            pr_url="https://github.com/owner/repo/pull/99",
+        )
+
+    assert isinstance(result, MergePRResult)
+    assert result.merged is True
+    assert result.merge_sha == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_invalid_url():
+    """Non-GitHub URL should return merged=False."""
+    svc = GitHubService()
+    result = await svc.merge_pull_request(pr_url="https://not-github.com/foo")
+
+    assert result.merged is False
+    assert "Could not parse" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_merge_pr_missing_token(monkeypatch):
+    """Missing GITHUB_TOKEN should return merged=False."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    svc = GitHubService()
+    result = await svc.merge_pull_request(
+        pr_url="https://github.com/owner/repo/pull/99",
+    )
+
+    assert result.merged is False
+    assert "GITHUB_TOKEN" in result.summary
+
+
+# ---------------------------------------------------------------------------
+# parse_github_pr_url
+# ---------------------------------------------------------------------------
+
+
+def test_parse_valid_url():
+    assert GitHubService.parse_github_pr_url(
+        "https://github.com/owner/repo/pull/42"
+    ) == ("owner", "repo", "42")
+
+
+def test_parse_invalid_url():
+    assert GitHubService.parse_github_pr_url("https://example.com/foo") is None

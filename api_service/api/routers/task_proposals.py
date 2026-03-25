@@ -68,7 +68,7 @@ def _build_task_preview(
     skill_id = skill.get("id")
     publish_mode = publish.get("mode")
     starting_branch = git.get("startingBranch")
-    new_branch = git.get("newBranch")
+    target_branch = git.get("targetBranch")
     instructions = task.get("instructions") or payload.get("instruction")
 
     runtime_value = (
@@ -81,8 +81,8 @@ def _build_task_preview(
     starting_value = (
         (str(starting_branch).strip() or None) if starting_branch is not None else None
     )
-    new_branch_value = (
-        (str(new_branch).strip() or None) if new_branch is not None else None
+    target_branch_value = (
+        (str(target_branch).strip() or None) if target_branch is not None else None
     )
     instructions_value = (
         (str(instructions).strip() or None) if instructions is not None else None
@@ -94,7 +94,7 @@ def _build_task_preview(
         skillId=skill_value,
         publishMode=publish_value,
         startingBranch=starting_value,
-        newBranch=new_branch_value,
+        targetBranch=target_branch_value,
         instructions=instructions_value,
     )
 

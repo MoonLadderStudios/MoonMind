@@ -34,20 +34,11 @@ dist/
 uv.lock
 
 # Worker runtime scratch outputs
-var/worker/
-var/worker-relative/
-var/skill_cache/
-var/skills_workspaces/
-var/pr_resolver/
-var/pr_comments/
-var/artifacts/
-/.gemini/
-var/security/
 agent_jobs/
 
 # Local saved artifacts
 /Saved/
-artifacts/
+
 
 # Local-only worker skills mirror
 .agents/skills/local/

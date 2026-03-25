@@ -2107,6 +2107,7 @@ class TemporalArtifactActivities:
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,
+                    "max_lease_duration_seconds": row.max_lease_duration_seconds,
                     "enabled": row.enabled,
                 }
             )
@@ -2154,6 +2155,105 @@ class TemporalArtifactActivities:
                 runtime_id,
             )
             return {"started": False, "workflow_id": workflow_id}
+
+    async def auth_profile_reset_manager(
+        self,
+        *,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """Terminate and restart the AuthProfileManager for *runtime_id*.
+
+        Used by AgentRun when the manager appears stuck (e.g. nondeterminism
+        error causing workflow task failures). Terminates the existing manager
+        if running, then starts a fresh one.
+        """
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+        from temporalio.service import RPCError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+            WORKFLOW_NAME as AUTH_PROFILE_MANAGER_WF,
+            WORKFLOW_TASK_QUEUE as AUTH_PROFILE_MANAGER_QUEUE,
+        )
+
+        workflow_id = f"auth-profile-manager:{runtime_id}"
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+
+        # Terminate the existing manager if it exists.
+        try:
+            handle = client.get_workflow_handle(workflow_id)
+            await handle.terminate(reason="Reset by AgentRun: manager appeared stuck")
+            logger.info(
+                "auth_profile.reset_manager terminated stale manager for runtime=%s",
+                runtime_id,
+            )
+        except RPCError:
+            logger.debug(
+                "auth_profile.reset_manager no running manager to terminate for runtime=%s",
+                runtime_id,
+            )
+
+        # Start a fresh manager.
+        await client.start_workflow(
+            AUTH_PROFILE_MANAGER_WF,
+            {"runtime_id": runtime_id},
+            id=workflow_id,
+            task_queue=AUTH_PROFILE_MANAGER_QUEUE,
+        )
+        logger.info(
+            "auth_profile.reset_manager started fresh manager for runtime=%s",
+            runtime_id,
+        )
+        return {"reset": True, "workflow_id": workflow_id}
+
+    async def auth_profile_verify_lease_holders(
+        self,
+        *,
+        workflow_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Check whether each lease-holding workflow is still running.
+
+        Uses the Temporal client to describe each workflow and determine if it
+        is in a terminal state. This allows the AuthProfileManager to reclaim
+        slots from cancelled/terminated workflows without waiting for the
+        2-hour lease timeout.
+
+        Returns a dict mapping workflow_id -> {"running": bool, "status": str}.
+        Non-found workflows are counted as not running.
+        """
+        from temporalio.client import RPCError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+
+        results: dict[str, dict[str, Any]] = {}
+        for wf_id in workflow_ids:
+            try:
+                handle = client.get_workflow_handle(wf_id)
+                desc = await handle.describe()
+                status_name = desc.status.name
+                results[wf_id] = {
+                    "running": status_name == "RUNNING",
+                    "status": status_name,
+                }
+            except RPCError as exc:
+                # Workflow does not exist or is not reachable
+                if exc.status.name == "NOT_FOUND":
+                    results[wf_id] = {"running": False, "status": "NOT_FOUND"}
+                else:
+                    results[wf_id] = {"running": False, "status": f"RPC_ERROR_{exc.status.name}"}
+            except Exception as exc:
+                logger.warning(
+                    "auth_profile.verify_lease_holders failed to describe %s: %s",
+                    wf_id,
+                    exc,
+                )
+                results[wf_id] = {"running": False, "status": "ERROR"}
+
+        return results
 
     async def oauth_session_ensure_volume(
         self,

@@ -51,6 +51,39 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     assert node_inputs["repo"] == "MoonLadderStudios/MoonMind"
 
 
+def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
+    """When pr-resolver has no inputs.pr but git.startingBranch is set,
+    the auto-generated instruction must include the branch as the pr selector
+    so the agent knows which PR to target."""
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                    "version": "1.0",
+                },
+                "git": {"startingBranch": "fix/my-feature-branch"},
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["instructions"].startswith(
+        "Execute skill 'pr-resolver' with inputs:"
+    )
+    assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
+
+
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -241,7 +274,9 @@ def test_runtime_planner_publish_pr_appends_gh_suffix_for_cli_runtimes():
     )
 
     text = plan["nodes"][-1]["inputs"]["instructions"]
-    assert "gh pr create" in text
+    assert "commit your work" in text
+    assert "Do NOT push or create a pull request" in text
+    assert "gh pr create" not in text
 
 
 def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
@@ -295,11 +330,13 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.workflow"
     from moonmind.workflows.temporal.workflows.auth_profile_manager import MoonMindAuthProfileManagerWorkflow
+    from moonmind.workflows.temporal.workflows.oauth_session import MoonMindOAuthSessionWorkflow as MoonMindOAuthSession
     assert kwargs["workflows"] == [
         MoonMindRun,
         MoonMindManifestIngest,
         MoonMindAuthProfileManagerWorkflow,
         MoonMindAgentRun,
+        MoonMindOAuthSession,
     ]
     assert kwargs["activities"] == [
         resolve_external_adapter,

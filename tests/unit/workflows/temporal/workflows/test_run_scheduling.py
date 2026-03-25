@@ -88,6 +88,40 @@ async def test_run_workflow_rescheduled(mock_run_environment):
             assert result["status"] == "success"
 
 @pytest.mark.asyncio
+async def test_run_workflow_rescheduled_past(mock_run_environment):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-sched",
+            workflows=[MoonMindRunWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            future_time = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+            handle = await env.client.start_workflow(
+                MoonMindRunWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.Run",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                    "scheduled_for": future_time
+                },
+                id="test-wf-resched-past",
+                task_queue="test-task-queue-sched",
+            )
+            
+            # Reschedule to the past to trigger immediate execution
+            past_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+            await handle.signal("reschedule", past_time)
+            
+            result = await handle.result()
+            assert result["status"] == "success"
+
+            # Verify that rescheduling to the past caused near-immediate execution
+            description = await handle.describe()
+            execution_duration = description.close_time - description.start_time
+            assert execution_duration < timedelta(minutes=1)
+
+@pytest.mark.asyncio
 async def test_run_workflow_scheduled_cancel(mock_run_environment):
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(

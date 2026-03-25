@@ -60,16 +60,9 @@ class ProfileService:
             # Initialize all keys from schema defaults (which should be None)
             # This ensures that if new keys are added to the schema and model,
             # they are initialized here during profile creation.
-            for key_in_schema in new_profile_data.dict(exclude_unset=False):
-                if key_in_schema.endswith("_api_key"):
-                    model_field_name = f"{key_in_schema}_encrypted"
-                    if hasattr(profile, model_field_name):
-                        setattr(
-                            profile,
-                            model_field_name,
-                            getattr(new_profile_data, key_in_schema),
-                        )
-                    # else: log warning or handle mismatch if necessary
+            for key_in_schema, value in new_profile_data.model_dump(exclude_unset=False, by_alias=True).items():
+                if hasattr(profile, key_in_schema):
+                    setattr(profile, key_in_schema, value)
 
             db_session.add(profile)
             try:
@@ -91,20 +84,8 @@ class ProfileService:
 
     def _apply_update_data_to_profile(self, profile: UserProfile, update_data: dict):
         for key_in_schema, value in update_data.items():
-            if key_in_schema.endswith(
-                "_api_key"
-            ):  # Handles google_api_key, openai_api_key, etc.
-                model_field_name = f"{key_in_schema}_encrypted"
-                # Assigning to this EncryptedType field handles encryption
-                if hasattr(profile, model_field_name):
-                    setattr(profile, model_field_name, value)
-                # else: log warning or handle mismatch if necessary
-            elif hasattr(
-                profile, key_in_schema
-            ):  # For other potential direct mapped fields
+            if hasattr(profile, key_in_schema):
                 setattr(profile, key_in_schema, value)
-            # else:
-            #     logger.warning(f"Field {key_in_schema} in profile_data not found on UserProfile model or not handled.")
 
     async def update_profile(
         self,
@@ -117,7 +98,7 @@ class ProfileService:
         If the profile doesn't exist, it will first be created.
         """
         profile = await self.get_profile_by_user_id(db_session, user_id)
-        update_data = profile_data.dict(exclude_unset=True)
+        update_data = profile_data.model_dump(exclude_unset=True, by_alias=True)
 
         # Safety check: `get_profile_by_user_id` should return a profile for the
         # provided user_id. This guard protects against potential data
