@@ -29,6 +29,8 @@ WORKFLOW_NAME = "MoonMind.AuthProfileManager"
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 
+VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
+
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
 
@@ -338,12 +340,13 @@ class MoonMindAuthProfileManagerWorkflow:
             # cancelled/terminated workflows that failed to release).
             self._evict_expired_leases()
 
-            # Verify lease holders are still running, reclaiming slots from
-            # workflows in terminal states without waiting for lease timeout.
-            await self._verify_lease_holders()
+            if workflow.patched(VERIFY_LEASE_HOLDERS_PATCH):
+                # Verify lease holders are still running, reclaiming slots from
+                # workflows in terminal states without waiting for lease timeout.
+                await self._verify_lease_holders()
 
-            # Immediately offer any reclaimed slots to waiting requests.
-            await self._drain_queue()
+                # Immediately offer any reclaimed slots to waiting requests.
+                await self._drain_queue()
 
             # Check continue-as-new threshold.
             # We use get_current_history_length() to account for timer loops

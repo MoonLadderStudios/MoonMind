@@ -63,6 +63,9 @@ from moonmind.workflows.temporal.workflows.agent_run import (
     get_activity_route,
     resolve_external_adapter,
 )
+from moonmind.workflows.temporal.workflows.oauth_session import (
+    MoonMindOAuthSessionWorkflow as MoonMindOAuthSession,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
@@ -549,7 +552,7 @@ async def main_async() -> None:
     runtime_resources: AsyncExitStack | None = None
 
     if topology.fleet == WORKFLOW_FLEET:
-        workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindAuthProfileManager, MoonMindAgentRun]
+        workflows = [MoonMindRun, MoonMindManifestIngest, MoonMindAuthProfileManager, MoonMindAgentRun, MoonMindOAuthSession]
         activities = [resolve_external_adapter, external_adapter_execution_style, get_activity_route]
         logger.info(
             "Temporal workflow fleet registrations: %s",
