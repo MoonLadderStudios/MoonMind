@@ -1744,15 +1744,6 @@ async def reschedule_execution(
             },
         )
     
-    # We must enforce that the target is in the future.
-    try:
-        _compute_schedule_delay(payload.scheduled_for)
-    except HTTPException as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=exc.detail,
-        ) from exc
-
     try:
         await get_temporal_client_adapter().send_reschedule_signal(
             record.workflow_id, payload.scheduled_for

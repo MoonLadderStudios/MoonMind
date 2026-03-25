@@ -116,6 +116,11 @@ async def test_run_workflow_rescheduled_past(mock_run_environment):
             result = await handle.result()
             assert result["status"] == "success"
 
+            # Verify that rescheduling to the past caused near-immediate execution
+            description = await handle.describe()
+            execution_duration = description.close_time - description.start_time
+            assert execution_duration < timedelta(minutes=1)
+
 @pytest.mark.asyncio
 async def test_run_workflow_scheduled_cancel(mock_run_environment):
     async with await WorkflowEnvironment.start_time_skipping() as env:

@@ -6,7 +6,6 @@ from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.client import TemporalClientAdapter
-from moonmind.config.settings import settings
 
 async def fake_execute_activity(activity_name, *args, **kwargs):
     if activity_name == "artifact.read":
@@ -76,3 +75,8 @@ async def test_create_deferred_reschedule_verify(mock_run_environment):
             result = await handle.result()
             
             assert result["status"] == "success"
+
+            # Verify that rescheduling to the past caused near-immediate execution
+            description = await handle.describe()
+            execution_duration = description.close_time - description.start_time
+            assert execution_duration < timedelta(hours=1)
