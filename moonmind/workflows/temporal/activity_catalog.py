@@ -57,7 +57,10 @@ class TemporalActivityTimeouts:
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityRetries:
-    """Default retry policy for one activity type."""
+    """Default retry policy for one activity type.
+    
+    See docs/Temporal/ErrorTaxonomy.md for error classification rules.
+    """
 
     max_attempts: int
     max_interval_seconds: int
