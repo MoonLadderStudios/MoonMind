@@ -48,10 +48,10 @@ class RagQdrantClient:
         self.overlay_chunk_overlap = overlay_chunk_overlap
         self._embedding_dimensions = embedding_dimensions
         if url:
-            self._client = QdrantClient(url=url, api_key=api_key, timeout=10, check_compatibility=False)
+            self._client = QdrantClient(url=url, api_key=api_key, timeout=10)
         else:
             self._client = QdrantClient(
-                host=host, port=port, api_key=api_key, timeout=10, check_compatibility=False
+                host=host, port=port, api_key=api_key, timeout=10
             )
 
     @property

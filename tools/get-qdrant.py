@@ -41,7 +41,11 @@ def main():
     args = parser.parse_args()
 
     try:
-        client = QdrantClient(host=args.host, port=args.port, check_compatibility=False)
+        client = QdrantClient(
+            host=args.host,
+            port=args.port,
+            check_compatibility=False,
+        )
 
         # Placeholder query vector
         query_vector = [0.0] * args.dim

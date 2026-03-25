@@ -45,7 +45,11 @@ def e2e_setup():
     # QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION_NAME are loaded at module level.
     # load_dotenv() is also called at module level.
 
-    qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
+    qdrant_client = QdrantClient(
+        host=QDRANT_HOST,
+        port=QDRANT_PORT,
+        check_compatibility=False,
+    )
     test_client = TestClient(
         app
     )  # app is imported from moonmind.application at module level
