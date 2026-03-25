@@ -35,6 +35,7 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow._repo = "org/repo"
     
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_search_attributes",
