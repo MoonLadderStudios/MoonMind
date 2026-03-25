@@ -520,6 +520,16 @@ async def main_async() -> None:
     else:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
+    import subprocess
+    def get_git_sha():
+        try:
+            return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        except Exception:
+            return "unknown"
+
+    build_id = os.environ.get("MOONMIND_BUILD_ID") or get_git_sha()
+    logger.info(f"Worker build_id configured as: {build_id}")
+
     try:
         worker = Worker(
             client,
@@ -527,6 +537,8 @@ async def main_async() -> None:
             workflows=workflows,
             activities=activities,
             workflow_runner=UnsandboxedWorkflowRunner(),
+            build_id=build_id,
+            use_worker_versioning=True,
             **_worker_concurrency_kwargs(topology),
         )
 
