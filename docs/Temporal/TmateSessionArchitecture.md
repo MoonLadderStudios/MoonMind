@@ -45,14 +45,14 @@ DISABLED → STARTING → READY → (ENDED | REVOKED | ERROR)
 | `READY` | Endpoints extracted. RO endpoint available; RW endpoint stored (encrypted at rest for live sessions). |
 | `ENDED` | Normal teardown — process completed or session expired. |
 | `REVOKED` | Operator explicitly terminated the session. |
-| `ERROR` | tmate setup failed; agent continues headless. |
+| `ERROR` | tmate setup failed; agent continues headless (graceful fallback). |
 
 ---
 
 ## 4. Shared Abstraction: `TmateSessionManager`
 
 > [!NOTE]
-> `TmateSessionManager` is **target architecture** — it does not exist yet. Currently, `launcher.py` contains inline tmate lifecycle logic and `oauth_session_activities.py` uses a separate Docker-exec polling approach. Phase 1 of the implementation plan extracts this shared class.
+> `TmateSessionManager` is **implemented** in `moonmind/workflows/temporal/runtime/tmate_session.py`. The `ManagedRuntimeLauncher` consumes it for runtime wrapping. The OAuth session path (`oauth_session_activities.py`) still uses a separate Docker-exec polling approach.
 
 ### 4.1 Location
 
@@ -140,38 +140,50 @@ MOONMIND_TMATE_SERVER_RSA_FINGERPRINT=""
 MOONMIND_TMATE_SERVER_ED25519_FINGERPRINT=""
 ```
 
-### 4.4 Consumer Wiring (Target State)
+### 4.4 Consumer Wiring
 
-The following shows the intended refactoring. Neither consumer has been migrated yet.
+#### Runtime Wrapping (launcher.py) — ✅ Migrated
 
-#### Runtime Wrapping (launcher.py)
+`ManagedRuntimeLauncher.launch()` uses `TmateSessionManager` with **graceful fallback**:
 
 ```python
-# Before (inline, ~100 lines of tmate logic)
-use_tmate = shutil.which("tmate") is not None
-if use_tmate:
-    # ... socket setup, config write, subprocess exec, wait ready, extract ...
-
-# After
 if TmateSessionManager.is_available():
     mgr = TmateSessionManager(session_name=f"mm-{run_id[:16]}")
-    endpoints = await mgr.start(cmd, env=env_overrides, cwd=workspace)
-    exit_code_path = str(mgr.exit_code_path)
-    # endpoints dict for supervisor
+    try:
+        endpoints = await mgr.start(cmd, env=env_overrides, cwd=workspace)
+        process = mgr.process
+        # verify process is actually alive ...
+    except Exception:
+        logger.warning("Tmate failed; falling back to plain subprocess.")
+        await mgr.teardown()
+        # fall through to plain subprocess
+
+if not use_tmate:
+    process = await asyncio.create_subprocess_exec(*cmd, ...)
 ```
 
-#### OAuth Sessions (oauth_session_activities.py)
+If tmate crashes during startup, the launcher **logs a warning and falls back to a plain subprocess**. The agent executes normally without live terminal access. See §4.5 for details.
 
-```python
-# Before (Docker exec polling, hardcoded /tmp/tmate.sock, 30s loop)
-for attempt in range(_TMATE_READY_TIMEOUT):
-    url_cmd = ["docker", "exec", container_name, "bash", "-c", "tmate -S ..."]
-    # ...
+#### OAuth Sessions (oauth_session_activities.py) — ⬜ Not Yet Migrated
 
-# After — TmateSessionManager runs inside the container entrypoint;
-# the activity uses docker exec + TmateSessionManager.extract_endpoints()
-# or the entrypoint writes endpoints to a well-known file that the activity reads.
-```
+Still uses a Docker-exec polling approach. Future migration will have the container entrypoint use `TmateSessionManager` directly or write endpoints to a well-known file.
+
+### 4.5 Graceful Fallback on Tmate Failure
+
+Tmate is an **enhancement, not a requirement** for agent execution. If tmate fails to start (binary issue, relay unreachable, socket error, etc.), the launcher falls back to a plain subprocess:
+
+1. The tmate `start()` call is wrapped in `try/except`.
+2. After `start()` succeeds, the launcher verifies the tmate-wrapped process is actually alive (non-None returncode check).
+3. On any failure:
+   - The failed tmate session is torn down (`teardown()`) to clean up socket/config files.
+   - `tmate_manager` is set to `None` and `use_tmate` is set to `False`.
+   - The launcher falls through to the plain `asyncio.create_subprocess_exec` path.
+4. The agent runs normally, but without live terminal access from Mission Control.
+
+This means:
+- **Workflows never fail due to tmate infrastructure issues.**
+- The `ERROR` lifecycle state (§3) represents this scenario — the agent continues headless.
+- Operator-facing live session status shows `DISABLED` or `ERROR` (no live output panel available).
 
 ---
 
@@ -264,7 +276,7 @@ The worker Docker image must include:
 
 The phased rollout plan is tracked in the implementation plan artifact. Summary:
 
-1. **Phase 1**: Extract `TmateSessionManager`, wire self-hosted config, fix dead code and status enum
+1. ~~**Phase 1**: Extract `TmateSessionManager`, wire self-hosted config, fix dead code and status enum~~ ✅ Complete
 2. **Phase 2**: Endpoint persistence (`workflow_live_sessions` table + API)
 3. **Phase 3**: Dashboard live output panel (iframe/xterm.js embedding)
 4. **Phase 4**: OAuth bootstrap error reporting + container cleanup

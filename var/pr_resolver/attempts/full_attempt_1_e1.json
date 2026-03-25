@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "tool": "pr_resolve_full",
-  "timestamp": "2026-03-25T20:14:28.179282+00:00",
+  "timestamp": "2026-03-25T20:18:42.386953+00:00",
   "status": "needs_remediation",
   "merge_outcome": "blocked",
   "decision": "remediation required",
@@ -9,16 +9,16 @@
   "pr_url": "https://github.com/MoonLadderStudios/MoonMind/pull/959",
   "max_iterations": 3,
   "merge_method": "squash",
-  "next_step": "run_fix_comments_skill",
+  "next_step": "run_fix_merge_conflicts_skill",
   "attempt_history": [
     {
       "stage": "full_remediation",
       "status": "needs_remediation",
-      "reason": "actionable_comments",
+      "reason": "merge_conflicts",
       "decision": "remediation required",
-      "timestamp": "2026-03-25T20:14:28.179526+00:00"
+      "timestamp": "2026-03-25T20:18:42.387251+00:00"
     }
   ],
-  "reason": "actionable_comments",
-  "final_reason": "actionable_comments"
+  "reason": "merge_conflicts",
+  "final_reason": "merge_conflicts"
 }

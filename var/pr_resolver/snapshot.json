@@ -2,7 +2,7 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "auto-4349dc45",
-    "headRefOid": "bd390efe9d2ef4e65f68171049738b93fe17dada",
+    "headRefOid": "a2ac825a66374f02e8ae996019b87a08ade74d19",
     "isDraft": false,
     "mergeStateStatus": "DIRTY",
     "mergeable": "CONFLICTING",
@@ -12,63 +12,53 @@
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:14:06Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855024/job/68603505334",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23562071357/job/68604256773",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-25T20:13:15Z",
-        "status": "COMPLETED",
-        "workflowName": "CodeQL"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:13:59Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855009/job/68603505327",
-        "name": "Analyze (actions)",
-        "startedAt": "2026-03-25T20:13:17Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-25T20:18:21Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855024/job/68603505353",
-        "name": "Analyze (python)",
-        "startedAt": "2026-03-25T20:13:16Z",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23562071395/job/68604256641",
+        "name": "Analyze (actions)",
+        "startedAt": "2026-03-25T20:18:22Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:14:15Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855009/job/68603505442",
-        "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-25T20:13:16Z",
-        "status": "COMPLETED",
-        "workflowName": "CodeQL"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:14:19Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855009/job/68603505311",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23562071357/job/68604256772",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-25T20:13:16Z",
-        "status": "COMPLETED",
+        "startedAt": "2026-03-25T20:18:21Z",
+        "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:13:51Z",
-        "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/68603596645",
-        "name": "CodeQL",
-        "startedAt": "2026-03-25T20:13:50Z",
-        "status": "COMPLETED",
-        "workflowName": ""
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23562071395/job/68604256625",
+        "name": "Analyze (javascript-typescript)",
+        "startedAt": "2026-03-25T20:18:22Z",
+        "status": "IN_PROGRESS",
+        "workflowName": "CodeQL"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23562071395/job/68604256688",
+        "name": "Analyze (python)",
+        "startedAt": "2026-03-25T20:18:21Z",
+        "status": "IN_PROGRESS",
+        "workflowName": "CodeQL"
       }
     ],
     "title": "feat(temporal): implement Phase 3 Temporal message passing idempotency",
@@ -76,36 +66,27 @@
   },
   "ci": {
     "isRunning": true,
-    "hasFailures": true,
-    "failedChecks": [
-      {
-        "name": "CI signal continuity",
-        "state": "MISSING_NON_SECURITY_CHECKS_ON_HEAD",
-        "url": ""
-      }
-    ],
-    "totalCheckCount": 6,
-    "securityCheckCount": 6,
+    "hasFailures": false,
+    "failedChecks": [],
+    "totalCheckCount": 5,
+    "securityCheckCount": 5,
     "nonSecurityCheckCount": 0,
     "checkNames": [
       "Analyze (javascript-typescript)",
       "Analyze (actions)",
       "Analyze (python)",
       "Analyze (javascript-typescript)",
-      "Analyze (python)",
-      "CodeQL"
+      "Analyze (python)"
     ],
-    "signalQuality": "degraded",
-    "degradedReasons": [
-      "head_missing_non_security_checks_seen_on_previous_commit"
-    ],
+    "signalQuality": "ok",
+    "degradedReasons": [],
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "bd390efe9d2ef4e65f68171049738b93fe17dada",
+    "headShaVerified": "a2ac825a66374f02e8ae996019b87a08ade74d19",
     "headShaNonSecurityCheckCount": 0,
-    "previousCommitSha": "642ba5e469b637bfa6854adfc1cde01196124fca",
-    "previousCommitNonSecurityCheckCount": 1
+    "previousCommitSha": "bd390efe9d2ef4e65f68171049738b93fe17dada",
+    "previousCommitNonSecurityCheckCount": 0
   },
   "commentsFetch": {
     "succeeded": true,
@@ -290,10 +271,10 @@
       "path": "moonmind/workflows/temporal/activity_runtime.py",
       "commit_id": "bd390efe9d2ef4e65f68171049738b93fe17dada",
       "in_reply_to_id": null,
-      "line": 24,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     }
   ],
   "commentsSummary": {
@@ -302,16 +283,14 @@
     "reviewCommentCount": 9,
     "issueCommentCount": 1,
     "reviewBodyCount": 3,
-    "actionableCommentCount": 1,
+    "actionableCommentCount": 0,
     "includeBotReviewComments": true,
     "humanCommentCount": 4,
     "botCommentCount": 9,
-    "hasActionableComments": true,
-    "actionableCommentIds": [
-      2990772075
-    ],
+    "hasActionableComments": false,
+    "actionableCommentIds": [],
     "nonActionableReasonCounts": {
-      "addressed_in_ledger": 12
+      "addressed_in_ledger": 13
     },
     "classifiedComments": [
       {
@@ -440,9 +419,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2990772075",
         "path": "moonmind/workflows/temporal/activity_runtime.py",
-        "line": 24,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       }
     ]
   }
