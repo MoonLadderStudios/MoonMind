@@ -444,16 +444,16 @@ If the high-effort items are completed, MoonMind also gains:
 | 9 | Add Temporal SDK workflow/signal tests | **⚠️ PARTIALLY DONE** | Unit tests exist for `MoonMind.Run` (`test_run.py`, `test_run_agent_dispatch.py`) and `MoonMind.AgentRun` (multiple test files including auto-answer, slot wait, status payloads). However, no tests exercise signal/update handler round-trips or replay determinism. |
 | 10 | Normalize error taxonomy for retries | **✅ DONE** | Created `docs/Temporal/ErrorTaxonomy.md` and updated `activity_catalog.py` `non_retryable_error_codes` to reference it. |
 
-### Phase 1 — Quick reliability wins (Low effort, 1-2 sprints)
+### Phase 1 — Quick reliability wins (Low effort, 1-2 sprints) [✅ COMPLETED]
 
 **Goal:** Fix remaining correctness gaps and add operational visibility.
 
 | Task | Files | Notes |
 |---|---|---|
-| **1a.** Add `@workflow.query get_status` to `MoonMind.Run` | `run.py` | Return `_state`, `_paused`, `_cancel_requested`, `_step_count`, `_summary`, `_awaiting_external`, `_waiting_reason`. Aligns with the client's `describe_workflow`. |
-| **1b.** Refactor integration loop to separate "operator resume" from "poll terminal" | `run.py` (lines 864-918) | Introduce a distinct `_poll_terminal` flag instead of reusing `_resume_requested` for two different intents. This makes the loop termination property easier to reason about and eliminates the post-loop `_resume_requested = False` reset. |
-| **1c.** Explore Signal-With-Start for AuthProfileManager bootstrapping | `agent_run.py` (`_ensure_manager_and_signal`) | Evaluate whether the Python SDK `start_workflow(..., start_signal=...)` or `signal_with_start` API can replace the current try/catch/activity/retry pattern. If SDK support is incomplete, document the limitation and keep the existing approach. |
-| **1d.** Define error taxonomy document | New: `docs/Temporal/ErrorTaxonomy.md` | Map each `ApplicationError` subtype to retry vs non-retryable classification. Update `activity_catalog.py` `non_retryable_error_codes` to reference the taxonomy. |
+| **1a. [✅]** Add `@workflow.query get_status` to `MoonMind.Run` | `run.py` | Return `_state`, `_paused`, `_cancel_requested`, `_step_count`, `_summary`, `_awaiting_external`, `_waiting_reason`. Aligns with the client's `describe_workflow`. |
+| **1b. [✅]** Refactor integration loop to separate "operator resume" from "poll terminal" | `run.py` (lines 864-918) | Introduce a distinct `_poll_terminal` flag instead of reusing `_resume_requested` for two different intents. This makes the loop termination property easier to reason about and eliminates the post-loop `_resume_requested = False` reset. |
+| **1c. [✅]** Explore Signal-With-Start for AuthProfileManager bootstrapping | `agent_run.py` (`_ensure_manager_and_signal`) | Evaluate whether the Python SDK `start_workflow(..., start_signal=...)` or `signal_with_start` API can replace the current try/catch/activity/retry pattern. If SDK support is incomplete, document the limitation and keep the existing approach. |
+| **1d. [✅]** Define error taxonomy document | New: `docs/Temporal/ErrorTaxonomy.md` | Map each `ApplicationError` subtype to retry vs non-retryable classification. Update `activity_catalog.py` `non_retryable_error_codes` to reference the taxonomy. |
 
 ### Phase 2 — Observability and testing (Medium effort, 2-3 sprints)
 
