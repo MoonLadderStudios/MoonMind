@@ -214,7 +214,7 @@ Child workflows and Continue-As-New are especially relevant when a single “tas
 
 **Requested:** “identify all Temporal workflows, activities, signals, queries, child workflows, and task queues in the repo.”
 
-**Status:** Not possible to enumerate from the accessible sources. The repo landing page shows top-level directories and describes the architecture, but source files containing Temporal decorators, worker registration, and task queue names could not be retrieved in this environment. citeturn35view0turn46view0
+**Status:** ✅ Completed — see [013-TemporalWorkflowMessagePassingInventory.md](013-TemporalWorkflowMessagePassingInventory.md) for the full code-level inventory of workflows, activities, task queues, message handlers, and gap analysis.
 
 **What an inventory would look like (framework):** In a Python Temporal app, you would enumerate Workflow classes (`@workflow.defn`) and their handlers (`@workflow.query`, `@workflow.signal`, `@workflow.update`), Activities (`@activity.defn`), calls to `workflow.execute_activity(...)`, child workflow starts, and all configured task queue strings used by Workers and `client.start_workflow(..., task_queue=...)`. Temporal’s docs show these constructs explicitly. citeturn46view0turn47view0turn46view3
 
@@ -391,6 +391,9 @@ This plan explicitly sequences work so that (1) the system gains an authoritativ
 This section turns the recommendations above into ordered phases. Each phase has a goal, concrete deliverables, and exit criteria so progress can be reviewed without re-reading the full report. Phases build on one another: later phases assume earlier contracts and inventories exist.
 
 ### Phase 1 — Discovery and authoritative inventory (✅ COMPLETE)
+
+> [!NOTE]
+> Phase 1 is fulfilled by [013-TemporalWorkflowMessagePassingInventory.md](013-TemporalWorkflowMessagePassingInventory.md), which contains the code-level inventory, action matrix, and gaps list.
 
 **Goal:** Replace inference with a code-level map of Temporal usage so every subsequent change is targeted and testable.
 
