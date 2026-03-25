@@ -671,7 +671,19 @@ class MoonMindRunWorkflow:
         if require_pull_request_url and pull_request_url is None:
             # Create PR natively since Jules publish_mode was overridden to "branch"
             ws = parameters.get("workspaceSpec") or {}
-            head_branch = ws.get("branch") or ""
+            agent_outputs = {}
+            if "execution_result" in locals():
+                agent_outputs = self._get_from_result(execution_result, "outputs") or {}
+                if not isinstance(agent_outputs, dict):
+                    agent_outputs = {}
+            
+            head_branch = (
+                agent_outputs.get("branch")
+                or agent_outputs.get("newBranch")
+                or ws.get("newBranch")
+                or ws.get("branch")
+                or ""
+            )
             target_branch = parameters.get("targetBranch") or ws.get("targetBranch") or ws.get("startingBranch") or "main"
             
             if not self._repo or not head_branch:
