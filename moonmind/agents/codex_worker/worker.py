@@ -3067,7 +3067,7 @@ class CodexWorker:
         publish_base_branch = str(publish.get("prBaseBranch") or "").strip() or None
         git_node = task.get("git")
         git = git_node if isinstance(git_node, Mapping) else {}
-        publish_working_branch = str(git.get("newBranch") or "").strip() or None
+        publish_working_branch = str(git.get("targetBranch") or "").strip() or None
         checkpoint = self._extract_jules_runtime_checkpoint(job.payload)
         checkpoint_now = datetime.now(UTC).isoformat()
         if checkpoint is not None:
@@ -4259,7 +4259,7 @@ class CodexWorker:
                 env=auth_context.repo_command_env,
             )
             starting_branch_input = str(git.get("startingBranch") or "").strip() or None
-            new_branch_input = str(git.get("newBranch") or "").strip() or None
+            new_branch_input = str(git.get("targetBranch") or "").strip() or None
             starting_branch = starting_branch_input or default_branch
 
             if new_branch_input:
@@ -4335,7 +4335,7 @@ class CodexWorker:
                         "value": starting_branch,
                         "explicit": starting_branch_input is not None,
                     },
-                    "newBranch": {
+                    "targetBranch": {
                         "value": new_branch,
                         "explicit": new_branch_input is not None,
                     },
@@ -4366,7 +4366,7 @@ class CodexWorker:
                 payload={
                     "defaultBranch": default_branch,
                     "startingBranch": starting_branch,
-                    "newBranch": new_branch,
+                    "targetBranch": new_branch,
                     "workingBranch": working_branch,
                 },
             )
@@ -4378,7 +4378,7 @@ class CodexWorker:
                     "jobType": job_type,
                     "defaultBranch": default_branch,
                     "startingBranch": starting_branch,
-                    "newBranch": new_branch,
+                    "targetBranch": new_branch,
                     "workingBranch": working_branch,
                     **dict(skill_meta),
                 },
@@ -7968,7 +7968,7 @@ class CodexWorker:
                         "model": None,
                         "effort": None,
                     },
-                    "git": {"startingBranch": starting_branch, "newBranch": None},
+                    "git": {"startingBranch": starting_branch, "targetBranch": None},
                     "publish": {
                         "mode": publish_mode,
                         "prBaseBranch": None,
@@ -11032,8 +11032,8 @@ class CodexWorker:
             metadata_dict.setdefault("triggerJobId", str(job.id))
             metadata_dict.setdefault("startingBranch", prepared.starting_branch)
             metadata_dict.setdefault("workingBranch", prepared.working_branch)
-            if prepared.new_branch and "newBranch" not in metadata_dict:
-                metadata_dict["newBranch"] = prepared.new_branch
+            if prepared.new_branch and "targetBranch" not in metadata_dict:
+                metadata_dict["targetBranch"] = prepared.new_branch
             origin["metadata"] = metadata_dict
             payload["origin"] = origin
 

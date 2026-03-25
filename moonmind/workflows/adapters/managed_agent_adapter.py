@@ -58,10 +58,34 @@ logger = logging.getLogger(__name__)
 # values are injected at launch time by the agent-runtime activity worker.
 _SECRET_ENV_PASSTHROUGH_KEYS: tuple[str, ...] = ("GH_TOKEN", "GITHUB_TOKEN")
 
-_PR_RESOLVER_RESULT_PATH = Path("artifacts/pr_resolver_result.json")
+_PR_RESOLVER_RESULT_PATHS: tuple[Path, ...] = (
+    Path("var/pr_resolver/result.json"),
+    Path("artifacts/pr_resolver_result.json"),
+)
 _PR_RESOLVER_FAILURE_STATUSES: frozenset[str] = frozenset(
     {"failed", "blocked", "attempts_exhausted"}
 )
+_PR_RESOLVER_BLOCKED_STATUSES: frozenset[str] = frozenset(
+    {"blocked", "attempts_exhausted"}
+)
+
+
+def _load_pr_resolver_result(workspace_path: str | None) -> dict[str, Any] | None:
+    """Load a pr-resolver result payload from known workspace locations."""
+
+    workspace = str(workspace_path or "").strip()
+    if not workspace:
+        return None
+
+    for rel_path in _PR_RESOLVER_RESULT_PATHS:
+        result_path = Path(workspace) / rel_path
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
 
 # Type aliases for async signal callables injected by the caller/workflow.
 ProfileFetcherFunc = Callable[..., Awaitable[dict[str, Any]]]
@@ -76,17 +100,8 @@ def _derive_pr_resolver_failure(
     workspace_path: str | None,
 ) -> tuple[str | None, str | None]:
     """Return failure metadata from pr-resolver artifacts when present."""
-
-    workspace = str(workspace_path or "").strip()
-    if not workspace:
-        return None, None
-
-    result_path = Path(workspace) / _PR_RESOLVER_RESULT_PATH
-    try:
-        payload = json.loads(result_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None, None
-    if not isinstance(payload, dict):
+    payload = _load_pr_resolver_result(workspace_path)
+    if payload is None:
         return None, None
 
     status = str(
@@ -102,7 +117,19 @@ def _derive_pr_resolver_failure(
         summary_parts.append(reason)
     if next_step:
         summary_parts.append(f"next_step={next_step}")
-    return "execution_error", "; ".join(summary_parts)
+    failure_class = (
+        "user_error" if status in _PR_RESOLVER_BLOCKED_STATUSES else "execution_error"
+    )
+    return failure_class, "; ".join(summary_parts)
+
+
+def _is_generic_process_exit_summary(summary: str | None) -> bool:
+    """Return whether a run summary only reports generic process exit."""
+
+    text = str(summary or "").strip().lower()
+    if not text:
+        return True
+    return text.startswith("process exited with code")
 
 
 class ProfileResolutionError(RuntimeError):
@@ -329,11 +356,20 @@ class ManagedAgentAdapter:
                     output_refs.append(record.diagnostics_ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
-                if failure_class is None and record.status == "completed":
-                    derived_failure_class, derived_summary = _derive_pr_resolver_failure(
-                        record.workspace_path
-                    )
-                    if derived_failure_class is not None:
+                derived_failure_class, derived_summary = _derive_pr_resolver_failure(
+                    record.workspace_path
+                )
+                if derived_failure_class is not None:
+                    should_apply_derived = False
+                    if record.status == "completed" and failure_class is None:
+                        should_apply_derived = True
+                    elif (
+                        record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        should_apply_derived = True
+                    if should_apply_derived:
                         failure_class = derived_failure_class
                         if derived_summary:
                             summary = derived_summary
