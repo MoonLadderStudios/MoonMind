@@ -1,8 +1,83 @@
 [
   {
+    "id": 4125027239,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  },
+  {
     "id": 4125276802,
     "disposition": "not-applicable",
     "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 2986938522,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script fix_init.py."
+  },
+  {
+    "id": 4005263103,
+    "disposition": "not-applicable",
+    "rationale": "Review summary, no action needed."
+  },
+  {
+    "id": 2986957961,
+    "disposition": "addressed",
+    "rationale": "Updated dashboard.js to use Temporal native API (/api/executions) instead of the deleted list route."
+  },
+  {
+    "id": 4005283394,
+    "disposition": "not-applicable",
+    "rationale": "Review summary, no action needed."
+  },
+  {
+    "id": 2986959207,
+    "disposition": "addressed",
+    "rationale": "Updated renderManifestListPage in dashboard.js to call /api/executions."
+  },
+  {
+    "id": 2986959238,
+    "disposition": "addressed",
+    "rationale": "Removed legacy task compatibility contract tests."
+  },
+  {
+    "id": 2986959275,
+    "disposition": "addressed",
+    "rationale": "Removed unused sourceHint parameter from resolveUnifiedTaskSource."
+  },
+  {
+    "id": 2986959301,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script update_schemas.py."
+  },
+  {
+    "id": 2986959350,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script fix_init.py."
+  },
+  {
+    "id": 2986959376,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script strip_dashboard.py."
+  },
+  {
+    "id": 2986959406,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script strip_dashboard2.py."
+  },
+  {
+    "id": 2986959433,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script rewrite_dashboard.py."
+  },
+  {
+    "id": 2986959448,
+    "disposition": "addressed",
+    "rationale": "Removed temporary refactoring script fix_test_task_dashboard.py."
+  },
+  {
+    "id": 4005284628,
+    "disposition": "not-applicable",
+    "rationale": "Pull request overview, no action needed."
   },
   {
     "id": 2987157079,
