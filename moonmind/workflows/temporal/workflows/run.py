@@ -770,7 +770,7 @@ class MoonMindRunWorkflow:
             }
             try:
                 create_result = await workflow.execute_activity(
-                    "integration.jules.create_pr",
+                    "repo.create_pr",
                     create_payload,
                     start_to_close_timeout=timedelta(minutes=2),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -1234,7 +1234,7 @@ class MoonMindRunWorkflow:
                         merge_payload["target_branch"] = effective_target
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "integration.jules.merge_pr"
+                        "repo.merge_pr"
                     )
                     merge_result = await workflow.execute_activity(
                         merge_route.activity_type,

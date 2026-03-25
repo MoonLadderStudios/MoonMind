@@ -56,6 +56,8 @@ When creating a new spec folder/feature ID:
 - If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
 
 ## Compatibility Policy
+- MoonMind is a **pre-release project** (see Constitution Principle XIII). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
+- When refactoring an activity name, model, or interface: grep the entire codebase, update every caller, test, mock, and doc reference, and delete the old artifact. Partial migrations are not acceptable.
 - Never introduce compatibility transforms that change execution semantics or billing-relevant values (for example model identifiers, effort values, queue semantics, or publish behavior).
 - Prefer fail-fast behavior for unsupported runtime input values over hidden fallback behavior.
 - For Codex execution specifically, `codex.model` and `codex.effort` inputs must be passed through exactly as provided. Unsupported values must fail through normal CLI/API validation.

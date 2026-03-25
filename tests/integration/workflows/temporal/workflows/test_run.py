@@ -191,7 +191,7 @@ async def mock_integration_fetch_result(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"external_url": "https://github.com/moonladder/moonmind/pull/999"}
 
 
-@activity.defn(name="integration.jules.merge_pr")
+@activity.defn(name="repo.merge_pr")
 async def mock_integration_merge_pr(args: Dict[str, Any]) -> Dict[str, Any]:
     INTEGRATION_MERGE_PR_CALLS.append(args)
     return {"merged": True}
