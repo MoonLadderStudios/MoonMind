@@ -1,10 +1,8 @@
-import asyncio
 import pytest
 from datetime import datetime, timedelta, timezone
 
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
-from temporalio.exceptions import ApplicationError
 
 from temporalio import workflow
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
@@ -111,7 +109,7 @@ async def test_run_workflow_scheduled_cancel(mock_run_environment):
                 task_queue="test-task-queue-sched",
             )
             
-            await handle.signal("cancel")
+            await handle.execute_update("Cancel")
             
             result = await handle.result()
             assert result["status"] == "canceled"
