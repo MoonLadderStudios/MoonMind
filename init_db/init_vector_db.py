@@ -101,7 +101,7 @@ if __name__ == "__main__":
         )
         try:
             client = qdrant_client.QdrantClient(
-                host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port
+                host=settings.qdrant.qdrant_host, port=settings.qdrant.qdrant_port, check_compatibility=False
             )
             logger.info(
                 f"Using vector store collection name: {settings.vector_store_collection_name}"
