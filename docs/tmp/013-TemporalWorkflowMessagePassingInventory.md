@@ -1,47 +1,48 @@
 # Temporal Workflow Message Passing Inventory
 
-This document fulfills Phase 1 of the Temporal Workflow Message Passing Improvements plan.
+This document fulfills Phase 1 of the Temporal Workflow Message Passing Improvements plan, providing a code-level map of Temporal usage in the MoonMind repository.
 
 ## 1. Inventory of Workflows, Activities, and Queues
 
-### Workflows (`@workflow.defn`)
-- `MoonMind.ManifestIngest` (`moonmind/workflows/temporal/manifest_ingest.py`, `moonmind/workflows/temporal/workflows/manifest_ingest.py`)
-  - **Updates**: `UpdateManifest`, `SetConcurrency`, `Pause`, `Resume`, `CancelNodes`, `RetryNodes`
-- `MoonMind.AgentRun` (`moonmind/workflows/temporal/workflows/agent_run.py`)
-  - **Signals**: (2 signals including `completion_signal`)
-- `MoonMind.AuthProfileManager` (`moonmind/workflows/temporal/workflows/auth_profile_manager.py`)
-  - **Signals**: (5 signals)
-  - **Queries**: (1 query)
-- `MoonMind.Run` (`moonmind/workflows/temporal/workflows/run.py`)
-  - **Signals**: `pause`, `resume`, `cancel`, `approve`, `ExternalEvent`, `child_state_changed`
-  - **Updates**: `update_parameters`, `update_title`
-  - **Queries**: `get_status` (pending/added)
-- `OAuthSessionWorkflow` (`moonmind/workflows/temporal/workflows/oauth_session.py`)
-  - **Signals**: (2 signals)
-  - **Queries**: (1 query)
-- `Task5_14Workflow` (`moonmind/workflows/temporal/workflows/task_5_14_workflow.py`)
+### Workflows and Handlers
 
-### Activities (`@activity.defn`)
-- **OAuth Session**: `oauth_session.cleanup_stale`, `oauth_session.ensure_volume`, `oauth_session.start_auth_runner`, `oauth_session.stop_auth_runner`, `oauth_session.update_status`, `oauth_session.mark_failed`
-- **Jules Integration**: `integration.jules.start`, `.status`, `.fetch_result`, `.cancel`, `.send_message`, `.list_activities`, `.answer_question`, `.merge_pr`, `.get_auto_answer_config`
-- **Codex Cloud Integration**: `integration.codex_cloud.start`, `.status`, `.fetch_result`, `.cancel`
-- **Agent/Adapter**: `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`, `agent_runtime.publish_artifacts`, `agent_runtime.cancel`
-- **General/Runtime** (dynamic/referenced): `plan.generate`, `artifact.read`, `mm.skill.execute`, `sandbox.run_command`, `proposal.generate`, `proposal.submit`
-- **Tests**: `task_5_14_activity`
+| Workflow Type | Decorator Location | Primary Purpose | Message Handlers |
+|---------------|-------------------|-----------------|------------------|
+| `MoonMind.Run` | `moonmind/workflows/temporal/workflows/run.py` | Core orchestrator for task execution and agent runs | **Signals:** `cancel`, `pause`, `resume`, `approve`, `ExternalEvent`, `child_state_changed`<br>**Updates:** `update_title`, `update_parameters`<br>**Queries:** `get_status` |
+| `MoonMind.AgentRun` | `moonmind/workflows/temporal/workflows/agent_run.py` | Orchestrates a specific agent/runtime within a run | **Signals:** `completion_signal`, `slot_assigned` |
+| `MoonMind.ManifestIngest` | `moonmind/workflows/temporal/manifest_ingest.py` | Manages background ingestion of templates/manifests | **Updates:** `UpdateManifest`, `SetConcurrency`, `Pause`, `Resume`, `CancelNodes`, `RetryNodes` |
+| `MoonMind.AuthProfileManager` | `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | Syncs auth profiles to workers | **Signals:** `request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`, `shutdown`<br>**Queries:** `get_state` |
+| `MoonMind.OAuthSession` | `moonmind/workflows/temporal/workflows/oauth_session.py` | Manages OAuth device code flow and tokens | **Signals:** `cancel`, `finalize`<br>**Queries:** `get_status` |
+| `MoonMind.Task514` | `moonmind/workflows/temporal/workflows/task_5_14_workflow.py` | Testing/utility workflow | |
+
+### Activities
+
+| Category | Activities | Purpose |
+|----------|------------|---------|
+| **OAuth Session** | `oauth_session.cleanup_stale`, `.ensure_volume`, `.start_auth_runner`, `.stop_auth_runner`, `.update_status`, `.mark_failed` | OAuth session lifecycle events |
+| **Jules Integration** | `integration.jules.start`, `.status`, `.fetch_result`, `.cancel`, `.send_message`, `.list_activities`, `.answer_question`, `.merge_pr`, `.get_auto_answer_config` | Jules API operations |
+| **Codex Cloud** | `integration.codex_cloud.start`, `.status`, `.fetch_result`, `.cancel` | Codex Cloud API operations |
+| **Agent/Adapter** | `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`, `agent_runtime.publish_artifacts`, `agent_runtime.cancel` | Agent adapter lookup and execution |
+| **General/Runtime** | `plan.generate`, `artifact.read`, `mm.skill.execute`, `sandbox.run_command`, `proposal.generate`, `proposal.submit` | Dynamic skill and sandbox execution |
+| **Tests** | `task_5_14_activity` | Testing |
 
 ### Task Queues
-- `mm.workflow`
-- `mm.activity.artifacts`
-- `mm.activity.llm`
-- `mm.activity.sandbox`
-- `mm.activity.integrations`
-- `mm.activity.agent_runtime`
-- `AUTH_PROFILE_MANAGER_QUEUE`
-- `ACTIVITY_TASK_QUEUE`
+
+| Queue String | Purpose |
+|--------------|---------|
+| `mm.workflow` | Default for Core Workflows (Run, AgentRun) |
+| `mm.activity.artifacts` | Artifact manipulation activities |
+| `mm.activity.llm` | LLM interactions |
+| `mm.activity.sandbox` | Sandbox executions |
+| `mm.activity.integrations` | External integrations |
+| `mm.activity.agent_runtime` | Agent runtime coordination |
+| `AUTH_PROFILE_MANAGER_QUEUE` | Auth profile sync |
+| `ACTIVITY_TASK_QUEUE` | Generic activities |
 
 ### Child Workflow Relationships
-- `MoonMind.Run` spawns execution-specific workflows.
-- `MoonMind.AgentRun` orchestrates specialized workers/activities (e.g., integrations, sandbox).
+
+* `MoonMind.ManifestIngest` -> spawns `MoonMind.Run` (for specific ingestion tasks)
+* `MoonMind.Run` -> spawns execution-specific workflows (`MoonMind.AgentRun`)
 
 ## 2. Action Matrix (API & Mission Control vs. Temporal)
 
@@ -73,6 +74,8 @@ This document fulfills Phase 1 of the Temporal Workflow Message Passing Improvem
    - **GAP**: UI enrichment (Summary/Details) needs standardization across all job types.
 8. **Encryption/codecs for payload confidentiality where required.**
    - **GAP**: Payload encryption is not systematically implemented for sensitive artifacts/prompts.
+9. **Query Safety.**
+   - **GAP**: Queries appear read-only but `get_status` and `get_state` handlers need manual auditing to confirm no state mutation.
 
 ## Exit Criteria Status
 - **Inventory Checked In**: Yes (this document).
