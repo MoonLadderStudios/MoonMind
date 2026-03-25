@@ -343,25 +343,16 @@ def _build_runtime_planner():
         # Skip Jules: session creation uses Jules API ``automationMode`` =
         # ``AUTO_CREATE_PR`` when ``publishMode`` is ``pr`` or ``branch``
         # (see ``JulesAgentAdapter.do_start``), not shell instructions.
-        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+        if isinstance(publish_mode, str) and publish_mode.strip().lower() in ("pr", "branch"):
             last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
             if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
-                pr_suffix = (
-                    "\n\nAfter completing the changes above, commit your work and "
-                    "push the current branch to origin (`git push -u origin HEAD`). "
-                    "Then create a GitHub pull request with the changes using `gh pr create --fill`."
+                commit_suffix = (
+                    "\n\nAfter completing the changes above, commit your work "
+                    "(`git add -A && git commit -m '<summary>'`). "
+                    "Do NOT push or create a pull request — that is handled automatically."
                 )
                 last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
-        elif isinstance(publish_mode, str) and publish_mode.strip().lower() == "branch":
-            last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
-            if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
-                push_suffix = (
-                    "\n\nAfter completing the changes above, commit your work and "
-                    "push the current branch to origin (`git push -u origin HEAD`)."
-                )
-                last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + push_suffix
+                last_inputs["instructions"] = last_inputs["instructions"] + commit_suffix
 
         return {
             "plan_version": "1.0",

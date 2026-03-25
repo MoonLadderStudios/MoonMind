@@ -69,7 +69,7 @@ from moonmind.workflows.temporal.manifest_ingest import (
     plan_nodes_to_runtime_nodes,
 )
 
-from moonmind.publish.service import PublishService
+
 
 class CmdRes:
     def __init__(self, stdout_bytes: bytes):
@@ -2797,29 +2797,50 @@ class TemporalAgentRuntimeActivities:
             if record.status == "completed" and workspace_path:
                 publish_mode = request.parameters.get("publishMode", "none")
                 if publish_mode != "none":
+                    # Deterministic git push: ensure the agent's work branch
+                    # is on the remote before the parent workflow tries to
+                    # create a PR.  Best-effort — the agent may have already
+                    # pushed, or there may be nothing to push.
                     try:
-                        try:
-                            job_id = UUID(run_id)
-                        except ValueError:
-                            job_id = UUID(hashlib.md5(run_id.encode('utf-8')).hexdigest())
-
-                        instruction = request.parameters.get("description") or request.parameters.get("title") or "Automated execution"
-                        publish_base_branch = request.parameters.get("publishBaseBranch", "main")
-
-                        svc = PublishService()
-                        await svc.publish(
-                            job_id=job_id,
-                            instruction=instruction,
-                            publish_mode=publish_mode,
-                            publish_base_branch=publish_base_branch,
-                            runtime_mode=profile.runtime_id or "managed",
-                            repo_dir=Path(workspace_path),
-                            run_command=_run_command,
+                        # Safety: resolve current branch and refuse to push
+                        # protected branches (main/master/target).
+                        branch_res = await _run_command(
+                            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                            cwd=Path(workspace_path),
+                            check=False,
                         )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        logger.error("PublishService failed for run %s", run_id, exc_info=True)
+                        current_branch = branch_res.stdout.strip()
+                        target_branch = (
+                            request.parameters.get("publishBaseBranch")
+                            or request.parameters.get("targetBranch")
+                            or "main"
+                        )
+                        protected = {"main", "master", target_branch}
+                        if not current_branch or current_branch in protected:
+                            logger.warning(
+                                "Post-agent git push skipped for run %s: "
+                                "HEAD is on protected branch '%s'",
+                                run_id,
+                                current_branch or "(detached/unknown)",
+                            )
+                        else:
+                            await _run_command(
+                                ["git", "push", "-u", "origin", current_branch],
+                                cwd=Path(workspace_path),
+                                check=False,
+                            )
+                            logger.info(
+                                "Post-agent git push completed for run %s "
+                                "(branch=%s)",
+                                run_id,
+                                current_branch,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Post-agent git push failed for run %s",
+                            run_id,
+                            exc_info=True,
+                        )
 
         task = asyncio.create_task(_supervise_and_publish())
         self._supervision_tasks.add(task)
