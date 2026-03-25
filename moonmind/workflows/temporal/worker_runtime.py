@@ -485,8 +485,25 @@ async def main_async() -> None:
     # can confirm the process is alive even during initial connection.
     healthcheck_server = await start_healthcheck_server()
 
+    import os
+    interceptors = []
+    if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
+        try:
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry import trace
+            from temporalio.contrib.opentelemetry import TracingInterceptor
+
+            if not isinstance(trace.get_tracer_provider(), TracerProvider):
+                trace.set_tracer_provider(TracerProvider())
+            interceptors.append(TracingInterceptor())
+            logger.info("OpenTelemetry tracing enabled for Temporal worker.")
+        except ImportError as e:
+            logger.warning(f"OpenTelemetry tracing requested but failed to initialize: {e}")
+
     client = await Client.connect(
-        settings.temporal.address, namespace=settings.temporal.namespace
+        settings.temporal.address, 
+        namespace=settings.temporal.namespace,
+        interceptors=interceptors,
     )
 
     workflows = []
