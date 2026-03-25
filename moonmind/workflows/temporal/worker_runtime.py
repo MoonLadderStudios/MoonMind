@@ -241,8 +241,24 @@ def _build_runtime_planner():
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
             if not node_inputs.get("newBranch") and not node_inputs.get("branch"):
+                import re
                 import uuid
-                node_inputs["newBranch"] = f"auto-{str(uuid.uuid4())[:8]}"
+
+                desc_source = str(
+                    task_payload.get("title")
+                    or parameter_payload.get("title")
+                    or selected_skill_name
+                    or ""
+                ).strip()
+
+                if desc_source:
+                    clean_desc = re.sub(r"[^a-z0-9]+", "-", desc_source.lower()).strip("-")
+                    clean_desc = clean_desc[:40].strip("-")
+                    prefix = f"{clean_desc}-" if clean_desc else ""
+                else:
+                    prefix = ""
+
+                node_inputs["newBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
 
         # --- Assemble plan ---
         title = str(
@@ -327,25 +343,16 @@ def _build_runtime_planner():
         # Skip Jules: session creation uses Jules API ``automationMode`` =
         # ``AUTO_CREATE_PR`` when ``publishMode`` is ``pr`` or ``branch``
         # (see ``JulesAgentAdapter.do_start``), not shell instructions.
-        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+        if isinstance(publish_mode, str) and publish_mode.strip().lower() in ("pr", "branch"):
             last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
             if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
-                pr_suffix = (
-                    "\n\nAfter completing the changes above, commit your work and "
-                    "push the current branch to origin (`git push -u origin HEAD`). "
-                    "Then create a GitHub pull request with the changes using `gh pr create --fill`."
+                commit_suffix = (
+                    "\n\nAfter completing the changes above, commit your work "
+                    "(`git add -A && git commit -m '<summary>'`). "
+                    "Do NOT push or create a pull request — that is handled automatically."
                 )
                 last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
-        elif isinstance(publish_mode, str) and publish_mode.strip().lower() == "branch":
-            last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
-            if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
-                push_suffix = (
-                    "\n\nAfter completing the changes above, commit your work and "
-                    "push the current branch to origin (`git push -u origin HEAD`)."
-                )
-                last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + push_suffix
+                last_inputs["instructions"] = last_inputs["instructions"] + commit_suffix
 
         return {
             "plan_version": "1.0",

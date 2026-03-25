@@ -1,0 +1,47 @@
+[
+  {
+    "id": 4124896637,
+    "disposition": "not-applicable",
+    "rationale": "Jules welcome comment, no action needed."
+  },
+  {
+    "id": 4124898489,
+    "disposition": "not-applicable",
+    "rationale": "Gemini Code Assist summary, no action needed."
+  },
+  {
+    "id": 2986815330,
+    "disposition": "addressed",
+    "rationale": "Moved import to top of api_service/main.py."
+  },
+  {
+    "id": 2986815337,
+    "disposition": "addressed",
+    "rationale": "Moved MagicMock import to the top of tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 2986815343,
+    "disposition": "addressed",
+    "rationale": "Removed duplicate MagicMock import in tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 4005122605,
+    "disposition": "not-applicable",
+    "rationale": "Gemini code review summary, no action needed."
+  },
+  {
+    "id": 2986822796,
+    "disposition": "addressed",
+    "rationale": "Updated wait_for mock to use AsyncMock in tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 2986822819,
+    "disposition": "addressed",
+    "rationale": "Updated wait_for mock to use AsyncMock in tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 4005130404,
+    "disposition": "not-applicable",
+    "rationale": "Copilot review summary, no action needed."
+  }
+]
