@@ -2155,6 +2155,51 @@ class TemporalArtifactActivities:
             )
             return {"started": False, "workflow_id": workflow_id}
 
+    async def auth_profile_verify_lease_holders(
+        self,
+        *,
+        workflow_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """Check whether each lease-holding workflow is still running.
+
+        Uses the Temporal client to describe each workflow and determine if it
+        is in a terminal state. This allows the AuthProfileManager to reclaim
+        slots from cancelled/terminated workflows without waiting for the
+        2-hour lease timeout.
+
+        Returns a dict mapping workflow_id -> {"running": bool, "status": str}.
+        Non-found workflows are counted as not running.
+        """
+        from temporalio.client import WorkflowFailureError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+
+        results: dict[str, dict[str, Any]] = {}
+        for wf_id in workflow_ids:
+            try:
+                handle = client.get_workflow_handle(wf_id)
+                desc = await handle.describe()
+                status_name = desc.status.name
+                results[wf_id] = {
+                    "running": status_name == "RUNNING",
+                    "status": status_name,
+                }
+            except WorkflowFailureError:
+                # Workflow does not exist or is not reachable
+                results[wf_id] = {"running": False, "status": "NOT_FOUND"}
+            except Exception as exc:
+                logger.warning(
+                    "auth_profile.verify_lease_holders failed to describe %s: %s",
+                    wf_id,
+                    exc,
+                )
+                results[wf_id] = {"running": False, "status": "ERROR"}
+
+        return results
+
     async def oauth_session_ensure_volume(
         self,
         request: Any = None,

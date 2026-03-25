@@ -572,6 +572,21 @@ class MoonMindAgentRun:
                         )
                     request.execution_profile_ref = self._assigned_profile_id
 
+                    # Notify parent of the assigned profile so it can release the slot
+                    # if this child exits in a terminal state (fallback for cancelled
+                    # workflows that fail to release their own slot).
+                    if parent_info and self._assigned_profile_id:
+                        parent_handle = workflow.get_external_workflow_handle(
+                            parent_info.workflow_id, run_id=parent_info.run_id
+                        )
+                        await parent_handle.signal(
+                            "profile_assigned",
+                            {
+                                "profile_id": self._assigned_profile_id,
+                                "child_workflow_id": workflow.info().workflow_id,
+                            },
+                        )
+
                     # Wire ManagedAgentAdapter with real DI callables.
                     # The slot_requester / slot_releaser / cooldown_reporter
                     # are thin wrappers around AuthProfileManager signals.

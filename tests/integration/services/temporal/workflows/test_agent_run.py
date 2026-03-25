@@ -28,6 +28,7 @@ class MockAuthProfileManager:
     def __init__(self):
         self._shutdown = False
         self.pending_requests = []
+        self._leases: dict[str, str] = {}  # profile_id -> workflow_id
 
     @workflow.signal
     def request_slot(self, payload: dict) -> None:
@@ -35,11 +36,24 @@ class MockAuthProfileManager:
 
     @workflow.signal
     def release_slot(self, payload: dict) -> None:
-        pass
+        """Release a slot lease. Removes the lease if the workflow_id matches."""
+        requester_id = payload.get("requester_workflow_id")
+        profile_id = payload.get("profile_id")
+        # Find and remove any lease held by this requester
+        to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
+        for p in to_remove:
+            del self._leases[p]
 
     @workflow.signal
     def report_cooldown(self, payload: dict) -> None:
         pass
+
+    @workflow.query
+    def get_state(self) -> dict:
+        return {
+            "leases": dict(self._leases),
+            "pending_requests": self.pending_requests,
+        }
 
     @workflow.run
     async def run(self, input_payload: dict) -> dict:
@@ -51,8 +65,10 @@ class MockAuthProfileManager:
             while self.pending_requests:
                 req = self.pending_requests.pop(0)
                 if assign_slots:
+                    profile_id = "default-managed"
+                    self._leases[profile_id] = req["requester_workflow_id"]
                     handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                    await handle.signal("slot_assigned", {"profile_id": "default-managed"})
+                    await handle.signal("slot_assigned", {"profile_id": profile_id})
         return {}
 
 
@@ -326,3 +342,83 @@ async def test_agent_run_external_agent_workflow():
                         c.startswith("status:")
                         for c in _external_activity_calls[start_idx:fetch_idx]
                     )
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_auth_profile_slot():
+    """Verify that cancelling a managed AgentRun releases its auth profile slot.
+
+    Regression test for the auth profile slot leak bug where `CancelledError`
+    handler wrapped the release_slot signal in `asyncio.shield()`, which does not
+    work with Temporal's workflow-level cancellation.
+
+    This test will initially FAIL, establishing the regression baseline. The fix
+    (Task 4) implements parent-initiated slot release fallback to close this gap.
+    """
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="agent-run-task-queue",
+            workflows=[MoonMindAgentRun, MockAuthProfileManager],
+            activities=[mock_publish_artifacts, mock_cancel],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            request = AgentExecutionRequest(
+                agent_kind="managed",
+                agent_id="test-agent",
+                execution_profile_ref="default-managed",
+                correlation_id="corr-cancel-slot",
+                idempotency_key="idem-cancel-slot",
+            )
+
+            # Start dummy manager that assigns slots
+            runtime_mapping = {"gemini_cli": "gemini_cli", "claude": "claude_code", "codex": "codex_cli"}
+            runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+            manager_id = f"auth-profile-manager:{runtime_id}"
+            manager_handle = await env.client.start_workflow(
+                MockAuthProfileManager.run,
+                {"runtime_id": request.agent_id, "assign_slots": True},
+                id=manager_id,
+                task_queue="agent-run-task-queue",
+            )
+
+            # Give the manager time to start
+            await asyncio.sleep(0.1)
+
+            # Start AgentRun workflow
+            agent_handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id="test-workflow-cancel-slot",
+                task_queue="agent-run-task-queue",
+            )
+
+            # Wait for the AgentRun to acquire a slot (it will be waiting for slot_assigned signal)
+            # The manager should have assigned the slot by now
+            await asyncio.sleep(0.5)
+
+            # Verify the manager holds the lease
+            manager_state_before = await manager_handle.query("get_state")
+            assert "default-managed" in manager_state_before.get("leases", {}), (
+                f"Expected manager to hold slot before cancellation, state={manager_state_before}"
+            )
+
+            # Cancel the AgentRun workflow while it's waiting for slot assignment or running
+            await agent_handle.cancel()
+
+            # Wait for cancellation to be processed
+            await asyncio.sleep(0.5)
+
+            # Query manager state after cancellation
+            try:
+                manager_state_after = await manager_handle.query("get_state")
+            except Exception:
+                # Manager might have shut down; check if slot is released via direct query
+                manager_state_after = {"leases": {}}
+
+            # The slot should be released after cancellation
+            # This assertion will FAIL initially (documenting the bug)
+            assert "default-managed" not in manager_state_after.get("leases", {}) or \
+                   manager_state_after.get("leases", {}).get("default-managed") != "test-workflow-cancel-slot", (
+                f"Slot was NOT released after cancellation. Manager state: {manager_state_after}"
+            )

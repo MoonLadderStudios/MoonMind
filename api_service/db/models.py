@@ -1825,6 +1825,9 @@ class ManagedAgentAuthProfile(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
+    max_lease_duration_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=7200, server_default=text("7200")
+    )
     owner_user_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid, nullable=True
     )

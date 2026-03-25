@@ -163,6 +163,12 @@ class MoonMindRunWorkflow:
         self._proposals_submitted = 0
         self._proposals_errors: list[str] = []
 
+        # Auth profile slot tracking for managed agent runs.
+        # Set when a child AgentRun acquires a slot so the parent can
+        # defensively release it if the child exits in a terminal state.
+        self._assigned_profile_id: Optional[str] = None
+        self._assigned_child_workflow_id: Optional[str] = None
+
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
             initial_interval=timedelta(seconds=5),
@@ -1626,6 +1632,107 @@ class MoonMindRunWorkflow:
             self._set_state(STATE_EXECUTING, summary="Launching agent...")
         elif new_state == "running":
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
+        elif new_state in ("completed", "failed", "canceled", "timed_out"):
+            # Child has reached a terminal state. If we have an assigned profile
+            # slot, release it defensively. This is a fallback for cases where
+            # the child fails to release the slot due to cancellation or other
+            # issues.
+            self._release_slot_defensive()
+
+    @workflow.signal
+    def profile_assigned(self, payload: dict) -> None:
+        """Record that a child AgentRun has acquired an auth profile slot.
+
+        The parent uses this to track which profile slot to release if the
+        child exits in a terminal state without releasing it itself.
+        """
+        self._assigned_profile_id = payload.get("profile_id")
+        self._assigned_child_workflow_id = payload.get("child_workflow_id")
+        self._get_logger().debug(
+            "Child workflow %s assigned profile %s",
+            self._assigned_child_workflow_id,
+            self._assigned_profile_id,
+        )
+
+    def _release_slot_defensive(self) -> None:
+        """Release the auth profile slot defensively when a child exits.
+
+        This is called when a child AgentRun exits in a terminal state but
+        may have failed to release its slot due to cancellation or other issues.
+        """
+        if not self._assigned_profile_id:
+            return
+
+        profile_id = self._assigned_profile_id
+        child_wf_id = self._assigned_child_workflow_id or "unknown"
+
+        self._get_logger().warning(
+            "Defensively releasing auth profile slot %s for child %s",
+            profile_id,
+            child_wf_id,
+        )
+
+        # Determine runtime_id from the child workflow ID pattern
+        # child_workflow_id format: "<parent_workflow_id>:agent:<node_id>[:retry<N>]"
+        runtime_id = self._infer_runtime_from_child(child_wf_id)
+        if runtime_id:
+            manager_id = f"auth-profile-manager:{runtime_id}"
+            try:
+                manager_handle = workflow.get_external_workflow_handle(manager_id)
+                # Schedule the async signal without awaiting - best effort cleanup.
+                # The manager's verify_lease_holders will reclaim the slot if this fails.
+                import asyncio
+                asyncio.create_task(
+                    self._signal_release_slot(
+                        manager_handle, child_wf_id, profile_id
+                    )
+                )
+            except Exception:
+                self._get_logger().warning(
+                    "Failed to schedule defensive release for profile %s", profile_id
+                )
+
+        # Clear the assignment
+        self._assigned_profile_id = None
+        self._assigned_child_workflow_id = None
+
+    async def _signal_release_slot(
+        self, manager_handle: Any, child_workflow_id: str, profile_id: str
+    ) -> None:
+        """Send release_slot signal to the auth profile manager."""
+        try:
+            await manager_handle.signal(
+                "release_slot",
+                {
+                    "requester_workflow_id": child_workflow_id,
+                    "profile_id": profile_id,
+                },
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to signal release_slot for profile %s: %s", profile_id, exc
+            )
+
+    def _infer_runtime_from_child(self, child_workflow_id: str) -> Optional[str]:
+        """Infer runtime_id from child workflow ID pattern.
+
+        Child workflow ID pattern: "<parent_workflow_id>:agent:<node_id>[:retry<N>]"
+        The node_id typically indicates the agent kind (e.g., "jules", "gemini", "claude").
+        """
+        # Simple heuristic: extract from the workflow ID
+        # Format: parent_id:agent:node_id[:retry<N>]
+        parts = child_workflow_id.split(":")
+        if len(parts) >= 3:
+            node_id = parts[2]
+            # Map common node IDs to runtime IDs
+            mapping = {
+                "jules": "jules",
+                "gemini": "gemini_cli",
+                "claude": "claude_code",
+                "codex": "codex_cli",
+            }
+            return mapping.get(node_id)
+        return None
 
     @workflow.update(name="Pause")
     def pause(self) -> None:
