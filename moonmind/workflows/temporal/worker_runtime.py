@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
@@ -228,7 +229,7 @@ def _build_runtime_planner():
             node_inputs["repository"] = repository.strip()
             node_inputs["repo"] = repository.strip()
 
-        for git_key in ("startingBranch", "newBranch", "branch"):
+        for git_key in ("startingBranch", "targetBranch", "branch"):
             git_val = (
                 git_payload.get(git_key)
                 or task_payload.get(git_key)
@@ -240,9 +241,25 @@ def _build_runtime_planner():
                 node_inputs[git_key] = git_val.strip()
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-            if not node_inputs.get("newBranch") and not node_inputs.get("branch"):
+            if not node_inputs.get("targetBranch") and not node_inputs.get("branch"):
+                import re
                 import uuid
-                node_inputs["newBranch"] = f"auto-{str(uuid.uuid4())[:8]}"
+
+                desc_source = str(
+                    task_payload.get("title")
+                    or parameter_payload.get("title")
+                    or selected_skill_name
+                    or ""
+                ).strip()
+
+                if desc_source:
+                    clean_desc = re.sub(r"[^a-z0-9]+", "-", desc_source.lower()).strip("-")
+                    clean_desc = clean_desc[:40].strip("-")
+                    prefix = f"{clean_desc}-" if clean_desc else ""
+                else:
+                    prefix = ""
+
+                node_inputs["targetBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
 
         # --- Assemble plan ---
         title = str(
@@ -327,25 +344,16 @@ def _build_runtime_planner():
         # Skip Jules: session creation uses Jules API ``automationMode`` =
         # ``AUTO_CREATE_PR`` when ``publishMode`` is ``pr`` or ``branch``
         # (see ``JulesAgentAdapter.do_start``), not shell instructions.
-        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+        if isinstance(publish_mode, str) and publish_mode.strip().lower() in ("pr", "branch"):
             last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
             if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
-                pr_suffix = (
-                    "\n\nAfter completing the changes above, commit your work and "
-                    "push the current branch to origin (`git push -u origin HEAD`). "
-                    "Then create a GitHub pull request with the changes using `gh pr create --fill`."
+                commit_suffix = (
+                    "\n\nAfter completing the changes above, commit your work "
+                    "(`git add -A && git commit -m '<summary>'`). "
+                    "Do NOT push or create a pull request — that is handled automatically."
                 )
                 last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
-        elif isinstance(publish_mode, str) and publish_mode.strip().lower() == "branch":
-            last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
-            if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
-                push_suffix = (
-                    "\n\nAfter completing the changes above, commit your work and "
-                    "push the current branch to origin (`git push -u origin HEAD`)."
-                )
-                last_inputs = nodes[-1]["inputs"]
-                last_inputs["instructions"] = last_inputs["instructions"] + push_suffix
+                last_inputs["instructions"] = last_inputs["instructions"] + commit_suffix
 
         return {
             "plan_version": "1.0",
@@ -521,6 +529,7 @@ async def main_async() -> None:
     client = await Client.connect(
         settings.temporal.address, 
         namespace=settings.temporal.namespace,
+        data_converter=pydantic_data_converter,
         interceptors=interceptors,
     )
 
@@ -539,16 +548,42 @@ async def main_async() -> None:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
     try:
+        use_versioning = os.environ.get("MOONMIND_ENABLE_WORKER_VERSIONING", "false").lower() in ("true", "1", "yes")
+        build_id = os.environ.get("MOONMIND_BUILD_ID")
+        if not build_id:
+            import subprocess
+            try:
+                build_id = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ).strip()
+            except Exception as e:
+                if use_versioning:
+                    logger.error(
+                        "Failed to determine Temporal worker build ID from "
+                        "MOONMIND_BUILD_ID or git. "
+                        "Set the MOONMIND_BUILD_ID environment variable to a "
+                        "stable, unique identifier for this build when "
+                        "use_worker_versioning is enabled.",
+                        exc_info=e,
+                    )
+                    raise RuntimeError(
+                        "Unable to determine Temporal worker build ID. "
+                        "Set MOONMIND_BUILD_ID to a unique identifier for this build."
+                    ) from e
+                build_id = "unknown"
+
         worker = Worker(
             client,
             task_queue=topology.task_queues[0],
             workflows=workflows,
             activities=activities,
             workflow_runner=UnsandboxedWorkflowRunner(),
+            build_id=build_id,
+            use_worker_versioning=use_versioning,
             **_worker_concurrency_kwargs(topology),
         )
 
-        logger.info("Worker started, polling task queues...")
+        logger.info(f"Worker started with build_id={build_id}, polling task queues...")
         await worker.run()
     finally:
         if runtime_resources is not None:
