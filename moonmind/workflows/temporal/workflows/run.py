@@ -778,11 +778,16 @@ class MoonMindRunWorkflow:
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 pr_url = self._get_from_result(create_result, "url")
+                created = self._get_from_result(create_result, "created")
+                summary = self._get_from_result(create_result, "summary") or ""
                 if pr_url:
                     pull_request_url = pr_url
                     self._get_logger().info(f"Natively created PR: {pull_request_url}")
                 else:
-                    raise ValueError("PR creation activity succeeded but returned no URL")
+                    raise ValueError(
+                        f"PR creation activity returned no URL"
+                        f" (created={created}): {summary}"
+                    )
             except Exception as e:
                 raise ValueError(
                     f"publishMode 'pr' requested; native PR creation failed: {e}"
