@@ -18,6 +18,7 @@ import logging
 import shlex
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
+from uuid import UUID
 
 from temporalio import activity
 
@@ -359,8 +360,8 @@ async def oauth_session_verify_volume(
     volume_ref = request.get("volume_ref", "")
     volume_mount_path = request.get("volume_mount_path")
 
-    if not runtime_id or not volume_ref:
-        raise ValueError("runtime_id and volume_ref are required")
+    if not session_id or not runtime_id or not volume_ref:
+        raise ValueError("session_id, runtime_id, and volume_ref are required")
 
     from moonmind.workflows.temporal.runtime.providers.volume_verifiers import verify_volume_credentials
 
@@ -481,9 +482,11 @@ async def oauth_session_register_profile(
             for key, value in profile_data.items():
                 setattr(existing_profile, key, value)
         else:
-            # We must use requested_by_user_id as owner if not present
-            # But note owner_user_id must be an integer, while requested_by_user_id is a string usually representing an integer in the system.
-            owner_id = int(session_obj.requested_by_user_id) if session_obj.requested_by_user_id else None
+            try:
+                # The owner_user_id column is a UUID, not an integer.
+                owner_id = UUID(session_obj.requested_by_user_id) if session_obj.requested_by_user_id else None
+            except ValueError:
+                owner_id = None
             new_profile = ManagedAgentAuthProfile(
                 profile_id=session_obj.profile_id,
                 owner_user_id=owner_id,
