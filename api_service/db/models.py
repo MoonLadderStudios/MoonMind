@@ -1920,6 +1920,66 @@ class ManagedAgentOAuthSession(Base):
     )
 
 
+class AgentJobLiveSessionProvider(str, enum.Enum):
+    TMATE = "tmate"
+
+
+class AgentJobLiveSessionStatus(str, enum.Enum):
+    DISABLED = "disabled"
+    STARTING = "starting"
+    READY = "ready"
+    REVOKED = "revoked"
+    ENDED = "ended"
+    ERROR = "error"
+
+
+class TaskRunLiveSession(Base):
+    __tablename__ = "task_run_live_sessions"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    task_run_id: Mapped[UUID] = mapped_column(Uuid, unique=True, index=True)
+    provider: Mapped[AgentJobLiveSessionProvider] = mapped_column(
+        Enum(AgentJobLiveSessionProvider, name="agentjoblivesessionprovider")
+    )
+    status: Mapped[AgentJobLiveSessionStatus] = mapped_column(
+        Enum(AgentJobLiveSessionStatus, name="agentjoblivesessionstatus")
+    )
+    ready_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    worker_id: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
+    worker_hostname: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tmate_session_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tmate_socket_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    attach_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attach_rw_encrypted: Mapped[Optional[str]] = mapped_column(
+        StringEncryptedType(Text, get_encryption_key), nullable=True
+    )
+    web_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    web_rw_encrypted: Mapped[Optional[str]] = mapped_column(
+        StringEncryptedType(Text, get_encryption_key), nullable=True
+    )
+    rw_granted_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=True
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
