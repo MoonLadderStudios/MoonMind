@@ -1,4 +1,4 @@
-import base64
+
 import pytest
 from pydantic import BaseModel, ValidationError
 
