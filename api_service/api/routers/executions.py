@@ -1736,11 +1736,12 @@ async def reschedule_execution(
             record.workflow_id, payload.scheduled_for
         )
     except Exception as exc:
+        logger.warning("Failed to send reschedule signal for workflow %s", record.workflow_id, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
                 "code": "signal_failed",
-                "message": f"Temporal signal failed: {exc}",
+                "message": "Failed to send reschedule signal to Temporal.",
             },
         ) from exc
 

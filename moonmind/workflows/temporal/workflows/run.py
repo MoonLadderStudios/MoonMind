@@ -274,9 +274,9 @@ class MoonMindRunWorkflow:
                 try:
                     from datetime import datetime
                     target_dt = datetime.fromisoformat(self._scheduled_for.replace("Z", "+00:00"))
-                except Exception:
-                    self._get_logger().warning(f"Invalid scheduled_for format: {self._scheduled_for}")
-                    break
+                except ValueError as exc:
+                    self._get_logger().error(f"Invalid scheduled_for format: {self._scheduled_for}", exc_info=True)
+                    raise exceptions.ApplicationError(f"Invalid scheduled_for format: {self._scheduled_for}", non_retryable=True) from exc
                 
                 now = workflow.now()
                 delay = target_dt - now
@@ -290,7 +290,8 @@ class MoonMindRunWorkflow:
                         timeout=delay,
                     )
                 except asyncio.TimeoutError:
-                    pass
+                    # Timeout means no reschedule/cancel happened before the scheduled time.
+                    self._get_logger().debug("Scheduled delay elapsed without reschedule/cancel.")
                 
                 if self._cancel_requested:
                     break
@@ -1515,8 +1516,11 @@ class MoonMindRunWorkflow:
             try:
                 from datetime import datetime
                 attributes["mm_scheduled_for"] = datetime.fromisoformat(self._scheduled_for.replace("Z", "+00:00"))
-            except Exception:
-                pass
+            except ValueError:
+                self._get_logger().warning(
+                    "Could not parse scheduled_for for search attribute: %s",
+                    self._scheduled_for,
+                )
 
         formatted_attributes = {
             k: v if isinstance(v, list) else [v] for k, v in attributes.items()
