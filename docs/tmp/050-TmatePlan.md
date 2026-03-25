@@ -3,7 +3,7 @@
 **Source:** [`docs/ManagedAgents/TmateArchitecture.md`](../ManagedAgents/TmateArchitecture.md)
 **Last synced:** 2026-03-25
 
-**Phase rollout (status):** **Phase 1** complete (integration test 1.9 still open). **Phase 2** in progress (2.2 `start_auth_runner` still uses Docker-exec polling; other Phase 2 items done). **Phase 3** largely complete — `TaskRunLiveSession` ORM model, `task_runs` router (`GET`, `report`, `heartbeat`, worker endpoints), worker HTTP reporting, and unit tests all implemented; live persistence follows [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/). **Phase 4** complete for MVP surfaces (Live Output + OAuth modal wired to `/api/v1/oauth-sessions`). **Phase 5–6** not started.
+**Phase rollout (status):** **Phase 1** complete (integration test 1.9 still open). **Phase 2** in progress (2.2 `start_auth_runner` still uses Docker-exec polling; other Phase 2 items done). **Phase 3** largely complete — `TaskRunLiveSession` ORM model, `task_runs` router (`GET`, `report`, `heartbeat`, worker endpoints), worker HTTP reporting, and unit tests all implemented; live persistence follows [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/). **Phase 4** complete for MVP surfaces (Live Output + OAuth modal wired to `/api/v1/oauth-sessions`). **Phase 5** not started.
 
 ---
 
@@ -41,7 +41,7 @@
 | `TmateSessionManager` inside `start_auth_runner` | ❌ Open | Still bash + `docker exec` polling; shares `_ENDPOINT_KEYS` with manager only |
 | End-to-end OAuth session **integration** test | ❌ Open | Phase 1.9 — unit coverage exists; full lifecycle test still absent |
 | Phase 5 — RW grant API, audit, auto-revoke, operator messages | ❌ Not implemented | `rw_granted_until` column exists in `TaskRunLiveSession` schema (ready for Phase 5); no grant button in dashboard JS |
-| Phase 6 — native provider OAuth drivers | ❌ Not implemented | Post-MVP |
+
 
 ---
 
@@ -121,15 +121,4 @@
 - [ ] **5.5** Operator messages into tmate session.
 - [ ] **5.6** Pause/resume workflow signals.
 
----
 
-## Phase 6 — Provider-Specific Driver Splits (Post-MVP)
-
-**Goal:** Replace tmate transport with native auth flows where viable.
-
-**Phase status:** **Not started.**
-
-- [ ] **6.1** Codex `device_code` driver.
-- [ ] **6.2** Gemini browser-assisted driver.
-- [ ] **6.3** Swap `session_transport` in `OAuthProviderSpec` per provider.
-- [ ] **6.4** Retain tmate as default fallback.
