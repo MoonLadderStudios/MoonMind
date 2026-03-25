@@ -8,7 +8,7 @@ Task publishing controls how agent-produced changes reach the repository after e
 |----------|----------|
 | `none`   | No publishing. Changes remain in the agent's workspace only. |
 | `branch` | Changes are committed and pushed to a work branch on the remote. |
-| `pr`     | Changes are committed, pushed to a work branch, and a pull request is created against the target branch. |
+| `pr`     | Changes are committed, pushed to a work branch, and a pull request is created against the base branch. |
 
 ### `none`
 
@@ -20,13 +20,13 @@ After the agent completes, the infrastructure pushes the current work branch to 
 
 ### `pr`
 
-Same as `branch`, but after the push completes the workflow creates a pull request via the `repo.create_pr` activity. The PR targets the configured base branch (see [Target Branch Resolution](#target-branch-resolution) below).
+Same as `branch`, but after the push completes the workflow creates a pull request via the `repo.create_pr` activity. The PR merges the head branch into the base branch (see [Branch Resolution](#branch-resolution) below).
 
 ## Branch Naming
 
 ### Auto-generated Branches
 
-When `publishMode` is `pr` and no explicit `newBranch` or `branch` is provided, the runtime planner auto-generates a branch name:
+When `publishMode` is `pr` and no explicit head branch is provided, the runtime planner auto-generates a branch name:
 
 ```
 {clean-title-prefix}-{uuid8}
@@ -39,15 +39,21 @@ When `publishMode` is `pr` and no explicit `newBranch` or `branch` is provided, 
 - Task title "Fix login page" → `fix-login-page-a1b2c3d4`
 - No title available → `e5f6a7b8` (UUID only)
 
-### Explicit Branches
+### Branch Fields
 
-Callers can specify branches explicitly via the task or workspace spec:
+The two primary branch fields exposed by the UI are:
 
-| Field            | Purpose |
-|------------------|---------|
-| `startingBranch` | The branch to clone/checkout from (base for changes). |
-| `newBranch`      | The branch to create for the agent's work.  |
-| `branch`         | General-purpose branch field (used as fallback for both). |
+| Field            | Role | Description |
+|------------------|------|-------------|
+| `startingBranch` | Base | The branch to clone from. Also used as the PR base (merge destination). |
+| `targetBranch`   | Head | The name for the agent's work branch. Becomes the PR head (source of changes). |
+
+Additional internal fields used as fallbacks:
+
+| Field            | Role | Description |
+|------------------|------|-------------|
+| `newBranch`      | Head | Internal equivalent of `targetBranch`. Created by the launcher, pushed by infrastructure. |
+| `branch`         | Fallback | General-purpose fallback for either head or base when the specific field is absent. |
 
 The runtime planner resolves these from multiple sources in priority order:
 
@@ -57,29 +63,28 @@ The runtime planner resolves these from multiple sources in priority order:
 4. Parameter payload
 5. Input payload
 
-## Target Branch Resolution
+## Branch Resolution
 
-When the workflow creates a PR (`publishMode: pr`), it must resolve both the **head branch** (where changes live) and the **base/target branch** (where the PR merges into).
+When the workflow creates a PR (`publishMode: pr`), it resolves the **head branch** (where changes live) and the **base branch** (where the PR merges into).
 
 ### Head Branch (PR source)
 
 Resolved via this fallback chain:
 
 1. Agent execution outputs: `outputs.branch` → `outputs.newBranch`
-2. Workspace spec: `workspaceSpec.newBranch` → `workspaceSpec.branch`
-3. Last plan node inputs: `inputs.newBranch` → `inputs.branch`
+2. Workspace spec: `newBranch` → `branch`
+3. Parameters / workspace spec: `targetBranch`
+4. Last plan node inputs: `newBranch` → `branch`
 
 If no head branch can be resolved, the workflow raises an error.
 
-### Target Branch (PR destination)
+### Base Branch (PR destination)
 
 Resolved via this fallback chain:
 
-1. `parameters.targetBranch`
-2. `workspaceSpec.targetBranch`
-3. `workspaceSpec.startingBranch`
-4. Last plan node inputs: `inputs.startingBranch`
-5. Default: `main`
+1. `workspaceSpec.startingBranch`
+2. Last plan node inputs: `startingBranch`
+3. Default: `main`
 
 ## Post-Agent Git Push
 
@@ -91,7 +96,7 @@ Before pushing, the runtime resolves the current branch name (`git rev-parse --a
 
 - `main`
 - `master`
-- The configured target/base branch
+- The configured base branch (`startingBranch`)
 
 If the branch is protected, the push is skipped with a warning log. This prevents accidental pushes to production branches if the agent switched branches or if branch creation failed.
 
@@ -109,7 +114,7 @@ Jules is an external agent provider with its own PR creation mechanism. Unlike m
 
 | Aspect | Managed Agents (Codex, Claude, Gemini CLI) | Jules |
 |--------|---------------------------------------------|-------|
-| Branch creation | `launcher.py` creates `newBranch` locally | Jules API manages branches internally |
+| Branch creation | Launcher creates head branch locally | Jules API manages branches internally |
 | Commit & push | Infrastructure pushes after agent completes | Jules handles internally |
 | PR creation | Workflow calls `repo.create_pr` activity | Jules API uses `automationMode: AUTO_CREATE_PR` |
 | Prompt suffix | Commit-only instruction appended | No instruction appended |
