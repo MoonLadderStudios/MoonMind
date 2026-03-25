@@ -45,6 +45,12 @@ from .temporal_models import (
     UpdateExecutionRequest,
     UpdateExecutionResponse,
 )
+from .temporal_activity_models import (
+    ArtifactReadInput,
+    ArtifactReadOutput,
+    ArtifactWriteCompleteInput,
+    Base64Bytes,
+)
 from .workflow_models import (
     CreateWorkflowRunRequest,
     WorkflowRunModel,
@@ -98,4 +104,8 @@ __all__ = [
     "WorkflowCredentialAuditModel",
     "WorkflowRunCollectionResponse",
     "CreateWorkflowRunRequest",
+    "ArtifactReadInput",
+    "ArtifactReadOutput",
+    "ArtifactWriteCompleteInput",
+    "Base64Bytes",
 ]
