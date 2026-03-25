@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
-from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,69 +12,82 @@ from api_service.api.schemas_task_runs import (
     TaskRunLiveSessionResponse,
     TaskRunLiveSessionWorkerResponse,
 )
-from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession
+from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession, User
+from api_service.auth_providers import get_current_user
+from api_service.api.routers.worker_auth import _require_worker_auth, _WorkerRequestAuth
 
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])
 
 
+async def get_live_session_db(
+    id: UUID, db: AsyncSession = Depends(get_async_session)
+) -> TaskRunLiveSession:
+    result = await db.execute(
+        select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == id)
+    )
+    session = result.scalars().first()
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Live session not found"
+        )
+    return session
+
+
 @router.get(
     "/{id}/live-session",
-    response_model=TaskRunLiveSessionResponse,
+    response_model=dict,
     responses={
         404: {"description": "Live session not found for this task run"},
     },
 )
 async def get_live_session(
-    id: UUID,
-    db: AsyncSession = Depends(get_async_session),
-) -> TaskRunLiveSessionResponse:
+    session: TaskRunLiveSession = Depends(get_live_session_db),
+    _user: User = Depends(get_current_user()),
+) -> dict:
     """Get the current live session status for a task run.
 
     This is intended for Mission Control operators to view live log outputs.
     """
-    result = await db.execute(select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == id))
-    session = result.scalars().first()
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Live session not found"
-        )
-
-    return TaskRunLiveSessionResponse.model_validate(session)
+    return {"session": TaskRunLiveSessionResponse.model_validate(session)}
 
 
 @router.get(
     "/{id}/live-session/worker",
-    response_model=TaskRunLiveSessionWorkerResponse,
+    response_model=dict,
     responses={
         404: {"description": "Live session not found for this task run"},
     },
 )
 async def get_live_session_worker(
-    id: UUID,
-    db: AsyncSession = Depends(get_async_session),
-) -> TaskRunLiveSessionWorkerResponse:
+    session: TaskRunLiveSession = Depends(get_live_session_db),
+    _worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> dict:
     """Fetch current live-session payload for a worker."""
-    result = await db.execute(select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == id))
-    session = result.scalars().first()
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Live session not found"
-        )
+    base_response = TaskRunLiveSessionWorkerResponse.model_validate(session)
+    data = base_response.model_dump(by_alias=True)
 
-    return TaskRunLiveSessionWorkerResponse.model_validate(session)
+    if hasattr(session, "attach_rw_encrypted"):
+        data["attachRw"] = getattr(session, "attach_rw_encrypted")
+    if hasattr(session, "web_rw_encrypted"):
+        data["webRw"] = getattr(session, "web_rw_encrypted")
+
+    return {"session": data}
 
 
 @router.post(
     "/{id}/live-session/report",
-    response_model=TaskRunLiveSessionResponse,
+    response_model=dict,
 )
 async def report_live_session(
     id: UUID,
     request: TaskRunLiveSessionReportRequest,
     db: AsyncSession = Depends(get_async_session),
-) -> TaskRunLiveSessionResponse:
+    _worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
+) -> dict:
     """Report live-session lifecycle updates for a task run."""
-    result = await db.execute(select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == id))
+    result = await db.execute(
+        select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == id)
+    )
     session = result.scalars().first()
 
     now = datetime.now(timezone.utc)
@@ -92,28 +104,22 @@ async def report_live_session(
             worker_id=request.worker_id,
         )
         db.add(session)
+    else:
+        if session.worker_id and request.worker_id and session.worker_id != request.worker_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Worker ID mismatch logic prevents hijacking.",
+            )
 
-    # Update fields
-    if request.status is not None:
-        session.status = request.status
-    if request.worker_hostname is not None:
-        session.worker_hostname = request.worker_hostname
-    if request.tmate_session_name is not None:
-        session.tmate_session_name = request.tmate_session_name
-    if request.tmate_socket_path is not None:
-        session.tmate_socket_path = request.tmate_socket_path
-    if request.attach_ro is not None:
-        session.attach_ro = request.attach_ro
-    if request.attach_rw is not None:
-        session.attach_rw_encrypted = request.attach_rw  # Assuming encryption handles it automatically via StringEncryptedType
-    if request.web_ro is not None:
-        session.web_ro = request.web_ro
-    if request.web_rw is not None:
-        session.web_rw_encrypted = request.web_rw
-    if request.expires_at is not None:
-        session.expires_at = request.expires_at
-    if request.error_message is not None:
-        session.error_message = request.error_message
+    # Data driven updates
+    update_data = request.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "attach_rw":
+            session.attach_rw_encrypted = value
+        elif field == "web_rw":
+            session.web_rw_encrypted = value
+        elif hasattr(session, field):
+            setattr(session, field, value)
 
     if session.status == AgentJobLiveSessionStatus.READY and not session.ready_at:
         session.ready_at = now
@@ -129,7 +135,7 @@ async def report_live_session(
     await db.commit()
     await db.refresh(session)
 
-    return TaskRunLiveSessionResponse.model_validate(session)
+    return {"session": TaskRunLiveSessionResponse.model_validate(session)}
 
 
 @router.post(
@@ -137,19 +143,12 @@ async def report_live_session(
     response_model=dict,
 )
 async def heartbeat_live_session(
-    id: UUID,
     request: TaskRunLiveSessionHeartbeatRequest,
+    session: TaskRunLiveSession = Depends(get_live_session_db),
     db: AsyncSession = Depends(get_async_session),
+    _worker_auth: _WorkerRequestAuth = Depends(_require_worker_auth),
 ) -> dict:
     """Send live-session heartbeat updates."""
-    result = await db.execute(select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == id))
-    session = result.scalars().first()
-
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Live session not found"
-        )
-
     if session.worker_id != request.worker_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

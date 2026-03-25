@@ -1935,6 +1935,9 @@ class AgentJobLiveSessionStatus(str, enum.Enum):
 
 class TaskRunLiveSession(Base):
     __tablename__ = "task_run_live_sessions"
+    __table_args__ = (
+        Index("ix_task_run_live_sessions_status_expires_at", "status", "expires_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     task_run_id: Mapped[UUID] = mapped_column(Uuid, unique=True, index=True)

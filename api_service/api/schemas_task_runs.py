@@ -10,34 +10,34 @@ from api_service.db.models import AgentJobLiveSessionProvider, AgentJobLiveSessi
 class TaskRunLiveSessionBase(BaseModel):
     provider: AgentJobLiveSessionProvider
     status: AgentJobLiveSessionStatus
-    worker_id: Optional[str] = None
-    worker_hostname: Optional[str] = None
-    tmate_session_name: Optional[str] = None
-    tmate_socket_path: Optional[str] = None
-    attach_ro: Optional[str] = None
-    web_ro: Optional[str] = None
-    ready_at: Optional[datetime] = None
-    ended_at: Optional[datetime] = None
-    expires_at: Optional[datetime] = None
-    rw_granted_until: Optional[datetime] = None
-    error_message: Optional[str] = None
+    worker_id: Optional[str] = Field(None, alias="workerId")
+    worker_hostname: Optional[str] = Field(None, alias="workerHostname")
+    tmate_session_name: Optional[str] = Field(None, alias="tmateSessionName")
+    tmate_socket_path: Optional[str] = Field(None, alias="tmateSocketPath")
+    attach_ro: Optional[str] = Field(None, alias="attachRo")
+    web_ro: Optional[str] = Field(None, alias="webRo")
+    ready_at: Optional[datetime] = Field(None, alias="readyAt")
+    ended_at: Optional[datetime] = Field(None, alias="endedAt")
+    expires_at: Optional[datetime] = Field(None, alias="expiresAt")
+    rw_granted_until: Optional[datetime] = Field(None, alias="rwGrantedUntil")
+    error_message: Optional[str] = Field(None, alias="errorMessage")
 
 
 class TaskRunLiveSessionResponse(TaskRunLiveSessionBase):
     id: UUID
-    task_run_id: UUID
-    created_at: datetime
-    updated_at: datetime
-    last_heartbeat_at: Optional[datetime] = None
+    task_run_id: UUID = Field(alias="taskRunId")
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")
+    last_heartbeat_at: Optional[datetime] = Field(None, alias="lastHeartbeatAt")
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class TaskRunLiveSessionWorkerResponse(TaskRunLiveSessionResponse):
-    attach_rw: Optional[str] = None
-    web_rw: Optional[str] = None
+    attach_rw: Optional[str] = Field(None, alias="attachRw")
+    web_rw: Optional[str] = Field(None, alias="webRw")
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class TaskRunLiveSessionReportRequest(BaseModel):

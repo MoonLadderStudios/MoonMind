@@ -10,7 +10,6 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-import sqlalchemy_utils
 
 # revision identifiers, used by Alembic.
 revision: str = 'c8a9b0c1d2e3'
@@ -33,9 +32,9 @@ def upgrade() -> None:
     sa.Column('tmate_session_name', sa.VARCHAR(length=255), autoincrement=False, nullable=True),
     sa.Column('tmate_socket_path', sa.VARCHAR(length=1024), autoincrement=False, nullable=True),
     sa.Column('attach_ro', sa.TEXT(), autoincrement=False, nullable=True),
-    sa.Column('attach_rw_encrypted', sa.TEXT(), autoincrement=False, nullable=True),
+    sa.Column('attach_rw_encrypted', postgresql.BYTEA(), autoincrement=False, nullable=True),
     sa.Column('web_ro', sa.TEXT(), autoincrement=False, nullable=True),
-    sa.Column('web_rw_encrypted', sa.TEXT(), autoincrement=False, nullable=True),
+    sa.Column('web_rw_encrypted', postgresql.BYTEA(), autoincrement=False, nullable=True),
     sa.Column('rw_granted_until', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True),
     sa.Column('last_heartbeat_at', postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True),
     sa.Column('error_message', sa.TEXT(), autoincrement=False, nullable=True),
