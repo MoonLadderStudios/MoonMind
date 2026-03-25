@@ -217,7 +217,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             # Keep task proposals opt-in from the submit form so Temporal
             # remains the default execution substrate for new runs.
             "defaultProposeTasks": False,
-            "taskSourceResolver": "/api/tasks/{taskId}/source",
             "workerRuntimeEnv": "MOONMIND_WORKER_RUNTIME",
             "supportedTaskRuntimes": supported_task_runtimes,
             "supportedWorkerRuntimes": list(_SUPPORTED_WORKER_RUNTIMES),
@@ -244,22 +243,6 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                         "agent_job_attachment_allowed_content_types": settings.workflow.agent_job_attachment_allowed_content_types,
                     }
                 ),
-            },
-            "taskCompatibilityList": "/api/tasks/list",
-            "taskCompatibilityDetail": "/api/tasks/{taskId}",
-            "taskResolution": "/api/tasks/{taskId}/resolution",
-            "temporalCompatibility": {
-                "enabled": True,
-                "uiQueryModel": "compatibility_adapter",
-                "list": "/api/executions",
-                "detail": "/api/executions/{workflowId}",
-                "actionExecutionField": "execution",
-                "actionRefreshField": "refresh",
-                "staleStateField": "staleState",
-                "refreshedAtField": "refreshedAt",
-                "countModeField": "countMode",
-                "degradedCountField": "degradedCount",
-                "backgroundRefetchMs": _POLL_INTERVALS_MS["list"],
             },
         },
     }

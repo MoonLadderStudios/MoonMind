@@ -430,19 +430,23 @@ class MoonMindRunWorkflow:
             return plan_ref
 
         plan_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.generate")
+        plan_payload_args = {
+            "principal": self._principal(),
+            "inputs_ref": input_ref,
+            "parameters": parameters,
+            "execution_ref": {
+                "namespace": workflow.info().namespace,
+                "workflow_id": workflow.info().workflow_id,
+                "run_id": workflow.info().run_id,
+                "link_type": "plan",
+            },
+        }
+        if workflow.patched("idempotency_key_phase3"):
+            plan_payload_args["idempotency_key"] = f"{workflow.info().workflow_id}_plan_generate"
+
         plan_result = await workflow.execute_activity(
             "plan.generate",
-            {
-                "principal": self._principal(),
-                "inputs_ref": input_ref,
-                "parameters": parameters,
-                "execution_ref": {
-                    "namespace": workflow.info().namespace,
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                    "link_type": "plan",
-                },
-            },
+            plan_payload_args,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(plan_route),
         )
@@ -621,18 +625,22 @@ class MoonMindRunWorkflow:
                         )
 
                     try:
+                        execute_payload = {
+                            "invocation_payload": invocation_payload,
+                            "principal": self._principal(),
+                            "registry_snapshot_ref": registry_snapshot_ref,
+                            "context": {
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "node_id": node_id,
+                            },
+                        }
+                        if workflow.patched("idempotency_key_phase3"):
+                            execute_payload["idempotency_key"] = f"{workflow.info().workflow_id}_{node_id}_execute"
+
                         execution_result = await workflow.execute_activity(
                             route.activity_type,
-                            {
-                                "invocation_payload": invocation_payload,
-                                "principal": self._principal(),
-                                "registry_snapshot_ref": registry_snapshot_ref,
-                                "context": {
-                                    "workflow_id": workflow.info().workflow_id,
-                                    "run_id": workflow.info().run_id,
-                                    "node_id": node_id,
-                                },
-                            },
+                            execute_payload,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             **self._execute_kwargs_for_route(route),
                         )
@@ -736,17 +744,17 @@ class MoonMindRunWorkflow:
             last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
             head_branch = (
                 agent_outputs.get("branch")
-                or agent_outputs.get("newBranch")
-                or ws.get("newBranch")
+                or agent_outputs.get("targetBranch")
+                or ws.get("targetBranch")
                 or ws.get("branch")
-                or last_node_inputs.get("newBranch")
+                or parameters.get("targetBranch")
+                or ws.get("targetBranch")
+                or last_node_inputs.get("targetBranch")
                 or last_node_inputs.get("branch")
                 or ""
             )
-            target_branch = (
-                parameters.get("targetBranch") 
-                or ws.get("targetBranch") 
-                or ws.get("startingBranch") 
+            base_branch = (
+                ws.get("startingBranch")
                 or last_node_inputs.get("startingBranch")
                 or "main"
             )
@@ -757,18 +765,18 @@ class MoonMindRunWorkflow:
                 )
             
             self._get_logger().info(
-                f"Creating PR natively from {head_branch} into {target_branch} for repo {self._repo}"
+                f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
             )
             create_payload = {
                 "repo": self._repo,
                 "head": head_branch,
-                "base": target_branch,
+                "base": base_branch,
                 "title": self._title or "Automated changes by MoonMind",
                 "body": self._summary or "Automated changes by MoonMind.",
             }
             try:
                 create_result = await workflow.execute_activity(
-                    "integration.jules.create_pr",
+                    "repo.create_pr",
                     create_payload,
                     start_to_close_timeout=timedelta(minutes=2),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -776,11 +784,16 @@ class MoonMindRunWorkflow:
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 pr_url = self._get_from_result(create_result, "url")
+                created = self._get_from_result(create_result, "created")
+                summary = self._get_from_result(create_result, "summary") or ""
                 if pr_url:
                     pull_request_url = pr_url
                     self._get_logger().info(f"Natively created PR: {pull_request_url}")
                 else:
-                    raise ValueError("PR creation activity succeeded but returned no URL")
+                    raise ValueError(
+                        f"PR creation activity returned no URL"
+                        f" (created={created}): {summary}"
+                    )
             except Exception as e:
                 raise ValueError(
                     f"publishMode 'pr' requested; native PR creation failed: {e}"
@@ -888,7 +901,7 @@ class MoonMindRunWorkflow:
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
-        for ws_key in ("repository", "repo", "startingBranch", "newBranch", "branch"):
+        for ws_key in ("repository", "repo", "startingBranch", "targetBranch", "branch"):
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val
@@ -1204,35 +1217,35 @@ class MoonMindRunWorkflow:
 
                 if pr_url:
                     # Determine if the PR's base branch needs updating.
-                    # If targetBranch is specified and differs from
-                    # startingBranch (which Jules used as the PR base),
-                    # the activity will PATCH the PR before merging.
+                    # Jules creates the PR against startingBranch. If the
+                    # caller wants a different merge destination we PATCH
+                    # the PR base before merging.
                     ws = parameters.get("workspaceSpec") or {}
                     starting_branch = (
                         ws.get("startingBranch") or ws.get("branch") or "main"
                     )
-                    target_branch = (
-                        parameters.get("targetBranch")
-                        or ws.get("targetBranch")
+                    base_override = (
+                        parameters.get("publishBaseBranch")
+                        or ws.get("publishBaseBranch")
                     )
-                    # Only pass target_branch when it differs from starting
-                    effective_target = (
-                        target_branch
-                        if target_branch and target_branch != starting_branch
+                    # Only re-target when explicitly different from starting
+                    effective_base = (
+                        base_override
+                        if base_override and base_override != starting_branch
                         else None
                     )
 
                     self._get_logger().info(
-                        "Jules branch-publish: merging PR %s (target=%s)",
+                        "Jules branch-publish: merging PR %s (base=%s)",
                         pr_url,
-                        effective_target or starting_branch,
+                        effective_base or starting_branch,
                     )
                     merge_payload = {"pr_url": pr_url}
-                    if effective_target:
-                        merge_payload["target_branch"] = effective_target
+                    if effective_base:
+                        merge_payload["target_branch"] = effective_base
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "integration.jules.merge_pr"
+                        "repo.merge_pr"
                     )
                     merge_result = await workflow.execute_activity(
                         merge_route.activity_type,
@@ -1282,15 +1295,19 @@ class MoonMindRunWorkflow:
             proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "proposal.generate"
             )
+            generate_payload = {
+                "principal": self._principal(),
+                "workflow_id": workflow.info().workflow_id,
+                "run_id": workflow.info().run_id,
+                "repo": self._repo,
+                "parameters": parameters,
+            }
+            if workflow.patched("idempotency_key_phase3"):
+                generate_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_generate"
+
             candidates = await workflow.execute_activity(
                 "proposal.generate",
-                {
-                    "principal": self._principal(),
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                    "repo": self._repo,
-                    "parameters": parameters,
-                },
+                generate_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
             )
@@ -1321,14 +1338,18 @@ class MoonMindRunWorkflow:
                 "temporal_run_id": workflow.info().run_id,
                 "trigger_repo": self._repo or "",
             }
+            submit_payload = {
+                "candidates": candidate_list,
+                "policy": policy,
+                "origin": origin,
+                "principal": self._principal(),
+            }
+            if workflow.patched("idempotency_key_phase3"):
+                submit_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_submit"
+
             submit_result = await workflow.execute_activity(
                 "proposal.submit",
-                {
-                    "candidates": candidate_list,
-                    "policy": policy,
-                    "origin": origin,
-                    "principal": self._principal(),
-                },
+                submit_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
             )
