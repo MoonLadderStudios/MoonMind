@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindRun,
     _build_runtime_planner,
     _build_runtime_activities,
+    get_activity_route,
     main_async,
     resolve_external_adapter,
 )
@@ -303,6 +304,7 @@ async def test_main_async_workflow_fleet(mock_worker_cls, mock_connect, mock_des
     assert kwargs["activities"] == [
         resolve_external_adapter,
         external_adapter_execution_style,
+        get_activity_route,
     ]
     assert kwargs["max_concurrent_workflow_tasks"] == 7
     assert "max_concurrent_activities" not in kwargs
@@ -409,6 +411,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         "artifact_handler",
         resolve_external_adapter,
         external_adapter_execution_style,
+        get_activity_route,
     ]
     mock_artifact_activities_cls.assert_called_once_with(ANY)
     mock_plan_activities_cls.assert_called_once_with(
