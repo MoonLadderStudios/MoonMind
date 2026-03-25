@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
@@ -521,6 +522,7 @@ async def main_async() -> None:
     client = await Client.connect(
         settings.temporal.address, 
         namespace=settings.temporal.namespace,
+        data_converter=pydantic_data_converter,
         interceptors=interceptors,
     )
 

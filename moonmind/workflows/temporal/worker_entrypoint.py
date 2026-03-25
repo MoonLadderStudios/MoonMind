@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.config.settings import settings
@@ -22,6 +23,7 @@ async def main():
     client = await Client.connect(
         settings.temporal.address,
         namespace=settings.temporal.namespace,
+        data_converter=pydantic_data_converter,
     )
 
     workflows = []
