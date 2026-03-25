@@ -187,6 +187,11 @@ class MoonMindAgentRun:
                 "integration.get_activity_route",
                 activity_name,
                 start_to_close_timeout=timedelta(seconds=10),
+                schedule_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    maximum_attempts=3,
+                ),
                 task_queue=WORKFLOW_TASK_QUEUE,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
@@ -198,7 +203,7 @@ class MoonMindAgentRun:
 
             retries_dict = route_dict.get("retries") or {}
             max_interval = retries_dict.get("max_interval_seconds", 60)
-            max_attempts = retries_dict.get("max_attempts", 0)
+            max_attempts = retries_dict["max_attempts"] if retries_dict else 0
             non_retryable = retries_dict.get("non_retryable_error_codes") or []
 
             rp = RetryPolicy(
@@ -214,6 +219,38 @@ class MoonMindAgentRun:
             
         self._route_cache[activity_name] = (fallback_queue, fallback_timeout, fallback_timeout, None, None)
         return fallback_queue, fallback_timeout, fallback_timeout, None, None
+
+    async def _execute_activity_with_routing(
+        self,
+        activity: str | object,
+        args: object,
+        fallback_queue: str,
+        fallback_timeout: timedelta,
+        **activity_kwargs,
+    ) -> object:
+        activity_name = activity if isinstance(activity, str) else getattr(activity, "__name__", str(activity))
+        q, stc, schedtc, rp, hb = await self._get_route_info(activity_name, fallback_queue, fallback_timeout)
+
+        options = {
+            "task_queue": q,
+            "start_to_close_timeout": stc,
+            "schedule_to_close_timeout": schedtc,
+        }
+        if rp:
+            options["retry_policy"] = rp
+        
+        heartbeat_timeout = activity_kwargs.pop("heartbeat_timeout", hb)
+        if heartbeat_timeout is not None:
+            options["heartbeat_timeout"] = heartbeat_timeout
+
+        options.update(activity_kwargs)
+
+        return await workflow.execute_activity(
+            activity,
+            args,
+            **options,
+        )
+
 
     async def _ensure_manager_and_signal(
         self,
@@ -783,23 +820,16 @@ class MoonMindAgentRun:
                                     "Jules continuation step requires a non-empty instruction_ref (prompt)",
                                     non_retryable=True,
                                 )
-                            q, stc, schedtc, rp, hb = await self._get_route_info("integration.jules.send_message", INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
-                            kwargs = {}
-                            if rp:
-                                kwargs["retry_policy"] = rp
-                            if hb:
-                                kwargs["heartbeat_timeout"] = hb
-                            await workflow.execute_activity(
+                            await self._execute_activity_with_routing(
                                 "integration.jules.send_message",
                                 {
                                     "session_id": jules_session_id,
                                     "prompt": prompt,
                                 },
-                                task_queue=q,
-                                start_to_close_timeout=stc,
-                                schedule_to_close_timeout=schedtc,
+                                INTEGRATIONS_TASK_QUEUE,
+                                INTEGRATIONS_ACTIVITY_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **kwargs,
+
                             )
                             self.run_id = jules_session_id
                             self.run_status = "running"
@@ -808,20 +838,13 @@ class MoonMindAgentRun:
                             # Start via Temporal activity on the integrations fleet
                             # (determinism-safe: no adapter construction in-workflow).
                             act_name = f"integration.{validated_id}.start"
-                            q, stc, schedtc, rp, hb = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
-                            kwargs = {}
-                            if rp:
-                                kwargs["retry_policy"] = rp
-                            if hb:
-                                kwargs["heartbeat_timeout"] = hb
-                            handle_dict = await workflow.execute_activity(
+                            handle_dict = await self._execute_activity_with_routing(
                                 act_name,
                                 request,
-                                task_queue=q,
-                                start_to_close_timeout=stc,
-                                schedule_to_close_timeout=schedtc,
+                                INTEGRATIONS_TASK_QUEUE,
+                                INTEGRATIONS_ACTIVITY_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **kwargs,
+
                             )
 
                             if isinstance(handle_dict, dict) and "external_id" in handle_dict:
@@ -877,20 +900,13 @@ class MoonMindAgentRun:
                             if request.agent_kind == "external":
                                 # Poll via Temporal activity (determinism-safe).
                                 act_name = f"integration.{self._external_agent_id}.status"
-                                q, stc, schedtc, rp, hb = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_STATUS_TIMEOUT)
-                                kwargs = {}
-                                if rp:
-                                    kwargs["retry_policy"] = rp
-                                if hb:
-                                    kwargs["heartbeat_timeout"] = hb
-                                status_dict = await workflow.execute_activity(
+                                status_dict = await self._execute_activity_with_routing(
                                     act_name,
                                     {"external_id": self.run_id},
-                                    task_queue=q,
-                                    start_to_close_timeout=stc,
-                                    schedule_to_close_timeout=schedtc,
+                                    INTEGRATIONS_TASK_QUEUE,
+                                    INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                    **kwargs,
+
                                 )
                                 status_obj = self._coerce_external_status_payload(
                                     status_payload=status_dict,
@@ -898,23 +914,16 @@ class MoonMindAgentRun:
                                 )
                             else:
                                 if use_managed_status_activity:
-                                    q, stc, schedtc, rp, hb = await self._get_route_info("agent_runtime.status", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_STATUS_TIMEOUT)
-                                    kwargs = {}
-                                    if rp:
-                                        kwargs["retry_policy"] = rp
-                                    if hb:
-                                        kwargs["heartbeat_timeout"] = hb
-                                    status_payload = await workflow.execute_activity(
+                                    status_payload = await self._execute_activity_with_routing(
                                         "agent_runtime.status",
                                         {
                                             "run_id": self.run_id,
                                             "agent_id": request.agent_id,
                                         },
-                                        task_queue=q,
-                                        start_to_close_timeout=stc,
-                                        schedule_to_close_timeout=schedtc,
+                                        AGENT_RUNTIME_TASK_QUEUE,
+                                        AGENT_RUNTIME_STATUS_TIMEOUT,
                                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                        **kwargs,
+
                                     )
                                     status_obj = self._coerce_managed_status_payload(
                                         status_payload=status_payload,
@@ -937,7 +946,7 @@ class MoonMindAgentRun:
 
                             # --- Jules auto-answer sub-flow (spec 094) ---
                             if (
-                                getattr(status_obj, "status", None) == "awaiting_callback"
+                                getattr(status_obj, "status", None) == RunStatus.awaiting_feedback
                                 and request.agent_kind == "external"
                                 and self._external_agent_id == "jules"
                             ):
@@ -973,20 +982,13 @@ class MoonMindAgentRun:
                                     break
 
                                 # Extract the question
-                                q, stc, schedtc, rp, hb = await self._get_route_info("integration.jules.list_activities", INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_STATUS_TIMEOUT)
-                                kwargs = {}
-                                if rp:
-                                    kwargs["retry_policy"] = rp
-                                if hb:
-                                    kwargs["heartbeat_timeout"] = hb
-                                activities_result = await workflow.execute_activity(
+                                activities_result = await self._execute_activity_with_routing(
                                     "integration.jules.list_activities",
                                     {"session_id": self.run_id},
-                                    task_queue=q,
-                                    start_to_close_timeout=stc,
-                                    schedule_to_close_timeout=schedtc,
+                                    INTEGRATIONS_TASK_QUEUE,
+                                    INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                    **kwargs,
+
                                 )
 
                                 act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
@@ -995,24 +997,17 @@ class MoonMindAgentRun:
                                 if question and act_id and act_id not in self._answered_activity_ids:
                                     # Dispatch question-answer cycle
                                     task_context = request.instruction_ref or request.agent_id or ""
-                                    q, stc, schedtc, rp, hb = await self._get_route_info("integration.jules.answer_question", INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
-                                    kwargs = {}
-                                    if rp:
-                                        kwargs["retry_policy"] = rp
-                                    if hb:
-                                        kwargs["heartbeat_timeout"] = hb
-                                    answer_result = await workflow.execute_activity(
+                                    answer_result = await self._execute_activity_with_routing(
                                         "integration.jules.answer_question",
                                         {
                                             "session_id": self.run_id,
                                             "question": question,
                                             "task_context": task_context,
                                         },
-                                        task_queue=q,
-                                        start_to_close_timeout=stc,
-                                        schedule_to_close_timeout=schedtc,
+                                        INTEGRATIONS_TASK_QUEUE,
+                                        INTEGRATIONS_ACTIVITY_TIMEOUT,
                                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                        **kwargs,
+
                                     )
                                     if isinstance(answer_result, dict) and answer_result.get("answered"):
                                         self._answered_activity_ids.add(act_id)
@@ -1054,41 +1049,27 @@ class MoonMindAgentRun:
                     if request.agent_kind == "external":
                         # Fetch result via Temporal activity.
                         act_name = f"integration.{self._external_agent_id}.fetch_result"
-                        q, stc, schedtc, rp, hb = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
-                        kwargs = {}
-                        if rp:
-                            kwargs["retry_policy"] = rp
-                        if hb:
-                            kwargs["heartbeat_timeout"] = hb
-                        result_dict = await workflow.execute_activity(
+                        result_dict = await self._execute_activity_with_routing(
                             act_name,
                             {"external_id": self.run_id},
-                            task_queue=q,
-                            start_to_close_timeout=stc,
-                            schedule_to_close_timeout=schedtc,
+                            INTEGRATIONS_TASK_QUEUE,
+                            INTEGRATIONS_ACTIVITY_TIMEOUT,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **kwargs,
+
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
                         if use_managed_status_activity:
-                            q, stc, schedtc, rp, hb = await self._get_route_info("agent_runtime.fetch_result", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_ACTIVITY_TIMEOUT)
-                            kwargs = {}
-                            if rp:
-                                kwargs["retry_policy"] = rp
-                            if hb:
-                                kwargs["heartbeat_timeout"] = hb
-                            result_payload = await workflow.execute_activity(
+                            result_payload = await self._execute_activity_with_routing(
                                 "agent_runtime.fetch_result",
                                 {
                                     "run_id": self.run_id,
                                     "agent_id": request.agent_id,
                                 },
-                                task_queue=q,
-                                start_to_close_timeout=stc,
-                                schedule_to_close_timeout=schedtc,
+                                AGENT_RUNTIME_TASK_QUEUE,
+                                AGENT_RUNTIME_ACTIVITY_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **kwargs,
+
                             )
                             self.final_result = (
                                 AgentRunResult(**result_payload)
@@ -1112,20 +1093,13 @@ class MoonMindAgentRun:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
 
                 # Post-run artifact publishing via the agent_runtime activity fleet.
-                q, stc, schedtc, rp, hb = await self._get_route_info("agent_runtime.publish_artifacts", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_ACTIVITY_TIMEOUT)
-                kwargs = {}
-                if rp:
-                    kwargs["retry_policy"] = rp
-                if hb:
-                    kwargs["heartbeat_timeout"] = hb
-                enriched_result = await workflow.execute_activity(
+                enriched_result = await self._execute_activity_with_routing(
                     "agent_runtime.publish_artifacts",
                     self.final_result.model_dump(mode="json", by_alias=True) if hasattr(self.final_result, "model_dump") else self.final_result,
-                    task_queue=q,
-                    start_to_close_timeout=stc,
-                    schedule_to_close_timeout=schedtc,
+                    AGENT_RUNTIME_TASK_QUEUE,
+                    AGENT_RUNTIME_ACTIVITY_TIMEOUT,
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                    **kwargs,
+
                 )
 
                 if isinstance(enriched_result, dict):
@@ -1183,36 +1157,22 @@ class MoonMindAgentRun:
                         if self.agent_kind == "external" and self._external_agent_id is not None:
                             # Route external cancel through integration activity.
                             act_name = f"integration.{self._external_agent_id}.cancel"
-                            q, stc, schedtc, rp, hb = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, AGENT_RUNTIME_CANCEL_TIMEOUT)
-                            kwargs = {}
-                            if rp:
-                                kwargs["retry_policy"] = rp
-                            if hb:
-                                kwargs["heartbeat_timeout"] = hb
-                            await workflow.execute_activity(
+                            await self._execute_activity_with_routing(
                                 act_name,
                                 {"external_id": self.run_id},
-                                task_queue=q,
-                                start_to_close_timeout=stc,
-                                schedule_to_close_timeout=schedtc,
+                                INTEGRATIONS_TASK_QUEUE,
+                                AGENT_RUNTIME_CANCEL_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **kwargs,
+
                             )
                         else:
-                            q, stc, schedtc, rp, hb = await self._get_route_info("agent_runtime.cancel", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_CANCEL_TIMEOUT)
-                            kwargs = {}
-                            if rp:
-                                kwargs["retry_policy"] = rp
-                            if hb:
-                                kwargs["heartbeat_timeout"] = hb
-                            await workflow.execute_activity(
+                            await self._execute_activity_with_routing(
                                 "agent_runtime.cancel",
                                 {"agent_kind": self.agent_kind, "run_id": self.run_id},
-                                task_queue=q,
-                                start_to_close_timeout=stc,
-                                schedule_to_close_timeout=schedtc,
+                                AGENT_RUNTIME_TASK_QUEUE,
+                                AGENT_RUNTIME_CANCEL_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                **kwargs,
+
                             )
                     except Exception:
                         self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
