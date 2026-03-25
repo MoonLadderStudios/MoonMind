@@ -696,6 +696,7 @@ class MoonMindRunWorkflow:
                     start_to_close_timeout=timedelta(minutes=2),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
                     retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 pr_url = self._get_from_result(create_result, "url")
                 if pr_url:
@@ -995,6 +996,7 @@ class MoonMindRunWorkflow:
                         start_to_close_timeout=timedelta(minutes=5),
                         task_queue=INTEGRATIONS_TASK_QUEUE,
                         retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
                 except Exception as exc:
                     self._get_logger().warning(f"Failed to send follow-up step {step_index + 1} to Jules: {exc}")

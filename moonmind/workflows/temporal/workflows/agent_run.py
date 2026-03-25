@@ -976,6 +976,7 @@ class MoonMindAgentRun:
                                 {"external_id": self.run_id},
                                 task_queue=INTEGRATIONS_TASK_QUEUE,
                                 start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                         else:
                             await workflow.execute_activity(
