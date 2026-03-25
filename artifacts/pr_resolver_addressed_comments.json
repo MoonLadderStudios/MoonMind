@@ -1,157 +1,47 @@
 [
   {
-    "id": 4125027239,
+    "id": 4124896637,
     "disposition": "not-applicable",
-    "rationale": "Informational summary from bot, no action needed."
+    "rationale": "Jules welcome comment, no action needed."
   },
   {
-    "id": 4125276802,
+    "id": 4124898489,
     "disposition": "not-applicable",
-    "rationale": "Informational summary from bot, no action needed."
+    "rationale": "Gemini Code Assist summary, no action needed."
   },
   {
-    "id": 2986938522,
+    "id": 2986815330,
     "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script fix_init.py."
+    "rationale": "Moved import to top of api_service/main.py."
   },
   {
-    "id": 4005263103,
+    "id": 2986815337,
+    "disposition": "addressed",
+    "rationale": "Moved MagicMock import to the top of tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 2986815343,
+    "disposition": "addressed",
+    "rationale": "Removed duplicate MagicMock import in tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 4005122605,
     "disposition": "not-applicable",
-    "rationale": "Review summary, no action needed."
+    "rationale": "Gemini code review summary, no action needed."
   },
   {
-    "id": 2986957961,
+    "id": 2986822796,
     "disposition": "addressed",
-    "rationale": "Updated dashboard.js to use Temporal native API (/api/executions) instead of the deleted list route."
+    "rationale": "Updated wait_for mock to use AsyncMock in tests/unit/auth/test_volume_verifiers.py."
   },
   {
-    "id": 4005283394,
+    "id": 2986822819,
+    "disposition": "addressed",
+    "rationale": "Updated wait_for mock to use AsyncMock in tests/unit/auth/test_volume_verifiers.py."
+  },
+  {
+    "id": 4005130404,
     "disposition": "not-applicable",
-    "rationale": "Review summary, no action needed."
-  },
-  {
-    "id": 2986959207,
-    "disposition": "addressed",
-    "rationale": "Updated renderManifestListPage in dashboard.js to call /api/executions."
-  },
-  {
-    "id": 2986959238,
-    "disposition": "addressed",
-    "rationale": "Removed legacy task compatibility contract tests."
-  },
-  {
-    "id": 2986959275,
-    "disposition": "addressed",
-    "rationale": "Removed unused sourceHint parameter from resolveUnifiedTaskSource."
-  },
-  {
-    "id": 2986959301,
-    "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script update_schemas.py."
-  },
-  {
-    "id": 2986959350,
-    "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script fix_init.py."
-  },
-  {
-    "id": 2986959376,
-    "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script strip_dashboard.py."
-  },
-  {
-    "id": 2986959406,
-    "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script strip_dashboard2.py."
-  },
-  {
-    "id": 2986959433,
-    "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script rewrite_dashboard.py."
-  },
-  {
-    "id": 2986959448,
-    "disposition": "addressed",
-    "rationale": "Removed temporary refactoring script fix_test_task_dashboard.py."
-  },
-  {
-    "id": 4005284628,
-    "disposition": "not-applicable",
-    "rationale": "Pull request overview, no action needed."
-  },
-  {
-    "id": 2987157079,
-    "disposition": "addressed",
-    "rationale": "Explicitly validated legacy list[int] inputs with range checks."
-  },
-  {
-    "id": 2987157131,
-    "disposition": "addressed",
-    "rationale": "Changed type to str | ArtifactRefModel."
-  },
-  {
-    "id": 2987157161,
-    "disposition": "addressed",
-    "rationale": "Added tests in tests/schemas/test_temporal_activity_models.py for serialization and legacy list[int]."
-  },
-  {
-    "id": 2987157192,
-    "disposition": "addressed",
-    "rationale": "Removed trailing spaces in docstrings."
-  },
-  {
-    "id": 2987157225,
-    "disposition": "addressed",
-    "rationale": "Decoded base64 with validate=True."
-  },
-  {
-    "id": 4005497951,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary from bot, no action needed."
-  },
-  {
-    "id": 2987161331,
-    "disposition": "addressed",
-    "rationale": "Added comprehensive test suite for new models."
-  },
-  {
-    "id": 2987161336,
-    "disposition": "addressed",
-    "rationale": "Sorted imported models alphabetically in __init__.py."
-  },
-  {
-    "id": 2987161349,
-    "disposition": "addressed",
-    "rationale": "Sorted __all__ list of new models alphabetically in __init__.py."
-  },
-  {
-    "id": 4005502081,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary from bot, no action needed."
-  },
-  {
-    "id": 2987171910,
-    "disposition": "addressed",
-    "rationale": "Added exception handler to fallback to utf-8 strings for legacy compatibility."
-  },
-  {
-    "id": 2987171915,
-    "disposition": "addressed",
-    "rationale": "Changed ArtifactReadInput.artifact_ref to accept ArtifactRefModel."
-  },
-  {
-    "id": 4005512932,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary from bot, no action needed."
-  },
-  {
-    "id": 2990191646,
-    "disposition": "addressed",
-    "rationale": "Removed unused 'Any' import."
-  },
-  {
-    "id": 2990191656,
-    "disposition": "addressed",
-    "rationale": "Removed unused 'base64' import."
+    "rationale": "Copilot review summary, no action needed."
   }
 ]
