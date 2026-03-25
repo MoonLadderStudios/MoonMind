@@ -1,13 +1,13 @@
-# Quickstart: Step Review Gate
+# Quickstart: Step Approval Policy
 
-## Enable Review Gate on a Plan
+## Enable Approval Policy on a Plan
 
 Add to a plan's JSON policy:
 
 ```json
 {
   "policy": {
-    "review_gate": {
+    "approval_policy": {
       "enabled": true,
       "max_review_attempts": 2,
       "reviewer_model": "default"
@@ -23,7 +23,7 @@ Include in `initialParameters` when creating a `MoonMind.Run`:
 ```json
 {
   "initialParameters": {
-    "reviewGate": {
+    "approvalPolicy": {
       "enabled": true
     }
   }
@@ -41,7 +41,7 @@ Exempt `agent_runtime` nodes from review:
 ```json
 {
   "policy": {
-    "review_gate": {
+    "approval_policy": {
       "enabled": true,
       "skip_tool_types": ["agent_runtime"]
     }
@@ -49,7 +49,7 @@ Exempt `agent_runtime` nodes from review:
 }
 ```
 
-## Verify Review Gate is Active
+## Verify Approval Policy is Active
 
 Check the workflow memo during execution — it will show:
 
@@ -61,7 +61,7 @@ After completion, the finish summary includes review metrics:
 
 ```json
 {
-  "reviewGate": {
+  "approvalPolicy": {
     "enabled": true,
     "stepsReviewed": 5,
     "totalReviewAttempts": 8

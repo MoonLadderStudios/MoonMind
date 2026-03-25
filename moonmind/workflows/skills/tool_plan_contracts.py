@@ -604,8 +604,8 @@ class PlanMetadata:
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewGatePolicy:
-    """Per-plan review gate configuration."""
+class ApprovalPolicyPolicy:
+    """Per-plan approval policy configuration."""
 
     enabled: bool = False
     max_review_attempts: int = 2
@@ -616,17 +616,17 @@ class ReviewGatePolicy:
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise ContractValidationError(
-                "invalid_policy", "review_gate.enabled must be a boolean"
+                "invalid_policy", "approval_policy.enabled must be a boolean"
             )
         if self.max_review_attempts < 0:
             raise ContractValidationError(
                 "invalid_policy",
-                "review_gate.max_review_attempts must be >= 0",
+                "approval_policy.max_review_attempts must be >= 0",
             )
         if self.review_timeout_seconds <= 0:
             raise ContractValidationError(
                 "invalid_policy",
-                "review_gate.review_timeout_seconds must be > 0",
+                "approval_policy.review_timeout_seconds must be > 0",
             )
 
     def to_payload(self) -> dict[str, Any]:
@@ -645,7 +645,7 @@ class PlanPolicy:
 
     failure_mode: str = "FAIL_FAST"
     max_concurrency: int = 1
-    review_gate: ReviewGatePolicy | None = None
+    approval_policy: ApprovalPolicyPolicy | None = None
 
     def __post_init__(self) -> None:
         if self.failure_mode not in SUPPORTED_FAILURE_MODES:
@@ -660,8 +660,8 @@ class PlanPolicy:
             "failure_mode": self.failure_mode,
             "max_concurrency": self.max_concurrency,
         }
-        if self.review_gate is not None and self.review_gate.enabled:
-            payload["review_gate"] = self.review_gate.to_payload()
+        if self.approval_policy is not None and self.approval_policy.enabled:
+            payload["approval_policy"] = self.approval_policy.to_payload()
         return payload
 
 
@@ -809,24 +809,24 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
         ),
     )
 
-    review_gate_raw = policy_raw.get("review_gate")
-    if isinstance(review_gate_raw, Mapping):
-        skip_raw = review_gate_raw.get("skip_tool_types", [])
+    approval_policy_raw = policy_raw.get("approval_policy")
+    if isinstance(approval_policy_raw, Mapping):
+        skip_raw = approval_policy_raw.get("skip_tool_types", [])
         if not isinstance(skip_raw, list):
             skip_raw = []
-        review_gate: ReviewGatePolicy | None = ReviewGatePolicy(
-            enabled=bool(review_gate_raw.get("enabled", False)),
+        approval_policy: ApprovalPolicyPolicy | None = ApprovalPolicyPolicy(
+            enabled=bool(approval_policy_raw.get("enabled", False)),
             max_review_attempts=(
                 int(raw_attempts)
-                if (raw_attempts := review_gate_raw.get("max_review_attempts")) is not None
+                if (raw_attempts := approval_policy_raw.get("max_review_attempts")) is not None
                 else 2
             ),
             reviewer_model=str(
-                review_gate_raw.get("reviewer_model") or "default"
+                approval_policy_raw.get("reviewer_model") or "default"
             ).strip(),
             review_timeout_seconds=(
                 int(raw_timeout)
-                if (raw_timeout := review_gate_raw.get("review_timeout_seconds")) is not None
+                if (raw_timeout := approval_policy_raw.get("review_timeout_seconds")) is not None
                 else 120
             ),
             skip_tool_types=tuple(
@@ -834,12 +834,12 @@ def parse_plan_definition(payload: Mapping[str, Any]) -> PlanDefinition:
             ) if skip_raw else DEFAULT_SKIP_TOOL_TYPES,
         )
     else:
-        review_gate = None  # Plan did not specify review_gate
+        approval_policy = None  # Plan did not specify approval_policy
 
     policy = PlanPolicy(
         failure_mode=str(policy_raw.get("failure_mode") or "FAIL_FAST").strip(),
         max_concurrency=int(policy_raw.get("max_concurrency") or 1),
-        review_gate=review_gate,
+        approval_policy=approval_policy,
     )
 
     return PlanDefinition(
@@ -993,7 +993,7 @@ __all__ = [
     "PlanMetadata",
     "PlanPolicy",
     "PlanRegistrySnapshot",
-    "ReviewGatePolicy",
+    "ApprovalPolicyPolicy",
     "ToolDefinition",
     "ToolExecutorBinding",
     "ToolFailure",

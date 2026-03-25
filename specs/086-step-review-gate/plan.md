@@ -1,11 +1,11 @@
-# Implementation Plan: Step Review Gate
+# Implementation Plan: Step Approval Policy
 
 **Branch**: `086-step-review-gate` | **Date**: 2026-03-18 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `specs/086-step-review-gate/spec.md`
 
 ## Summary
 
-Add an optional review gate that, when enabled, wraps every plan-node execution in `MoonMind.Run` with an LLM-powered validation step. The reviewer evaluates step outputs against input aims. Failed steps are retried with structured feedback. Implemented as a `ReviewGatePolicy` on `PlanPolicy`, a `step.review` Temporal Activity, and a review-retry loop in the execution stage.
+Add an optional approval policy that, when enabled, wraps every plan-node execution in `MoonMind.Run` with an LLM-powered validation step. The reviewer evaluates step outputs against input aims. Failed steps are retried with structured feedback. Implemented as a `ApprovalPolicyPolicy` on `PlanPolicy`, a `step.review` Temporal Activity, and a review-retry loop in the execution stage.
 
 ## Technical Context
 
@@ -49,16 +49,16 @@ specs/086-step-review-gate/
 ### Source Code (repository root)
 
 ```text
-moonmind/workflows/skills/tool_plan_contracts.py     # MODIFY: add ReviewGatePolicy, extend PlanPolicy
-moonmind/workflows/skills/review_gate.py             # NEW: ReviewRequest, ReviewVerdict, prompt builder
+moonmind/workflows/skills/tool_plan_contracts.py     # MODIFY: add ApprovalPolicyPolicy, extend PlanPolicy
+moonmind/workflows/skills/approval_policy.py             # NEW: ReviewRequest, ReviewVerdict, prompt builder
 moonmind/workflows/temporal/activities/step_review.py # NEW: step.review activity
 moonmind/workflows/temporal/activity_catalog.py       # MODIFY: register step.review route
 moonmind/workflows/temporal/workflows/run.py          # MODIFY: review-retry loop in _run_execution_stage
 
-tests/unit/workflows/skills/test_review_gate_contracts.py  # NEW: contract tests
-tests/unit/workflows/skills/test_review_gate_policy.py     # NEW: policy parsing tests
+tests/unit/workflows/skills/test_approval_policy_contracts.py  # NEW: contract tests
+tests/unit/workflows/skills/test_approval_policy_policy.py     # NEW: policy parsing tests
 tests/unit/workflows/temporal/test_step_review_activity.py  # NEW: activity tests
-tests/unit/workflows/temporal/test_run_review_gate.py       # NEW: workflow loop tests
+tests/unit/workflows/temporal/test_run_approval_policy.py       # NEW: workflow loop tests
 ```
 
 **Structure Decision**: All changes are within the existing `moonmind/workflows/` and `tests/unit/workflows/` directories. No new top-level packages or services.

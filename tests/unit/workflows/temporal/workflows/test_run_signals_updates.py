@@ -88,15 +88,15 @@ async def test_run_workflow_pause_resume(mock_run_environment):
                 },
                 id="test-wf-pause",
                 task_queue="test-task-queue-signals",
-                start_signal="pause",
             )
+            await handle.execute_update("Pause")
             
             # Workflow should be paused and waiting.
             await asyncio.sleep(0.1)
             status = await handle.query("get_status")
             assert status.get("paused") is True
             
-            await handle.signal("resume")
+            await handle.execute_update("Resume")
             result = await handle.result()
             assert result["status"] == "success"
 
@@ -118,15 +118,15 @@ async def test_run_workflow_update_parameters(mock_run_environment):
                 },
                 id="test-wf-update",
                 task_queue="test-task-queue-signals",
-                start_signal="pause",
             )
+            await handle.execute_update("Pause")
             
             await handle.execute_update(
                 "update_parameters",
-                {"parameters": {"param1": "new_value", "param2": "value2"}}
+                {"new_parameters": {"param1": "new_value", "param2": "value2"}}
             )
             
-            await handle.signal("resume")
+            await handle.execute_update("Resume")
             result = await handle.result()
             assert result["status"] == "success"
 
@@ -148,11 +148,10 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
                 },
                 id="test-wf-cancel",
                 task_queue="test-task-queue-signals",
-                start_signal="pause",
             )
+            await handle.execute_update("Pause")
             
-            await handle.signal("cancel")
-            await handle.signal("resume")
+            await handle.execute_update("Cancel")
             result = await handle.result()
             assert result["status"] == "canceled"
 

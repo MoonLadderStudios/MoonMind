@@ -1,4 +1,4 @@
-"""Tests for review gate contracts: ReviewRequest, ReviewVerdict, builders."""
+"""Tests for approval policy contracts: ReviewRequest, ReviewVerdict, builders."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import pytest
 from moonmind.workflows.skills.tool_plan_contracts import (
     ContractValidationError,
     DEFAULT_SKIP_TOOL_TYPES,
-    ReviewGatePolicy,
+    ApprovalPolicyPolicy,
 )
-from moonmind.workflows.skills.review_gate import (
+from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
     ReviewVerdict,
     build_feedback_input,
@@ -19,12 +19,12 @@ from moonmind.workflows.skills.review_gate import (
 )
 
 
-# ── ReviewGatePolicy ──────────────────────────────────────────────────
+# ── ApprovalPolicyPolicy ──────────────────────────────────────────────────
 
 
-class TestReviewGatePolicy:
+class TestApprovalPolicyPolicy:
     def test_defaults(self):
-        p = ReviewGatePolicy()
+        p = ApprovalPolicyPolicy()
         assert p.enabled is False
         assert p.max_review_attempts == 2
         assert p.reviewer_model == "default"
@@ -32,24 +32,24 @@ class TestReviewGatePolicy:
         assert p.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES
 
     def test_enabled(self):
-        p = ReviewGatePolicy(enabled=True, max_review_attempts=3)
+        p = ApprovalPolicyPolicy(enabled=True, max_review_attempts=3)
         assert p.enabled is True
         assert p.max_review_attempts == 3
 
     def test_negative_max_attempts_rejected(self):
         with pytest.raises(ContractValidationError, match="max_review_attempts"):
-            ReviewGatePolicy(max_review_attempts=-1)
+            ApprovalPolicyPolicy(max_review_attempts=-1)
 
     def test_zero_max_attempts_allowed(self):
-        p = ReviewGatePolicy(max_review_attempts=0)
+        p = ApprovalPolicyPolicy(max_review_attempts=0)
         assert p.max_review_attempts == 0
 
     def test_zero_timeout_rejected(self):
         with pytest.raises(ContractValidationError, match="review_timeout_seconds"):
-            ReviewGatePolicy(review_timeout_seconds=0)
+            ApprovalPolicyPolicy(review_timeout_seconds=0)
 
     def test_to_payload(self):
-        p = ReviewGatePolicy(enabled=True, skip_tool_types=("agent_runtime",))
+        p = ApprovalPolicyPolicy(enabled=True, skip_tool_types=("agent_runtime",))
         payload = p.to_payload()
         assert payload["enabled"] is True
         assert payload["skip_tool_types"] == ["agent_runtime"]

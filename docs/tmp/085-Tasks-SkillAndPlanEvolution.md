@@ -8,7 +8,7 @@
 ### Recommendations & migration strategy (§)
 
 - Strict JSON-schema validation for Tools/Plans; central registry loader; snapshot digest — verify completeness vs `SkillAndPlanContracts.md` and code.
-- Plan interpreter, dispatcher, observability, security bullets — many are partially implemented in `MoonMind.Run`; align doc with shipped behavior.
+- Plan executor, dispatcher, observability, security bullets — many are partially implemented in `MoonMind.Run`; align doc with shipped behavior.
 
 ### Implementation roadmap (§)
 

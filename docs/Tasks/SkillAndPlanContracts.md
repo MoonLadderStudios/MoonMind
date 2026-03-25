@@ -436,7 +436,7 @@ Planning is expressed as one or more skills (e.g., `plan.generate`) executed as 
 
 ## 9) Execution semantics (Plan → Activity invocations)
 
-### 9.1 The Plan Interpreter (workflow algorithm)
+### 9.1 The Plan Executor (workflow algorithm)
 
 1. Read the plan artifact reference.
 2. Validate plan:
@@ -660,7 +660,7 @@ Reserve fields without enabling them:
 
 ### C) Execution semantics
 
-* Plan Interpreter algorithm (deterministic orchestration)
+* Plan Executor algorithm (deterministic orchestration)
 * Node → activity invocation mapping (registry snapshot resolution)
 * Concurrency rules and failure modes
 * Progress and intermediate output contracts
@@ -669,4 +669,4 @@ Reserve fields without enabling them:
 
 ## 14) Engineering backlog
 
-Minimum components: tool registry format + loader + validator; registry snapshot digest artifact; `plan.validate`; Plan Interpreter in `MoonMind.Run`; `mm.tool.execute` / skill dispatch activity; progress query and optional progress artifact. Status is tracked in [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md).
+Minimum components: tool registry format + loader + validator; registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.Run`; `mm.tool.execute` / skill dispatch activity; progress query and optional progress artifact. Status is tracked in [`docs/tmp/remaining-work/Tasks-SkillAndPlanContracts.md`](../tmp/remaining-work/Tasks-SkillAndPlanContracts.md).

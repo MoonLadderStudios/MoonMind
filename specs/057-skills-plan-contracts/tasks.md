@@ -42,9 +42,9 @@
 - [X] T008 Implement structural plan validation for supported version, DAG edges, and unsupported semantics rejection in `moonmind/workflows/skills/plan_validation.py` (DOC-REQ-003, DOC-REQ-010).
 - [X] T009 Implement deep validation activity flow that persists validated plans and blocks execution on validation errors in `moonmind/workflows/skills/skill_dispatcher.py` (DOC-REQ-012, DOC-REQ-016).
 - [X] T010 [P] Implement dispatcher activity registration and strict declared-binding enforcement in `moonmind/workflows/skills/skill_dispatcher.py` (DOC-REQ-014, DOC-REQ-016).
-- [X] T011 Implement deterministic ready-node scheduler with max-concurrency control in `moonmind/workflows/skills/plan_interpreter.py` (DOC-REQ-001, DOC-REQ-010, DOC-REQ-016).
-- [X] T012 Implement failure-mode policy engine (`FAIL_FAST` vs `CONTINUE`) and skipped/cancelled bookkeeping in `moonmind/workflows/skills/plan_interpreter.py` (DOC-REQ-010).
-- [X] T013 Implement deterministic cross-node input reference resolution and dependency-safe ref checks in `moonmind/workflows/skills/plan_validation.py` and `moonmind/workflows/skills/plan_interpreter.py` (DOC-REQ-011).
+- [X] T011 Implement deterministic ready-node scheduler with max-concurrency control in `moonmind/workflows/skills/plan_executor.py` (DOC-REQ-001, DOC-REQ-010, DOC-REQ-016).
+- [X] T012 Implement failure-mode policy engine (`FAIL_FAST` vs `CONTINUE`) and skipped/cancelled bookkeeping in `moonmind/workflows/skills/plan_executor.py` (DOC-REQ-010).
+- [X] T013 Implement deterministic cross-node input reference resolution and dependency-safe ref checks in `moonmind/workflows/skills/plan_validation.py` and `moonmind/workflows/skills/plan_executor.py` (DOC-REQ-011).
 
 **Checkpoint**: Core registry, validation, dispatch, and interpreter foundations are ready for story slices.
 
@@ -64,10 +64,10 @@
 
 ### Implementation for User Story 1
 
-- [X] T017 [US1] Wire validated-plan + pinned-snapshot execution entrypoints in `moonmind/workflows/skills/skill_dispatcher.py` and `moonmind/workflows/skills/plan_interpreter.py` (DOC-REQ-012, DOC-REQ-013).
-- [X] T018 [US1] Enforce dependency-success scheduling and deterministic execution order in `moonmind/workflows/skills/plan_interpreter.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-010).
-- [X] T019 [US1] Implement policy-correct branch cancellation/continuation transitions in `moonmind/workflows/skills/plan_interpreter.py` (DOC-REQ-010).
-- [X] T020 [US1] Implement per-node `SkillResult` aggregation and terminal status shaping in `moonmind/workflows/skills/plan_interpreter.py` and `moonmind/workflows/skills/skill_plan_contracts.py` (DOC-REQ-007, DOC-REQ-015).
+- [X] T017 [US1] Wire validated-plan + pinned-snapshot execution entrypoints in `moonmind/workflows/skills/skill_dispatcher.py` and `moonmind/workflows/skills/plan_executor.py` (DOC-REQ-012, DOC-REQ-013).
+- [X] T018 [US1] Enforce dependency-success scheduling and deterministic execution order in `moonmind/workflows/skills/plan_executor.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-010).
+- [X] T019 [US1] Implement policy-correct branch cancellation/continuation transitions in `moonmind/workflows/skills/plan_executor.py` (DOC-REQ-010).
+- [X] T020 [US1] Implement per-node `SkillResult` aggregation and terminal status shaping in `moonmind/workflows/skills/plan_executor.py` and `moonmind/workflows/skills/skill_plan_contracts.py` (DOC-REQ-007, DOC-REQ-015).
 
 **Checkpoint**: User Story 1 is independently executable and policy-deterministic.
 
@@ -113,9 +113,9 @@
 
 ### Implementation for User Story 3
 
-- [X] T034 [US3] Implement structured execution progress state model updates in `moonmind/workflows/skills/plan_interpreter.py` and `moonmind/workflows/skills/skill_plan_contracts.py` (DOC-REQ-001, DOC-REQ-015, DOC-REQ-016).
-- [X] T035 [US3] Implement optional durable `progress.json` artifact publication flow in `moonmind/workflows/skills/plan_interpreter.py` and `moonmind/workflows/skills/artifact_store.py` (DOC-REQ-004, DOC-REQ-015).
-- [X] T036 [US3] Implement terminal summary artifact publication with per-node outcomes in `moonmind/workflows/skills/plan_interpreter.py` and `moonmind/workflows/skills/artifact_store.py` (DOC-REQ-007, DOC-REQ-015).
+- [X] T034 [US3] Implement structured execution progress state model updates in `moonmind/workflows/skills/plan_executor.py` and `moonmind/workflows/skills/skill_plan_contracts.py` (DOC-REQ-001, DOC-REQ-015, DOC-REQ-016).
+- [X] T035 [US3] Implement optional durable `progress.json` artifact publication flow in `moonmind/workflows/skills/plan_executor.py` and `moonmind/workflows/skills/artifact_store.py` (DOC-REQ-004, DOC-REQ-015).
+- [X] T036 [US3] Implement terminal summary artifact publication with per-node outcomes in `moonmind/workflows/skills/plan_executor.py` and `moonmind/workflows/skills/artifact_store.py` (DOC-REQ-007, DOC-REQ-015).
 - [X] T037 [US3] Expose progress and summary contract helpers for runtime consumers in `moonmind/workflows/skills/contracts.py` and `moonmind/workflows/skills/__init__.py` (DOC-REQ-015).
 
 **Checkpoint**: User Story 3 is independently observable and audit-friendly.

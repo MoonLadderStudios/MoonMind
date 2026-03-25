@@ -57,7 +57,10 @@ class TemporalActivityTimeouts:
 
 @dataclass(frozen=True, slots=True)
 class TemporalActivityRetries:
-    """Default retry policy for one activity type."""
+    """Default retry policy for one activity type.
+    
+    See docs/Temporal/ErrorTaxonomy.md for error classification rules.
+    """
 
     max_attempts: int
     max_interval_seconds: int
@@ -407,7 +410,7 @@ def build_default_activity_catalog(
             capability_class="sandbox",
             task_queue=cfg.activity_sandbox_task_queue,
             fleet=SANDBOX_FLEET,
-            timeouts=TemporalActivityTimeouts(600, 900, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(120, 300, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
@@ -417,7 +420,7 @@ def build_default_activity_catalog(
             capability_class="sandbox",
             task_queue=cfg.activity_sandbox_task_queue,
             fleet=SANDBOX_FLEET,
-            timeouts=TemporalActivityTimeouts(600, 900, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(120, 300, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
@@ -427,7 +430,7 @@ def build_default_activity_catalog(
             capability_class="sandbox",
             task_queue=cfg.activity_sandbox_task_queue,
             fleet=SANDBOX_FLEET,
-            timeouts=TemporalActivityTimeouts(3600, 3600, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(600, 1800, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
@@ -437,7 +440,7 @@ def build_default_activity_catalog(
             capability_class="sandbox",
             task_queue=cfg.activity_sandbox_task_queue,
             fleet=SANDBOX_FLEET,
-            timeouts=TemporalActivityTimeouts(3600, 3600, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(600, 1800, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
@@ -476,6 +479,33 @@ def build_default_activity_catalog(
             fleet=ARTIFACTS_FLEET,
             timeouts=TemporalActivityTimeouts(15, 30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=15),
+        ),
+        TemporalActivityDefinition(
+            activity_type="oauth_session.update_session_urls",
+            family="oauth_session",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(15, 30),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
+            activity_type="oauth_session.verify_volume",
+            family="oauth_session",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
+            activity_type="oauth_session.register_profile",
+            family="oauth_session",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
             activity_type="oauth_session.mark_failed",
@@ -618,7 +648,7 @@ def build_default_activity_catalog(
             capability_class="integration:openclaw",
             task_queue=cfg.activity_integrations_task_queue,
             fleet=INTEGRATIONS_FLEET,
-            timeouts=TemporalActivityTimeouts(3600, 7200, heartbeat_timeout_seconds=120),
+            timeouts=TemporalActivityTimeouts(600, 1800, heartbeat_timeout_seconds=120),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
@@ -628,7 +658,7 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(120, 300, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(
@@ -637,7 +667,7 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(120, 300, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(
