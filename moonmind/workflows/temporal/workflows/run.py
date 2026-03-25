@@ -724,14 +724,23 @@ class MoonMindRunWorkflow:
                 if not isinstance(agent_outputs, dict):
                     agent_outputs = {}
             
+            last_node_inputs = nodes[-1].get("inputs", {}) if nodes else {}
             head_branch = (
                 agent_outputs.get("branch")
                 or agent_outputs.get("newBranch")
                 or ws.get("newBranch")
                 or ws.get("branch")
+                or last_node_inputs.get("newBranch")
+                or last_node_inputs.get("branch")
                 or ""
             )
-            target_branch = parameters.get("targetBranch") or ws.get("targetBranch") or ws.get("startingBranch") or "main"
+            target_branch = (
+                parameters.get("targetBranch") 
+                or ws.get("targetBranch") 
+                or ws.get("startingBranch") 
+                or last_node_inputs.get("startingBranch")
+                or "main"
+            )
             
             if not self._repo or not head_branch:
                 raise ValueError(

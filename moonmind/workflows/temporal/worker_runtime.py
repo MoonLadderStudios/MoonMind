@@ -331,11 +331,21 @@ def _build_runtime_planner():
             last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
             if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
                 pr_suffix = (
-                    "\n\nAfter completing the changes above, create a GitHub "
-                    "pull request with the changes using `gh pr create`."
+                    "\n\nAfter completing the changes above, commit your work and "
+                    "push the current branch to origin (`git push -u origin HEAD`). "
+                    "Then create a GitHub pull request with the changes using `gh pr create --fill`."
                 )
                 last_inputs = nodes[-1]["inputs"]
                 last_inputs["instructions"] = last_inputs["instructions"] + pr_suffix
+        elif isinstance(publish_mode, str) and publish_mode.strip().lower() == "branch":
+            last_tool = str(nodes[-1].get("tool", {}).get("name") or "").strip().lower()
+            if last_tool not in _TOOLS_WITH_AUTO_PR_CREATION:
+                push_suffix = (
+                    "\n\nAfter completing the changes above, commit your work and "
+                    "push the current branch to origin (`git push -u origin HEAD`)."
+                )
+                last_inputs = nodes[-1]["inputs"]
+                last_inputs["instructions"] = last_inputs["instructions"] + push_suffix
 
         return {
             "plan_version": "1.0",
