@@ -175,8 +175,9 @@ class ManagedRunSupervisor:
             except asyncio.TimeoutError:
                 try:
                     activity.heartbeat({"run_id": run_id})
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Activity heartbeat failures are non-fatal for the supervisor loop
+                    logger.debug("Activity heartbeat failed: %s", e)
                 self._store.update_status(
                     run_id,
                     "running",
