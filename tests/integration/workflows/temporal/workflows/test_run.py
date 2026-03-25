@@ -89,6 +89,9 @@ async def _wait_for_condition(
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
+    # Phase 3: Verify idempotency key is present (or support legacy absence)
+    if "idempotency_key" in args:
+        assert "_plan_generate" in args["idempotency_key"]
     return {"plan_ref": "artifact://plan/123"}
 
 
@@ -147,6 +150,8 @@ async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
+    if "idempotency_key" in args:
+        assert "_execute" in args["idempotency_key"]
     return {"status": "COMPLETED", "outputs": {}}
 
 

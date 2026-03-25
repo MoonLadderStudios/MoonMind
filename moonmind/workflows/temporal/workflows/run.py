@@ -436,6 +436,7 @@ class MoonMindRunWorkflow:
                 "principal": self._principal(),
                 "inputs_ref": input_ref,
                 "parameters": parameters,
+                "idempotency_key": f"{workflow.info().workflow_id}_plan_generate",
                 "execution_ref": {
                     "namespace": workflow.info().namespace,
                     "workflow_id": workflow.info().workflow_id,
@@ -627,6 +628,7 @@ class MoonMindRunWorkflow:
                                 "invocation_payload": invocation_payload,
                                 "principal": self._principal(),
                                 "registry_snapshot_ref": registry_snapshot_ref,
+                                "idempotency_key": f"{workflow.info().workflow_id}_{node_id}_execute",
                                 "context": {
                                     "workflow_id": workflow.info().workflow_id,
                                     "run_id": workflow.info().run_id,
@@ -1290,6 +1292,7 @@ class MoonMindRunWorkflow:
                     "run_id": workflow.info().run_id,
                     "repo": self._repo,
                     "parameters": parameters,
+                    "idempotency_key": f"{workflow.info().workflow_id}_proposal_generate",
                 },
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
@@ -1328,6 +1331,7 @@ class MoonMindRunWorkflow:
                     "policy": policy,
                     "origin": origin,
                     "principal": self._principal(),
+                    "idempotency_key": f"{workflow.info().workflow_id}_proposal_submit",
                 },
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
