@@ -12,7 +12,7 @@ Task publishing controls how agent-produced changes reach the repository after e
 
 ### `none`
 
-The agent runs in its workspace but no git operations occur after completion. Useful for read-only tasks (analysis, diagnostics, research).
+The agent runs in its workspace but no git operations occur after completion. Useful for read-only tasks (analysis, diagnostics, research) or for tasks with side effects other than a final publish action.
 
 ### `branch`
 
