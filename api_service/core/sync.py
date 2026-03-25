@@ -56,6 +56,26 @@ def _coerce_temporal_scalar(value: Any) -> str | None:
     return text or None
 
 
+def merged_parameters_for_projection(
+    payload: dict[str, Any],
+    canonical: TemporalExecutionCanonicalRecord | None,
+) -> dict[str, Any]:
+    """Merge creation-time parameters from the canonical DB row with memo-derived parameters.
+
+    ``map_temporal_state_to_projection`` sets ``parameters`` from workflow memo only; memo
+    typically does not repeat ``targetRuntime`` or task tool snapshots. The canonical row
+    in ``temporal_execution_sources`` holds those creation-time fields.
+
+    Both ``sync_execution_projection`` and the ``GET /api/executions?source=temporal`` list
+    path must apply the same merge so ``_serialize_execution`` can populate Runtime/Skill.
+    """
+    synced_params = payload.get("parameters") or {}
+    if canonical is None:
+        return dict(synced_params)
+    canonical_params = canonical.parameters or {}
+    return {**canonical_params, **synced_params}
+
+
 async def map_temporal_state_to_projection(
     desc: WorkflowExecutionDescription,
 ) -> dict[str, Any]:
@@ -257,9 +277,7 @@ async def sync_execution_projection(
     # The memo-derived parameters from map_temporal_state_to_projection are typically
     # empty; the canonical record is the source of truth for creation-time parameters.
     if canonical is not None:
-        canonical_params = canonical.parameters or {}
-        synced_params = payload.get("parameters") or {}
-        projection.parameters = {**canonical_params, **synced_params}
+        projection.parameters = merged_parameters_for_projection(payload, canonical)
 
     if canonical is not None and canonical.state != state_value:
         canonical.state = state_value
