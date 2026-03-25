@@ -1,5 +1,70 @@
 [
   {
+    "id": 4124642041,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 2986561946,
+    "disposition": "addressed",
+    "rationale": "Added idempotency_key support to mm_skill_execute signature."
+  },
+  {
+    "id": 4004828007,
+    "disposition": "not-applicable",
+    "rationale": "Automated code review summary, no action needed."
+  },
+  {
+    "id": 4004831933,
+    "disposition": "not-applicable",
+    "rationale": "Automated code review summary, no action needed."
+  },
+  {
+    "id": 2986565248,
+    "disposition": "addressed",
+    "rationale": "Updated Phase 3 idempotency documentation example format."
+  },
+  {
+    "id": 2986565257,
+    "disposition": "addressed",
+    "rationale": "Updated test_run plan.generate mock assertion using execution_ref.workflow_id."
+  },
+  {
+    "id": 2986565269,
+    "disposition": "addressed",
+    "rationale": "Updated test_run skill.execute mock assertion using context.workflow_id."
+  },
+  {
+    "id": 2986625191,
+    "disposition": "addressed",
+    "rationale": "Gated proposal.generate idempotency_key with workflow.patched."
+  },
+  {
+    "id": 2986625227,
+    "disposition": "addressed",
+    "rationale": "Gated proposal.submit idempotency_key with workflow.patched."
+  },
+  {
+    "id": 2986625258,
+    "disposition": "addressed",
+    "rationale": "Updated Phase 3 idempotency documentation example to use workflow_id."
+  },
+  {
+    "id": 2986625295,
+    "disposition": "addressed",
+    "rationale": "Clarified backwards compatibility testing in documentation."
+  },
+  {
+    "id": 4004904245,
+    "disposition": "not-applicable",
+    "rationale": "Automated code review summary, no action needed."
+  },
+  {
+    "id": 2990772075,
+    "disposition": "addressed",
+    "rationale": "Removed unused JulesIntegrationStartRequest import."
+  },
+  {
     "id": 4125155789,
     "disposition": "not-applicable",
     "rationale": "Bot overview comment."

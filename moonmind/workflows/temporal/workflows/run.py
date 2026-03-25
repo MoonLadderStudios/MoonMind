@@ -430,19 +430,23 @@ class MoonMindRunWorkflow:
             return plan_ref
 
         plan_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("plan.generate")
+        plan_payload_args = {
+            "principal": self._principal(),
+            "inputs_ref": input_ref,
+            "parameters": parameters,
+            "execution_ref": {
+                "namespace": workflow.info().namespace,
+                "workflow_id": workflow.info().workflow_id,
+                "run_id": workflow.info().run_id,
+                "link_type": "plan",
+            },
+        }
+        if workflow.patched("idempotency_key_phase3"):
+            plan_payload_args["idempotency_key"] = f"{workflow.info().workflow_id}_plan_generate"
+
         plan_result = await workflow.execute_activity(
             "plan.generate",
-            {
-                "principal": self._principal(),
-                "inputs_ref": input_ref,
-                "parameters": parameters,
-                "execution_ref": {
-                    "namespace": workflow.info().namespace,
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                    "link_type": "plan",
-                },
-            },
+            plan_payload_args,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(plan_route),
         )
@@ -621,18 +625,22 @@ class MoonMindRunWorkflow:
                         )
 
                     try:
+                        execute_payload = {
+                            "invocation_payload": invocation_payload,
+                            "principal": self._principal(),
+                            "registry_snapshot_ref": registry_snapshot_ref,
+                            "context": {
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "node_id": node_id,
+                            },
+                        }
+                        if workflow.patched("idempotency_key_phase3"):
+                            execute_payload["idempotency_key"] = f"{workflow.info().workflow_id}_{node_id}_execute"
+
                         execution_result = await workflow.execute_activity(
                             route.activity_type,
-                            {
-                                "invocation_payload": invocation_payload,
-                                "principal": self._principal(),
-                                "registry_snapshot_ref": registry_snapshot_ref,
-                                "context": {
-                                    "workflow_id": workflow.info().workflow_id,
-                                    "run_id": workflow.info().run_id,
-                                    "node_id": node_id,
-                                },
-                            },
+                            execute_payload,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             **self._execute_kwargs_for_route(route),
                         )
@@ -1287,15 +1295,19 @@ class MoonMindRunWorkflow:
             proposal_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                 "proposal.generate"
             )
+            generate_payload = {
+                "principal": self._principal(),
+                "workflow_id": workflow.info().workflow_id,
+                "run_id": workflow.info().run_id,
+                "repo": self._repo,
+                "parameters": parameters,
+            }
+            if workflow.patched("idempotency_key_phase3"):
+                generate_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_generate"
+
             candidates = await workflow.execute_activity(
                 "proposal.generate",
-                {
-                    "principal": self._principal(),
-                    "workflow_id": workflow.info().workflow_id,
-                    "run_id": workflow.info().run_id,
-                    "repo": self._repo,
-                    "parameters": parameters,
-                },
+                generate_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
             )
@@ -1326,14 +1338,18 @@ class MoonMindRunWorkflow:
                 "temporal_run_id": workflow.info().run_id,
                 "trigger_repo": self._repo or "",
             }
+            submit_payload = {
+                "candidates": candidate_list,
+                "policy": policy,
+                "origin": origin,
+                "principal": self._principal(),
+            }
+            if workflow.patched("idempotency_key_phase3"):
+                submit_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_submit"
+
             submit_result = await workflow.execute_activity(
                 "proposal.submit",
-                {
-                    "candidates": candidate_list,
-                    "policy": policy,
-                    "origin": origin,
-                    "principal": self._principal(),
-                },
+                submit_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
             )

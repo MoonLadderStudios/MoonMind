@@ -89,6 +89,14 @@ async def _wait_for_condition(
 @activity.defn(name="plan.generate")
 async def mock_plan_generate(args: Dict[str, Any]) -> Dict[str, Any]:
     PLAN_GENERATE_CALLS.append(args)
+    # Phase 3: Verify idempotency key is present (or support legacy absence)
+    if "idempotency_key" in args:
+        workflow_id = args.get("execution_ref", {}).get("workflow_id")
+        if workflow_id:
+            assert args["idempotency_key"] == f"{workflow_id}_plan_generate"
+        else:
+            # Fallback for tests that may not provide full execution_ref
+            assert "_plan_generate" in args["idempotency_key"]
     return {"plan_ref": "artifact://plan/123"}
 
 
@@ -147,6 +155,15 @@ async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
 @activity.defn(name="mm.skill.execute")
 async def mock_skill_execute(args: Dict[str, Any]) -> Dict[str, Any]:
     SKILL_EXECUTE_CALLS.append(args)
+    if "idempotency_key" in args:
+        context = args.get("context", {})
+        workflow_id = context.get("workflow_id")
+        node_id = context.get("node_id")
+        if workflow_id and node_id:
+            assert args["idempotency_key"] == f"{workflow_id}_{node_id}_execute"
+        else:
+            # Fallback for tests that may not provide full context
+            assert "_execute" in args["idempotency_key"]
     return {"status": "COMPLETED", "outputs": {}}
 
 

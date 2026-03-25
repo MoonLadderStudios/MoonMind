@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "tool": "pr_resolve_orchestrate",
+  "status": "attempts_exhausted",
+  "merge_outcome": "attempts_exhausted",
+  "decision": "no progress after full remediation escalation",
+  "reason": "merge_conflicts",
+  "final_reason": "merge_conflicts",
+  "next_step": "run_fix_merge_conflicts_skill",
+  "max_attempts": 3,
+  "finalize_max_retries": 2,
+  "fix_max_iterations": 3,
+  "escalations": 1,
+  "attempt_count": 2,
+  "started_at": "2026-03-25T20:18:22.933348+00:00",
+  "finished_at": "2026-03-25T20:18:51.930585+00:00",
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "stage": "finalize",
+      "status": "blocked",
+      "reason": "merge_conflicts",
+      "timestamp": "2026-03-25T20:18:32.913349+00:00"
+    },
+    {
+      "attempt": 1,
+      "stage": "full_remediation",
+      "status": "needs_remediation",
+      "reason": "merge_conflicts",
+      "escalation": 1,
+      "max_iterations": 3,
+      "timestamp": "2026-03-25T20:18:42.396561+00:00"
+    },
+    {
+      "attempt": 2,
+      "stage": "finalize",
+      "status": "blocked",
+      "reason": "merge_conflicts",
+      "timestamp": "2026-03-25T20:18:51.930568+00:00"
+    }
+  ],
+  "decisions": [
+    "finalize:blocked:merge_conflicts",
+    "full_remediation:needs_remediation:merge_conflicts",
+    "finalize:blocked:merge_conflicts"
+  ]
+}
