@@ -1107,7 +1107,10 @@ class MoonMindRunWorkflow:
 
                     status = self._get_from_result(poll_result, "normalized_status")
                     if status in ("completed", "failed", "canceled", "awaiting_feedback"):
-                        _poll_terminal = True
+                        if workflow.patched("refactor-loop-1.2"):
+                            _poll_terminal = True
+                        else:
+                            self._resume_requested = True
                         self._external_status = "completed" if status == "awaiting_feedback" else status
                         if status == "failed":
                             self._get_logger().warning(f"Integration failed: {poll_result}")
@@ -1119,6 +1122,9 @@ class MoonMindRunWorkflow:
                     poll_interval_seconds = min(
                         poll_interval_seconds * 2, max_poll_interval_seconds
                     )
+
+            if not workflow.patched("refactor-loop-1.2"):
+                self._resume_requested = False
 
             if self._external_status != "completed":
                 # If a step failed or was canceled, do not dispatch remaining steps

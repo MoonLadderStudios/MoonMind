@@ -521,16 +521,28 @@ async def main_async() -> None:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
     try:
+        build_id = os.environ.get("MOONMIND_BUILD_ID")
+        if not build_id:
+            import subprocess
+            try:
+                build_id = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], text=True
+                ).strip()
+            except Exception:
+                build_id = "unknown"
+
         worker = Worker(
             client,
             task_queue=topology.task_queues[0],
             workflows=workflows,
             activities=activities,
             workflow_runner=UnsandboxedWorkflowRunner(),
+            build_id=build_id,
+            use_worker_versioning=True,
             **_worker_concurrency_kwargs(topology),
         )
 
-        logger.info("Worker started, polling task queues...")
+        logger.info(f"Worker started with build_id={build_id}, polling task queues...")
         await worker.run()
     finally:
         if runtime_resources is not None:
