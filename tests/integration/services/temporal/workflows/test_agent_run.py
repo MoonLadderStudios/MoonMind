@@ -38,7 +38,6 @@ class MockAuthProfileManager:
     def release_slot(self, payload: dict) -> None:
         """Release a slot lease. Removes the lease if the workflow_id matches."""
         requester_id = payload.get("requester_workflow_id")
-        profile_id = payload.get("profile_id")
         # Find and remove any lease held by this requester
         to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
         for p in to_remove:

@@ -1681,7 +1681,6 @@ class MoonMindRunWorkflow:
                 manager_handle = workflow.get_external_workflow_handle(manager_id)
                 # Schedule the async signal without awaiting - best effort cleanup.
                 # The manager's verify_lease_holders will reclaim the slot if this fails.
-                import asyncio
                 asyncio.create_task(
                     self._signal_release_slot(
                         manager_handle, child_wf_id, profile_id
