@@ -240,7 +240,7 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
             return {"external_id": "ext-1"}
         if activity_type == "integration.jules.fetch_result":
             return {"url": "https://github.com/org/repo/pull/123", "summary": "Done"}
-        if activity_type == "integration.jules.merge_pr":
+        if activity_type == "repo.merge_pr":
             return {"merged": True, "summary": "Merged successfully"}
         return {}
 
@@ -269,7 +269,7 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     assert captured[0][0] == "artifact.read"
     assert captured[1][0] == "integration.jules.start"
     assert captured[2][0] == "integration.jules.fetch_result"
-    assert captured[3][0] == "integration.jules.merge_pr"
+    assert captured[3][0] == "repo.merge_pr"
     
     # Verify merge_pr payload
     merge_payload = captured[3][1]
