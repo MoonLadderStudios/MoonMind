@@ -134,12 +134,10 @@ class TemporalClientAdapter:
 
         args = [input_args] if input_args is not None else []
 
-        formatted_search_attributes = {}
-        if search_attributes:
-            formatted_search_attributes = {
-                k: v if isinstance(v, list) else [v]
-                for k, v in search_attributes.items()
-            }
+        formatted_search_attributes = {
+            k: v if isinstance(v, list) else [v]
+            for k, v in (search_attributes or {}).items()
+        }
 
         if start_delay is not None:
             scheduled_for = datetime.now(timezone.utc) + start_delay
@@ -379,17 +377,11 @@ class TemporalClientAdapter:
 
         args = [workflow_input] if workflow_input is not None else []
 
-        formatted_sa = {}
-        if search_attributes:
-            formatted_sa = {
-                k: v if isinstance(v, list) else [v]
-                for k, v in search_attributes.items()
-            }
-
+        formatted_sa = {
+            k: v if isinstance(v, list) else [v]
+            for k, v in (search_attributes or {}).items()
+        }
         formatted_sa["mm_scheduled_for"] = ["{{.ScheduleTime}}"]
-
-        if not formatted_sa:
-            formatted_sa = None
 
         try:
             handle = await client.create_schedule(
