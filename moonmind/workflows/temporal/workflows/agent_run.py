@@ -576,16 +576,18 @@ class MoonMindAgentRun:
                     # if this child exits in a terminal state (fallback for cancelled
                     # workflows that fail to release their own slot).
                     if parent_info and self._assigned_profile_id:
-                        parent_handle = workflow.get_external_workflow_handle(
-                            parent_info.workflow_id, run_id=parent_info.run_id
-                        )
-                        await parent_handle.signal(
-                            "profile_assigned",
-                            {
-                                "profile_id": self._assigned_profile_id,
-                                "child_workflow_id": workflow.info().workflow_id,
-                            },
-                        )
+                        if workflow.patched("agent_run_parent_profile_assigned_signal"):
+                            parent_handle = workflow.get_external_workflow_handle(
+                                parent_info.workflow_id, run_id=parent_info.run_id
+                            )
+                            await parent_handle.signal(
+                                "profile_assigned",
+                                {
+                                    "profile_id": self._assigned_profile_id,
+                                    "child_workflow_id": workflow.info().workflow_id,
+                                    "runtime_id": runtime_id,
+                                },
+                            )
 
                     # Wire ManagedAgentAdapter with real DI callables.
                     # The slot_requester / slot_releaser / cooldown_reporter

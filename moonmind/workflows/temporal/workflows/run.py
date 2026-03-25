@@ -81,6 +81,8 @@ _GITHUB_PR_URL_PATTERN = re.compile(
 # Replay-stable `workflow.patched` id for integration status polling terminal handling.
 # Keep in sync with docs/Temporal/WorkerDeployment.md if renamed (only before first prod deploy).
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
+# Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
+RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -168,6 +170,7 @@ class MoonMindRunWorkflow:
         # defensively release it if the child exits in a terminal state.
         self._assigned_profile_id: Optional[str] = None
         self._assigned_child_workflow_id: Optional[str] = None
+        self._assigned_runtime_id: Optional[str] = None
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -1637,7 +1640,8 @@ class MoonMindRunWorkflow:
             # slot, release it defensively. This is a fallback for cases where
             # the child fails to release the slot due to cancellation or other
             # issues.
-            self._release_slot_defensive()
+            if workflow.patched(RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH):
+                self._release_slot_defensive()
 
     @workflow.signal
     def profile_assigned(self, payload: dict) -> None:
@@ -1648,6 +1652,7 @@ class MoonMindRunWorkflow:
         """
         self._assigned_profile_id = payload.get("profile_id")
         self._assigned_child_workflow_id = payload.get("child_workflow_id")
+        self._assigned_runtime_id = payload.get("runtime_id")
         self._get_logger().debug(
             "Child workflow %s assigned profile %s",
             self._assigned_child_workflow_id,
@@ -1672,9 +1677,9 @@ class MoonMindRunWorkflow:
             child_wf_id,
         )
 
-        # Determine runtime_id from the child workflow ID pattern
-        # child_workflow_id format: "<parent_workflow_id>:agent:<node_id>[:retry<N>]"
-        runtime_id = self._infer_runtime_from_child(child_wf_id)
+        # Use the runtime_id passed from the child via profile_assigned signal.
+        # Fall back to inference from child_workflow_id if not available.
+        runtime_id = self._assigned_runtime_id or self._infer_runtime_from_child(child_wf_id)
         if runtime_id:
             manager_id = f"auth-profile-manager:{runtime_id}"
             try:
@@ -1694,6 +1699,7 @@ class MoonMindRunWorkflow:
         # Clear the assignment
         self._assigned_profile_id = None
         self._assigned_child_workflow_id = None
+        self._assigned_runtime_id = None
 
     async def _signal_release_slot(
         self, manager_handle: Any, child_workflow_id: str, profile_id: str

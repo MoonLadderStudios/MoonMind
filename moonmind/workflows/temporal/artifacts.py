@@ -2107,6 +2107,7 @@ class TemporalArtifactActivities:
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,
+                    "max_lease_duration_seconds": row.max_lease_duration_seconds,
                     "enabled": row.enabled,
                 }
             )
@@ -2170,7 +2171,7 @@ class TemporalArtifactActivities:
         Returns a dict mapping workflow_id -> {"running": bool, "status": str}.
         Non-found workflows are counted as not running.
         """
-        from temporalio.client import WorkflowFailureError
+        from temporalio.client import RPCError
 
         from moonmind.workflows.temporal.client import TemporalClientAdapter
 
@@ -2187,9 +2188,12 @@ class TemporalArtifactActivities:
                     "running": status_name == "RUNNING",
                     "status": status_name,
                 }
-            except WorkflowFailureError:
+            except RPCError as exc:
                 # Workflow does not exist or is not reachable
-                results[wf_id] = {"running": False, "status": "NOT_FOUND"}
+                if exc.status.name == "NOT_FOUND":
+                    results[wf_id] = {"running": False, "status": "NOT_FOUND"}
+                else:
+                    results[wf_id] = {"running": False, "status": f"RPC_ERROR_{exc.status.name}"}
             except Exception as exc:
                 logger.warning(
                     "auth_profile.verify_lease_holders failed to describe %s: %s",

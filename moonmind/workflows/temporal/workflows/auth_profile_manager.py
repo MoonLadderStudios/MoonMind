@@ -342,6 +342,9 @@ class MoonMindAuthProfileManagerWorkflow:
             # workflows in terminal states without waiting for lease timeout.
             await self._verify_lease_holders()
 
+            # Immediately offer any reclaimed slots to waiting requests.
+            await self._drain_queue()
+
             # Check continue-as-new threshold.
             # We use get_current_history_length() to account for timer loops
             # that don't increment self._event_count, or server suggestions.
