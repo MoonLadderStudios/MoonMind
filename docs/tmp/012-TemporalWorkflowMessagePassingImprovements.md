@@ -408,7 +408,10 @@ This section turns the recommendations above into ordered phases. Each phase has
 - Inventory is checked into repo docs or a maintained internal doc and is updateable on each release.
 - Stakeholders agree which workflow types are “job/task” orchestrators versus supporting workflows.
 
-### Phase 2 — Per-workflow message contracts
+### Phase 2 — Per-workflow message contracts (✅ COMPLETE)
+
+> [!NOTE]
+> Phase 2 is fulfilled by [014-TemporalMessageContracts.md](014-TemporalMessageContracts.md), which establishes the explicit Query/Signal/Update contracts and the implementation plan.
 
 **Goal:** Establish an explicit **Query / Signal / Update** contract for each job-orchestration workflow type, aligned with Temporal semantics (queries read-only; updates for validated, trackable commands; signals for fire-and-forget events).
 
