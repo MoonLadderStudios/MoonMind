@@ -94,6 +94,11 @@ WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 
+# How long to wait for a slot_assigned signal before assuming the manager is
+# stuck (e.g. nondeterminism error) and resetting it.
+_SLOT_WAIT_TIMEOUT_SECONDS = 120
+_SLOT_WAIT_MAX_RESETS = 3
+
 
 @activity.defn(name="integration.get_activity_route")
 async def get_activity_route(activity_name: str) -> dict:
@@ -305,6 +310,46 @@ class MoonMindAgentRun:
             # Re-acquire handle and retry signal once.
             manager_handle = workflow.get_external_workflow_handle(manager_id)
             await manager_handle.signal("request_slot", signal_payload)
+        return manager_handle
+
+    async def _reset_and_request_slot(
+        self,
+        manager_id: str,
+        runtime_id: str,
+    ) -> workflow.ExternalWorkflowHandle:
+        """Terminate a stuck manager, start a fresh one, and re-request a slot.
+
+        Called when the slot wait times out, indicating the manager may have a
+        nondeterminism error or other unrecoverable workflow task failure.
+        """
+        self._get_logger().warning(
+            "Slot wait timed out — resetting auth-profile-manager %s",
+            manager_id,
+        )
+        q, stc, schedtc, rp, hb = await self._get_route_info(
+            "auth_profile.reset_manager", "mm.activity.artifacts", timedelta(seconds=30)
+        )
+        kwargs = {}
+        if rp:
+            kwargs["retry_policy"] = rp
+        if hb:
+            kwargs["heartbeat_timeout"] = hb
+        await workflow.execute_activity(
+            "auth_profile.reset_manager",
+            {"runtime_id": runtime_id},
+            task_queue=q,
+            start_to_close_timeout=stc,
+            schedule_to_close_timeout=schedtc,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            **kwargs,
+        )
+        # Re-acquire handle and request slot from the fresh manager.
+        manager_handle = workflow.get_external_workflow_handle(manager_id)
+        signal_payload = {
+            "requester_workflow_id": workflow.info().workflow_id,
+            "runtime_id": runtime_id,
+        }
+        await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
 
     async def _sync_manager_profiles(
@@ -605,9 +650,11 @@ class MoonMindAgentRun:
                             non_retryable=True,
                         )
 
-                    # Wait indefinitely for an auth profile slot.
+                    # Wait for an auth profile slot.
                     # Awaiting time does not count against the execution timeout;
                     # overall_start is reset once the slot is acquired.
+                    # If the manager is stuck (e.g. nondeterminism error), the
+                    # wait will time out and we reset the manager automatically.
                     self.run_status = RunStatus.awaiting_slot
                     parent_info = workflow.info().parent
                     if parent_info:
@@ -619,9 +666,34 @@ class MoonMindAgentRun:
                             args=["awaiting_slot", f"Waiting for auth profile slot on {runtime_id}"]
                         )
 
-                    await workflow.wait_condition(
-                        lambda: self.slot_assigned_event.is_set(),
-                    )
+                    if workflow.patched("agent_run_slot_wait_retry_v1"):
+                        slot_resets = 0
+                        while not self.slot_assigned_event.is_set():
+                            try:
+                                await workflow.wait_condition(
+                                    lambda: self.slot_assigned_event.is_set(),
+                                    timeout=timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS),
+                                )
+                            except TimeoutError:
+                                if slot_resets >= _SLOT_WAIT_MAX_RESETS:
+                                    raise ApplicationError(
+                                        f"Auth profile slot not assigned after {_SLOT_WAIT_MAX_RESETS} manager resets for runtime_id='{runtime_id}'",
+                                        type="SlotAcquisitionTimeout",
+                                        non_retryable=True,
+                                    )
+                                self.slot_assigned_event.clear()
+                                manager_handle = await self._reset_and_request_slot(
+                                    manager_id, runtime_id,
+                                )
+                                await self._sync_manager_profiles(
+                                    manager_handle=manager_handle,
+                                    runtime_id=runtime_id,
+                                )
+                                slot_resets += 1
+                    else:
+                        await workflow.wait_condition(
+                            lambda: self.slot_assigned_event.is_set(),
+                        )
 
                     # Reset the execution clock so the timeout budget starts
                     # from slot acquisition, not from workflow start.
