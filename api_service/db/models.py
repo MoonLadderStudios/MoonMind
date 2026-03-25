@@ -221,6 +221,7 @@ class RecurringTaskDefinition(Base):
         String(32), nullable=True
     )
     last_dispatch_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    temporal_schedule_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     owner_user_id: Mapped[Optional[UUID]] = mapped_column(
         Uuid,
         ForeignKey("user.id", ondelete="SET NULL"),
