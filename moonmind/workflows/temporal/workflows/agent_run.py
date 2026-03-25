@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import dataclasses
 from datetime import timedelta
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
@@ -20,6 +21,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
+    )
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
     )
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
@@ -86,6 +90,12 @@ STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 
 
+@activity.defn(name="integration.get_activity_route")
+async def get_activity_route(activity_name: str) -> dict:
+    catalog = build_default_activity_catalog()
+    route = catalog.resolve_activity(activity_name)
+    return dataclasses.asdict(route)
+
 @activity.defn(name="integration.resolve_external_adapter")
 async def resolve_external_adapter(agent_id: str) -> str:
     """Activity: verify that *agent_id* has a registered adapter.
@@ -111,6 +121,9 @@ async def external_adapter_execution_style(agent_id: str) -> str:
     )
     from moonmind.workflows.adapters.external_adapter_registry import (
         build_default_registry,
+    )
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
     )
 
     registry = build_default_registry()
@@ -161,6 +174,27 @@ class MoonMindAgentRun:
         # Auto-answer state (Jules question auto-answer, spec 094)
         self._answered_activity_ids: set[str] = set()
         self._auto_answer_count: int = 0
+        self._route_cache: dict[str, tuple[str, timedelta]] = {}
+
+    async def _get_route_info(self, activity_name: str, fallback_queue: str, fallback_timeout: timedelta) -> tuple[str, timedelta]:
+        if activity_name in self._route_cache:
+            return self._route_cache[activity_name]
+        
+        if workflow.patched("agent-run-catalog-timeouts-v1"):
+            route_dict = await workflow.execute_activity(
+                "integration.get_activity_route",
+                activity_name,
+                start_to_close_timeout=timedelta(seconds=10),
+                task_queue=WORKFLOW_TASK_QUEUE,
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+            q = route_dict["task_queue"]
+            t = timedelta(seconds=route_dict["timeouts"]["start_to_close_seconds"])
+            self._route_cache[activity_name] = (q, t)
+            return q, t
+            
+        self._route_cache[activity_name] = (fallback_queue, fallback_timeout)
+        return fallback_queue, fallback_timeout
 
     async def _ensure_manager_and_signal(
         self,
@@ -197,11 +231,12 @@ class MoonMindAgentRun:
                 "AuthProfileManager %s not found, auto-starting via activity",
                 manager_id,
             )
+            q, t = await self._get_route_info("auth_profile.ensure_manager", "mm.activity.artifacts", timedelta(seconds=30))
             await workflow.execute_activity(
                 "auth_profile.ensure_manager",
                 {"runtime_id": runtime_id},
-                task_queue="mm.activity.artifacts",
-                start_to_close_timeout=timedelta(seconds=30),
+                task_queue=q,
+                start_to_close_timeout=t,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
             # Re-acquire handle and retry signal once.
@@ -217,11 +252,12 @@ class MoonMindAgentRun:
     ) -> int:
         """Best-effort manager refresh from DB-backed auth_profile.list snapshot."""
         try:
+            q, t = await self._get_route_info("auth_profile.list", "mm.activity.artifacts", timedelta(seconds=30))
             profile_snapshot = await workflow.execute_activity(
                 "auth_profile.list",
                 {"runtime_id": runtime_id},
-                task_queue="mm.activity.artifacts",
-                start_to_close_timeout=timedelta(seconds=30),
+                task_queue=q,
+                start_to_close_timeout=t,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
             )
             profiles = []
@@ -536,11 +572,12 @@ class MoonMindAgentRun:
                     wf_id = workflow.info().workflow_id
 
                     async def _profile_fetcher(**kw):
+                        q, t = await self._get_route_info("auth_profile.list", "mm.activity.artifacts", timedelta(seconds=30))
                         return await workflow.execute_activity(
                             "auth_profile.list",
                             {"runtime_id": kw.get("runtime_id", runtime_id)},
-                            task_queue="mm.activity.artifacts",
-                            start_to_close_timeout=timedelta(seconds=30),
+                            task_queue=q,
+                            start_to_close_timeout=t,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
@@ -563,11 +600,12 @@ class MoonMindAgentRun:
                         })
 
                     async def _run_launcher(**kw):
+                        q, t = await self._get_route_info("agent_runtime.launch", AGENT_RUNTIME_TASK_QUEUE, timedelta(seconds=30))
                         return await workflow.execute_activity(
                             "agent_runtime.launch",
                             kw.get("payload", {}),
-                            task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                            start_to_close_timeout=timedelta(seconds=30),
+                            task_queue=q,
+                            start_to_close_timeout=t,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
 
@@ -603,21 +641,23 @@ class MoonMindAgentRun:
 
                 elif request.agent_kind == "external":
                     # Validate adapter availability in an activity (deterministic-safe).
+                    q, t = await self._get_route_info("integration.resolve_external_adapter", WORKFLOW_TASK_QUEUE, timedelta(seconds=30))
                     validated_id = await workflow.execute_activity(
                         resolve_external_adapter,
                         request.agent_id,
-                        task_queue=WORKFLOW_TASK_QUEUE,
-                        start_to_close_timeout=timedelta(seconds=30),
+                        task_queue=q,
+                        start_to_close_timeout=t,
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
                     # Store the validated agent_id for activity routing.
                     self._external_agent_id = validated_id
 
+                    q, t = await self._get_route_info("integration.external_adapter_execution_style", WORKFLOW_TASK_QUEUE, timedelta(seconds=30))
                     execution_style = await workflow.execute_activity(
                         external_adapter_execution_style,
                         validated_id,
-                        task_queue=WORKFLOW_TASK_QUEUE,
-                        start_to_close_timeout=timedelta(seconds=30),
+                        task_queue=q,
+                        start_to_close_timeout=t,
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                     )
 
@@ -626,11 +666,12 @@ class MoonMindAgentRun:
                             max(int(timeout_seconds), 60),
                             86400,
                         )
+                        q, t = await self._get_route_info("integration.openclaw.execute", INTEGRATIONS_TASK_QUEUE, timedelta(seconds=stc_seconds))
                         result_payload = await workflow.execute_activity(
                             "integration.openclaw.execute",
                             request,
-                            task_queue=INTEGRATIONS_TASK_QUEUE,
-                            start_to_close_timeout=timedelta(seconds=stc_seconds),
+                            task_queue=q,
+                            start_to_close_timeout=t,
                             heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
@@ -655,14 +696,15 @@ class MoonMindAgentRun:
                                     "Jules continuation step requires a non-empty instruction_ref (prompt)",
                                     non_retryable=True,
                                 )
+                            q, t = await self._get_route_info("integration.jules.send_message", INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
                             await workflow.execute_activity(
                                 "integration.jules.send_message",
                                 {
                                     "session_id": jules_session_id,
                                     "prompt": prompt,
                                 },
-                                task_queue=INTEGRATIONS_TASK_QUEUE,
-                                start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                task_queue=q,
+                                start_to_close_timeout=t,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                             self.run_id = jules_session_id
@@ -671,11 +713,13 @@ class MoonMindAgentRun:
                         else:
                             # Start via Temporal activity on the integrations fleet
                             # (determinism-safe: no adapter construction in-workflow).
+                            act_name = f"integration.{validated_id}.start"
+                            q, t = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
                             handle_dict = await workflow.execute_activity(
-                                f"integration.{validated_id}.start",
+                                act_name,
                                 request,
-                                task_queue=INTEGRATIONS_TASK_QUEUE,
-                                start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                task_queue=q,
+                                start_to_close_timeout=t,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
 
@@ -731,11 +775,13 @@ class MoonMindAgentRun:
                         except asyncio.TimeoutError:
                             if request.agent_kind == "external":
                                 # Poll via Temporal activity (determinism-safe).
+                                act_name = f"integration.{self._external_agent_id}.status"
+                                q, t = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_STATUS_TIMEOUT)
                                 status_dict = await workflow.execute_activity(
-                                    f"integration.{self._external_agent_id}.status",
+                                    act_name,
                                     {"external_id": self.run_id},
-                                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                                    start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
+                                    task_queue=q,
+                                    start_to_close_timeout=t,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 )
                                 status_obj = self._coerce_external_status_payload(
@@ -744,14 +790,15 @@ class MoonMindAgentRun:
                                 )
                             else:
                                 if use_managed_status_activity:
+                                    q, t = await self._get_route_info("agent_runtime.status", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_STATUS_TIMEOUT)
                                     status_payload = await workflow.execute_activity(
                                         "agent_runtime.status",
                                         {
                                             "run_id": self.run_id,
                                             "agent_id": request.agent_id,
                                         },
-                                        task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                                        start_to_close_timeout=AGENT_RUNTIME_STATUS_TIMEOUT,
+                                        task_queue=q,
+                                        start_to_close_timeout=t,
                                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                     )
                                     status_obj = self._coerce_managed_status_payload(
@@ -780,11 +827,12 @@ class MoonMindAgentRun:
                                 and self._external_agent_id == "jules"
                             ):
                                 # Read config via activity (determinism-safe)
+                                q, t = await self._get_route_info("integration.jules.get_auto_answer_config", INTEGRATIONS_TASK_QUEUE, timedelta(seconds=10))
                                 auto_answer_config = await workflow.execute_activity(
                                     "integration.jules.get_auto_answer_config",
                                     [],
-                                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                                    start_to_close_timeout=timedelta(seconds=10),
+                                    task_queue=q,
+                                    start_to_close_timeout=t,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 )
                                 aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
@@ -803,11 +851,12 @@ class MoonMindAgentRun:
                                     break
 
                                 # Extract the question
+                                q, t = await self._get_route_info("integration.jules.list_activities", INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_STATUS_TIMEOUT)
                                 activities_result = await workflow.execute_activity(
                                     "integration.jules.list_activities",
                                     {"session_id": self.run_id},
-                                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                                    start_to_close_timeout=INTEGRATIONS_STATUS_TIMEOUT,
+                                    task_queue=q,
+                                    start_to_close_timeout=t,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                 )
 
@@ -817,6 +866,7 @@ class MoonMindAgentRun:
                                 if question and act_id and act_id not in self._answered_activity_ids:
                                     # Dispatch question-answer cycle
                                     task_context = request.instruction_ref or request.agent_id or ""
+                                    q, t = await self._get_route_info("integration.jules.answer_question", INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
                                     answer_result = await workflow.execute_activity(
                                         "integration.jules.answer_question",
                                         {
@@ -824,8 +874,8 @@ class MoonMindAgentRun:
                                             "question": question,
                                             "task_context": task_context,
                                         },
-                                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                                        start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                        task_queue=q,
+                                        start_to_close_timeout=t,
                                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
                                     )
                                     if isinstance(answer_result, dict) and answer_result.get("answered"):
@@ -867,24 +917,27 @@ class MoonMindAgentRun:
                 if self.final_result is None:
                     if request.agent_kind == "external":
                         # Fetch result via Temporal activity.
+                        act_name = f"integration.{self._external_agent_id}.fetch_result"
+                        q, t = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, INTEGRATIONS_ACTIVITY_TIMEOUT)
                         result_dict = await workflow.execute_activity(
-                            f"integration.{self._external_agent_id}.fetch_result",
+                            act_name,
                             {"external_id": self.run_id},
-                            task_queue=INTEGRATIONS_TASK_QUEUE,
-                            start_to_close_timeout=INTEGRATIONS_ACTIVITY_TIMEOUT,
+                            task_queue=q,
+                            start_to_close_timeout=t,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
                         )
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
                         if use_managed_status_activity:
+                            q, t = await self._get_route_info("agent_runtime.fetch_result", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_ACTIVITY_TIMEOUT)
                             result_payload = await workflow.execute_activity(
                                 "agent_runtime.fetch_result",
                                 {
                                     "run_id": self.run_id,
                                     "agent_id": request.agent_id,
                                 },
-                                task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                                start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
+                                task_queue=q,
+                                start_to_close_timeout=t,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                             self.final_result = (
@@ -909,11 +962,12 @@ class MoonMindAgentRun:
                     await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
 
                 # Post-run artifact publishing via the agent_runtime activity fleet.
+                q, t = await self._get_route_info("agent_runtime.publish_artifacts", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_ACTIVITY_TIMEOUT)
                 enriched_result = await workflow.execute_activity(
                     "agent_runtime.publish_artifacts",
                     self.final_result.model_dump(mode="json", by_alias=True) if hasattr(self.final_result, "model_dump") else self.final_result,
-                    task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                    start_to_close_timeout=AGENT_RUNTIME_ACTIVITY_TIMEOUT,
+                    task_queue=q,
+                    start_to_close_timeout=t,
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
 
@@ -971,18 +1025,21 @@ class MoonMindAgentRun:
                     try:
                         if self.agent_kind == "external" and self._external_agent_id is not None:
                             # Route external cancel through integration activity.
+                            act_name = f"integration.{self._external_agent_id}.cancel"
+                            q, t = await self._get_route_info(act_name, INTEGRATIONS_TASK_QUEUE, AGENT_RUNTIME_CANCEL_TIMEOUT)
                             await workflow.execute_activity(
-                                f"integration.{self._external_agent_id}.cancel",
+                                act_name,
                                 {"external_id": self.run_id},
-                                task_queue=INTEGRATIONS_TASK_QUEUE,
-                                start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                                task_queue=q,
+                                start_to_close_timeout=t,
                             )
                         else:
+                            q, t = await self._get_route_info("agent_runtime.cancel", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_CANCEL_TIMEOUT)
                             await workflow.execute_activity(
                                 "agent_runtime.cancel",
                                 {"agent_kind": self.agent_kind, "run_id": self.run_id},
-                                task_queue=AGENT_RUNTIME_TASK_QUEUE,
-                                start_to_close_timeout=AGENT_RUNTIME_CANCEL_TIMEOUT,
+                                task_queue=q,
+                                start_to_close_timeout=t,
                             )
                     except Exception:
                         self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
