@@ -105,7 +105,7 @@ def resolve_template_scope_for_user(
 
     if normalized_scope not in {"global", "personal"}:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "invalid_template_scope",
                 "message": "scope must be one of: global, personal",
@@ -127,7 +127,7 @@ def resolve_template_scope_for_user(
         normalized_scope_ref = user_id or None
     if normalized_scope_ref is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "template_scope_ref_required",
                 "message": "scopeRef is required when scope is personal.",
