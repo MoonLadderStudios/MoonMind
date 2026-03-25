@@ -209,6 +209,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "auth_profile.list": ("artifacts", "auth_profile_list"),
     "auth_profile.ensure_manager": ("artifacts", "auth_profile_ensure_manager"),
+    "auth_profile.verify_lease_holders": (
+        "artifacts",
+        "auth_profile_verify_lease_holders",
+    ),
     "oauth_session.ensure_volume": ("artifacts", "oauth_session_ensure_volume"),
     "oauth_session.start_auth_runner": ("artifacts", "oauth_session_start_auth_runner"),
     "oauth_session.stop_auth_runner": ("artifacts", "oauth_session_stop_auth_runner"),
@@ -2799,15 +2803,14 @@ class TemporalAgentRuntimeActivities:
                 if publish_mode != "none":
                     # Deterministic git push: ensure the agent's work branch
                     # is on the remote before the parent workflow tries to
-                    # create a PR.  Best-effort — the agent may have already
-                    # pushed, or there may be nothing to push.
+                    # create a PR.
                     try:
                         # Safety: resolve current branch and refuse to push
                         # protected branches (main/master/target).
                         branch_res = await _run_command(
                             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                             cwd=Path(workspace_path),
-                            check=False,
+                            check=True,
                         )
                         current_branch = branch_res.stdout.strip()
                         target_branch = (
@@ -2824,17 +2827,29 @@ class TemporalAgentRuntimeActivities:
                                 current_branch or "(detached/unknown)",
                             )
                         else:
-                            await _run_command(
+                            push_res = await _run_command(
                                 ["git", "push", "-u", "origin", current_branch],
                                 cwd=Path(workspace_path),
                                 check=False,
                             )
-                            logger.info(
-                                "Post-agent git push completed for run %s "
-                                "(branch=%s)",
-                                run_id,
-                                current_branch,
-                            )
+                            if push_res.returncode != 0:
+                                logger.error(
+                                    "Post-agent git push FAILED for run %s "
+                                    "(branch=%s, rc=%d): %s",
+                                    run_id,
+                                    current_branch,
+                                    push_res.returncode,
+                                    push_res.stderr.strip()
+                                    if push_res.stderr
+                                    else "(no stderr)",
+                                )
+                            else:
+                                logger.info(
+                                    "Post-agent git push completed for run %s "
+                                    "(branch=%s)",
+                                    run_id,
+                                    current_branch,
+                                )
                     except Exception:
                         logger.warning(
                             "Post-agent git push failed for run %s",

@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
@@ -171,6 +172,17 @@ def _build_runtime_planner():
                 raise RuntimeError(
                     "pr-resolver task requires task.tool.inputs.pr or task.git.startingBranch "
                     "when task.instructions is not explicitly provided"
+                )
+            # Ensure the auto-generated instruction includes the PR/branch
+            # selector so the agent knows which PR to target.  The selector
+            # may come from git_payload rather than selected_skill_inputs, so
+            # the generic " with inputs:" block above can miss it.
+            effective_selector = pr_selector or branch_selector
+            if effective_selector and not pr_selector:
+                merged_inputs = dict(selected_skill_inputs) if selected_skill_inputs else {}
+                merged_inputs["pr"] = effective_selector
+                instructions = f"Execute skill '{selected_skill_name}' with inputs:\n" + json.dumps(
+                    merged_inputs, indent=2, sort_keys=True,
                 )
 
         # --- Resolve runtime mode ---
@@ -528,6 +540,7 @@ async def main_async() -> None:
     client = await Client.connect(
         settings.temporal.address, 
         namespace=settings.temporal.namespace,
+        data_converter=pydantic_data_converter,
         interceptors=interceptors,
     )
 

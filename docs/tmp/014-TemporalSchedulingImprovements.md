@@ -29,7 +29,7 @@ This plan closes that gap and adds supporting improvements across five phases.
 | Schedule policy mapping (overlap, catchup, jitter) | ✅ Implemented |
 | Recurring dispatch via Temporal Schedules (primary path) | 🔲 Not yet wired |
 | `mm_scheduled_for` search attribute | 🔲 Not implemented |
-| Reschedulable timer pattern | 🔲 Not implemented |
+| Reschedulable timer pattern | ✅ Implemented |
 | Cron/timezone correctness tests at DST boundaries | 🔲 Not implemented |
 
 ---
@@ -169,20 +169,20 @@ This plan closes that gap and adds supporting improvements across five phases.
 > starts the workflow immediately, then waits on an updatable timer that can be changed via signal.
 > See [TemporalScheduling.md §6.2](../Temporal/TemporalScheduling.md#62-mechanism-updatable-timer-pattern).
 
-- [ ] **4.1** Add `reschedule` signal handler to `MoonMind.Run`
+- [x] **4.1** Add `reschedule` signal handler to `MoonMind.Run`
   - **Files:** `moonmind/workflows/temporal/workflows/run.py`
   - Workflow waits with an updatable timer when `input.scheduled_for` is set
   - `reschedule` signal updates the target time; timer re-evaluates
 
-- [ ] **4.2** Add `send_reschedule_signal()` to `TemporalClientAdapter`
+- [x] **4.2** Add `send_reschedule_signal()` to `TemporalClientAdapter`
   - **Files:** `moonmind/workflows/temporal/client.py`
 
-- [ ] **4.3** Add reschedule API endpoint
+- [x] **4.3** Add reschedule API endpoint
   - **Files:** `api_service/api/routers/executions.py`
   - `POST /api/executions/{workflowId}/reschedule` with body `{ "scheduledFor": "2026-03-24T12:00:00Z" }`
   - Backend sends a `reschedule` signal via `TemporalClientAdapter`
 
-- [ ] **4.4** Add Mission Control UI action
+- [x] **4.4** Add Mission Control UI action
   - Add "Change scheduled time" action on the task detail page for workflows with `mm_state=scheduled`
 
 ### Verification

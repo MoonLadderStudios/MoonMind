@@ -24,6 +24,7 @@ def _manager_profile_payload(row: ManagedAgentAuthProfile) -> dict[str, Any]:
             row.rate_limit_policy.value if row.rate_limit_policy else None
         ),
         "enabled": row.enabled,
+        "max_lease_duration_seconds": row.max_lease_duration_seconds,
     }
 
 async def sync_auth_profile_manager(
