@@ -158,7 +158,7 @@ This matches Temporal’s own guidance for cancellable activities ([cancellation
 
 If **`agent_runtime.cancel`** queues behind other work, increase **worker** throughput on **`mm.activity.agent_runtime`** or reduce exclusive long-running work occupying slots.
 
-### P2 — `workflow.query` for “cancellation in progress”
+### ~~P2 — `workflow.query` for “cancellation in progress”~~ (Done)
 
 Expose read-only state (e.g. `cancelling=True`) so Mission Control can show progress **without** mutating workflow state. Queries are the idiomatic read path.
 

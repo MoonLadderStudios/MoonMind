@@ -100,6 +100,8 @@ class MoonMindOAuthSessionWorkflow:
             "session_id": self._session_id,
             "finalize_requested": self._finalize_requested,
             "cancel_requested": self._cancel_requested,
+            # Mirrors cancel_requested for consistency with run workflows
+            "canceling": self._cancel_requested,
             "container_name": self._container_name,
         }
 
