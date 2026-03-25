@@ -40,6 +40,30 @@ class TestOAuthSessionCatalogRegistration:
         assert route.timeouts.start_to_close_seconds == 15
         assert route.timeouts.schedule_to_close_seconds == 30
 
+    def test_update_session_urls_in_catalog(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity("oauth_session.update_session_urls")
+        assert route.activity_type == "oauth_session.update_session_urls"
+        assert route.fleet == "artifacts"
+        assert route.timeouts.start_to_close_seconds == 15
+        assert route.timeouts.schedule_to_close_seconds == 30
+
+    def test_verify_volume_in_catalog(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity("oauth_session.verify_volume")
+        assert route.activity_type == "oauth_session.verify_volume"
+        assert route.fleet == "artifacts"
+        assert route.timeouts.start_to_close_seconds == 60
+        assert route.timeouts.schedule_to_close_seconds == 120
+
+    def test_register_profile_in_catalog(self) -> None:
+        catalog = build_default_activity_catalog()
+        route = catalog.resolve_activity("oauth_session.register_profile")
+        assert route.activity_type == "oauth_session.register_profile"
+        assert route.fleet == "artifacts"
+        assert route.timeouts.start_to_close_seconds == 30
+        assert route.timeouts.schedule_to_close_seconds == 60
+
 
 class TestOAuthSessionWorkflowRegistration:
     """Verify the OAuth session workflow is registered."""

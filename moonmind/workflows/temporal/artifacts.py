@@ -2218,6 +2218,48 @@ class TemporalArtifactActivities:
         payload = request if isinstance(request, dict) else dict(kwargs)
         return await _mark_failed(payload)
 
+    async def oauth_session_update_session_urls(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.update_session_urls`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_update_session_urls as _update_session_urls,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _update_session_urls(payload)
+
+    async def oauth_session_verify_volume(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.verify_volume`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_verify_volume as _verify_volume,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _verify_volume(payload)
+
+    async def oauth_session_register_profile(
+        self,
+        request: Any = None,
+        /,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Delegate to standalone ``oauth_session.register_profile`` activity."""
+        from moonmind.workflows.temporal.activities.oauth_session_activities import (
+            oauth_session_register_profile as _register_profile,
+        )
+
+        payload = request if isinstance(request, dict) else dict(kwargs)
+        return await _register_profile(payload)
+
     async def oauth_session_cleanup_stale(
         self,
         request: Any = None,
