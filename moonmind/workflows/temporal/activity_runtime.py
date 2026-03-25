@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
-from moonmind.schemas.jules_models import JulesIntegrationMergePRResult, JulesIntegrationCreatePRResult
+from moonmind.schemas.jules_models import JulesIntegrationStartRequest
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -226,12 +226,13 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integration_jules_fetch_result",
     ),
     "integration.jules.cancel": ("integrations", "integration_jules_cancel"),
-    "integration.jules.merge_pr": ("integrations", "integration_jules_merge_pr"),
-    "integration.jules.create_pr": ("integrations", "integration_jules_create_pr"),
     "integration.jules.send_message": ("integrations", "integration_jules_send_message"),
     "integration.jules.list_activities": ("integrations", "integration_jules_list_activities"),
     "integration.jules.answer_question": ("integrations", "integration_jules_answer_question"),
     "integration.jules.get_auto_answer_config": ("integrations", "integration_jules_get_auto_answer_config"),
+    # General-purpose repo operations (provider-agnostic)
+    "repo.create_pr": ("integrations", "repo_create_pr"),
+    "repo.merge_pr": ("integrations", "repo_merge_pr"),
     "agent_runtime.launch": ("agent_runtime", "agent_runtime_launch"),
     "integration.codex_cloud.start": ("integrations", "integration_codex_cloud_start"),
     "integration.codex_cloud.status": ("integrations", "integration_codex_cloud_status"),
@@ -1898,43 +1899,38 @@ class TemporalIntegrationActivities:
             terminal=normalized.terminal,
         )
 
-    async def integration_jules_merge_pr(
+    # ------------------------------------------------------------------
+    # General-purpose repo operations (provider-agnostic)
+    # ------------------------------------------------------------------
+
+    async def repo_create_pr(
         self, payload: dict
-    ) -> JulesIntegrationMergePRResult:
-        """Auto-merge a Jules-created PR into its target branch via GitHub API."""
-        client = self._client_factory()
+    ) -> dict:
+        """Create a PR via GitHub REST API (provider-agnostic)."""
+        from moonmind.workflows.adapters.github_service import GitHubService
 
-        pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
-        target_branch = payload.get("target_branch") or payload.get("targetBranch")
-
-        if target_branch:
-            success, summary = await client.update_pull_request_base(
-                pr_url=pr_url, new_base=target_branch,
-            )
-            if not success:
-                return JulesIntegrationMergePRResult(
-                    prUrl=pr_url,
-                    merged=False,
-                    summary=f"Base branch update failed: {summary}",
-                )
-
-        return await client.merge_pull_request(pr_url=pr_url)
-
-    async def integration_jules_create_pr(
-        self, payload: dict
-    ) -> "JulesIntegrationCreatePRResult":
-        """Create a PR natively via GitHub API."""
-        client = self._client_factory()
-
-        repo = payload.get("repo") or ""
-        head = payload.get("head") or ""
-        base = payload.get("base") or ""
-        title = payload.get("title") or ""
-        body = payload.get("body") or ""
-
-        return await client.create_pull_request(
-            repo=repo, head=head, base=base, title=title, body=body
+        svc = GitHubService()
+        result = await svc.create_pull_request(
+            repo=payload.get("repo") or "",
+            head=payload.get("head") or "",
+            base=payload.get("base") or "",
+            title=payload.get("title") or "",
+            body=payload.get("body") or "",
         )
+        return result.model_dump(by_alias=True)
+
+    async def repo_merge_pr(
+        self, payload: dict
+    ) -> dict:
+        """Merge a PR via GitHub REST API (provider-agnostic)."""
+        from moonmind.workflows.adapters.github_service import GitHubService
+
+        svc = GitHubService()
+        result = await svc.merge_pull_request(
+            pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
+            merge_method=payload.get("merge_method") or payload.get("mergeMethod") or "merge",
+        )
+        return result.model_dump(by_alias=True)
 
     async def integration_jules_send_message(
         self,
