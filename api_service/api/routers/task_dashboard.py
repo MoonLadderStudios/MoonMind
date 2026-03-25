@@ -278,7 +278,7 @@ async def task_settings_route(
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
     current_path = "/tasks/settings"
-    boot_payload = generate_boot_payload("settings", initial_data=build_runtime_config(current_path))
+    boot_payload = generate_boot_payload("settings")
     assets_html = ui_assets("settings")
 
     return templates.TemplateResponse(

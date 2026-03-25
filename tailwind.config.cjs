@@ -2,6 +2,7 @@
 module.exports = {
   content: [
     "./api_service/templates/task_dashboard.html",
+    "./api_service/templates/_navigation.html",
     "./api_service/static/task_dashboard/**/*.js",
   ],
   darkMode: "class",
