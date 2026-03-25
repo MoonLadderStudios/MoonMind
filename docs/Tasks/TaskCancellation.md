@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-13  
+Last Updated: 2026-03-24  
 
 ## 1. Purpose
 
@@ -25,6 +25,7 @@ This document outlines **Task Cancellation** in MoonMind so that:
 2. **Running cancellation**: user requests cancellation for a running workflow → API sends a Temporal Cancellation Request, workflow detects request, stops execution gracefully, and job transitions to `cancelled`.
 3. **Unified surfaces**: UI + REST + MCP all map to the **same API service methods**.
 4. **Auditability**: cancellation actions are visible in workflow history and UI events.
+5. **Resource lease cleanup**: cancellation must release shared resources (auth profile slots, tmate sessions) so they are not orphaned.
 
 ### Non-Goals
 
@@ -44,7 +45,7 @@ MoonMind task runs are durably orchestrated by Temporal Workflows (e.g., `MoonMi
 
 * The `MoonMind.Run` workflow receives the Cancellation Request.
 * The workflow must catch the resulting `CancelledError` (in the Python Temporal SDK).
-* The workflow runs compensating actions (uploading incomplete staged artifacts, emitting a final `task.step.failed` event, cleaning up resources).
+* The workflow runs compensating actions (uploading incomplete staged artifacts, emitting a final `task.step.failed` event, cleaning up resources, **releasing auth profile slots**).
 * The workflow exits.
 * The API/UI observes the `CANCELED` status via the Temporal Visibility index or Webhooks and mirrors the `cancelled` state to the user.
 
@@ -76,3 +77,27 @@ Temporal Activities executing long-running steps (e.g., calling an LLM or runnin
    * Send `SIGINT` (graceful).
    * After a short grace period, send `SIGKILL`.
    * Ensure the child process group is terminated cleanly to prevent orphaned Docker/OS processes.
+
+---
+
+## 6. Auth Profile Slot Cleanup on Cancellation
+
+Managed agent runs (`MoonMind.AgentRun`) acquire auth profile slots from the `AuthProfileManager` singleton workflow before launching. These slots are a limited resource (typically `max_parallel_runs: 1` per profile). The system must guarantee slot recovery regardless of how a workflow terminates.
+
+### 6.1 Desired Behavior
+
+* When a managed `AgentRun` workflow is cancelled (or times out, or fails), it **must** release its auth profile slot.
+* The `AuthProfileManager` must **not** rely solely on the child workflow's cleanup code to release slots. A defense-in-depth approach is required.
+* Slot recovery must happen within a **reasonable bound** (minutes, not hours) to avoid blocking subsequent task submissions.
+
+### 6.2 Defense-in-Depth Layers
+
+The slot lifecycle is protected by multiple layers, ordered by reliability:
+
+1. **Workflow-initiated release (primary)**: `MoonMind.AgentRun`'s `CancelledError`/`TimeoutError`/`Exception` handlers signal `release_slot` to the `AuthProfileManager`. This is the fast path.
+2. **Manager-side lease eviction (safety net)**: The `AuthProfileManager` calls `evict_expired_leases()` every 60 seconds, removing leases older than `_MAX_LEASE_DURATION_SECONDS`. This catches cases where the workflow cleanup failed entirely.
+3. **Manager-side active probing (recommended)**: The `AuthProfileManager` should verify that lease-holding workflows are still running via Temporal visibility queries. Workflows in a terminal state that did not explicitly release should have their leases reclaimed immediately.
+
+### 6.3 Invariant
+
+At steady state, every auth profile slot held by a lease must correspond to a **running** `MoonMind.AgentRun` workflow. Any slot leased to a terminal workflow represents a leak and should be reclaimed by the next manager housekeeping cycle.

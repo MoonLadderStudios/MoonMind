@@ -172,13 +172,13 @@ For runs that **cannot** honor cancellation (bug, poison pill), operators may us
 
 ---
 
-## Non-goals (explicitly out of scope for “idiomatic Temporal”)
+## Non-goals (explicitly out of scope for "idiomatic Temporal")
 
 The following were previously suggested in earlier drafts but **conflict** with keeping Temporal as the **single orchestration and lifecycle authority**:
 
 | Anti-pattern | Why avoid |
 |--------------|-----------|
-| **“Bypass Temporal cancel”** via **direct IPC** to kill a process | Splits truth: process may exit while workflow still shows running; breaks audit and child/parent semantics. |
+| **"Bypass Temporal cancel"** via **direct IPC** to kill a process | Splits truth: process may exit while workflow still shows running; breaks audit and child/parent semantics. |
 | **`execute_local_activity` from workflow to kill a remote agent process** | Local activities run on the **workflow worker**; managed agents run on **other** workers. This does not replace **`agent_runtime.cancel`** on the correct fleet. |
 | **Duplicate cancel channels** (API kills process, workflow learns later) | Hard to reason about; duplicates failures and billing edge cases. |
 
@@ -192,6 +192,115 @@ The following were previously suggested in earlier drafts but **conflict** with 
 2. **Heartbeats** + **heartbeat timeouts** for long activities (`agent_runtime`, integrations).
 3. **Timeout / retry** tuning and **worker** capacity for `mm.activity.agent_runtime`.
 4. **Query** for UX; **supervisor** timing tweaks last.
+5. **Auth profile slot leak prevention** — active lease-holder verification in `AuthProfileManager` (see below).
+
+---
+
+## Auth Profile Slot Leak on Cancellation
+
+### Observed Failure (2026-03-24)
+
+Workflow `mm:5b122aaa` was cancelled while its child `MoonMind.AgentRun` held a `claude_minimax` auth profile slot (`max_parallel_runs: 1`). The slot was **not released**, blocking all subsequent Claude Code tasks until the lease was manually released via a `release_slot` signal to the `AuthProfileManager`.
+
+### Root Cause Analysis
+
+The `CancelledError` handler in `MoonMind.AgentRun` (line ~1005 in `agent_run.py`) wraps the slot-release signal in `asyncio.shield()`:
+
+```python
+except CancelledError:
+    async def _release_slot():
+        try:
+            manager_handle = workflow.get_external_workflow_handle(manager_id)
+            await manager_handle.signal("release_slot", {...})
+        except Exception:
+            self._get_logger().warning("Failed to release slot on cancellation...")
+    tasks.append(asyncio.shield(_release_slot()))
+    ...
+    await asyncio.gather(*tasks, return_exceptions=True)
+    raise
+```
+
+**Why the signal was not sent:** Temporal's Python SDK processes `CancelledError` within a workflow task. The `asyncio.shield()` is a Python-level primitive — it does not override Temporal's workflow-level cancellation semantics. Once the Temporal SDK has decided to cancel the workflow execution, `SignalExternalWorkflowExecution` commands may not be delivered if the workflow task completes as cancelled. The workflow history for `mm:5b122aaa:agent:node-1` confirms: no `SignalExternalWorkflowExecutionInitiated` event appears after the `WorkflowExecutionCancelRequested` event.
+
+**Contributing factor:** The workflow was stuck on `integration.get_activity_route` (unregistered activity, now fixed) when the cancel arrived. Even with `TRY_CANCEL`, the cleanup handler's signal may still be swallowed depending on SDK workflow-task finalization ordering.
+
+### Why the Safety Net Did Not Help Quickly
+
+The `AuthProfileManager` runs `evict_expired_leases()` every 60 seconds with `_MAX_LEASE_DURATION_SECONDS = 7200` (2 hours). This is intentionally conservative, as legitimate runs may last up to an hour. However, it means a leaked slot from a cancelled workflow could block the queue for up to **2 hours** — far too long for a single-slot profile.
+
+### Failure Modes Where Slot Cleanup Can Fail
+
+| Failure Mode | Current Handling | Gap |
+|---|---|---|
+| `CancelledError` handler runs but `asyncio.shield` signal not delivered | Handler exists | Signal may not execute (Temporal SDK finalization) |
+| Workflow terminates (not cancelled) | No cleanup code runs at all | No handler for `WorkflowExecutionTerminated` |
+| Workflow stuck on unregistered/failing activity | `TRY_CANCEL` set, but cleanup depends on handler executing | Same shield issue |
+| Worker crashes | No cleanup possible | Only lease eviction catches this |
+| Workflow completes normally after 429 retry | `release_slot` signal sent | Working correctly |
+
+---
+
+## Implementation Tasks: Auth Profile Slot Leak Prevention
+
+> **Design principle:** Do not rely on the child workflow's cleanup code as the sole mechanism for slot recovery. The `AuthProfileManager` (the slot owner) must independently detect and reclaim orphaned leases using idiomatic Temporal patterns.
+
+### Task 1: Active Lease Holder Verification in `AuthProfileManager`
+
+**What:** Add a periodic check in `_evict_expired_leases()` (or a new `_verify_lease_holders()` method) that queries whether each lease-holding workflow is still running.
+
+**How (idiomatic Temporal):** Use `workflow.execute_activity()` to call a new verification activity on the workflow fleet that uses the Temporal Client's `describe_workflow_execution(workflow_id)` API to check whether the lease-holder workflow is in a terminal state (`COMPLETED`, `CANCELED`, `TERMINATED`, `FAILED`, `TIMED_OUT`).
+
+```python
+# New activity on mm.workflow fleet
+@activity.defn(name="auth_profile.verify_lease_holder")
+async def verify_lease_holder(workflow_id: str) -> dict:
+    """Check if a workflow is still running. Returns {"running": bool, "status": str}."""
+    client = await Client.connect(...)
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        desc = await handle.describe()
+        status = desc.status.name  # RUNNING, COMPLETED, CANCELED, etc.
+        return {"running": status == "RUNNING", "status": status}
+    except RPCError:
+        return {"running": False, "status": "NOT_FOUND"}
+```
+
+**Why idiomatic:** Activities are the correct place for non-deterministic operations (RPC calls) in Temporal. The manager workflow stays deterministic; verification is delegated to an activity.
+
+**Where:**
+- New activity: `auth_profile_manager.py` or `activity_catalog.py`
+- Manager integration: `_evict_expired_leases()` in `auth_profile_manager.py`
+- Registration: `worker_runtime.py` (workflow fleet activities list)
+
+**Reclaim policy:** If a lease holder is in a terminal state, release the lease immediately and proceed to drain the pending request queue. Log a warning for observability.
+
+### Task 2: Reduce `_MAX_LEASE_DURATION_SECONDS` or Make It Profile-Configurable
+
+**What:** The current 2-hour default is too conservative for profiles with `max_parallel_runs: 1`. Either:
+- Reduce the global default to a shorter value (e.g., 90 minutes)
+- Allow per-profile `max_lease_duration_seconds` configuration (e.g., in the DB-backed profile definition)
+
+**Where:** `auth_profile_manager.py` constant and/or `ProfileSlotState` dataclass.
+
+### Task 3: Verify `CancelledError` Slot Release Reliability
+
+**What:** Add a workflow-level test that:
+1. Starts a `MoonMind.AgentRun` with a managed agent kind
+2. Assigns an auth profile slot
+3. Cancels the workflow
+4. Asserts that the `AuthProfileManager` state no longer contains the lease
+
+**Where:** `tests/unit/workflows/temporal/test_auth_profile_manager.py` or a new test file.
+
+**Why:** The existing `CancelledError` handler has never been tested at the workflow boundary. The `asyncio.shield` + Temporal cancel interaction must be validated empirically.
+
+### Task 4: (Optional) Parent-Initiated Slot Release Fallback
+
+**What:** If `MoonMind.Run` (the parent) observes that its child `MoonMind.AgentRun` exited as `CANCELED` or `FAILED`, the parent can send a defensive `release_slot` signal to the `AuthProfileManager` as a fallback.
+
+**Why idiomatic:** The parent workflow is still running after the child terminates; it can issue signals. This adds a second release attempt without introducing any non-Temporal control plane.
+
+**Where:** `_run_execution_stage()` in `run.py`, in the child workflow completion handling.
 
 ---
 
@@ -200,3 +309,4 @@ The following were previously suggested in earlier drafts but **conflict** with 
 - [Interrupt a Workflow Execution — Python SDK](https://docs.temporal.io/develop/python/cancellation)
 - [Failure detection — Python SDK](https://docs.temporal.io/develop/python/failure-detection) (timeouts, heartbeats)
 - [`temporalio.workflow.ActivityCancellationType`](https://python.temporal.io/temporalio.workflow.ActivityCancellationType.html)
+- [TaskCancellation.md § 6 — Auth Profile Slot Cleanup](../Tasks/TaskCancellation.md) (canonical design)
