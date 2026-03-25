@@ -801,6 +801,7 @@ class TemporalSkillActivities:
         artifact_service: TemporalArtifactService | None = None,
         principal: str | None = None,
         context: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> SkillResult:
         return await self._execute_skill_invocation(
             invocation_payload=invocation_payload,

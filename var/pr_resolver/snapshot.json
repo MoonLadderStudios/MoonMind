@@ -1,14 +1,117 @@
 {
-  "branch": "auto-4349dc45",
   "pr": {
+    "baseRefName": "main",
+    "headRefName": "auto-4349dc45",
+    "headRefOid": "642ba5e469b637bfa6854adfc1cde01196124fca",
+    "isDraft": false,
+    "mergeStateStatus": "UNSTABLE",
+    "mergeable": "MERGEABLE",
     "number": 959,
+    "reviewDecision": "",
+    "state": "OPEN",
+    "statusCheckRollup": [
+      {
+        "__typename": "CheckRun",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561630154/job/68602700408",
+        "name": "test",
+        "startedAt": "2026-03-25T20:07:53Z",
+        "status": "IN_PROGRESS",
+        "workflowName": "Run Pytest Unit Tests"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-03-25T20:08:44Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628359/job/68602696516",
+        "name": "Analyze (javascript-typescript)",
+        "startedAt": "2026-03-25T20:07:52Z",
+        "status": "COMPLETED",
+        "workflowName": "CodeQL"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-03-25T20:08:38Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628333/job/68602696538",
+        "name": "Analyze (actions)",
+        "startedAt": "2026-03-25T20:07:51Z",
+        "status": "COMPLETED",
+        "workflowName": "CodeQL"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "0001-01-01T00:00:00Z",
+        "conclusion": "",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628359/job/68602696505",
+        "name": "Analyze (python)",
+        "startedAt": "2026-03-25T20:07:53Z",
+        "status": "IN_PROGRESS",
+        "workflowName": "CodeQL"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-03-25T20:08:48Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628333/job/68602696542",
+        "name": "Analyze (javascript-typescript)",
+        "startedAt": "2026-03-25T20:07:51Z",
+        "status": "COMPLETED",
+        "workflowName": "CodeQL"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-03-25T20:09:01Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628333/job/68602696566",
+        "name": "Analyze (python)",
+        "startedAt": "2026-03-25T20:07:52Z",
+        "status": "COMPLETED",
+        "workflowName": "CodeQL"
+      },
+      {
+        "__typename": "CheckRun",
+        "completedAt": "2026-03-25T20:08:30Z",
+        "conclusion": "SUCCESS",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/68602791799",
+        "name": "CodeQL",
+        "startedAt": "2026-03-25T20:08:28Z",
+        "status": "COMPLETED",
+        "workflowName": ""
+      }
+    ],
     "title": "feat(temporal): implement Phase 3 Temporal message passing idempotency",
-    "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959",
-    "head_ref": "auto-4349dc45",
-    "base_ref": "main"
+    "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959"
   },
-  "repository": "MoonLadderStudios/MoonMind",
-  "comment_count": 12,
+  "ci": {
+    "isRunning": true,
+    "hasFailures": false,
+    "failedChecks": [],
+    "totalCheckCount": 7,
+    "securityCheckCount": 6,
+    "nonSecurityCheckCount": 1,
+    "checkNames": [
+      "test",
+      "Analyze (javascript-typescript)",
+      "Analyze (actions)",
+      "Analyze (python)",
+      "Analyze (javascript-typescript)",
+      "Analyze (python)",
+      "CodeQL"
+    ],
+    "signalQuality": "ok",
+    "degradedReasons": [],
+    "requiredChecksKnown": false,
+    "requiredChecks": [],
+    "missingRequiredChecks": [],
+    "headShaVerified": "642ba5e469b637bfa6854adfc1cde01196124fca",
+    "headShaNonSecurityCheckCount": 1
+  },
+  "commentsFetch": {
+    "succeeded": true,
+    "source": ".agents/skills/fix-comments/tools/get_branch_pr_comments.py"
+  },
   "comments": [
     {
       "type": "issue_comment",
@@ -177,5 +280,151 @@
       "updated_at": "2026-03-25T08:34:08Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#pullrequestreview-4004904245"
     }
-  ]
+  ],
+  "commentsSummary": {
+    "classificationVersion": 2,
+    "total": 12,
+    "reviewCommentCount": 8,
+    "issueCommentCount": 1,
+    "reviewBodyCount": 3,
+    "actionableCommentCount": 6,
+    "includeBotReviewComments": true,
+    "humanCommentCount": 4,
+    "botCommentCount": 8,
+    "hasActionableComments": true,
+    "actionableCommentIds": [
+      2986561946,
+      2986565248,
+      2986565257,
+      2986565269,
+      2986625258,
+      2986625295
+    ],
+    "nonActionableReasonCounts": {
+      "bot_comment_excluded": 4,
+      "thread_outdated": 2
+    },
+    "classifiedComments": [
+      {
+        "id": 4124642041,
+        "type": "issue_comment",
+        "user": "gemini-code-assist[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#issuecomment-4124642041",
+        "path": null,
+        "line": null,
+        "actionable": false,
+        "reason": "bot_comment_excluded"
+      },
+      {
+        "id": 2986561946,
+        "type": "review_comment",
+        "user": "chatgpt-codex-connector[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986561946",
+        "path": "moonmind/workflows/temporal/workflows/run.py",
+        "line": 631,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 4004828007,
+        "type": "review",
+        "user": "chatgpt-codex-connector[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#pullrequestreview-4004828007",
+        "path": null,
+        "line": null,
+        "actionable": false,
+        "reason": "bot_comment_excluded"
+      },
+      {
+        "id": 4004831933,
+        "type": "review",
+        "user": "gemini-code-assist[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#pullrequestreview-4004831933",
+        "path": null,
+        "line": null,
+        "actionable": false,
+        "reason": "bot_comment_excluded"
+      },
+      {
+        "id": 2986565248,
+        "type": "review_comment",
+        "user": "gemini-code-assist[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986565248",
+        "path": "docs/tmp/015-TemporalIdempotency.md",
+        "line": 25,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2986565257,
+        "type": "review_comment",
+        "user": "gemini-code-assist[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986565257",
+        "path": "tests/integration/workflows/temporal/workflows/test_run.py",
+        "line": 94,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2986565269,
+        "type": "review_comment",
+        "user": "gemini-code-assist[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986565269",
+        "path": "tests/integration/workflows/temporal/workflows/test_run.py",
+        "line": 154,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2986625191,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625191",
+        "path": "moonmind/workflows/temporal/workflows/run.py",
+        "line": 1301,
+        "actionable": false,
+        "reason": "thread_outdated"
+      },
+      {
+        "id": 2986625227,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625227",
+        "path": "moonmind/workflows/temporal/workflows/run.py",
+        "line": 1340,
+        "actionable": false,
+        "reason": "thread_outdated"
+      },
+      {
+        "id": 2986625258,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625258",
+        "path": "docs/tmp/015-TemporalIdempotency.md",
+        "line": 25,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2986625295,
+        "type": "review_comment",
+        "user": "Copilot",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625295",
+        "path": "docs/tmp/015-TemporalIdempotency.md",
+        "line": 43,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 4004904245,
+        "type": "review",
+        "user": "copilot-pull-request-reviewer[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#pullrequestreview-4004904245",
+        "path": null,
+        "line": null,
+        "actionable": false,
+        "reason": "bot_comment_excluded"
+      }
+    ]
+  }
 }

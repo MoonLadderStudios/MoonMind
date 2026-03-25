@@ -22,7 +22,7 @@ Activities encapsulate side effects (e.g., calling an LLM, generating a plan, st
 ### Implementation Strategy
 1. **Activity Payloads**: Activities that interact with external state (e.g., `plan.generate`, `artifact.write`, LLM calls) must accept an `idempotency_key` string in their input payload.
 2. **Generation**: The orchestrating workflow (`MoonMind.Run` or child workflows) generates this key deterministically.
-   - Example format: `{workflow.info().run_id}_step_{step_count}_{activity_name}`
+   - Example format (current convention): use `workflow.info().workflow_id`, e.g. `{workflow_id}_plan_generate` or `{workflow_id}_{node_id}_execute`. This keeps the key stable across retries and Continue-As-New runs for the same logical job.
 3. **Usage in Worker**: The activity worker uses the `idempotency_key` when communicating with external APIs (e.g., setting the `Idempotency-Key` HTTP header) or checking local caches to prevent re-execution of billed operations if the activity fails *after* external side-effects complete but *before* Temporal records the completion.
 
 ### Compensating Actions
@@ -40,4 +40,4 @@ To guarantee "exactly one logical job" per task ID:
 
 ## 4. Workflow-Boundary Testing
 
-Per MoonMind's testing policy, workflow-boundary tests must cover compatibility paths for prior payload shapes where in-flight runs may exist. Tests added in Phase 3 explicitly check for the optional presence of `idempotency_key` to guarantee backwards compatibility.
+Per MoonMind's testing policy, workflow-boundary tests must cover compatibility paths for prior payload shapes where in-flight runs may exist. Tests added in Phase 3 explicitly verify that activities tolerate the optional presence or absence of `idempotency_key` in their inputs (payload-schema backwards compatibility), and our Temporal workflows gate any new commands behind `workflow.patched(...)` (or an equivalent pattern) so that in-flight workflows replay with identical command sequences (Temporal replay backwards compatibility).

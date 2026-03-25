@@ -1,122 +1,62 @@
 [
   {
-    "id": 4125155789,
+    "id": 4124642041,
     "disposition": "not-applicable",
-    "rationale": "Bot overview comment."
+    "rationale": "Informational summary from bot, no action needed."
   },
   {
-    "id": 2987042864,
+    "id": 2986561946,
     "disposition": "addressed",
-    "rationale": "Removed unused sqlalchemy_utils import from migration."
+    "rationale": "Added idempotency_key support to mm_skill_execute signature."
   },
   {
-    "id": 2987042879,
-    "disposition": "addressed",
-    "rationale": "Removed unused Optional import from task_runs.py."
-  },
-  {
-    "id": 2987042886,
-    "disposition": "addressed",
-    "rationale": "Removed unused Request import from task_runs.py."
-  },
-  {
-    "id": 2987047086,
-    "disposition": "addressed",
-    "rationale": "Added comprehensive success and failure tests for endpoints in test_task_runs.py."
-  },
-  {
-    "id": 4005379521,
+    "id": 4004828007,
     "disposition": "not-applicable",
-    "rationale": "Bot review summary."
+    "rationale": "Automated code review summary, no action needed."
   },
   {
-    "id": 2987047089,
-    "disposition": "addressed",
-    "rationale": "Extracted DB lookup into get_live_session_db dependency."
-  },
-  {
-    "id": 2987047100,
-    "disposition": "addressed",
-    "rationale": "Refactored report_live_session update logic to be data-driven."
-  },
-  {
-    "id": 2987047106,
-    "disposition": "addressed",
-    "rationale": "Declared ix_task_run_live_sessions_status_expires_at composite index in TaskRunLiveSession model."
-  },
-  {
-    "id": 2987066202,
-    "disposition": "addressed",
-    "rationale": "Explicitly map encrypted RW fields to expected response attributes in GET worker endpoint."
-  },
-  {
-    "id": 2987066241,
-    "disposition": "addressed",
-    "rationale": "Used postgresql.BYTEA() for encrypted columns per codebase pattern instead of plain TEXT."
-  },
-  {
-    "id": 2987066275,
-    "disposition": "addressed",
-    "rationale": "Removed unused Request and Optional imports in router."
-  },
-  {
-    "id": 2987066303,
-    "disposition": "addressed",
-    "rationale": "Added appropriate user and worker auth dependencies to all endpoints."
-  },
-  {
-    "id": 2987066330,
-    "disposition": "addressed",
-    "rationale": "Added _require_worker_auth dependency to get_live_session_worker."
-  },
-  {
-    "id": 2987066347,
-    "disposition": "addressed",
-    "rationale": "Added rejection check on worker_id mismatch in report_live_session updates."
-  },
-  {
-    "id": 2987066377,
-    "disposition": "addressed",
-    "rationale": "Configured models with populate_by_name=True and camelCase aliases."
-  },
-  {
-    "id": 2987066398,
-    "disposition": "addressed",
-    "rationale": "Removed unused sqlalchemy_utils."
-  },
-  {
-    "id": 2987066419,
-    "disposition": "addressed",
-    "rationale": "Fixed mock router mounting prefix in test client."
-  },
-  {
-    "id": 2987066440,
-    "disposition": "addressed",
-    "rationale": "Updated tests to verify db.execute is called."
-  },
-  {
-    "id": 4005399199,
+    "id": 4004831933,
     "disposition": "not-applicable",
-    "rationale": "Bot overview comment."
+    "rationale": "Automated code review summary, no action needed."
   },
   {
-    "id": 2987085635,
+    "id": 2986565248,
     "disposition": "addressed",
-    "rationale": "Added worker auth requirement to mutation endpoints."
+    "rationale": "Updated Phase 3 idempotency documentation example format."
   },
   {
-    "id": 2987085644,
+    "id": 2986565257,
     "disposition": "addressed",
-    "rationale": "Endpoints now return expected {'session': ...} envelope dicts."
+    "rationale": "Updated test_run plan.generate mock assertion using execution_ref.workflow_id."
   },
   {
-    "id": 4005421974,
+    "id": 2986565269,
+    "disposition": "addressed",
+    "rationale": "Updated test_run skill.execute mock assertion using context.workflow_id."
+  },
+  {
+    "id": 2986625191,
+    "disposition": "addressed",
+    "rationale": "Gated proposal.generate idempotency_key with workflow.patched."
+  },
+  {
+    "id": 2986625227,
+    "disposition": "addressed",
+    "rationale": "Gated proposal.submit idempotency_key with workflow.patched."
+  },
+  {
+    "id": 2986625258,
+    "disposition": "addressed",
+    "rationale": "Updated Phase 3 idempotency documentation example to use workflow_id."
+  },
+  {
+    "id": 2986625295,
+    "disposition": "addressed",
+    "rationale": "Clarified backwards compatibility testing in documentation."
+  },
+  {
+    "id": 4004904245,
     "disposition": "not-applicable",
-    "rationale": "Bot overview comment."
-  },
-  {
-    "id": 2987085646,
-    "disposition": "addressed",
-    "rationale": "Mapped decrypted RW fields into worker response envelope."
+    "rationale": "Automated code review summary, no action needed."
   }
 ]

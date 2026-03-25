@@ -63,6 +63,7 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
 
     resolved = await workflow._run_planning_stage(
@@ -172,6 +173,7 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -282,6 +284,7 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -378,6 +381,7 @@ async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_sta
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     with pytest.raises(
         ValueError,
@@ -492,6 +496,7 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind"},
@@ -586,6 +591,7 @@ async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     with pytest.raises(
         ValueError,
@@ -684,6 +690,7 @@ async def test_run_execution_stage_publish_mode_pr_accepts_github_pull_request_u
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
 
     await workflow._run_execution_stage(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
