@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
@@ -134,12 +134,19 @@ class TemporalClientAdapter:
 
         args = [input_args] if input_args is not None else []
 
-        formatted_search_attributes = None
+        formatted_search_attributes = {}
         if search_attributes:
             formatted_search_attributes = {
                 k: v if isinstance(v, list) else [v]
                 for k, v in search_attributes.items()
             }
+
+        if start_delay is not None:
+            scheduled_for = datetime.now(timezone.utc) + start_delay
+            formatted_search_attributes["mm_scheduled_for"] = [scheduled_for]
+
+        if not formatted_search_attributes:
+            formatted_search_attributes = None
 
         start_kwargs: dict[str, Any] = {
             "id": workflow_id,
@@ -372,12 +379,17 @@ class TemporalClientAdapter:
 
         args = [workflow_input] if workflow_input is not None else []
 
-        formatted_sa = None
+        formatted_sa = {}
         if search_attributes:
             formatted_sa = {
                 k: v if isinstance(v, list) else [v]
                 for k, v in search_attributes.items()
             }
+
+        formatted_sa["mm_scheduled_for"] = ["{{.ScheduleTime}}"]
+
+        if not formatted_sa:
+            formatted_sa = None
 
         try:
             handle = await client.create_schedule(
