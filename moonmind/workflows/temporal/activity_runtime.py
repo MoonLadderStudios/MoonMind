@@ -21,7 +21,6 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from moonmind.config.settings import settings
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
-from moonmind.schemas.jules_models import JulesIntegrationStartRequest
 from moonmind.workflows.adapters.managed_agent_adapter import ManagedAgentAdapter
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter

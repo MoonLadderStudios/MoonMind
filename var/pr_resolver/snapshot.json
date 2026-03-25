@@ -2,41 +2,31 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "auto-4349dc45",
-    "headRefOid": "642ba5e469b637bfa6854adfc1cde01196124fca",
+    "headRefOid": "bd390efe9d2ef4e65f68171049738b93fe17dada",
     "isDraft": false,
-    "mergeStateStatus": "UNSTABLE",
-    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "DIRTY",
+    "mergeable": "CONFLICTING",
     "number": 959,
     "reviewDecision": "",
     "state": "OPEN",
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "0001-01-01T00:00:00Z",
-        "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561630154/job/68602700408",
-        "name": "test",
-        "startedAt": "2026-03-25T20:07:53Z",
-        "status": "IN_PROGRESS",
-        "workflowName": "Run Pytest Unit Tests"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:08:44Z",
+        "completedAt": "2026-03-25T20:14:06Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628359/job/68602696516",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855024/job/68603505334",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-25T20:07:52Z",
+        "startedAt": "2026-03-25T20:13:15Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:08:38Z",
+        "completedAt": "2026-03-25T20:13:59Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628333/job/68602696538",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855009/job/68603505327",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-25T20:07:51Z",
+        "startedAt": "2026-03-25T20:13:17Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
@@ -44,39 +34,39 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628359/job/68602696505",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855024/job/68603505353",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-25T20:07:53Z",
+        "startedAt": "2026-03-25T20:13:16Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:08:48Z",
+        "completedAt": "2026-03-25T20:14:15Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628333/job/68602696542",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855009/job/68603505442",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-25T20:07:51Z",
+        "startedAt": "2026-03-25T20:13:16Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:09:01Z",
+        "completedAt": "2026-03-25T20:14:19Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561628333/job/68602696566",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23561855009/job/68603505311",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-25T20:07:52Z",
+        "startedAt": "2026-03-25T20:13:16Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-25T20:08:30Z",
+        "completedAt": "2026-03-25T20:13:51Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/68602791799",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/68603596645",
         "name": "CodeQL",
-        "startedAt": "2026-03-25T20:08:28Z",
+        "startedAt": "2026-03-25T20:13:50Z",
         "status": "COMPLETED",
         "workflowName": ""
       }
@@ -86,13 +76,18 @@
   },
   "ci": {
     "isRunning": true,
-    "hasFailures": false,
-    "failedChecks": [],
-    "totalCheckCount": 7,
+    "hasFailures": true,
+    "failedChecks": [
+      {
+        "name": "CI signal continuity",
+        "state": "MISSING_NON_SECURITY_CHECKS_ON_HEAD",
+        "url": ""
+      }
+    ],
+    "totalCheckCount": 6,
     "securityCheckCount": 6,
-    "nonSecurityCheckCount": 1,
+    "nonSecurityCheckCount": 0,
     "checkNames": [
-      "test",
       "Analyze (javascript-typescript)",
       "Analyze (actions)",
       "Analyze (python)",
@@ -100,13 +95,17 @@
       "Analyze (python)",
       "CodeQL"
     ],
-    "signalQuality": "ok",
-    "degradedReasons": [],
+    "signalQuality": "degraded",
+    "degradedReasons": [
+      "head_missing_non_security_checks_seen_on_previous_commit"
+    ],
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "642ba5e469b637bfa6854adfc1cde01196124fca",
-    "headShaNonSecurityCheckCount": 1
+    "headShaVerified": "bd390efe9d2ef4e65f68171049738b93fe17dada",
+    "headShaNonSecurityCheckCount": 0,
+    "previousCommitSha": "642ba5e469b637bfa6854adfc1cde01196124fca",
+    "previousCommitNonSecurityCheckCount": 1
   },
   "commentsFetch": {
     "succeeded": true,
@@ -133,10 +132,10 @@
       "path": "moonmind/workflows/temporal/workflows/run.py",
       "commit_id": "642ba5e469b637bfa6854adfc1cde01196124fca",
       "in_reply_to_id": null,
-      "line": 631,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review",
@@ -169,10 +168,10 @@
       "path": "docs/tmp/015-TemporalIdempotency.md",
       "commit_id": "642ba5e469b637bfa6854adfc1cde01196124fca",
       "in_reply_to_id": null,
-      "line": 25,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -185,10 +184,10 @@
       "path": "tests/integration/workflows/temporal/workflows/test_run.py",
       "commit_id": "642ba5e469b637bfa6854adfc1cde01196124fca",
       "in_reply_to_id": null,
-      "line": 94,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -201,10 +200,10 @@
       "path": "tests/integration/workflows/temporal/workflows/test_run.py",
       "commit_id": "642ba5e469b637bfa6854adfc1cde01196124fca",
       "in_reply_to_id": null,
-      "line": 154,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -217,7 +216,7 @@
       "path": "moonmind/workflows/temporal/workflows/run.py",
       "commit_id": "3247dc48f8033034e841c72f16ccdad2499d04f6",
       "in_reply_to_id": null,
-      "line": 1301,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": true
@@ -233,7 +232,7 @@
       "path": "moonmind/workflows/temporal/workflows/run.py",
       "commit_id": "3247dc48f8033034e841c72f16ccdad2499d04f6",
       "in_reply_to_id": null,
-      "line": 1340,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": true
@@ -249,10 +248,10 @@
       "path": "docs/tmp/015-TemporalIdempotency.md",
       "commit_id": "642ba5e469b637bfa6854adfc1cde01196124fca",
       "in_reply_to_id": null,
-      "line": 25,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -265,10 +264,10 @@
       "path": "docs/tmp/015-TemporalIdempotency.md",
       "commit_id": "642ba5e469b637bfa6854adfc1cde01196124fca",
       "in_reply_to_id": null,
-      "line": 43,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review",
@@ -279,30 +278,40 @@
       "created_at": "2026-03-25T08:34:08Z",
       "updated_at": "2026-03-25T08:34:08Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#pullrequestreview-4004904245"
+    },
+    {
+      "type": "review_comment",
+      "id": 2990772075,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'JulesIntegrationStartRequest' is not used.\n\n---\n\nTo fix an unused import, remove the specific import statement (or the unused name from a multi-name import) so that only actually-used symbols are imported. This keeps the module clean, avoids confusion, and can slightly reduce import overhead.</p>\n<p>In this file, the single best fix is to delete the line:</p>\n<pre><code>from moonmind.schemas.jules_models import JulesIntegrationStartRequest\n</code></pre>\n<p>and leave all surrounding imports unchanged. This does not affect existing functionality because <code>JulesIntegrationStartRequest</code> is not referenced anywhere in the shown code. The change is localized to <code>moonmind/workflows/temporal/activity_runtime.py</code> at line 24; no additional methods, imports, or definitions are required.",
+      "created_at": "2026-03-25T20:09:48Z",
+      "updated_at": "2026-03-25T20:09:48Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2990772075",
+      "path": "moonmind/workflows/temporal/activity_runtime.py",
+      "commit_id": "bd390efe9d2ef4e65f68171049738b93fe17dada",
+      "in_reply_to_id": null,
+      "line": 24,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
     }
   ],
   "commentsSummary": {
     "classificationVersion": 2,
-    "total": 12,
-    "reviewCommentCount": 8,
+    "total": 13,
+    "reviewCommentCount": 9,
     "issueCommentCount": 1,
     "reviewBodyCount": 3,
-    "actionableCommentCount": 6,
+    "actionableCommentCount": 1,
     "includeBotReviewComments": true,
     "humanCommentCount": 4,
-    "botCommentCount": 8,
+    "botCommentCount": 9,
     "hasActionableComments": true,
     "actionableCommentIds": [
-      2986561946,
-      2986565248,
-      2986565257,
-      2986565269,
-      2986625258,
-      2986625295
+      2990772075
     ],
     "nonActionableReasonCounts": {
-      "bot_comment_excluded": 4,
-      "thread_outdated": 2
+      "addressed_in_ledger": 12
     },
     "classifiedComments": [
       {
@@ -313,7 +322,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986561946,
@@ -321,9 +330,9 @@
         "user": "chatgpt-codex-connector[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986561946",
         "path": "moonmind/workflows/temporal/workflows/run.py",
-        "line": 631,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4004828007,
@@ -333,7 +342,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4004831933,
@@ -343,7 +352,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986565248,
@@ -351,9 +360,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986565248",
         "path": "docs/tmp/015-TemporalIdempotency.md",
-        "line": 25,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986565257,
@@ -361,9 +370,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986565257",
         "path": "tests/integration/workflows/temporal/workflows/test_run.py",
-        "line": 94,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986565269,
@@ -371,9 +380,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986565269",
         "path": "tests/integration/workflows/temporal/workflows/test_run.py",
-        "line": 154,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986625191,
@@ -381,9 +390,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625191",
         "path": "moonmind/workflows/temporal/workflows/run.py",
-        "line": 1301,
+        "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986625227,
@@ -391,9 +400,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625227",
         "path": "moonmind/workflows/temporal/workflows/run.py",
-        "line": 1340,
+        "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986625258,
@@ -401,9 +410,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625258",
         "path": "docs/tmp/015-TemporalIdempotency.md",
-        "line": 25,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 2986625295,
@@ -411,9 +420,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2986625295",
         "path": "docs/tmp/015-TemporalIdempotency.md",
-        "line": 43,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4004904245,
@@ -423,7 +432,17 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
+      },
+      {
+        "id": 2990772075,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/959#discussion_r2990772075",
+        "path": "moonmind/workflows/temporal/activity_runtime.py",
+        "line": 24,
+        "actionable": true,
+        "reason": "actionable"
       }
     ]
   }
