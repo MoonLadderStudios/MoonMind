@@ -724,7 +724,7 @@ class MoonMindRunWorkflow:
                 if not isinstance(agent_outputs, dict):
                     agent_outputs = {}
             
-            last_node_inputs = nodes[-1].get("inputs", {}) if nodes else {}
+            last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
             head_branch = (
                 agent_outputs.get("branch")
                 or agent_outputs.get("newBranch")
