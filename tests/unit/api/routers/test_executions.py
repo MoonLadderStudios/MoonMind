@@ -700,6 +700,40 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
     assert dumped["effort"] == "high"
 
 
+def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key() -> None:
+    """Some payloads store mode under parameters.runtime.mode without top-level targetRuntime."""
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={"title": "Nested RT", "summary": "OK"},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="mm:rt-nested",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        created_at="2026-03-19T00:00:00Z",
+        started_at="2026-03-19T00:00:00Z",
+        updated_at="2026-03-19T00:00:00Z",
+        closed_at=None,
+        integration_state=None,
+        parameters={
+            "runtime": {"mode": "gemini_cli", "model": "gemini-2.0"},
+        },
+        paused=False,
+        waiting_reason=None,
+        attention_required=False,
+    )
+
+    payload = _serialize_execution(record)
+
+    assert payload.target_runtime == "gemini_cli"
+    dumped = payload.model_dump(by_alias=True)
+    assert dumped["targetRuntime"] == "gemini_cli"
+
+
 def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()

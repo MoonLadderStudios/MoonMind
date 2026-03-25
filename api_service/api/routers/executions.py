@@ -12,6 +12,7 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import Client
 from temporalio.service import RPCError
@@ -20,6 +21,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     MoonMindWorkflowState,
+    TemporalExecutionCanonicalRecord,
     TemporalExecutionCloseStatus,
     TemporalExecutionRecord,
     User,
@@ -304,6 +306,10 @@ def _serialize_execution(
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
     ]
+    if not target_runtime:
+        runtime_nested = params.get("runtime")
+        if isinstance(runtime_nested, dict):
+            target_runtime = str(runtime_nested.get("mode") or "").strip() or None
     if not target_runtime:
         target_runtime = (
             _coerce_temporal_scalar(search_attributes.get("mm_target_runtime"))
@@ -1235,7 +1241,10 @@ async def list_executions(
 
     if source == "temporal":
         try:
-            from api_service.core.sync import map_temporal_state_to_projection
+            from api_service.core.sync import (
+                map_temporal_state_to_projection,
+                merged_parameters_for_projection,
+            )
 
             client = temporal_client
 
@@ -1274,10 +1283,23 @@ async def list_executions(
             )
             await iterator.fetch_next_page()
 
+            page = iterator.current_page or []
+            canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
+            if page:
+                workflow_ids = [wf.id for wf in page]
+                stmt = select(TemporalExecutionCanonicalRecord).where(
+                    TemporalExecutionCanonicalRecord.workflow_id.in_(workflow_ids)
+                )
+                canonical_rows = (await session.execute(stmt)).scalars().all()
+                canonical_map = {row.workflow_id: row for row in canonical_rows}
+
             items = []
-            if iterator.current_page:
-                for wf in iterator.current_page:
+            if page:
+                for wf in page:
                     payload = await map_temporal_state_to_projection(wf)
+                    payload["parameters"] = merged_parameters_for_projection(
+                        payload, canonical_map.get(wf.id)
+                    )
                     # We need a record-like object for serialization
                     from types import SimpleNamespace
 

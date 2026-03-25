@@ -4,7 +4,10 @@ from unittest.mock import Mock
 
 from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionStatus
 
-from api_service.core.sync import map_temporal_state_to_projection
+from api_service.core.sync import (
+    map_temporal_state_to_projection,
+    merged_parameters_for_projection,
+)
 from api_service.db.models import (
     MoonMindWorkflowState,
     TemporalExecutionCloseStatus,
@@ -141,3 +144,23 @@ def test_map_temporal_state_to_projection_memo_parameters_empty_by_default():
     assert params.get("targetRuntime") is None
     assert params.get("model") is None
     assert params.get("effort") is None
+
+
+def test_merged_parameters_for_projection_combines_canonical_with_memo_payload():
+    from types import SimpleNamespace
+
+    canonical = SimpleNamespace()
+    canonical.parameters = {
+        "targetRuntime": "codex",
+        "task": {"tool": {"name": "fix-ci"}},
+    }
+    payload = {"parameters": {"model": "gpt-5"}}
+    merged = merged_parameters_for_projection(payload, canonical)
+    assert merged["targetRuntime"] == "codex"
+    assert merged["task"]["tool"]["name"] == "fix-ci"
+    assert merged["model"] == "gpt-5"
+
+
+def test_merged_parameters_for_projection_without_canonical_returns_memo_only():
+    payload = {"parameters": {"targetRuntime": "jules"}}
+    assert merged_parameters_for_projection(payload, None) == {"targetRuntime": "jules"}
