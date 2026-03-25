@@ -95,55 +95,21 @@ class TestVerifyVolumeCredentials:
     async def test_successful_verification(self) -> None:
         """Simulate Docker run finding credentials."""
         mock_process = AsyncMock()
-        mock_process.communicate = AsyncMock(
-            return_value=(
-                b"FOUND:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
-                b"",
-            )
-        )
+        # Mock communicate as a regular sync function so wait_for won't leave a dangling coroutine
+        from unittest.mock import MagicMock
+        mock_process.communicate = MagicMock(return_value="dummy")
         mock_process.returncode = 0
 
         with patch(
-            "asyncio.create_subprocess_exec",
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
             return_value=mock_process,
         ), patch(
-            "asyncio.wait_for",
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
             return_value=(
                 b"FOUND:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
                 b"",
-            ),
+            )
         ):
-            # Need to return mock_process from create_subprocess_exec
-            # and mock wait_for to return the communicate result
-            pass
-
-        # Simpler approach: mock at a higher level
-        mock_process = AsyncMock()
-        mock_process.returncode = 0
-
-        async def mock_communicate():
-            return (
-                b"FOUND:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
-                b"",
-            )
-
-        mock_process.communicate = mock_communicate
-
-        with patch(
-            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio"
-        ) as mock_asyncio:
-            mock_asyncio.create_subprocess_exec = AsyncMock(
-                return_value=mock_process
-            )
-            mock_asyncio.subprocess = asyncio.subprocess
-            mock_asyncio.wait_for = AsyncMock(
-                return_value=(
-                    b"FOUND:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
-                    b"",
-                )
-            )
-            mock_asyncio.TimeoutError = asyncio.TimeoutError
-
             result = await verify_volume_credentials(
                 runtime_id="gemini_cli",
                 volume_ref="gemini_auth_volume",
@@ -156,31 +122,20 @@ class TestVerifyVolumeCredentials:
     async def test_no_credentials_found(self) -> None:
         """Simulate Docker run finding no credentials."""
         mock_process = AsyncMock()
+        from unittest.mock import MagicMock
+        mock_process.communicate = MagicMock(return_value="dummy")
         mock_process.returncode = 0
 
-        async def mock_communicate():
-            return (
+        with patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.create_subprocess_exec",
+            return_value=mock_process,
+        ), patch(
+            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio.wait_for",
+            return_value=(
                 b"MISSING:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
                 b"",
             )
-
-        mock_process.communicate = mock_communicate
-
-        with patch(
-            "moonmind.workflows.temporal.runtime.providers.volume_verifiers.asyncio"
-        ) as mock_asyncio:
-            mock_asyncio.create_subprocess_exec = AsyncMock(
-                return_value=mock_process
-            )
-            mock_asyncio.subprocess = asyncio.subprocess
-            mock_asyncio.wait_for = AsyncMock(
-                return_value=(
-                    b"MISSING:.config/gemini/credentials.json\nMISSING:.config/google-cloud-sdk/application_default_credentials.json\n",
-                    b"",
-                )
-            )
-            mock_asyncio.TimeoutError = asyncio.TimeoutError
-
+        ):
             result = await verify_volume_credentials(
                 runtime_id="gemini_cli",
                 volume_ref="gemini_auth_volume",

@@ -247,12 +247,23 @@ def _load_or_create_vector_index(app_state):
             )
 
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    await startup_event()
+    yield
+    # Shutdown logic
+    teardown_providers()
+
 app = FastAPI(
     title="MoonMind API",
     description="API for MoonMind - LLM-powered documentation search and chat interface",
     version="0.1.0",
     docs_url="/docs",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 # Setup templates
@@ -556,7 +567,6 @@ async def ensure_auth_profile_managers_started():
         logger.error(f"Error ensuring AuthProfileManager workflows: {e}", exc_info=True)
 
 
-@app.on_event("startup")
 async def startup_event():
     """Defines the application's startup events."""
     logger.info("Executing application startup events...")
@@ -661,7 +671,6 @@ async def startup_event():
     logger.info("Application startup events completed.")
 
 
-@app.on_event("shutdown")
 def teardown_providers():
     """
     Optional: If your providers need explicit cleanup, do it here.
