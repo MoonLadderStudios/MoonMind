@@ -43,6 +43,42 @@ When creating a new spec folder/feature ID:
   `docker run --rm -v agent_workspaces:/work/agent_jobs -it -v /tmp:/host_tmp alpine sh -lc 'ls /work/agent_jobs/<job_id> | head'`.
 - In the repository code/docs path, durable workflow artifacts for workflow automation are typically written to `var/artifacts/<scope>/<run_id>` (for example `var/artifacts/spec_workflows/<run_id>`).
 
+## Troubleshooting Temporal Workflow Runs
+
+When asked to check on a workflow, follow this procedure in order:
+
+1. **Describe the parent workflow** (always use `--namespace moonmind`):
+   ```
+   docker exec moonmind-temporal-1 temporal workflow describe \
+     --namespace moonmind --workflow-id "<workflow-id>"
+   ```
+   Check: Status, StartTime, StateTransitionCount, HistoryLength, Pending Activities, Pending Child Workflows.
+
+2. **If the parent has pending child workflows**, describe each child:
+   ```
+   docker exec moonmind-temporal-1 temporal workflow describe \
+     --namespace moonmind --workflow-id "<child-workflow-id>"
+   ```
+
+3. **Inspect recent history** of whichever workflow is actively executing (the deepest pending child):
+   ```
+   docker exec moonmind-temporal-1 temporal workflow show \
+     --namespace moonmind --workflow-id "<workflow-id>" | tail -30
+   ```
+   A healthy agent poll loop looks like: `ActivityTaskScheduled → Started → Completed → TimerStarted → TimerFired` repeating on ~10s intervals. If the last event is an `ActivityTaskScheduled` with no `Started` for minutes, the worker may be down or the task queue starved.
+
+4. **List workflows** when the ID is unknown or to find related runs:
+   ```
+   docker exec moonmind-temporal-1 temporal workflow list \
+     --namespace moonmind --query "mm_state = 'executing'"
+   ```
+
+Key diagnostics:
+- **Pending Activities > 0 with no progress**: worker may be down — check `docker ps` and worker logs.
+- **TimerStarted as last event**: workflow is sleeping between poll cycles — normal, wait for it to fire.
+- **ActivityTaskFailed / WorkflowTaskFailed**: read the failure details in the event history JSON output (`--output json`).
+- **"workflow not found"**: always retry with `--namespace moonmind` — the default namespace is empty.
+
 ## Tool Execution Guardrails
 - **Strict Verification of Tool Results**: Never hallucinate success or fabricate data when a tool execution fails. If a tool (e.g., `read_file`, `run_shell_command`) returns an error such as 'File not found', you must correctly identify the failure and take appropriate remediating action instead of silently bypassing it.
 
@@ -56,6 +92,8 @@ When creating a new spec folder/feature ID:
 - If secrets are observed in comments, logs, or commits: stop, redact/delete the exposed content when possible, and rotate affected credentials immediately.
 
 ## Compatibility Policy
+- MoonMind is a **pre-release project** (see Constitution Principle XIII). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
+- When refactoring an activity name, model, or interface: grep the entire codebase, update every caller, test, mock, and doc reference, and delete the old artifact. Partial migrations are not acceptable.
 - Never introduce compatibility transforms that change execution semantics or billing-relevant values (for example model identifiers, effort values, queue semantics, or publish behavior).
 - Prefer fail-fast behavior for unsupported runtime input values over hidden fallback behavior.
 - For Codex execution specifically, `codex.model` and `codex.effort` inputs must be passed through exactly as provided. Unsupported values must fail through normal CLI/API validation.

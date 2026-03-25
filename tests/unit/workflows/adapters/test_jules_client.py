@@ -573,50 +573,77 @@ async def test_list_activities_empty_response():
     assert result.activity_id is None
 
 
-# --- native PR creation tests ---
+# --- native PR creation tests (delegation to GitHubService) ---
 
 
 @pytest.mark.asyncio
 async def test_create_pull_request_success():
+    """JulesClient.create_pull_request delegates to GitHubService."""
+    from unittest.mock import AsyncMock, patch
+
+    from moonmind.workflows.adapters.github_service import CreatePRResult
+
+    mock_result = CreatePRResult(
+        url="https://github.com/owner/repo/pull/1",
+        created=True,
+        summary="PR created successfully: https://github.com/owner/repo/pull/1",
+    )
+
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST"
-        assert request.url.path == "/repos/owner/repo/pulls"
-        body = json.loads(request.content)
-        assert body["head"] == "feature-branch"
-        assert body["base"] == "main"
-        assert body["title"] == "Test PR"
-        assert body["body"] == "Test body"
-        return httpx.Response(201, json={"html_url": "https://github.com/owner/repo/pull/1"})
+        return httpx.Response(200, json={"id": "stub"})
 
     client = _make_client(handler)
-    result = await client.create_pull_request(
-        repo="owner/repo",
-        head="feature-branch",
-        base="main",
-        title="Test PR",
-        body="Test body",
-        github_token="fake-token"
-    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as MockSvc:
+        mock_svc_instance = MockSvc.return_value
+        mock_svc_instance.create_pull_request = AsyncMock(return_value=mock_result)
+
+        result = await client.create_pull_request(
+            repo="owner/repo",
+            head="feature-branch",
+            base="main",
+            title="Test PR",
+            body="Test body",
+            github_token="fake-token",
+        )
+
     assert result.created is True
-    assert result.pr_url == "https://github.com/owner/repo/pull/1"
+    assert result.url == "https://github.com/owner/repo/pull/1"
 
 
 @pytest.mark.asyncio
 async def test_create_pull_request_failure():
+    """JulesClient.create_pull_request returns failure from GitHubService."""
+    from unittest.mock import AsyncMock, patch
+
+    from moonmind.workflows.adapters.github_service import CreatePRResult
+
+    mock_result = CreatePRResult(
+        url=None,
+        created=False,
+        summary="GitHub create PR failed with HTTP 422 for owner/repo.",
+    )
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            422, 
-            json={"message": "Validation Failed", "errors": [{"message": "A pull request already exists"}]}
-        )
+        return httpx.Response(200, json={"id": "stub"})
 
     client = _make_client(handler)
-    result = await client.create_pull_request(
-        repo="owner/repo",
-        head="feature-branch",
-        base="main",
-        title="Test PR",
-        body="Test body",
-        github_token="fake-token"
-    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as MockSvc:
+        mock_svc_instance = MockSvc.return_value
+        mock_svc_instance.create_pull_request = AsyncMock(return_value=mock_result)
+
+        result = await client.create_pull_request(
+            repo="owner/repo",
+            head="feature-branch",
+            base="main",
+            title="Test PR",
+            body="Test body",
+            github_token="fake-token",
+        )
+
     assert result.created is False
     assert "HTTP 422" in result.summary
+

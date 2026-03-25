@@ -463,6 +463,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
+            activity_type="auth_profile.verify_lease_holders",
+            family="auth_profile",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
             activity_type="oauth_session.ensure_volume",
             family="oauth_session",
             capability_class="artifacts",
@@ -562,15 +571,6 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
-            activity_type="integration.jules.merge_pr",
-            family="integration",
-            capability_class="integration:jules",
-            task_queue=cfg.activity_integrations_task_queue,
-            fleet=INTEGRATIONS_FLEET,
-            timeouts=TemporalActivityTimeouts(120, 300),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
-        ),
-        TemporalActivityDefinition(
             activity_type="integration.jules.send_message",
             family="integration",
             capability_class="integration:jules",
@@ -651,6 +651,25 @@ def build_default_activity_catalog(
             timeouts=TemporalActivityTimeouts(600, 1800, heartbeat_timeout_seconds=120),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
+        ),
+        # ---- General-purpose repo operations (provider-agnostic) ----
+        TemporalActivityDefinition(
+            activity_type="repo.create_pr",
+            family="repo",
+            capability_class="integration:jules",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 300),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
+            activity_type="repo.merge_pr",
+            family="repo",
+            capability_class="integration:jules",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(120, 300),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
             activity_type="integration.get_activity_route",

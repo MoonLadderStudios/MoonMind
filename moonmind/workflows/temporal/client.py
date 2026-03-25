@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
 from temporalio.client import Client, WorkflowExecutionDescription
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from api_service.db.models import TemporalExecutionRecord
@@ -67,7 +68,11 @@ class WorkflowStartResult:
 async def get_temporal_client(address: str, namespace: str) -> Client:
     """Connect to and return a Temporal client."""
 
-    return await Client.connect(address, namespace=namespace)
+    return await Client.connect(
+        address,
+        namespace=namespace,
+        data_converter=pydantic_data_converter,
+    )
 
 
 async def fetch_workflow_execution(
@@ -97,6 +102,7 @@ class TemporalClientAdapter:
                 self._client = await Client.connect(
                     settings.temporal.address,
                     namespace=settings.temporal.namespace,
+                    data_converter=pydantic_data_converter,
                 )
             return self._client
 

@@ -354,7 +354,7 @@ def _serialize_execution(
     # Only show the "(default)" fallback when git context exists in the payload.
     has_git_context = bool(git_payload) or any(
         task_payload.get(k) or params.get(k)
-        for k in ("startingBranch", "newBranch", "defaultBranch", "branch")
+        for k in ("startingBranch", "targetBranch", "defaultBranch", "branch")
     )
     if not starting_branch and has_git_context:
         default_branch = str(
@@ -362,11 +362,11 @@ def _serialize_execution(
         ).strip()
         starting_branch = f"{default_branch} (default)"
 
-    # Precedence: task.git.newBranch > task.newBranch > params.newBranch
+    # Precedence: task.git.targetBranch > task.targetBranch > params.targetBranch
     target_branch = str(
-        git_payload.get("newBranch")
-        or task_payload.get("newBranch")
-        or params.get("newBranch")
+        git_payload.get("targetBranch")
+        or task_payload.get("targetBranch")
+        or params.get("targetBranch")
         or ""
     ).strip() or None
 
@@ -785,13 +785,13 @@ async def _create_execution_from_task_request(
     )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
-        for git_key in ("startingBranch", "newBranch", "branch"):
+        for git_key in ("startingBranch", "targetBranch", "branch"):
             git_value = git_payload.get(git_key)
             if isinstance(git_value, str) and git_value.strip():
                 normalized_git_payload[git_key] = git_value.strip()
         if normalized_git_payload:
             normalized_task_for_planner["git"] = normalized_git_payload
-    for key in ("repoRef", "startingBranch", "newBranch", "branch"):
+    for key in ("repoRef", "startingBranch", "targetBranch", "branch"):
         value = task_payload.get(key)
         if isinstance(value, str) and value.strip():
             normalized_task_for_planner[key] = value.strip()
@@ -1744,15 +1744,6 @@ async def reschedule_execution(
             },
         )
     
-    # We must enforce that the target is in the future.
-    try:
-        _compute_schedule_delay(payload.scheduled_for)
-    except HTTPException as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=exc.detail,
-        ) from exc
-
     try:
         await get_temporal_client_adapter().send_reschedule_signal(
             record.workflow_id, payload.scheduled_for

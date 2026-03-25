@@ -30,11 +30,6 @@ from moonmind.workflows.skills.resolver import (
 from api_service.ui_boot import generate_boot_payload
 from api_service.ui_assets import ui_assets
 
-from moonmind.workflows.tasks.source_mapping import (
-    TaskResolutionAmbiguousError,
-    TaskResolutionNotFoundError,
-    TaskSourceMappingService,
-)
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
     TemporalExecutionService,
@@ -210,44 +205,6 @@ async def _get_temporal_service(
     )
 
 
-def _build_task_source_response(
-    *,
-    task_id: str,
-    source: str,
-) -> DashboardTaskSourceResponse:
-    source_label = {
-        "queue": "Queue",
-        "temporal": "Temporal",
-    }.get(source, source.title())
-    return DashboardTaskSourceResponse(
-        taskId=task_id,
-        source=source,
-        sourceLabel=source_label,
-        detailPath=f"/tasks/{task_id}?source={source}",
-    )
-
-
-async def _resolve_dashboard_task_source(
-    *,
-    task_id: str,
-    temporal_service: TemporalExecutionService,
-    user: User,
-) -> DashboardTaskSourceResponse | None:
-    try:
-        execution = await temporal_service.describe_execution(task_id)
-    except TemporalExecutionNotFoundError:
-        return None
-
-    if bool(getattr(user, "is_superuser", False)):
-        return _build_task_source_response(task_id=task_id, source="temporal")
-
-    owner_id = getattr(execution, "owner_id", None)
-    user_id = getattr(user, "id", None)
-    if owner_id is not None and user_id is not None and str(owner_id) == str(user_id):
-        return _build_task_source_response(task_id=task_id, source="temporal")
-    return None
-
-
 def _render_dashboard(request: Request, current_path: str) -> HTMLResponse:
     config = build_runtime_config(current_path)
     return templates.TemplateResponse(
@@ -378,91 +335,6 @@ async def create_dashboard_skill(
     skill_file.write_text(request.markdown, encoding="utf-8")
 
     return {"status": "success"}
-
-
-@router.get(
-    "/api/tasks/{task_id}/resolution",
-    response_model=TaskSourceResolutionResponse,
-)
-async def resolve_dashboard_task_resolution(
-    task_id: str,
-    *,
-    source_hint: Literal["temporal"] | None = Query(None, alias="source"),
-    session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
-) -> TaskSourceResolutionResponse:
-    """Resolve a unified task handle to its canonical execution source."""
-
-    service = TaskSourceMappingService(session)
-    try:
-        resolved = await service.resolve_task(
-            task_id=task_id,
-            source_hint=source_hint,
-            user=user,
-        )
-    except TaskResolutionNotFoundError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "task_not_found",
-                "message": str(exc),
-            },
-        ) from exc
-    except TaskResolutionAmbiguousError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "ambiguous_task_source",
-                "message": str(exc),
-                "sources": sorted(exc.sources),
-            },
-        ) from exc
-
-    if resolved.source != "temporal":
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "task_not_found",
-                "message": f"Task {task_id} was not found in active dashboard sources.",
-            },
-        )
-
-    return TaskSourceResolutionResponse(
-        taskId=task_id,
-        source=resolved.source,
-        entry=resolved.entry,
-        workflowId=resolved.workflow_id,
-    )
-
-
-
-
-
-@router.get(
-    "/api/tasks/{task_id}/source",
-    response_model=DashboardTaskSourceResponse,
-)
-async def get_dashboard_task_source(
-    task_id: str,
-    temporal_service: TemporalExecutionService = Depends(_get_temporal_service),
-    _user: User = Depends(get_current_user()),
-) -> DashboardTaskSourceResponse:
-    """Resolve a canonical dashboard task id to its backing source."""
-
-    resolved = await _resolve_dashboard_task_source(
-        task_id=task_id,
-        temporal_service=temporal_service,
-        user=_user,
-    )
-    if resolved is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "code": "task_source_not_found",
-                "message": f"Task {task_id} was not found in dashboard sources.",
-            },
-        )
-    return resolved
 
 
 __all__ = [
