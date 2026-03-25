@@ -68,7 +68,9 @@ class WorkflowStartResult:
 async def get_temporal_client(address: str, namespace: str) -> Client:
     """Connect to and return a Temporal client."""
 
-    return await Client.connect(address, namespace=namespace,
+    return await Client.connect(
+        address,
+        namespace=namespace,
         data_converter=pydantic_data_converter,
     )
 
