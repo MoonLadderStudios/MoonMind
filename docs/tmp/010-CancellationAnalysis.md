@@ -166,7 +166,7 @@ Expose read-only state (e.g. `cancelling=True`) so Mission Control can show prog
 
 After Temporal-side cancellation is sound, adjust **graceful wait** constants for CLI tools if product safety allows—this is **orthogonal** to Temporal but reduces tail latency.
 
-### P3 — Terminate only as a last resort
+### ~~P3 — Terminate only as a last resort~~ (Done)
 
 For runs that **cannot** honor cancellation (bug, poison pill), operators may use **Terminate** via tooling. Document **when** it is appropriate; do not treat it as the normal Mission Control path.
 
