@@ -31,7 +31,7 @@ from .strategies import get_strategy
 
 HEARTBEAT_INTERVAL = 30  # seconds
 GRACEFUL_TERMINATE_WAIT_SECONDS = (
-    2.0  # seconds to wait for graceful SIGTERM before SIGKILL
+    1.0  # seconds to wait for graceful SIGTERM before SIGKILL
 )
 
 
