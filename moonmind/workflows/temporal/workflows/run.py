@@ -736,12 +736,12 @@ class MoonMindRunWorkflow:
             last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
             head_branch = (
                 agent_outputs.get("branch")
-                or agent_outputs.get("newBranch")
-                or ws.get("newBranch")
+                or agent_outputs.get("targetBranch")
+                or ws.get("targetBranch")
                 or ws.get("branch")
                 or parameters.get("targetBranch")
                 or ws.get("targetBranch")
-                or last_node_inputs.get("newBranch")
+                or last_node_inputs.get("targetBranch")
                 or last_node_inputs.get("branch")
                 or ""
             )
@@ -893,7 +893,7 @@ class MoonMindRunWorkflow:
         idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
 
         workspace_spec: dict[str, Any] = {}
-        for ws_key in ("repository", "repo", "startingBranch", "newBranch", "branch"):
+        for ws_key in ("repository", "repo", "startingBranch", "targetBranch", "branch"):
             ws_val = node_inputs.get(ws_key)
             if ws_val is not None:
                 workspace_spec[ws_key] = ws_val

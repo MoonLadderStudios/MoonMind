@@ -36,7 +36,7 @@ class ManagedRuntimeLauncher:
     def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
         if not isinstance(workspace_spec, dict):
             return None
-        for key in ("newBranch", "startingBranch", "branch"):
+        for key in ("targetBranch", "startingBranch", "branch"):
             value = workspace_spec.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -258,7 +258,7 @@ class ManagedRuntimeLauncher:
         clone_cmd.extend([source, str(repo_path)])
         await self._run_checked_command(*clone_cmd, cwd=str(workspace_root))
 
-        new_branch = str(workspace_spec.get("newBranch") or "").strip()
+        new_branch = str(workspace_spec.get("targetBranch") or "").strip()
         if new_branch:
             returncode, stdout_text, stderr_text = await self._run_command(
                 "git",

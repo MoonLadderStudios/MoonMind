@@ -228,7 +228,7 @@ def _build_runtime_planner():
             node_inputs["repository"] = repository.strip()
             node_inputs["repo"] = repository.strip()
 
-        for git_key in ("startingBranch", "newBranch", "branch"):
+        for git_key in ("startingBranch", "targetBranch", "branch"):
             git_val = (
                 git_payload.get(git_key)
                 or task_payload.get(git_key)
@@ -240,7 +240,7 @@ def _build_runtime_planner():
                 node_inputs[git_key] = git_val.strip()
 
         if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
-            if not node_inputs.get("newBranch") and not node_inputs.get("branch"):
+            if not node_inputs.get("targetBranch") and not node_inputs.get("branch"):
                 import re
                 import uuid
 
@@ -258,7 +258,7 @@ def _build_runtime_planner():
                 else:
                     prefix = ""
 
-                node_inputs["newBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
+                node_inputs["targetBranch"] = f"{prefix}{str(uuid.uuid4())[:8]}"
 
         # --- Assemble plan ---
         title = str(
