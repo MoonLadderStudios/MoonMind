@@ -1041,6 +1041,7 @@ class MoonMindAgentRun:
                                 {"agent_kind": self.agent_kind, "run_id": self.run_id},
                                 task_queue=q,
                                 start_to_close_timeout=t,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                     except Exception:
                         self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
