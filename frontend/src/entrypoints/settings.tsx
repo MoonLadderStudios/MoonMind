@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
-import { BootPayload } from '../boot/parseBootPayload';
 
 interface ProfileData {
   id?: string;
