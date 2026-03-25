@@ -742,8 +742,19 @@ class MoonMindRunWorkflow:
                             self._get_logger().warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
                             
         if require_pull_request_url and pull_request_url is None:
-            # Create PR natively since Jules publish_mode was overridden to "branch"
-            ws = parameters.get("workspaceSpec") or {}
+            last_tool = str(
+                (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get("name") or ""
+            ).strip().lower()
+            if last_tool in ("jules", "jules_api", "github_pr_creator") or (
+                "jules_session_id" in locals() and jules_session_id
+            ):
+                self._get_logger().info(
+                    "Skipping native PR creation: agent '%s' handles its own PRs.",
+                    last_tool or "jules",
+                )
+            else:
+                # Create PR natively since agent push is missing PR URL
+                ws = parameters.get("workspaceSpec") or {}
             agent_outputs = {}
             if "execution_result" in locals():
                 agent_outputs = self._get_from_result(execution_result, "outputs") or {}
@@ -799,10 +810,15 @@ class MoonMindRunWorkflow:
                     pull_request_url = pr_url
                     self._get_logger().info(f"Natively created PR: {pull_request_url}")
                 else:
-                    raise ValueError(
-                        f"PR creation activity returned no URL"
-                        f" (created={created}): {summary}"
-                    )
+                    if "422" in summary:
+                        self._get_logger().warning(
+                            f"Native PR creation failed with validation error (likely no commits): {summary}"
+                        )
+                    else:
+                        raise ValueError(
+                            f"PR creation activity returned no URL"
+                            f" (created={created}): {summary}"
+                        )
             except Exception as e:
                 raise ValueError(
                     f"publishMode 'pr' requested; native PR creation failed: {e}"

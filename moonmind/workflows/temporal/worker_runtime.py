@@ -49,9 +49,7 @@ from moonmind.workflows.temporal.workers import (
     describe_configured_worker,
     list_registered_workflow_types,
 )
-from moonmind.workflows.temporal.workflows.auth_profile_manager import (
-    MoonMindAuthProfileManagerWorkflow as MoonMindAuthProfileManager,
-)
+from moonmind.workflows.temporal.workflows.auth_profile_manager import MoonMindAuthProfileManagerWorkflow as MoonMindAuthProfileManager
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
