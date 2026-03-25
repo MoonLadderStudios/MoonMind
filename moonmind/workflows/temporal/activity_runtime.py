@@ -1938,9 +1938,11 @@ class TemporalIntegrationActivities:
 
     async def integration_jules_send_message(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        session_id: str,
-        prompt: str,
+        session_id: str | None = None,
+        prompt: str | None = None,
         principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
@@ -1949,18 +1951,33 @@ class TemporalIntegrationActivities:
         Used for multi-step workflows: resumes the session with new
         instructions instead of creating a new session.
         """
-        if not session_id or not session_id.strip():
+        request_payload = {}
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.jules.send_message"
+            )
+        if request_payload:
+            if session_id is None:
+                session_id = request_payload.get("session_id")
+            if prompt is None:
+                prompt = request_payload.get("prompt")
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+
+        if not session_id or not str(session_id).strip():
             raise TemporalActivityRuntimeError(
                 "integration.jules.send_message requires a non-empty session_id"
             )
-        if not prompt or not prompt.strip():
+        if not prompt or not str(prompt).strip():
             raise TemporalActivityRuntimeError(
                 "integration.jules.send_message requires a non-empty prompt"
             )
 
         result = await self._adapter.send_message(
-            run_id=session_id,
-            prompt=prompt,
+            run_id=str(session_id).strip(),
+            prompt=str(prompt).strip(),
         )
         status_snapshot = self._status_snapshot(
             str(result.metadata.get("providerStatus") or "running")
@@ -2229,13 +2246,41 @@ class TemporalIntegrationActivities:
 
     async def integration_codex_cloud_status(
         self,
+        request: Mapping[str, Any] | str | None = None,
+        /,
         *,
-        external_id: str,
+        external_id: str | None = None,
         principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
         """Poll current status for one Codex Cloud task."""
-        status = await self._codex_cloud_adapter.status(external_id)
+        request_payload: dict[str, Any] = {}
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.codex_cloud.status"
+            )
+        elif request is not None and not isinstance(request, str):
+            raise TemporalActivityRuntimeError(
+                "integration.codex_cloud.status payload must be a JSON object or string external_id"
+            )
+
+        if request_payload:
+            if external_id is None:
+                external_id = request_payload.get("external_id")
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+        elif isinstance(request, str):
+            if external_id is None:
+                external_id = request.strip()
+
+        if not external_id or not str(external_id).strip():
+            raise TemporalActivityRuntimeError(
+                "integration.codex_cloud.status requires a non-empty external_id"
+            )
+
+        status = await self._codex_cloud_adapter.status(str(external_id).strip())
         provider_status = str(status.metadata.get("providerStatus") or "unknown")
         external_url = str(status.metadata.get("externalUrl") or "").strip() or None
 
@@ -2274,18 +2319,40 @@ class TemporalIntegrationActivities:
 
     async def integration_codex_cloud_fetch_result(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        external_id: str,
-        principal: str,
+        external_id: str | None = None,
+        principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> tuple[ArtifactRef, ...]:
         """Fetch terminal result for one completed Codex Cloud task."""
+        request_payload: dict[str, Any] = {}
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.codex_cloud.fetch_result"
+            )
+
+        if request_payload:
+            if external_id is None:
+                external_id = request_payload.get("external_id")
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+
+        if not external_id or not str(external_id).strip():
+            raise TemporalActivityRuntimeError(
+                "integration.codex_cloud.fetch_result requires a non-empty external_id"
+            )
+
         if self._artifact_service is None:
             raise TemporalActivityRuntimeError(
                 "integration.codex_cloud.fetch_result requires artifact storage"
             )
 
         status = await self.integration_codex_cloud_status(
+            request=request_payload,
             external_id=external_id,
             principal=principal,
             execution_ref=execution_ref,
@@ -2297,13 +2364,34 @@ class TemporalIntegrationActivities:
 
     async def integration_codex_cloud_cancel(
         self,
+        request: Mapping[str, Any] | None = None,
+        /,
         *,
-        external_id: str,
-        principal: str,
+        external_id: str | None = None,
+        principal: str | None = None,
         execution_ref: ExecutionRef | dict[str, Any] | None = None,
     ) -> IntegrationStatusResult:
         """Attempt best-effort cancellation of one Codex Cloud task."""
-        result = await self._codex_cloud_adapter.cancel(external_id)
+        request_payload: dict[str, Any] = {}
+        if isinstance(request, Mapping):
+            request_payload = _coerce_activity_request(
+                request, activity_type="integration.codex_cloud.cancel"
+            )
+
+        if request_payload:
+            if external_id is None:
+                external_id = request_payload.get("external_id")
+            if principal is None:
+                principal = request_payload.get("principal")
+            if execution_ref is None:
+                execution_ref = request_payload.get("execution_ref")
+
+        if not external_id or not str(external_id).strip():
+            raise TemporalActivityRuntimeError(
+                "integration.codex_cloud.cancel requires a non-empty external_id"
+            )
+
+        result = await self._codex_cloud_adapter.cancel(str(external_id).strip())
 
         provider_status = str(
             result.metadata.get("providerStatus") or ""
