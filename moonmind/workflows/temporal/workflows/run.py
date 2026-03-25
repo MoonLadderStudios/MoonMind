@@ -385,7 +385,13 @@ class MoonMindRunWorkflow:
             "initialParameters",
             "initial_parameters",
         )
-        self._repo = self._string_from_mapping(parameters, "repo")
+        ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
+        self._repo = (
+            self._string_from_mapping(parameters, "repo")
+            or self._string_from_mapping(parameters, "repository")
+            or self._string_from_mapping(ws, "repo")
+            or self._string_from_mapping(ws, "repository")
+        )
         self._integration = self._string_from_mapping(parameters, "integration")
 
         input_ref = self._optional_string(
