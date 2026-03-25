@@ -95,14 +95,14 @@ An operations user monitors active and completed runs and needs structured progr
 - **FR-006**: The runtime MUST validate each plan node for unique ID, pinned skill availability, schema-compliant inputs, and bounded overrides. (Maps: DOC-REQ-006, DOC-REQ-012)
 - **FR-007**: The runtime MUST normalize failures to the standard skill error code set and apply policy-driven retries. (Maps: DOC-REQ-008)
 - **FR-008**: The runtime MUST resolve inter-node references deterministically and reject plans with invalid reference targets. (Maps: DOC-REQ-011, DOC-REQ-012)
-- **FR-009**: The plan interpreter MUST schedule nodes only after all dependencies succeed, enforce max concurrency, and apply configured failure mode (`FAIL_FAST` or `CONTINUE`). (Maps: DOC-REQ-010)
+- **FR-009**: The plan executor MUST schedule nodes only after all dependencies succeed, enforce max concurrency, and apply configured failure mode (`FAIL_FAST` or `CONTINUE`). (Maps: DOC-REQ-010)
 - **FR-010**: The interpreter MUST resolve skill contracts from the plan's pinned registry snapshot and MUST NOT resolve from latest registry state. (Maps: DOC-REQ-013)
 - **FR-011**: Node dispatch MUST use activity type and capability requirements declared by the skill registry, and interpreter logic MUST NOT guess bindings. (Maps: DOC-REQ-014)
 - **FR-012**: The runtime MUST expose structured progress state during execution and support durable progress artifact publication. (Maps: DOC-REQ-001, DOC-REQ-015)
 - **FR-013**: The runtime MUST produce per-node results and a final summary artifact for completed plan executions. (Maps: DOC-REQ-015)
 - **FR-014**: Delivery MUST include production runtime code changes implementing the contracts in `docs/Skills/SkillAndPlanContracts.md`; docs/spec-only edits are not sufficient for completion. (Maps: runtime scope guard)
 - **FR-015**: Delivery MUST include validation tests covering registry validation, plan validation, reference resolution, interpreter scheduling/failure behavior, dispatcher routing, and progress reporting. (Maps: DOC-REQ-016, runtime scope guard)
-- **FR-016**: Delivery MUST implement the minimum runtime capability set from the source checklist: registry loader/validator, snapshot digest + artifact storage, deep plan validation activity, plan interpreter, skill dispatcher, and progress query/artifact output. (Maps: DOC-REQ-016)
+- **FR-016**: Delivery MUST implement the minimum runtime capability set from the source checklist: registry loader/validator, snapshot digest + artifact storage, deep plan validation activity, plan executor, skill dispatcher, and progress query/artifact output. (Maps: DOC-REQ-016)
 
 ### DOC-REQ to Functional Requirement Mapping
 
@@ -171,5 +171,5 @@ An operations user monitors active and completed runs and needs structured progr
 
 ### Residual risks
 
-- Contract behavior spans multiple runtime modules (`skill_registry`, `plan_validation`, `skill_dispatcher`, and `plan_interpreter`), so implementation drift remains possible if changes bypass shared contracts.
+- Contract behavior spans multiple runtime modules (`skill_registry`, `plan_validation`, `skill_dispatcher`, and `plan_executor`), so implementation drift remains possible if changes bypass shared contracts.
 - Failure-policy and dependency-ordering regressions remain possible if edge-case tests are skipped during implementation.

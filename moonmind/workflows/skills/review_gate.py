@@ -1,6 +1,6 @@
 """Review gate contracts and utilities.
 
-Data models for the step review gate system:
+Data models for the step approval policy system:
 - ``ReviewRequest``: input to the ``step.review`` activity.
 - ``ReviewVerdict``: structured output from the review activity.
 - Feedback builders for injecting review feedback into step inputs.

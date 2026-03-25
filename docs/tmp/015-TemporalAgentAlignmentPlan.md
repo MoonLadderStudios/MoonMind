@@ -127,39 +127,39 @@ This plan closes that gap through five phases of work, each independently shippa
 
 **Goal:** Make the docs and codebase vocabulary consistently Temporal-native.
 
-- [ ] **4.1** Add top-level architecture statement
+- [x] **4.1** Add top-level architecture statement
   - **Files:** `docs/Temporal/TemporalArchitecture.md`
   - Add and repeat consistently across docs: _"MoonMind execution is Temporal-native. MoonMind adds domain contracts above Temporal—Tool, Plan, Artifact, Agent Adapter—but does not introduce a parallel orchestration substrate."_
 
-- [ ] **4.2** Rename "Plan Interpreter" → "Plan Executor" or "Plan Driver"
+- [x] **4.2** Rename "Plan Executor" → "Plan Executor" or "Plan Driver"
   - **Files:** Docs and source code references
   - "Interpreter" implies a shadow orchestrator; "Executor" makes clear the Workflow is the durable owner
 
-- [ ] **4.3** Define the dual agent execution model in docs
+- [x] **4.3** Define the dual agent execution model in docs
   - **Files:** Architecture docs
   - Document two sanctioned agent execution modes:
     1. **Workflow-native agentic loop** — reasoning loop lives in workflow code; each model/tool interaction is an Activity
     2. **Delegated agent runtime** — agent runs outside the workflow; `MoonMind.AgentRun` owns its durable lifecycle
   - Sharpen `MoonMind.AgentRun` contract: _"The durable lifecycle wrapper for delegated cognition"_
 
-- [ ] **4.4** Formalize the Query vs Visibility split
+- [x] **4.4** Formalize the Query vs Visibility split
   - **Files:** Architecture docs
   - **Visibility + projections** → list pages, counts, filtering, history, dashboards
   - **Queries** → live execution detail, current progress, awaiting reason, active step, intervention point
 
-- [ ] **4.5** Codify the adapter vs workflow boundary rule
+- [x] **4.5** Codify the adapter vs workflow boundary rule
   - **Files:** Architecture docs
   - _"Adapters translate provider/runtime semantics. Workflows own lifecycle semantics."_
   - Adapters: normalize states, launch/start/status/fetch/cancel, expose capability descriptors
   - Workflows: phase progression, waiting, orchestration-level retries, HITL transitions, durable lifecycle state
 
-- [ ] **4.6** Clean up naming collisions
-  - Rename "Review Gate" → "Approval Policy" or "HITL Policy"
+- [x] **4.6** Clean up naming collisions
+  - Rename "Approval Policy" → "Approval Policy" or "HITL Policy"
   - Distinguish **workflow pause** from **fleet quiesce/drain** in pause/resume docs
   - Remove any user-visible "queue" wording that implies ordering semantics
   - Avoid "dispatcher/supervisor" language for logic that is Workflow + Activity behavior
 
-- [ ] **4.7** Formalize "read models are never execution truth"
+- [x] **4.7** Formalize "read models are never execution truth"
   - **Files:** Architecture docs
   - workflow state/history + artifacts = execution truth
   - Visibility = indexed execution query plane

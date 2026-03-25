@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from moonmind.workflows.skills.review_gate import (
+from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
     parse_review_verdict,
 )

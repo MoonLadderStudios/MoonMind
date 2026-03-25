@@ -42,7 +42,7 @@ from .materializer import (
     SkillMaterializationError,
     materialize_run_skill_workspace,
 )
-from .plan_interpreter import (
+from .plan_executor import (
     PlanExecutionError,
     PlanExecutionSummary,
     PlanInterpreter,

@@ -1,12 +1,12 @@
-# Data Model: Step Review Gate
+# Data Model: Step Approval Policy
 
-## ReviewGatePolicy
+## ApprovalPolicyPolicy
 
 Configuration object embedded in `PlanPolicy`.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | `bool` | `False` | Whether the review gate is active |
+| `enabled` | `bool` | `False` | Whether the approval policy is active |
 | `max_review_attempts` | `int` | `2` | Max retries per step on review failure (excludes initial) |
 | `reviewer_model` | `str` | `"default"` | LLM model for review |
 | `review_timeout_seconds` | `int` | `120` | Timeout per review activity |
@@ -57,7 +57,7 @@ Injected into step inputs on retry.
 
 ```mermaid
 graph TD
-    PP[PlanPolicy] -->|contains| RGP[ReviewGatePolicy]
+    PP[PlanPolicy] -->|contains| RGP[ApprovalPolicyPolicy]
     RGP -->|configures| RL[Review Loop in _run_execution_stage]
     RL -->|creates| RR[ReviewRequest]
     RL -->|receives| RV[ReviewVerdict]

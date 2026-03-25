@@ -40,9 +40,13 @@ MoonMind currently operates with:
 
 This is the current documented and implemented direction in the repository, not legacy trivia.
 
+
 ### 3.2 Target state
 
+**Architecture Precept:** *MoonMind execution is Temporal-native. MoonMind adds domain contracts above Temporal—Tool, Plan, Artifact, Agent Adapter—but does not introduce a parallel orchestration substrate.*
+
 MoonMind is migrating to **Temporal as the primary durable workflow manager and scheduling system** for workflow-driven automation.
+
 
 In the target state:
 
@@ -348,9 +352,17 @@ Execution moves toward **Temporal** as the durable orchestration layer for new f
 | `ActionPlan` | `Plan` artifact plus workflow orchestration logic | Plan stays a MoonMind domain concept |
 | Step | Plan node, activity call, or child workflow | Depends on isolation and retry boundary |
 | `prepare -> execute -> publish` | workflow phases reflected in `mm_state` and artifacts | Keep phase meaning, change substrate |
-| Approval token / approval gate | Signal or Update plus workflow policy check | Approval remains a product policy concept |
+| Approval token / Approval Policy | Signal or Update plus workflow policy check | Approval remains a product policy concept |
 | Worker runtime selection | Activity routing and worker capability binding | Not a new workflow taxonomy |
 | DB state sink snapshot | Artifact-backed fallback plus reconciliation | Relevant during migration and degraded mode |
+
+
+### 8.1 Adapter vs. Workflow Boundary
+
+A strict boundary exists between Adapters and Workflows:
+- *"Adapters translate provider/runtime semantics. Workflows own lifecycle semantics."*
+- **Adapters:** Normalize states, handle launch/start/status/fetch/cancel operations, and expose capability descriptors.
+- **Workflows:** Own phase progression, waiting, orchestration-level retries, HITL (Human-in-the-Loop) transitions, and durable lifecycle state.
 
 ## 9. Workflow model
 
@@ -386,6 +398,15 @@ Do not create separate workflow type families just for:
 - worker brand or provider choice
 
 Those are routing and execution concerns, not root orchestration categories.
+
+
+### 9.3 Agent Execution Model
+
+MoonMind sanctions two agent execution modes:
+1. **Workflow-native agentic loop:** The reasoning loop lives in workflow code; each model/tool interaction is an Activity.
+2. **Delegated agent runtime:** The agent runs outside the workflow; `MoonMind.AgentRun` owns its durable lifecycle.
+
+The `MoonMind.AgentRun` contract is specifically defined as: *"The durable lifecycle wrapper for delegated cognition."*
 
 ## 10. Activity model and worker topology
 
@@ -497,6 +518,20 @@ Canonical search attributes and memo fields should align with the newer workflow
 - allow a task row to map to a Temporal workflow execution behind the scenes
 - avoid inventing queue-order semantics for list sorting or status interpretation
 - use Temporal page tokens and count semantics only for Temporal-backed queries
+
+
+### 12.4 Query vs. Visibility Split
+
+To maintain strict boundaries between execution state and read models:
+- **Visibility + projections:** Used for list pages, counts, filtering, history, and dashboards.
+- **Queries:** Used for live execution detail, current progress, awaiting reason, active step, and intervention point.
+
+### 12.5 Read Models Are Never Execution Truth
+
+- **Execution Truth:** Workflow state/history + artifacts = execution truth.
+- **Query Plane:** Visibility = indexed execution query plane.
+- **Read Optimization:** Projections = UI/read optimization.
+- **Strict Rule:** Projections must **never** be read by workflows to decide what to do next.
 
 ## 13. Public API posture
 

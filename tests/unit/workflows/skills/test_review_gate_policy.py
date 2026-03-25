@@ -1,4 +1,4 @@
-"""Tests for PlanPolicy review_gate parsing and serialization."""
+"""Tests for PlanPolicy approval_policy parsing and serialization."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from __future__ import annotations
 from moonmind.workflows.skills.tool_plan_contracts import (
     DEFAULT_SKIP_TOOL_TYPES,
     PlanPolicy,
-    ReviewGatePolicy,
+    ApprovalPolicyPolicy,
     parse_plan_definition,
 )
 
@@ -32,50 +32,50 @@ _MINIMAL_PLAN = {
 }
 
 
-class TestPlanPolicyReviewGate:
-    def test_default_plan_policy_has_none_review_gate(self):
+class TestPlanPolicyApprovalPolicy:
+    def test_default_plan_policy_has_none_approval_policy(self):
         policy = PlanPolicy()
-        assert policy.review_gate is None
+        assert policy.approval_policy is None
 
-    def test_plan_policy_with_enabled_review_gate(self):
-        rg = ReviewGatePolicy(enabled=True, max_review_attempts=5)
-        policy = PlanPolicy(review_gate=rg)
-        assert policy.review_gate is not None
-        assert policy.review_gate.enabled is True
-        assert policy.review_gate.max_review_attempts == 5
+    def test_plan_policy_with_enabled_approval_policy(self):
+        rg = ApprovalPolicyPolicy(enabled=True, max_review_attempts=5)
+        policy = PlanPolicy(approval_policy=rg)
+        assert policy.approval_policy is not None
+        assert policy.approval_policy.enabled is True
+        assert policy.approval_policy.max_review_attempts == 5
 
-    def test_to_payload_omits_review_gate_when_none(self):
+    def test_to_payload_omits_approval_policy_when_none(self):
         policy = PlanPolicy()
         payload = policy.to_payload()
-        assert "review_gate" not in payload
+        assert "approval_policy" not in payload
 
-    def test_to_payload_omits_review_gate_when_disabled(self):
-        rg = ReviewGatePolicy(enabled=False)
-        policy = PlanPolicy(review_gate=rg)
+    def test_to_payload_omits_approval_policy_when_disabled(self):
+        rg = ApprovalPolicyPolicy(enabled=False)
+        policy = PlanPolicy(approval_policy=rg)
         payload = policy.to_payload()
-        assert "review_gate" not in payload
+        assert "approval_policy" not in payload
 
-    def test_to_payload_includes_review_gate_when_enabled(self):
-        rg = ReviewGatePolicy(enabled=True)
-        policy = PlanPolicy(review_gate=rg)
+    def test_to_payload_includes_approval_policy_when_enabled(self):
+        rg = ApprovalPolicyPolicy(enabled=True)
+        policy = PlanPolicy(approval_policy=rg)
         payload = policy.to_payload()
-        assert "review_gate" in payload
-        assert payload["review_gate"]["enabled"] is True
+        assert "approval_policy" in payload
+        assert payload["approval_policy"]["enabled"] is True
 
 
-class TestParsePlanDefinitionReviewGate:
-    def test_parse_without_review_gate_returns_none(self):
-        """When plan omits review_gate, PlanPolicy.review_gate is None."""
+class TestParsePlanDefinitionApprovalPolicy:
+    def test_parse_without_approval_policy_returns_none(self):
+        """When plan omits approval_policy, PlanPolicy.approval_policy is None."""
         plan_payload = {**_MINIMAL_PLAN, "policy": {"failure_mode": "FAIL_FAST"}}
         plan = parse_plan_definition(plan_payload)
-        assert plan.policy.review_gate is None
+        assert plan.policy.approval_policy is None
 
-    def test_parse_with_review_gate_enabled(self):
+    def test_parse_with_approval_policy_enabled(self):
         plan_payload = {
             **_MINIMAL_PLAN,
             "policy": {
                 "failure_mode": "FAIL_FAST",
-                "review_gate": {
+                "approval_policy": {
                     "enabled": True,
                     "max_review_attempts": 3,
                     "reviewer_model": "gpt-4",
@@ -85,7 +85,7 @@ class TestParsePlanDefinitionReviewGate:
             },
         }
         plan = parse_plan_definition(plan_payload)
-        rg = plan.policy.review_gate
+        rg = plan.policy.approval_policy
         assert rg.enabled is True
         assert rg.max_review_attempts == 3
         assert rg.reviewer_model == "gpt-4"
@@ -98,37 +98,37 @@ class TestParsePlanDefinitionReviewGate:
             **_MINIMAL_PLAN,
             "policy": {
                 "failure_mode": "FAIL_FAST",
-                "review_gate": {
+                "approval_policy": {
                     "enabled": True,
                     "max_review_attempts": 0,
                 },
             },
         }
         plan = parse_plan_definition(plan_payload)
-        assert plan.policy.review_gate.max_review_attempts == 0
+        assert plan.policy.approval_policy.max_review_attempts == 0
 
-    def test_parse_with_review_gate_disabled_explicitly(self):
+    def test_parse_with_approval_policy_disabled_explicitly(self):
         plan_payload = {
             **_MINIMAL_PLAN,
             "policy": {
                 "failure_mode": "CONTINUE",
-                "review_gate": {"enabled": False},
+                "approval_policy": {"enabled": False},
             },
         }
         plan = parse_plan_definition(plan_payload)
-        assert plan.policy.review_gate.enabled is False
+        assert plan.policy.approval_policy.enabled is False
 
-    def test_parse_review_gate_defaults_on_empty_object(self):
+    def test_parse_approval_policy_defaults_on_empty_object(self):
         """Explicit empty object means 'specified but with defaults'."""
         plan_payload = {
             **_MINIMAL_PLAN,
             "policy": {
                 "failure_mode": "FAIL_FAST",
-                "review_gate": {},
+                "approval_policy": {},
             },
         }
         plan = parse_plan_definition(plan_payload)
-        rg = plan.policy.review_gate
+        rg = plan.policy.approval_policy
         assert rg is not None          # Present, not None
         assert rg.enabled is False
         assert rg.max_review_attempts == 2
@@ -141,8 +141,8 @@ class TestParsePlanDefinitionReviewGate:
             **_MINIMAL_PLAN,
             "policy": {
                 "failure_mode": "FAIL_FAST",
-                "review_gate": {"enabled": True, "skip_tool_types": "not-a-list"},
+                "approval_policy": {"enabled": True, "skip_tool_types": "not-a-list"},
             },
         }
         plan = parse_plan_definition(plan_payload)
-        assert plan.policy.review_gate.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES
+        assert plan.policy.approval_policy.skip_tool_types == DEFAULT_SKIP_TOOL_TYPES

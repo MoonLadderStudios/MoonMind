@@ -1,4 +1,4 @@
-# Step Review Gate System
+# Step Approval Policy System
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
@@ -9,7 +9,7 @@ Related: `docs/Tasks/SkillAndPlanContracts.md`, `docs/Tasks/TasksStepSystem.md`,
 
 ## 1. Summary
 
-An optional **review gate** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.Run`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the step is retried with structured feedback about what went wrong.
+An optional **approval policy** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.Run`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the step is retried with structured feedback about what went wrong.
 
 The feature is designed as a **toggle** — when enabled, the system automatically wraps every eligible step in a review-retry loop without requiring any changes to the plan itself. Non-idempotent tools (e.g., publish steps that create PRs) are exempt by default to prevent duplicate side effects.
 
@@ -19,7 +19,7 @@ The feature is designed as a **toggle** — when enabled, the system automatical
 
 ### Goals
 
-- **Automatic injection**: Operators toggle the feature on; the review gate appears after every step transparently.
+- **Automatic injection**: Operators toggle the feature on; the approval policy appears after every step transparently.
 - **LLM-powered review**: A dedicated review activity evaluates step outputs against step inputs/aims using an LLM.
 - **Retry with feedback**: Failed reviews feed structured diagnostics back to the step, allowing it to self-correct.
 - **Bounded retries**: Configurable max review attempts per step to prevent runaway cost.
@@ -29,7 +29,7 @@ The feature is designed as a **toggle** — when enabled, the system automatical
 ### Non-Goals
 
 - Human-in-the-loop review (already exists via approval signals).
-- Replacing Temporal's native activity retry policy (review gate operates at a higher semantic level).
+- Replacing Temporal's native activity retry policy (approval policy operates at a higher semantic level).
 - Conditional plan branching based on review output (reserved for future conditional-edge support).
 
 ---
@@ -40,7 +40,7 @@ The feature is designed as a **toggle** — when enabled, the system automatical
 flowchart TD
     subgraph MoonMind.Run Execution Loop
         A[Plan Node N] -->|execute| B[Activity / AgentRun]
-        B --> C{Review Gate Enabled?}
+        B --> C{Approval Policy Enabled?}
         C -->|No| D[Record Result & Continue]
         C -->|Yes| E[Review Activity]
         E --> F{Review Verdict}
@@ -58,12 +58,12 @@ flowchart TD
 
 ### 4.1 PlanPolicy Extension
 
-Add optional review gate configuration to the existing `PlanPolicy` contract.
+Add optional approval policy configuration to the existing `PlanPolicy` contract.
 
 ```python
 @dataclass(frozen=True, slots=True)
-class ReviewGatePolicy:
-    """Per-plan review gate configuration."""
+class ApprovalPolicyPolicy:
+    """Per-plan approval policy configuration."""
 
     enabled: bool = False
     max_review_attempts: int = 2          # retries per step (excluding initial)
@@ -82,7 +82,7 @@ Add to `PlanPolicy`:
  class PlanPolicy:
      failure_mode: str = "FAIL_FAST"
      max_concurrency: int = 1
-+    review_gate: ReviewGatePolicy | None = None  # None = not specified in plan
++    approval_policy: ApprovalPolicyPolicy | None = None  # None = not specified in plan
 ```
 
 ### 4.2 Plan JSON Schema Extension
@@ -92,7 +92,7 @@ Add to `PlanPolicy`:
   "policy": {
     "failure_mode": "FAIL_FAST",
     "max_concurrency": 1,
-    "review_gate": {
+    "approval_policy": {
       "enabled": true,
       "max_review_attempts": 2,
       "reviewer_model": "default",
@@ -103,7 +103,7 @@ Add to `PlanPolicy`:
 }
 ```
 
-When `review_gate` is absent or `enabled` is `false`, behavior is identical to today.
+When `approval_policy` is absent or `enabled` is `false`, behavior is identical to today.
 
 ### 4.3 Review Activity Input / Output Contracts
 
@@ -175,14 +175,14 @@ The existing node-iteration loop in `MoonMind.Run._run_execution_stage()` wraps 
 
 ```python
 for index, node in enumerate(ordered_nodes, start=1):
-    review_gate = plan_definition.policy.review_gate
+    approval_policy = plan_definition.policy.approval_policy
     gate_active = (
-        review_gate.enabled
-        and node_tool_type not in review_gate.skip_tool_types
+        approval_policy.enabled
+        and node_tool_type not in approval_policy.skip_tool_types
     )
 
     previous_feedback = None
-    max_attempts = (review_gate.max_review_attempts + 1) if gate_active else 1
+    max_attempts = (approval_policy.max_review_attempts + 1) if gate_active else 1
 
     for attempt in range(1, max_attempts + 1):
         # Build step input, injecting feedback from prior review if present
@@ -332,16 +332,16 @@ The review activity routes to the **LLM activity fleet** (`mm.activity.llm`), le
 
 ### 7.1 Plan-Level (Primary)
 
-The `policy.review_gate` block in the plan JSON. This is the most precise control.
+The `policy.approval_policy` block in the plan JSON. This is the most precise control.
 
 ### 7.2 Workflow-Level (API Parameter)
 
-The `initialParameters` payload when starting a `MoonMind.Run` can include a review gate override:
+The `initialParameters` payload when starting a `MoonMind.Run` can include a approval policy override:
 
 ```json
 {
   "initialParameters": {
-    "reviewGate": {
+    "approvalPolicy": {
       "enabled": true,
       "maxReviewAttempts": 3
     }
@@ -349,14 +349,14 @@ The `initialParameters` payload when starting a `MoonMind.Run` can include a rev
 }
 ```
 
-**Precedence**: Plan-level `review_gate` configuration takes full precedence when **present** in the plan JSON (regardless of value). Workflow-level and env-var defaults only apply when the plan **omits** the `review_gate` block entirely.
+**Precedence**: Plan-level `approval_policy` configuration takes full precedence when **present** in the plan JSON (regardless of value). Workflow-level and env-var defaults only apply when the plan **omits** the `approval_policy` block entirely.
 
-- Plan has `review_gate` → use plan's config (even if `enabled: false`)
-- Plan omits `review_gate` + workflow has `reviewGate` → use workflow config
+- Plan has `approval_policy` → use plan's config (even if `enabled: false`)
+- Plan omits `approval_policy` + workflow has `approvalPolicy` → use workflow config
 - Both omit → use `MOONMIND_REVIEW_GATE_DEFAULT_ENABLED` env var
-- All omit → review gate is disabled
+- All omit → approval policy is disabled
 
-> **Implementation note**: The plan parser must distinguish "plan omitted `review_gate`" (→ `None`) from "plan explicitly set `review_gate`" (→ `ReviewGatePolicy`). Use `Optional[ReviewGatePolicy]` on `PlanPolicy.review_gate` with `None` meaning "not specified".
+> **Implementation note**: The plan parser must distinguish "plan omitted `approval_policy`" (→ `None`) from "plan explicitly set `approval_policy`" (→ `ApprovalPolicyPolicy`). Use `Optional[ApprovalPolicyPolicy]` on `PlanPolicy.approval_policy` with `None` meaning "not specified".
 
 ### 7.3 Environment Variable (Default)
 
@@ -366,10 +366,10 @@ The `initialParameters` payload when starting a `MoonMind.Run` can include a rev
 
 The task creation form gains a toggle:
 
-- **"Enable Step Review Gate"** checkbox (off by default)
+- **"Enable Step Approval Policy"** checkbox (off by default)
 - Expanding section with optional overrides (max attempts, reviewer model)
 
-The toggle maps to the `reviewGate` field in `initialParameters`.
+The toggle maps to the `approvalPolicy` field in `initialParameters`.
 
 ---
 
@@ -385,14 +385,14 @@ During review cycles, the workflow memo updates to reflect:
 
 ### 8.2 Search Attributes
 
-Add `mm_review_gate_active` (bool) search attribute for filtering in Temporal Visibility and Mission Control.
+Add `mm_approval_policy_active` (bool) search attribute for filtering in Temporal Visibility and Mission Control.
 
 ### 8.3 Mission Control Terminal Widget
 
 Review verdicts are emitted to the Mission Control live output as scoped blocks:
 
 ```
-───── Review Gate: step n1 (attempt 1) ─────
+───── Approval Policy: step n1 (attempt 1) ─────
 Verdict: FAIL (confidence: 0.85)
 Issues:
   [error] Missing import statement for 'datetime' in utils.py
@@ -403,11 +403,11 @@ Retrying step with feedback...
 
 ### 8.4 Finish Summary Integration
 
-The `reports/run_summary.json` includes review gate metrics:
+The `reports/run_summary.json` includes approval policy metrics:
 
 ```json
 {
-  "reviewGate": {
+  "approvalPolicy": {
     "enabled": true,
     "stepsReviewed": 5,
     "totalReviewAttempts": 8,
@@ -437,7 +437,7 @@ The `reports/run_summary.json` includes review gate metrics:
 | `failure_mode: CONTINUE` | If a step fails all review attempts, execution continues to the next step. |
 | Temporal retry policy | Temporal retries handle transient infrastructure errors. Review gate handles semantic/correctness failures. They operate at different levels. |
 | Approval gates | Review gate runs before any approval gate. A step must pass review before reaching an approval checkpoint. |
-| `MoonMind.AgentRun` 429 retry | The 429 retry in `AgentRun` is internal to that workflow. The review gate evaluates the final output of the child workflow. |
+| `MoonMind.AgentRun` 429 retry | The 429 retry in `AgentRun` is internal to that workflow. The approval policy evaluates the final output of the child workflow. |
 
 ### 9.3 Skip List
 
@@ -465,7 +465,7 @@ The review activity is a standard Temporal Activity — all nondeterministic beh
 ### 10.2 Replay Safety
 
 The review-retry loop is fully deterministic:
-- Loop bounds are derived from `review_gate.max_review_attempts` (frozen in the plan policy).
+- Loop bounds are derived from `approval_policy.max_review_attempts` (frozen in the plan policy).
 - Review verdicts are recorded in Temporal workflow history as activity results.
 - Feedback strings are deterministic (they come from recorded activity results).
 
@@ -481,7 +481,7 @@ Each review adds one activity result to the workflow history. With a default of 
 
 | File | Change |
 |---|---|
-| `moonmind/workflows/skills/tool_plan_contracts.py` | Add `ReviewGatePolicy` dataclass, extend `PlanPolicy`, update `parse_plan_definition()` |
+| `moonmind/workflows/skills/tool_plan_contracts.py` | Add `ApprovalPolicyPolicy` dataclass, extend `PlanPolicy`, update `parse_plan_definition()` |
 
 ### Layer 2: Review Activity
 
@@ -500,15 +500,15 @@ Each review adds one activity result to the workflow history. With a default of 
 
 | File | Change |
 |---|---|
-| `api_service/api/routers/executions.py` | Accept `reviewGate` in create-run payload, merge into `initialParameters` |
-| `api_service/static/task_dashboard/dashboard.js` | Add review gate toggle to task creation form |
+| `api_service/api/routers/executions.py` | Accept `approvalPolicy` in create-run payload, merge into `initialParameters` |
+| `api_service/static/task_dashboard/dashboard.js` | Add approval policy toggle to task creation form |
 
 ### Layer 5: Observability
 
 | File | Change |
 |---|---|
 | `moonmind/workflows/temporal/workflows/run.py` | Emit review verdicts to memo and terminal output |
-| Finish summary logic | Include `reviewGate` metrics in `run_summary.json` |
+| Finish summary logic | Include `approvalPolicy` metrics in `run_summary.json` |
 
 ---
 

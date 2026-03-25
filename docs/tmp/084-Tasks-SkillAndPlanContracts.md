@@ -10,7 +10,7 @@
 1. Tool registry file format + loader + validator.
 2. Registry snapshot digest + artifact storage.
 3. `plan.validate` activity (deep validation).
-4. Plan Interpreter in `MoonMind.Run` (schedule nodes, results, policy).
+4. Plan Executor in `MoonMind.Run` (schedule nodes, results, policy).
 5. `mm.skill.execute` dispatcher in worker fleet (note: codebase may use `mm.tool.execute` naming — reconcile).
 6. Progress query + optional progress artifact.
 

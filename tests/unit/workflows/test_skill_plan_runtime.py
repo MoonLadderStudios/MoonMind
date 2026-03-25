@@ -12,7 +12,7 @@ from moonmind.workflows.skills.artifact_store import (
     FileArtifactStore,
     InMemoryArtifactStore,
 )
-from moonmind.workflows.skills.plan_interpreter import create_validated_interpreter
+from moonmind.workflows.skills.plan_executor import create_validated_interpreter
 from moonmind.workflows.skills.plan_validation import (
     PlanValidationError,
     validate_plan_payload,
@@ -420,7 +420,7 @@ def test_skill_dispatcher_uses_default_handler_when_specific_handler_missing():
     assert result.outputs["echo_repo"] == "git:org/repo#branch"
 
 
-def test_plan_interpreter_fail_fast_skips_dependents():
+def test_plan_executor_fail_fast_skips_dependents():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
     plan = parse_plan_definition(
@@ -449,7 +449,7 @@ def test_plan_interpreter_fail_fast_skips_dependents():
     assert summary.progress_artifact_ref is not None
 
 
-def test_plan_interpreter_continue_executes_independent_nodes():
+def test_plan_executor_continue_executes_independent_nodes():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
     plan_payload = _plan_payload(
@@ -485,7 +485,7 @@ def test_plan_interpreter_continue_executes_independent_nodes():
     assert "n2" in summary.results
 
 
-def test_plan_interpreter_fail_fast_records_cancelled_in_flight_nodes():
+def test_plan_executor_fail_fast_records_cancelled_in_flight_nodes():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
     plan_payload = _plan_payload(
