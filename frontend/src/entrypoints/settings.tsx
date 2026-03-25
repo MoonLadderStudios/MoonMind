@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
-import { BootPayload } from '../boot/parseBootPayload';
 
 interface ProfileData {
   id?: string;
@@ -16,7 +15,7 @@ interface Notice {
   text: string;
 }
 
-function UserSettingsPage({ payload }: { payload: BootPayload }) {
+function UserSettingsPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<Notice | null>(null);
 
