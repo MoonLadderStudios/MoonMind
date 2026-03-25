@@ -209,6 +209,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
     "auth_profile.list": ("artifacts", "auth_profile_list"),
     "auth_profile.ensure_manager": ("artifacts", "auth_profile_ensure_manager"),
+    "auth_profile.reset_manager": ("artifacts", "auth_profile_reset_manager"),
     "auth_profile.verify_lease_holders": (
         "artifacts",
         "auth_profile_verify_lease_holders",

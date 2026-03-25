@@ -2156,6 +2156,57 @@ class TemporalArtifactActivities:
             )
             return {"started": False, "workflow_id": workflow_id}
 
+    async def auth_profile_reset_manager(
+        self,
+        *,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        """Terminate and restart the AuthProfileManager for *runtime_id*.
+
+        Used by AgentRun when the manager appears stuck (e.g. nondeterminism
+        error causing workflow task failures). Terminates the existing manager
+        if running, then starts a fresh one.
+        """
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+        from temporalio.service import RPCError
+
+        from moonmind.workflows.temporal.client import TemporalClientAdapter
+        from moonmind.workflows.temporal.workflows.auth_profile_manager import (
+            WORKFLOW_NAME as AUTH_PROFILE_MANAGER_WF,
+            WORKFLOW_TASK_QUEUE as AUTH_PROFILE_MANAGER_QUEUE,
+        )
+
+        workflow_id = f"auth-profile-manager:{runtime_id}"
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+
+        # Terminate the existing manager if it exists.
+        try:
+            handle = client.get_workflow_handle(workflow_id)
+            await handle.terminate(reason="Reset by AgentRun: manager appeared stuck")
+            logger.info(
+                "auth_profile.reset_manager terminated stale manager for runtime=%s",
+                runtime_id,
+            )
+        except RPCError:
+            logger.debug(
+                "auth_profile.reset_manager no running manager to terminate for runtime=%s",
+                runtime_id,
+            )
+
+        # Start a fresh manager.
+        await client.start_workflow(
+            AUTH_PROFILE_MANAGER_WF,
+            {"runtime_id": runtime_id},
+            id=workflow_id,
+            task_queue=AUTH_PROFILE_MANAGER_QUEUE,
+        )
+        logger.info(
+            "auth_profile.reset_manager started fresh manager for runtime=%s",
+            runtime_id,
+        )
+        return {"reset": True, "workflow_id": workflow_id}
+
     async def auth_profile_verify_lease_holders(
         self,
         *,
