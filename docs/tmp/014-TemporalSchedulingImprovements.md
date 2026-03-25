@@ -132,7 +132,7 @@ This plan closes that gap and adds supporting improvements across five phases.
 
 **Goal:** Make scheduled execution times queryable via Temporal Visibility.
 
-- [ ] **3.1** Register the search attribute
+- [x] **3.1** Register the search attribute
   - **Files:** `services/temporal/bootstrap-namespace.sh`
   - ```bash
     temporal operator search-attribute create \
@@ -141,15 +141,15 @@ This plan closes that gap and adds supporting improvements across five phases.
       --type Datetime
     ```
 
-- [ ] **3.2** Set `mm_scheduled_for` on deferred one-time executions
+- [x] **3.2** Set `mm_scheduled_for` on deferred one-time executions
   - **Files:** `moonmind/workflows/temporal/client.py`
   - When `start_delay` is provided in `start_workflow()`, add `mm_scheduled_for = now + start_delay` to search attributes
 
-- [ ] **3.3** Set `mm_scheduled_for` on schedule-spawned workflows
+- [x] **3.3** Set `mm_scheduled_for` on schedule-spawned workflows
   - **Files:** `moonmind/workflows/temporal/client.py`
   - Use the schedule time as `mm_scheduled_for` in `ScheduleActionStartWorkflow` config
 
-- [ ] **3.4** Document in Visibility docs
+- [x] **3.4** Document in Visibility docs
   - **Files:** `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 ### Verification

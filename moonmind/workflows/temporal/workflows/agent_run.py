@@ -1032,6 +1032,7 @@ class MoonMindAgentRun:
                                 {"external_id": self.run_id},
                                 task_queue=q,
                                 start_to_close_timeout=t,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
                             )
                         else:
                             q, t = await self._get_route_info("agent_runtime.cancel", AGENT_RUNTIME_TASK_QUEUE, AGENT_RUNTIME_CANCEL_TIMEOUT)

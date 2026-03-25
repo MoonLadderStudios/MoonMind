@@ -96,27 +96,27 @@ This plan closes that gap through five phases of work, each independently shippa
 > and `schedule_errors.py`. This phase wires it into the recurring tasks service as the primary
 > dispatch path.
 
-- [ ] **3.1** Add `temporal_schedule_id` column to `RecurringTaskDefinition`
+- [x] **3.1** Add `temporal_schedule_id` column to `RecurringTaskDefinition`
   - **Files:** DB migration, `api_service/db/models.py`
   - Nullable string; when populated, indicates the definition has a corresponding Temporal Schedule
 
-- [ ] **3.2** Create/update Temporal Schedule on definition CRUD
+- [x] **3.2** Create/update Temporal Schedule on definition CRUD
   - **Files:** `recurring_tasks_service.py`
   - On `create_definition()`: call `TemporalClientAdapter.create_schedule()`
   - On `update_definition()`: call `update_schedule()`
   - On enable/disable: call `pause_schedule()` / `unpause_schedule()`
 
-- [ ] **3.3** Hybrid dispatch with feature flag
+- [x] **3.3** Hybrid dispatch with feature flag
   - **Files:** `recurring_tasks_service.py`
   - Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` | `"temporal"` | `"dual"`)
   - In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing)
 
-- [ ] **3.4** Migrate existing definitions
+- [x] **3.4** Migrate existing definitions
   - **Files:** New migration script
   - Iterate existing enabled definitions and call `create_schedule()` for each
   - Populate `temporal_schedule_id`
 
-- [ ] **3.5** Deprecate app-layer cron computation
+- [x] **3.5** Deprecate app-layer cron computation
   - **Files:** `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py`
   - Once `"temporal"` mode is stable, remove `schedule_due_definitions()` polling loop and `compute_next_occurrence()` dispatch path
   - Keep cron validation for UI
