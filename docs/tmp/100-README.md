@@ -17,7 +17,6 @@ Each file in this directory tracks **open migration or implementation work** des
 |-----------------|---------|
 | `docs/Tasks/TaskDependenciesPlan.md` | [`plans-TaskDependenciesPlan.md`](plans-TaskDependenciesPlan.md) |
 | `docs/Api/ExecutionsApiContract.md` | [`Api-ExecutionsApiContract.md`](Api-ExecutionsApiContract.md) |
-| `docs/CodexMcpToolsAdapter.md` | [`CodexMcpToolsAdapter.md`](CodexMcpToolsAdapter.md) |
 | `docs/Temporal/TaskExecutionCompatibilityModel.md` | [`Temporal-TaskExecutionCompatibilityModel.md`](Temporal-TaskExecutionCompatibilityModel.md) |
 | `docs/Temporal/SourceOfTruthAndProjectionModel.md` | [`Temporal-SourceOfTruthAndProjectionModel.md`](Temporal-SourceOfTruthAndProjectionModel.md) |
 | `docs/Temporal/VisibilityAndUiQueryModel.md` | [`Temporal-VisibilityAndUiQueryModel.md`](Temporal-VisibilityAndUiQueryModel.md) |
@@ -59,6 +58,6 @@ Each file in this directory tracks **open migration or implementation work** des
 | `docs/Rag/LlamaIndexManifestSystem.md` | [`Rag-LlamaIndexManifestSystem.md`](Rag-LlamaIndexManifestSystem.md) |
 | `docs/Rag/WorkflowRag.md` | [`Rag-WorkflowRag.md`](Rag-WorkflowRag.md) |
 | `docs/Memory/MemoryResearch.md` | [`Memory-MemoryResearch.md`](Memory-MemoryResearch.md) |
-| `docs/MIGRATION_GENERATION.md` | [`MIGRATION_GENERATION.md`](MIGRATION_GENERATION.md) |
+| `docs/ExternalAgents/AlembicMigrationGeneration.md` | [`ExternalAgents-AlembicMigrationGeneration.md`](ExternalAgents-AlembicMigrationGeneration.md) |
 
 **Maintenance:** When a source doc’s open work is finished, update or delete its tracker and adjust `docs/tmp/PlansOverview.md` if needed.

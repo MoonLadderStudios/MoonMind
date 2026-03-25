@@ -19,7 +19,6 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | Document | Summary |
 | -------- | ------- |
 | [`docs/Api/ExecutionsApiContract.md`](../Api/ExecutionsApiContract.md) | Migration posture for `/api/executions` and compatibility during the task-oriented / Temporal migration (incl. §16 compatibility contract). |
-| [`docs/CodexMcpToolsAdapter.md`](../CodexMcpToolsAdapter.md) | Notes legacy Codex paths as compatibility during migration. |
 | [`docs/Temporal/TaskExecutionCompatibilityModel.md`](../Temporal/TaskExecutionCompatibilityModel.md) | Bridge contract for task-shaped surfaces and Temporal; compatibility maturity (sequencing in `remaining-work`). |
 | [`docs/Temporal/SourceOfTruthAndProjectionModel.md`](../Temporal/SourceOfTruthAndProjectionModel.md) | Migration stance for projections vs Temporal; migration-phase exception matrix. |
 | [`docs/Temporal/VisibilityAndUiQueryModel.md`](../Temporal/VisibilityAndUiQueryModel.md) | Projection rules; target contract vs implementation gaps (tracker). |
@@ -120,7 +119,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 
 | Document | Summary |
 | -------- | ------- |
-| [`docs/MIGRATION_GENERATION.md`](../MIGRATION_GENERATION.md) | How to **generate** Alembic migrations (not a feature migration roadmap, but the canonical migration-script workflow). |
+| [`docs/ExternalAgents/AlembicMigrationGeneration.md`](../ExternalAgents/AlembicMigrationGeneration.md) | How to **generate** Alembic migrations (not a feature migration roadmap, but the canonical migration-script workflow). |
 
 ---
 
@@ -132,7 +131,7 @@ These entries were converted from migration / phased-implementation framing to *
 - [`docs/ExternalAgents/OpenClawAgentAdapter.md`](../ExternalAgents/OpenClawAgentAdapter.md) — streaming-gateway path, settings, and tests exist; implementation checklist removed.
 - [`docs/ManagedAgents/SkillGithubPrResolver.md`](../ManagedAgents/SkillGithubPrResolver.md) — skill tree and unit tests exist; implementation checklist replaced with verification pointers.
 
-**Not rewritten** (incomplete, open research, operational procedure, or product-wide migration still in flight): all other rows in this index — notably task dependencies phases 2–4, Cursor CLI integration checklists, Mission Control / Temporal migration posture docs, `WorkflowRag` and manifest delivery unfinished items, `ManagedAndExternalAgentExecutionModel` Phase 7, `MIGRATION_GENERATION.md` (procedural), and `MemoryResearch.md` (research).
+**Not rewritten** (incomplete, open research, operational procedure, or product-wide migration still in flight): all other rows in this index — notably task dependencies phases 2–4, Cursor CLI integration checklists, Mission Control / Temporal migration posture docs, `WorkflowRag` and manifest delivery unfinished items, `ManagedAndExternalAgentExecutionModel` Phase 7, `AlembicMigrationGeneration.md` (procedural), and `MemoryResearch.md` (research).
 
 ---
 

@@ -145,6 +145,11 @@ class MoonMindAgentRun:
 
         Tries the signal. If the manager workflow doesn't exist, starts it
         via the ``auth_profile.ensure_manager`` activity and retries once.
+        
+        Note: The Temporal Python SDK does not provide a `signal_with_start`
+        method on `workflow.ExternalWorkflowHandle` objects for use inside a
+        workflow. Therefore, we use this try/catch/activity/retry pattern to
+        emulate the behavior.
         """
         manager_handle = workflow.get_external_workflow_handle(manager_id)
         signal_payload = {
@@ -449,7 +454,7 @@ class MoonMindAgentRun:
                     manager_handle = await self._ensure_manager_and_signal(
                         manager_id,
                         runtime_id,
-                        request_slot=False,
+                        request_slot=True,
                     )
                     profile_count = await self._sync_manager_profiles(
                         manager_handle=manager_handle,
@@ -461,14 +466,6 @@ class MoonMindAgentRun:
                             type="ProfileResolutionError",
                             non_retryable=True,
                         )
-
-                    await manager_handle.signal(
-                        "request_slot",
-                        {
-                            "requester_workflow_id": workflow.info().workflow_id,
-                            "runtime_id": runtime_id,
-                        },
-                    )
 
                     # Wait indefinitely for an auth profile slot.
                     # Awaiting time does not count against the execution timeout;
