@@ -67,6 +67,7 @@ class AuthProfileCreate(BaseModel):
     cooldown_after_429_seconds: int = Field(default=300, ge=0)
     rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
     enabled: bool = True
+    max_lease_duration_seconds: int = Field(default=7200, ge=60)
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "AuthProfileCreate":
@@ -126,6 +127,7 @@ class AuthProfileUpdate(BaseModel):
         default=None, pattern="^(backoff|queue|fail_fast)$"
     )
     enabled: Optional[bool] = None
+    max_lease_duration_seconds: Optional[int] = Field(default=None, ge=60)
 
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "AuthProfileUpdate":
@@ -163,6 +165,7 @@ class AuthProfileResponse(BaseModel):
     cooldown_after_429_seconds: int
     rate_limit_policy: str
     enabled: bool
+    max_lease_duration_seconds: int
     created_at: Optional[str]
     updated_at: Optional[str]
 
@@ -237,6 +240,7 @@ async def create_profile(
         cooldown_after_429_seconds=body.cooldown_after_429_seconds,
         rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
         enabled=body.enabled,
+        max_lease_duration_seconds=body.max_lease_duration_seconds,
     )
     session.add(profile)
     await session.commit()
@@ -305,6 +309,7 @@ def _row_to_dict(row: ManagedAgentAuthProfile) -> dict[str, Any]:
             row.rate_limit_policy.value if row.rate_limit_policy else None
         ),
         "enabled": row.enabled,
+        "max_lease_duration_seconds": row.max_lease_duration_seconds,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

@@ -94,7 +94,7 @@ Tasks submitted via `POST /api/queue/jobs` are normalized into the canonical pay
     },
     "git": {
       "startingBranch": null,
-      "newBranch": null
+      "targetBranch": null
     },
     "publish": {
       "mode": "pr",
