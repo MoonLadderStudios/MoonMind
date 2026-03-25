@@ -344,7 +344,7 @@ class TaskProposalService:
                 ),
                 "skill": {"id": "auto", "args": {}},
                 "runtime": {"mode": None, "model": None, "effort": None},
-                "git": {"startingBranch": None, "newBranch": None},
+                "git": {"startingBranch": None, "targetBranch": None},
                 "publish": {"mode": "pr"},
             }
         elif not self._clean_str(

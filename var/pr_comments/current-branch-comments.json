@@ -1,0 +1,58 @@
+{
+  "branch": "fix/claude-code-cli-prompt-flag",
+  "pr": {
+    "number": 930,
+    "title": "fix: use -p flag and positional prompt for Claude CLI",
+    "url": "https://github.com/MoonLadderStudios/MoonMind/pull/930",
+    "head_ref": "fix/claude-code-cli-prompt-flag",
+    "base_ref": "main"
+  },
+  "repository": "MoonLadderStudios/MoonMind",
+  "comment_count": 4,
+  "comments": [
+    {
+      "type": "issue_comment",
+      "id": 4122274273,
+      "user": "chatgpt-codex-connector[bot]",
+      "body": "You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/settings/usage).",
+      "created_at": "2026-03-25T00:17:06Z",
+      "updated_at": "2026-03-25T00:17:06Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/930#issuecomment-4122274273"
+    },
+    {
+      "type": "issue_comment",
+      "id": 4122274663,
+      "user": "gemini-code-assist[bot]",
+      "body": "## Summary of Changes\n\nHello, I'm Gemini Code Assist[^1]! I'm currently reviewing this pull request and will post my feedback shortly. In the meantime, here's a summary to help you and other reviewers quickly get up to speed!\n\nThis pull request addresses a critical issue where Claude Code managed workflows were failing due to an incompatibility with the Claude CLI's argument parsing. By updating the command construction to use the correct `-p` flag and positional arguments for prompts, it ensures that these workflows can execute successfully. The changes also guarantee that the CLI always operates in non-interactive mode, which is essential for automated environments.\n\n### Highlights\n\n* **CLI Argument Correction**: The `--prompt` flag for the Claude CLI has been replaced with the `-p` flag, and the instruction is now passed as a positional argument, aligning with the updated Claude CLI v2.1.50 behavior.\n* **Non-Interactive Mode Enforcement**: The `-p` flag, which enables non-interactive mode, is now always appended to the Claude CLI command, as it is required for managed subprocess runs.\n* **Test Updates**: Three assertions in `test_remaining_strategies.py` were updated to reflect the new command structure, ensuring all 27 strategy tests continue to pass.\n\n\ud83e\udde0 **New Feature in Public Preview:** You can now enable **Memory** to help **Gemini Code Assist** learn from your team's feedback. This makes future code reviews more consistent and personalized to your project's style. **Click [here](https://codeassist.google/code-review/login) to enable Memory in your admin console.**\n\n<details>\n<summary><b>Using Gemini Code Assist</b></summary>\n<br>\n\nThe full guide for Gemini Code Assist can be found on our [documentation page](https://developers.google.com/gemini-code-assist/docs/review-github-code), here are some quick tips.\n\n<b>Invoking Gemini</b>\n\nYou can request assistance from Gemini at any point by creating a comment using either `/gemini <command>` or `@gemini-code-assist <command>`. Below is a summary of the supported commands on the current page.\n\nFeature | Command | Description\n--- | --- | ---\nCode Review | `/gemini review` | Performs a code review for the current pull request in its current state.\nPull Request Summary | `/gemini summary` | Provides a summary of the current pull request in its current state.\nComment | @gemini-code-assist | Responds in comments when explicitly tagged, both in pull request comments and review comments.\nHelp | `/gemini help` | Displays a list of available commands.\n\n<b>Customization</b>\n\nTo customize Gemini Code Assist for GitHub experience, repository maintainers can create a configuration file and/or provide a custom code review style guide (such as PEP-8 for Python) by creating and adding files to a `.gemini/` folder in the base of the repository. Detailed instructions can be found [here](https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github).\n\n<b>Limitations & Feedback</b>\n\nGemini Code Assist may make mistakes. Please leave feedback on any instances where its feedback is incorrect or counter productive. You can react with :thumbsup: and :thumbsdown: on @gemini-code-assist comments. If you're interested in giving your feedback about your experience with Gemini Code Assist for GitHub and other Google products, sign up [here](https://google.qualtrics.com/jfe/form/SV_2cyuGuTWsEw84yG).\n</details>\n\n\n[^1]: Review the [Privacy Notices](https://policies.google.com/privacy), [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy), [Terms of Service](https://policies.google.com/terms), and learn how to configure Gemini Code Assist in GitHub [here](https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github). Gemini can make mistakes, so double check it and [use code with caution](https://support.google.com/legal/answer/13505487).\n",
+      "created_at": "2026-03-25T00:17:12Z",
+      "updated_at": "2026-03-25T00:17:12Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/930#issuecomment-4122274663"
+    },
+    {
+      "type": "review_comment",
+      "id": 2985044760,
+      "user": "gemini-code-assist[bot]",
+      "body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nThis change correctly passes the instruction as a positional argument. However, this is redundant with the `prepare_workspace` method in the same class, which writes the same instruction to `CLAUDE.md`. The documentation in the base class also indicates that `CLAUDE.md` is the intended mechanism for passing instructions to the Claude runtime.\n\nThis duplication can lead to confusion and potential bugs. The instruction should be passed via a single, clear mechanism. If using a positional argument is the correct approach now, the file-writing logic in `prepare_workspace` should be removed to eliminate the redundancy.",
+      "created_at": "2026-03-25T00:18:34Z",
+      "updated_at": "2026-03-25T00:18:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/930#discussion_r2985044760",
+      "path": "moonmind/workflows/temporal/runtime/strategies/claude_code.py",
+      "commit_id": "5e1169e95ef1c03a7e1472ea59334537dbb60a21",
+      "in_reply_to_id": null,
+      "line": 48,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review",
+      "id": 4003198975,
+      "user": "gemini-code-assist[bot]",
+      "state": "COMMENTED",
+      "body": "## Code Review\n\nThis pull request updates the Claude CLI command construction to use a positional argument for instructions and includes the `-p` flag for non-interactive mode. The reviewer noted a potential redundancy where instructions are now passed as a positional argument, but also written to `CLAUDE.md` by the `prepare_workspace` method, suggesting that one of these mechanisms should be removed to avoid confusion and potential bugs.",
+      "created_at": "2026-03-25T00:18:34Z",
+      "updated_at": "2026-03-25T00:18:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/930#pullrequestreview-4003198975"
+    }
+  ]
+}

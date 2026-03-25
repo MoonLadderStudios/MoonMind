@@ -41,23 +41,22 @@ When `publishMode` is `pr` and no explicit head branch is provided, the runtime 
 
 ### Branch Fields
 
-The two primary branch fields exposed by the UI are:
+The two primary branch fields used consistently across UI, API, and internal logic:
 
 | Field            | Role | Description |
 |------------------|------|-------------|
 | `startingBranch` | Base | The branch to clone from. Also used as the PR base (merge destination). |
 | `targetBranch`   | Head | The name for the agent's work branch. Becomes the PR head (source of changes). |
 
-Additional internal fields used as fallbacks:
+Additional fallback field:
 
 | Field            | Role | Description |
 |------------------|------|-------------|
-| `newBranch`      | Head | Internal equivalent of `targetBranch`. Created by the launcher, pushed by infrastructure. |
 | `branch`         | Fallback | General-purpose fallback for either head or base when the specific field is absent. |
 
 The runtime planner resolves these from multiple sources in priority order:
 
-1. `git` payload (`task.git.startingBranch`, `task.git.newBranch`)
+1. `git` payload (`task.git.startingBranch`, `task.git.targetBranch`)
 2. Task payload (`task.startingBranch`, etc.)
 3. Selected skill inputs
 4. Parameter payload
@@ -71,10 +70,9 @@ When the workflow creates a PR (`publishMode: pr`), it resolves the **head branc
 
 Resolved via this fallback chain:
 
-1. Agent execution outputs: `outputs.branch` → `outputs.newBranch`
-2. Workspace spec: `newBranch` → `branch`
-3. Parameters / workspace spec: `targetBranch`
-4. Last plan node inputs: `newBranch` → `branch`
+1. Agent execution outputs: `outputs.branch` → `outputs.targetBranch`
+2. Workspace spec: `targetBranch` → `branch`
+3. Last plan node inputs: `targetBranch` → `branch`
 
 If no head branch can be resolved, the workflow raises an error.
 
