@@ -233,9 +233,16 @@ def _build_runtime_planner():
                 git_payload.get(git_key)
                 or task_payload.get(git_key)
                 or selected_skill_inputs.get(git_key)
+                or parameter_payload.get(git_key)
+                or input_payload.get(git_key)
             )
             if isinstance(git_val, str) and git_val.strip():
                 node_inputs[git_key] = git_val.strip()
+
+        if isinstance(publish_mode, str) and publish_mode.strip().lower() == "pr":
+            if not node_inputs.get("newBranch") and not node_inputs.get("branch"):
+                import uuid
+                node_inputs["newBranch"] = f"auto-{str(uuid.uuid4())[:8]}"
 
         # --- Assemble plan ---
         title = str(
