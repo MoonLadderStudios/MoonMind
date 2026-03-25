@@ -7,7 +7,10 @@ import pytest
 pytest.importorskip("temporalio")
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    INTEGRATION_POLL_LOOP_PATCH,
+    MoonMindRunWorkflow,
+)
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
     import json
@@ -32,6 +35,7 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow._repo = "org/repo"
     
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "upsert_search_attributes",
@@ -91,6 +95,87 @@ async def test_run_integration_stage_poll_driven_completion(
     assert captured[0][0] == "artifact.read"
     assert captured[1][0] == "integration.jules.start"
     assert captured[2][0] == "integration.jules.status"
+    assert mock_run_workflow._external_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compatibility: polling completion must use the replay-stable patch id (see WorkerDeployment)."""
+    patch_calls: list[str] = []
+
+    def fake_patched(patch_id: str) -> bool:
+        patch_calls.append(patch_id)
+        return True
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}]
+            )
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.status":
+            return {"normalized_status": "completed", "tracking_ref": "track-2"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+
+    assert patch_calls, "workflow.patched should be evaluated for integration poll completion"
+    assert set(patch_calls) == {INTEGRATION_POLL_LOOP_PATCH}
+    assert mock_run_workflow._external_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In-flight history without the patch marker: legacy resume path still reaches completed."""
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}]
+            )
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.status":
+            return {"normalized_status": "completed", "tracking_ref": "track-2"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+
     assert mock_run_workflow._external_status == "completed"
 
 

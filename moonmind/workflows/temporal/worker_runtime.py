@@ -539,16 +539,42 @@ async def main_async() -> None:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
     try:
+        use_versioning = os.environ.get("MOONMIND_ENABLE_WORKER_VERSIONING", "false").lower() in ("true", "1", "yes")
+        build_id = os.environ.get("MOONMIND_BUILD_ID")
+        if not build_id:
+            import subprocess
+            try:
+                build_id = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ).strip()
+            except Exception as e:
+                if use_versioning:
+                    logger.error(
+                        "Failed to determine Temporal worker build ID from "
+                        "MOONMIND_BUILD_ID or git. "
+                        "Set the MOONMIND_BUILD_ID environment variable to a "
+                        "stable, unique identifier for this build when "
+                        "use_worker_versioning is enabled.",
+                        exc_info=e,
+                    )
+                    raise RuntimeError(
+                        "Unable to determine Temporal worker build ID. "
+                        "Set MOONMIND_BUILD_ID to a unique identifier for this build."
+                    ) from e
+                build_id = "unknown"
+
         worker = Worker(
             client,
             task_queue=topology.task_queues[0],
             workflows=workflows,
             activities=activities,
             workflow_runner=UnsandboxedWorkflowRunner(),
+            build_id=build_id,
+            use_worker_versioning=use_versioning,
             **_worker_concurrency_kwargs(topology),
         )
 
-        logger.info("Worker started, polling task queues...")
+        logger.info(f"Worker started with build_id={build_id}, polling task queues...")
         await worker.run()
     finally:
         if runtime_resources is not None:
