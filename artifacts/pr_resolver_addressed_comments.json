@@ -1,0 +1,37 @@
+[
+  {
+    "id": 4124501088,
+    "disposition": "not-applicable",
+    "rationale": "Informational greeting from bot."
+  },
+  {
+    "id": 4124502066,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from bot."
+  },
+  {
+    "id": 4004700213,
+    "disposition": "not-applicable",
+    "rationale": "Informational review from bot."
+  },
+  {
+    "id": 2986460273,
+    "disposition": "not-applicable",
+    "rationale": "Heartbeat propagation was already implemented in PR 958 and merged into this branch."
+  },
+  {
+    "id": 4004713842,
+    "disposition": "not-applicable",
+    "rationale": "Informational review overview."
+  },
+  {
+    "id": 2986461669,
+    "disposition": "not-applicable",
+    "rationale": "Heartbeat propagation was already implemented in PR 958 and merged into this branch."
+  },
+  {
+    "id": 4004715685,
+    "disposition": "not-applicable",
+    "rationale": "Informational review overview."
+  }
+]
