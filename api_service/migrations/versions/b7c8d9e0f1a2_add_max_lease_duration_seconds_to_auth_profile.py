@@ -1,7 +1,7 @@
 """Add max_lease_duration_seconds to managed_agent_auth_profiles
 
 Revision ID: b7c8d9e0f1a2
-Revises: f9d1b627d0eb
+Revises: c8a9b0c1d2e3
 Create Date: 2026-03-25 21:35:00.000000
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = "b7c8d9e0f1a2"
-down_revision: Union[str, None] = "f9d1b627d0eb"
+down_revision: Union[str, None] = "c8a9b0c1d2e3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
