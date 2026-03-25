@@ -26,7 +26,7 @@
 
 ## Decision 4: Enforce DAG semantics with explicit failure policy
 
-- **Decision**: Use topological validation and dependency-ready scheduling in `plan_interpreter.py` with `FAIL_FAST` and `CONTINUE`.
+- **Decision**: Use topological validation and dependency-ready scheduling in `plan_executor.py` with `FAIL_FAST` and `CONTINUE`.
 - **Rationale**: Matches v1 semantics and keeps execution order deterministic.
 - **Alternatives considered**:
   - Conditional edges in v1: rejected by source contract.

@@ -1,4 +1,4 @@
-"""Deterministic plan interpreter for DAG skill execution."""
+"""Deterministic plan executor for DAG skill execution."""
 
 from __future__ import annotations
 

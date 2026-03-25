@@ -23,21 +23,23 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 3. Provide a **clear, auditable operator control** (API + Mission Control Dashboard) with reason + timestamps.
 4. Support an upgrade-friendly workflow:
    * **Pause → Drain → Upgrade → Resume**
-5. Optional “quiesce” mode: allow operators to request that **running jobs pause at safe Activity boundaries** while retaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes).
+5. Optional “workflow pause” mode: allow operators to request that **running jobs pause at safe Activity boundaries** while retaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes).
 
 ---
 
 ## 3. Pause Modes
 
-### 3.1 Drain (default / recommended for upgrades)
+### 3.1 Fleet Drain (default / recommended for upgrades)
 
 * **Mechanism**: Scale down or gracefully shut down `temporal-worker-sandbox` and `agent_runtime` worker fleets.
+* This operates at the **fleet** level. The workflows themselves are not paused; they simply wait in the task queue for a worker to become available.
 * A graceful shutdown in Temporal (`worker.shutdown()`) blocks new Activity claims immediately but lets currently executing Activities finish or hit their heartbeat timeout.
 * Operator waits until the Temporal UI shows no active workers mapping to the Task Queues → safe to restart/upgrade underlying images.
 
-### 3.2 Quiesce (System-Wide Suspend)
+### 3.2 Workflow Pause (System-Wide Suspend)
 
-* **Mechanism**: A broadcast Temporal Signal (or Temporal Batch Operations API) sent to all running Workflows.
+* **Mechanism**: A broadcast Temporal Signal sent to all running Workflows, telling the orchestration logic to suspend.
+* This operates at the **workflow** level. Workers may still be online, but the workflows intentionally do not schedule new Activities.
 * Workflows check this state between Activities using a signal handler. If paused, the Workflow blocks on a `workflow.wait_condition()` until resumed.
 * Long-running agent runtimes are detached and their state is preserved via the `ManagedRunStore`, rather than requiring Temporal Activity heartbeats.
 
@@ -90,7 +92,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 ### 6.1 Running Activity behavior (Quiesce mode)
 
-In Quiesce mode, the system uses Temporal's Batch Operations API to Signal thousands of running workflows efficiently. The workflow implementation should:
+In Workflow Pause mode, the system uses Temporal's Batch Operations API to Signal thousands of running workflows efficiently. The workflow implementation should:
 
 * Register a pause signal handler: `def pause_signal_handler(self, paused: bool)`.
 * Maintain an internal `self.is_paused` flag.
@@ -100,7 +102,7 @@ In Quiesce mode, the system uses Temporal's Batch Operations API to Signal thous
 **Worker Identity & Identity Reconnection**:
 Resumed workflows seamlessly handoff or continue on newly upgraded workers holding the same Task Queue, thanks to Temporal's execution guarantees.
 
-**Important**: Quiesce is meant for short maintenance where workflows need to suspend rapidly without losing long-running context. For infrastructure upgrades, Drain is the safe path.
+**Important**: Workflow Pause is meant for short maintenance where workflows need to suspend rapidly without losing long-running context. For infrastructure upgrades, Drain is the safe path.
 
 ### 6.2 External Agents
 

@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Step Review Gate
+# Specification Quality Checklist: Step Approval Policy
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-03-18

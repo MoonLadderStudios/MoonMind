@@ -1,4 +1,4 @@
-# Specification Analysis Report: Step Review Gate
+# Specification Analysis Report: Step Approval Policy
 
 **Feature**: 086-step-review-gate
 **Date**: 2026-03-18
@@ -18,7 +18,7 @@
 
 | Requirement Key | Has Task? | Task IDs | Notes |
 |---|---|---|---|
-| FR-001 (ReviewGatePolicy) | ✅ | T003, T011 | Impl + test |
+| FR-001 (ApprovalPolicyPolicy) | ✅ | T003, T011 | Impl + test |
 | FR-002 (PlanPolicy extension) | ✅ | T004, T013 | Impl + test |
 | FR-003 (JSON parsing) | ✅ | T005, T013 | Impl + test |
 | FR-004 (ReviewRequest/Verdict) | ✅ | T006, T007, T012 | Impl + test |

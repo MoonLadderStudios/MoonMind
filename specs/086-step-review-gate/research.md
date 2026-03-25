@@ -1,4 +1,4 @@
-# Research: Step Review Gate
+# Research: Step Approval Policy
 
 ## R1: Temporal Review Patterns
 

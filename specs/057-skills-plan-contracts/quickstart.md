@@ -13,7 +13,7 @@
   - `moonmind/workflows/skills/skill_registry.py`
   - `moonmind/workflows/skills/plan_validation.py`
   - `moonmind/workflows/skills/skill_dispatcher.py`
-  - `moonmind/workflows/skills/plan_interpreter.py`
+  - `moonmind/workflows/skills/plan_executor.py`
   - `moonmind/workflows/skills/artifact_store.py`
 - Integration wrapper:
   - `moonmind/workflows/skills/registry.py`

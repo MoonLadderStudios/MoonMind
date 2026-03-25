@@ -18,7 +18,7 @@ Overall, the current spec is thorough. However, implementation is greenfield: we
 
 ## Best Practices (Temporal + Agent Orchestration)
 
-**Deterministic Orchestration:** Temporal requires deterministic workflow logic; it excels at *orchestration* and state durability. As MoonMind's doc states, "Workflow code orchestrates only. No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities". This aligns perfectly with Temporal guidance: workflows replay reliably using past decisions, while non-deterministic AI calls live in Activities. Thus, tool invocation and plan execution belong in Activities, while the plan interpreter (in the Workflow) only schedules nodes, updates progress, and applies failure policies.
+**Deterministic Orchestration:** Temporal requires deterministic workflow logic; it excels at *orchestration* and state durability. As MoonMind's doc states, "Workflow code orchestrates only. No nondeterministic behavior in workflow code. All external I/O and LLM calls are Activities". This aligns perfectly with Temporal guidance: workflows replay reliably using past decisions, while non-deterministic AI calls live in Activities. Thus, tool invocation and plan execution belong in Activities, while the plan executor (in the Workflow) only schedules nodes, updates progress, and applies failure policies.
 
 **Idempotency & Retries:** By default Temporal will retry an Activity on failure (up to `max_attempts`). We must design Tools so that **re-running an Activity is safe or idempotent**. For example, writing to a DB should use unique keys or check existing records (idempotency keys). Activities like `mm.tool.execute` can compute an idempotency key (e.g. `workflowRunId-activityId`) and skip duplicate side-effects. We should make clear in the Tool contract how Activities achieve idempotency (e.g. through transactional design or dedup keys). Non-idempotent logic should raise retriable vs non-retriable errors appropriately, consistent with our `ToolFailure` codes.
 
@@ -56,7 +56,7 @@ MoonMind currently uses **Skill** and **Plan**. Comparable systems use varied te
 
 - **Schema & Contracts:** Implement strict JSON-schema validation for Tools and Plans. Use a central **Tool Registry loader** that validates required fields (name, version, I/O schemas, executor, policies). On startup, register a digest of the tool set for snapshot pinning. Store plans as versioned artifacts.
 
-- **Plan Execution (Workflow):** Write the Plan Interpreter as a Temporal Workflow (`MoonMind.Run`). Pseudocode:
+- **Plan Execution (Workflow):** Write the Plan Executor as a Temporal Workflow (`MoonMind.Run`). Pseudocode:
 
   ```python
   @workflow.defn

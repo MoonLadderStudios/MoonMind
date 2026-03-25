@@ -66,7 +66,7 @@ docs/Skills/SkillAndPlanContracts.md
 moonmind/workflows/skills/
 ├── artifact_store.py
 ├── contracts.py
-├── plan_interpreter.py
+├── plan_executor.py
 ├── plan_validation.py
 ├── registry.py
 ├── skill_dispatcher.py
@@ -119,7 +119,7 @@ Research outcomes in `specs/045-skills-plan-contracts/research.md` establish:
 - Maintain `plan_validate_activity` as authoritative deep validator before interpreter start.
 - Reject plans on missing skills, schema violations, cycles, or invalid inter-node references.
 
-### 4. Deterministic plan interpreter semantics
+### 4. Deterministic plan executor semantics
 
 - Execute only dependency-ready nodes up to `max_concurrency`.
 - Enforce `FAIL_FAST` vs `CONTINUE` behavior exactly as policy declares.

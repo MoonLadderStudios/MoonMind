@@ -8,7 +8,7 @@ Last Updated: 2026-03-13
 
 ## 1. Purpose
 
-Define the MoonMind **Task Presets** system: a server-hosted catalog of reusable orchestration presets that users browse, parameterize, and apply to tasks. Presets compile into `PlanDefinition` artifacts (see `docs/Tasks/SkillAndPlanContracts.md`) for execution by the Temporal Plan Interpreter.
+Define the MoonMind **Task Presets** system: a server-hosted catalog of reusable orchestration presets that users browse, parameterize, and apply to tasks. Presets compile into `PlanDefinition` artifacts (see `docs/Tasks/SkillAndPlanContracts.md`) for execution by the Temporal Plan Executor.
 
 The system serves three roles:
 
@@ -38,7 +38,7 @@ PlanDefinition (immutable artifact)
          │
          │  submit to Temporal
          v
-Plan Interpreter (MoonMind.Run workflow)
+Plan Executor (MoonMind.Run workflow)
   └── schedules Activities, tracks progress, enforces policy
 ```
 
@@ -67,7 +67,7 @@ Plan Interpreter (MoonMind.Run workflow)
 ### Non-Goals
 
 - Allowing parameter substitutions during Temporal runtime (remains an anti-pattern; all parameterization happens at expansion time).
-- Replacing the Plan Interpreter or modifying Temporal Workflow execution behavior.
+- Replacing the Plan Executor or modifying Temporal Workflow execution behavior.
 - Supporting conditional logic within presets (conditions belong in Plans via future `edges[].condition` support; see `SkillAndPlanContracts.md` §Q2).
 
 ---
@@ -99,7 +99,7 @@ Plan Interpreter (MoonMind.Run workflow)
                   +-----+------------------+
                         v
                   +-----+------------------+
-                  | Plan Interpreter       |
+                  | Plan Executor       |
                   | (MoonMind.Run workflow) |
                   +------------------------+
 ```
@@ -108,7 +108,7 @@ Key properties:
 
 - Presets are stored centrally and exposed via FastAPI routers under `/api/task-step-templates` (to be renamed `/api/presets` in a future migration).
 - The expansion service applies inputs via Jinja2 rendering, validates against skill schemas, generates deterministic step IDs, resolves the current registry snapshot, and compiles the result into a `PlanDefinition`.
-- The `PlanDefinition` is written as an immutable artifact. The Plan Interpreter in `MoonMind.Run` reads the artifact reference and executes the DAG.
+- The `PlanDefinition` is written as an immutable artifact. The Plan Executor in `MoonMind.Run` reads the artifact reference and executes the DAG.
 - Audit metadata (`appliedPreset`) is attached to the task record for governance and traceability.
 
 ---
@@ -566,7 +566,7 @@ Overrides are bounded by server-enforced limits (e.g. max_concurrency capped at 
 - `specs/028-task-presets/spec.md` — Original feature specification with user stories and acceptance criteria.
 - `moonmind/workflows/skills/tool_plan_contracts.py` — `PlanDefinition`, `Step`, `PlanEdge` dataclasses.
 - `moonmind/workflows/skills/plan_validation.py` — DAG validation logic.
-- `moonmind/workflows/skills/plan_interpreter.py` — Deterministic plan execution in Temporal.
+- `moonmind/workflows/skills/plan_executor.py` — Deterministic plan execution in Temporal.
 - `api_service/services/task_templates/catalog.py` — Expansion service implementation.
 - `api_service/services/task_templates/save.py` — Save-from-task service.
 - `api_service/api/routers/task_step_templates.py` — REST API router.

@@ -109,7 +109,7 @@ MoonMind's execution model is built on three domain concepts that Temporal does 
 * **Plan** — a DAG of tool invocations (Steps) with explicit dependencies, concurrency policy, and failure mode (`FAIL_FAST` or `CONTINUE`).
 * **Artifact** — large inputs/outputs stored outside workflow history, referenced by `ArtifactRef`.
 
-Plans are data, not code. They are validated, stored as artifacts, and interpreted deterministically by the plan interpreter inside `MoonMind.Run`. Planning itself is "just a tool" — an LLM activity that produces a plan artifact.
+Plans are data, not code. They are validated, stored as artifacts, and interpreted deterministically by the plan executor inside `MoonMind.Run`. Planning itself is "just a tool" — an LLM activity that produces a plan artifact.
 
 See: [Tool and Plan Contracts](Tasks/SkillAndPlanContracts.md) · [Skill and Plan Evolution](Tasks/SkillAndPlanEvolution.md)
 
