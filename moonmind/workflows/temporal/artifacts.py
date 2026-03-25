@@ -1952,10 +1952,17 @@ class TemporalArtifactActivities:
         self,
         *,
         artifact_id: str,
-        payload: bytes,
+        payload: bytes | str | list[int],
         principal: str,
         content_type: str | None = None,
     ) -> ArtifactRef:
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        elif isinstance(payload, list):
+            payload = bytes(payload)
+        elif not isinstance(payload, bytes):
+            payload = bytes(payload)
+
         artifact = await self._service.write_complete(
             artifact_id=artifact_id,
             principal=principal,

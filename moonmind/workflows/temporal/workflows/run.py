@@ -1387,7 +1387,7 @@ class MoonMindRunWorkflow:
                 {
                     "principal": self._principal(),
                     "artifact_id": self._get_from_result(artifact_ref, "artifact_id") or "",
-                    "payload": json.dumps(finish_summary).encode("utf-8"),
+                    "payload": json.dumps(finish_summary),
                     "content_type": "application/json",
                 },
                 **self._execute_kwargs_for_route(artifact_write_route),
