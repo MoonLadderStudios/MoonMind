@@ -1,4 +1,4 @@
-# Worker Deployment Runbook
+# Temporal Worker Deployment Runbook
 
 This document outlines the operational procedures for deploying updates to MoonMind Temporal workers safely, minimizing disruption to in-flight workflows.
 
@@ -31,7 +31,7 @@ When modifying workflows, you must determine whether the changes are backwards-c
 
 For backwards-incompatible workflow changes, the safest approach is a side-by-side deployment:
 
-1. **Gate changes in code:** Use `workflow.patched("my-patch-id")` to branch logic between the old and new behavior.
+1. **Gate changes in code:** Use `workflow.patched("refactor-loop-1.2")` (or the current patch id in `moonmind/workflows/temporal/workflows/run.py`) to branch logic between the old and new behavior.
 2. **Deploy new workers:** Deploy workers running the updated code alongside old workers. New executions will pick up the new worker version, while existing executions can safely replay against the patched logic.
 3. **Wait for completion:** Wait for all workflows using the old logic to complete.
 4. **Remove old logic:** In a subsequent release, remove the `workflow.patched` gate and the old logic.

@@ -78,6 +78,9 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
     re.IGNORECASE,
 )
+# Replay-stable `workflow.patched` id for integration status polling terminal handling.
+# Keep in sync with docs/Temporal/WorkerDeployment.md if renamed (only before first prod deploy).
+INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -1107,7 +1110,7 @@ class MoonMindRunWorkflow:
 
                     status = self._get_from_result(poll_result, "normalized_status")
                     if status in ("completed", "failed", "canceled", "awaiting_feedback"):
-                        if workflow.patched("refactor-loop-1.2"):
+                        if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
                             _poll_terminal = True
                         else:
                             self._resume_requested = True
@@ -1123,7 +1126,7 @@ class MoonMindRunWorkflow:
                         poll_interval_seconds * 2, max_poll_interval_seconds
                     )
 
-            if not workflow.patched("refactor-loop-1.2"):
+            if not workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
                 self._resume_requested = False
 
             if self._external_status != "completed":
