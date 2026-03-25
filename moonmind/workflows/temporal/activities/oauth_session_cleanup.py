@@ -72,6 +72,29 @@ async def oauth_session_cleanup_stale(
             )
             expired_ids.append(session.session_id)
             expired_count += 1
+            
+            # Phase 2: Harden cleanup to call docker stop + rm
+            if session.container_name:
+                import asyncio
+                try:
+                    # Stop container
+                    stop_proc = await asyncio.create_subprocess_exec(
+                        "docker", "stop", "-t", "5", session.container_name,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await asyncio.wait_for(stop_proc.communicate(), timeout=10)
+                    
+                    # Remove container
+                    rm_proc = await asyncio.create_subprocess_exec(
+                        "docker", "rm", "-f", session.container_name,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await asyncio.wait_for(rm_proc.communicate(), timeout=10)
+                    logger.debug("Cleaned up docker container %s for expired session %s", session.container_name, session.session_id)
+                except Exception as exc:
+                    logger.warning("Failed to clean up docker container %s for expired session %s: %s", session.container_name, session.session_id, exc)
 
         if expired_count > 0:
             await db.commit()

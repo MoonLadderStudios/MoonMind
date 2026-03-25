@@ -2662,7 +2662,7 @@ class TemporalAgentRuntimeActivities:
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 
         # Idempotency check handled in launcher
-        record, process, endpoints = await self._run_launcher.launch(
+        record, process, endpoints, tmate_manager = await self._run_launcher.launch(
             run_id=run_id,
             request=request,
             profile=profile,
@@ -2702,6 +2702,7 @@ class TemporalAgentRuntimeActivities:
                     timeout_seconds=timeout_seconds,
                     exit_code_path=exit_code_path,
                     cleanup_paths=cleanup_paths,
+                    tmate_manager=tmate_manager,
                 )
             except asyncio.CancelledError:
                 raise

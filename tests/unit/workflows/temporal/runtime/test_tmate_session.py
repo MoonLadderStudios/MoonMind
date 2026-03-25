@@ -403,3 +403,31 @@ class TestStart:
                     Path("/tmp/test.sock"), timeout=5.0
                 )
 
+
+# ---------------------------------------------------------------------------
+# GC Orphaned Sockets
+# ---------------------------------------------------------------------------
+
+class TestGCOrphanedSockets:
+    def test_gc_removes_untracked_sockets(self, tmp_path):
+        sock_dir = tmp_path / "tmate"
+        sock_dir.mkdir()
+        
+        sock1 = sock_dir / "mm-active1.sock"
+        sock1.touch()
+        conf1 = sock_dir / "mm-active1.conf"
+        conf1.touch()
+        
+        sock2 = sock_dir / "mm-orphaned1.sock"
+        sock2.touch()
+        conf2 = sock_dir / "mm-orphaned1.conf"
+        conf2.touch()
+        
+        active = {"mm-active1"}
+        removed = TmateSessionManager.gc_orphaned_sockets(active, socket_dir=sock_dir)
+        
+        assert removed == 1
+        assert sock1.exists()
+        assert conf1.exists()
+        assert not sock2.exists()
+        assert not conf2.exists()
