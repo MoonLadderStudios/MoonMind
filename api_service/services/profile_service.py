@@ -60,7 +60,7 @@ class ProfileService:
             # Initialize all keys from schema defaults (which should be None)
             # This ensures that if new keys are added to the schema and model,
             # they are initialized here during profile creation.
-            for key_in_schema in new_profile_data.dict(exclude_unset=False):
+            for key_in_schema in new_profile_data.model_dump(exclude_unset=False):
                 if key_in_schema.endswith("_api_key"):
                     model_field_name = f"{key_in_schema}_encrypted"
                     if hasattr(profile, model_field_name):
@@ -117,7 +117,7 @@ class ProfileService:
         If the profile doesn't exist, it will first be created.
         """
         profile = await self.get_profile_by_user_id(db_session, user_id)
-        update_data = profile_data.dict(exclude_unset=True)
+        update_data = profile_data.model_dump(exclude_unset=True)
 
         # Safety check: `get_profile_by_user_id` should return a profile for the
         # provided user_id. This guard protects against potential data

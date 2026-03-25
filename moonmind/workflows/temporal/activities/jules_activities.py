@@ -19,7 +19,6 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunStatus,
 )
 from moonmind.schemas.jules_models import (
-    JulesIntegrationMergePRResult,
     JulesSendMessageRequest,
 )
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
@@ -249,47 +248,40 @@ async def jules_answer_question_activity(payload: dict) -> dict:
         await client.aclose()
 
 
-@activity.defn(name="integration.jules.merge_pr")
-async def jules_merge_pr_activity(payload: dict) -> JulesIntegrationMergePRResult:
-    """Auto-merge a Jules-created PR into its target branch via GitHub API.
-
-    Used when ``publishMode == "branch"`` to merge the PR that Jules
-    created during an ``AUTO_CREATE_PR`` session.
+@activity.defn(name="repo.merge_pr")
+async def repo_merge_pr_activity(payload: dict) -> dict:
+    """Merge a PR via GitHub REST API (provider-agnostic).
 
     Accepts a dict with:
     - ``pr_url`` (str): the GitHub PR URL to merge
     - ``target_branch`` (str, optional): if set and differs from the PR's
       current base, the PR base is updated before merging
+    - ``merge_method`` (str, optional): merge strategy (default "merge")
     """
-
-    import os
-
-    gate = build_runtime_gate_state()
-    if not gate.enabled:
-        raise RuntimeError(
-            f"{JULES_RUNTIME_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
-        )
+    from moonmind.workflows.adapters.github_service import GitHubService
 
     pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
     target_branch = payload.get("target_branch") or payload.get("targetBranch")
+    merge_method = payload.get("merge_method") or payload.get("mergeMethod") or "merge"
 
-    jules_url = os.environ.get("JULES_API_URL", "").strip() or "https://jules.googleapis.com/v1alpha"
-    jules_key = os.environ.get("JULES_API_KEY", "").strip()
-    client = JulesClient(base_url=jules_url, api_key=jules_key)
+    svc = GitHubService()
 
     # If a target branch is specified, update the PR's base before merging
     if target_branch:
-        success, summary = await client.update_pull_request_base(
+        success, summary = await svc.update_pull_request_base(
             pr_url=pr_url, new_base=target_branch,
         )
         if not success:
-            return JulesIntegrationMergePRResult(
-                prUrl=pr_url,
+            from moonmind.workflows.adapters.github_service import MergePRResult
+            result = MergePRResult(
+                pr_url=pr_url,
                 merged=False,
                 summary=f"Base branch update failed: {summary}",
             )
+            return result.model_dump(by_alias=True)
 
-    return await client.merge_pull_request(pr_url=pr_url)
+    result = await svc.merge_pull_request(pr_url=pr_url, merge_method=merge_method)
+    return result.model_dump(by_alias=True)
 
 
 @activity.defn(name="integration.jules.get_auto_answer_config")
@@ -340,7 +332,7 @@ __all__ = [
     "jules_fetch_result_activity",
     "jules_get_auto_answer_config_activity",
     "jules_list_activities_activity",
-    "jules_merge_pr_activity",
+    "repo_merge_pr_activity",
     "jules_send_message_activity",
     "jules_start_activity",
     "jules_status_activity",

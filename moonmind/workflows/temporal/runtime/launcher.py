@@ -36,7 +36,7 @@ class ManagedRuntimeLauncher:
     def _extract_workspace_branch(workspace_spec: dict[str, object] | None) -> str | None:
         if not isinstance(workspace_spec, dict):
             return None
-        for key in ("newBranch", "startingBranch", "branch"):
+        for key in ("targetBranch", "startingBranch", "branch"):
             value = workspace_spec.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -258,7 +258,7 @@ class ManagedRuntimeLauncher:
         clone_cmd.extend([source, str(repo_path)])
         await self._run_checked_command(*clone_cmd, cwd=str(workspace_root))
 
-        new_branch = str(workspace_spec.get("newBranch") or "").strip()
+        new_branch = str(workspace_spec.get("targetBranch") or "").strip()
         if new_branch:
             returncode, stdout_text, stderr_text = await self._run_command(
                 "git",
@@ -409,16 +409,45 @@ class ManagedRuntimeLauncher:
         if use_tmate:
             session_name = f"mm-{run_id.replace('-', '')[:16]}"
             tmate_manager = TmateSessionManager(session_name=session_name)
-            tmate_endpoints = await tmate_manager.start(
-                command=cmd,
-                env=env_overrides,
-                cwd=resolved_workspace_path,
-                exit_code_capture=True,
-            )
-            # The tmate manager owns the subprocess — retrieve it for the
-            # caller (supervisor) which needs the Process handle.
-            process = tmate_manager.process
+            try:
+                tmate_endpoints = await tmate_manager.start(
+                    command=cmd,
+                    env=env_overrides,
+                    cwd=resolved_workspace_path,
+                    exit_code_capture=True,
+                )
+                process = tmate_manager.process
+                # Verify the tmate-wrapped process is actually alive.
+                # If tmate crashed during startup the process will already
+                # have a non-None returncode.
+                if process is None or (
+                    process.returncode is not None and process.returncode != 0
+                ):
+                    raise RuntimeError(
+                        f"tmate process exited immediately "
+                        f"(rc={getattr(process, 'returncode', '?')})"
+                    )
+            except Exception:
+                logger.warning(
+                    "Tmate session failed for run_id=%s; "
+                    "falling back to plain subprocess.",
+                    run_id,
+                    exc_info=True,
+                )
+                # Clean up the failed tmate session.
+                try:
+                    await tmate_manager.teardown()
+                except Exception:
+                    logger.debug(
+                        "tmate teardown after fallback failed", exc_info=True
+                    )
+                tmate_manager = None
+                use_tmate = False
+                # Fall through to the plain subprocess path below.
 
+        if use_tmate and tmate_manager is not None:
+            tmate_endpoints = tmate_manager.endpoints
+            process = tmate_manager.process
             endpoints = {
                 "tmate_session_name": tmate_endpoints.session_name,
                 "tmate_socket_path": tmate_endpoints.socket_path,
@@ -430,7 +459,8 @@ class ManagedRuntimeLauncher:
                 value = getattr(tmate_endpoints, attr, None)
                 if value:
                     endpoints[attr] = value
-        else:
+
+        if not use_tmate:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.DEVNULL,

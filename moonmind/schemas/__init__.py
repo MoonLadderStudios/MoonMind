@@ -29,13 +29,6 @@ from .manifest_v0_models import (
     VectorStoreConfig,
     export_v0_schema,
 )
-from .task_compatibility_models import (
-    TaskActionAvailability,
-    TaskCompatibilityDetail,
-    TaskCompatibilityListResponse,
-    TaskCompatibilityRow,
-    TaskDebugContext,
-)
 from .temporal_models import (
     CancelExecutionRequest,
     CreateExecutionRequest,
@@ -44,6 +37,12 @@ from .temporal_models import (
     SignalExecutionRequest,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
+)
+from .temporal_activity_models import (
+    ArtifactReadInput,
+    ArtifactReadOutput,
+    ArtifactWriteCompleteInput,
+    Base64Bytes,
 )
 from .workflow_models import (
     CreateWorkflowRunRequest,
@@ -74,11 +73,6 @@ __all__ = [
     "RunConfig",
     "SecurityConfig",
     "export_v0_schema",
-    "TaskActionAvailability",
-    "TaskDebugContext",
-    "TaskCompatibilityRow",
-    "TaskCompatibilityDetail",
-    "TaskCompatibilityListResponse",
     "CreateExecutionRequest",
     "UpdateExecutionRequest",
     "UpdateExecutionResponse",
@@ -98,4 +92,8 @@ __all__ = [
     "WorkflowCredentialAuditModel",
     "WorkflowRunCollectionResponse",
     "CreateWorkflowRunRequest",
+    "ArtifactReadInput",
+    "ArtifactReadOutput",
+    "ArtifactWriteCompleteInput",
+    "Base64Bytes",
 ]

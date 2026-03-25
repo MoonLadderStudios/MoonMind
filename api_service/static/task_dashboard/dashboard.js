@@ -185,17 +185,6 @@
 
   const TEMPORAL_INLINE_INPUT_MAX_CHARS = 4000;
   const systemConfig = config.system || {};
-  const temporalCompatibilityConfig =
-    systemConfig.temporalCompatibility &&
-      typeof systemConfig.temporalCompatibility === "object"
-      ? systemConfig.temporalCompatibility
-      : {};
-  const taskSourceResolverEndpoint = String(
-    systemConfig.taskSourceResolver || "/api/tasks/{taskId}/source",
-  );
-  const taskResolutionEndpoint = String(
-    systemConfig.taskResolution || "/api/tasks/{taskId}/resolution",
-  );
   const supportedWorkerRuntimes =
     Array.isArray(systemConfig.supportedWorkerRuntimes) &&
       systemConfig.supportedWorkerRuntimes.length > 0
@@ -317,26 +306,16 @@
     if (!payload || typeof payload !== "object") {
       return null;
     }
-    const executionField = String(
-      temporalCompatibilityConfig.actionExecutionField || "execution",
-    );
+    const executionField = "execution";
     const candidate = payload[executionField];
     return candidate && typeof candidate === "object" ? candidate : null;
   }
 
   function describeTemporalCompatibilityFreshness(payload) {
-    const refreshField = String(
-      temporalCompatibilityConfig.actionRefreshField || "refresh",
-    );
-    const staleField = String(
-      temporalCompatibilityConfig.staleStateField || "staleState",
-    );
-    const refreshedAtField = String(
-      temporalCompatibilityConfig.refreshedAtField || "refreshedAt",
-    );
-    const degradedCountField = String(
-      temporalCompatibilityConfig.degradedCountField || "degradedCount",
-    );
+    const refreshField = "refresh";
+    const staleField = "staleState";
+    const refreshedAtField = "refreshedAt";
+    const degradedCountField = "degradedCount";
     const refresh =
       payload &&
         typeof payload === "object" &&
@@ -4197,7 +4176,7 @@
     );
 
     const load = async () => {
-      const endpoint = "/api/tasks/list?entry=manifest&limit=200";
+      const endpoint = "/api/executions?entry=manifest&limit=200";
       const payload = await fetchJson(endpoint);
       const rows = sortRows(
         toTemporalRows(payload?.items || []).map((row) => ({
@@ -8380,50 +8359,12 @@
     startPolling(() => load(true), pollIntervals.detail);
   }
 
-  async function resolveUnifiedTaskSource(taskId, sourceHint = "") {
+  async function resolveUnifiedTaskSource(taskId) {
     const safeTaskId = normalizeDashboardDetailSegment(taskId);
     if (!safeTaskId) {
       return { source: "", resolvedId: "" };
     }
-    try {
-      const resolutionUrl = new URL(
-        endpoint(taskResolutionEndpoint, { taskId: safeTaskId }),
-        window.location.origin,
-      );
-      const normalizedSourceHint = String(sourceHint || "").trim().toLowerCase();
-      if (normalizedSourceHint) {
-        resolutionUrl.searchParams.set("source", normalizedSourceHint);
-      }
-      const payload = await fetchJson(`${resolutionUrl.pathname}${resolutionUrl.search}`);
-      const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
-      
-      let resolvedId = safeTaskId;
-      const payloadWorkflowId = String(pick(payload, "workflowId") || "").trim();
-      const payloadTaskId = String(pick(payload, "taskId") || "").trim();
-      
-      if (resolvedSource === "temporal" && payloadWorkflowId) {
-        resolvedId = payloadWorkflowId;
-      } else if (payloadTaskId) {
-        resolvedId = payloadTaskId;
-      }
-
-      return ["queue", "temporal"].includes(resolvedSource)
-        ? { source: resolvedSource, resolvedId }
-        : { source: "", resolvedId: "" };
-    }
-    catch (_error) {
-      try {
-        const payload = await fetchJson(
-          endpoint(taskSourceResolverEndpoint, { taskId: safeTaskId }),
-        );
-        const resolvedSource = String(pick(payload, "source") || "").trim().toLowerCase();
-        return ["queue", "temporal"].includes(resolvedSource)
-          ? { source: resolvedSource, resolvedId: safeTaskId }
-          : { source: "", resolvedId: "" };
-      } catch (_fallbackError) {
-        return { source: "", resolvedId: "" };
-      }
-    }
+    return { source: "temporal", resolvedId: safeTaskId };
   }
 
   async function renderProposalsListPage() {
