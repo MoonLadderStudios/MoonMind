@@ -48,9 +48,6 @@ _ENABLE_TEST_UI_ROUTE = os.environ.get("MOONMIND_ENABLE_TEST_UI_ROUTE", "").lowe
 if _ENABLE_TEST_UI_ROUTE:
     from api_service.test_ui_route import router as test_ui_router
 
-from api_service.api.routers.task_compatibility import (
-    router as task_compatibility_router,
-)
 from api_service.api.routers.task_dashboard import router as task_dashboard_router
 from api_service.api.routers.task_proposals import router as task_proposals_router
 from api_service.api.routers.task_step_templates import (
@@ -338,7 +335,6 @@ app.include_router(automation_router)
 app.include_router(task_proposals_router)
 app.include_router(recurring_tasks_router)
 app.include_router(task_dashboard_router)
-app.include_router(task_compatibility_router)
 app.include_router(task_step_templates_router)
 app.include_router(temporal_artifacts_router)
 if _ENABLE_TEST_UI_ROUTE:

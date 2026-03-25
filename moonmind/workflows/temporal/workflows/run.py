@@ -78,6 +78,9 @@ _GITHUB_PR_URL_PATTERN = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+",
     re.IGNORECASE,
 )
+# Replay-stable `workflow.patched` id for integration status polling terminal handling.
+# Keep in sync with docs/Temporal/WorkerDeployment.md if renamed (only before first prod deploy).
+INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
@@ -382,7 +385,13 @@ class MoonMindRunWorkflow:
             "initialParameters",
             "initial_parameters",
         )
-        self._repo = self._string_from_mapping(parameters, "repo")
+        ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
+        self._repo = (
+            self._string_from_mapping(parameters, "repo")
+            or self._string_from_mapping(parameters, "repository")
+            or self._string_from_mapping(ws, "repo")
+            or self._string_from_mapping(ws, "repository")
+        )
         self._integration = self._string_from_mapping(parameters, "integration")
 
         input_ref = self._optional_string(
@@ -759,7 +768,7 @@ class MoonMindRunWorkflow:
             }
             try:
                 create_result = await workflow.execute_activity(
-                    "integration.jules.create_pr",
+                    "repo.create_pr",
                     create_payload,
                     start_to_close_timeout=timedelta(minutes=2),
                     task_queue=INTEGRATIONS_TASK_QUEUE,
@@ -767,11 +776,16 @@ class MoonMindRunWorkflow:
                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 )
                 pr_url = self._get_from_result(create_result, "url")
+                created = self._get_from_result(create_result, "created")
+                summary = self._get_from_result(create_result, "summary") or ""
                 if pr_url:
                     pull_request_url = pr_url
                     self._get_logger().info(f"Natively created PR: {pull_request_url}")
                 else:
-                    raise ValueError("PR creation activity succeeded but returned no URL")
+                    raise ValueError(
+                        f"PR creation activity returned no URL"
+                        f" (created={created}): {summary}"
+                    )
             except Exception as e:
                 raise ValueError(
                     f"publishMode 'pr' requested; native PR creation failed: {e}"
@@ -1116,7 +1130,12 @@ class MoonMindRunWorkflow:
 
                     status = self._get_from_result(poll_result, "normalized_status")
                     if status in ("completed", "failed", "canceled", "awaiting_feedback"):
-                        _poll_terminal = True
+                        # Temporal records which branch was taken; replay without the patch marker
+                        # must follow the pre-patch control flow (else branch + clear below).
+                        if workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
+                            _poll_terminal = True
+                        else:
+                            self._resume_requested = True
                         self._external_status = "completed" if status == "awaiting_feedback" else status
                         if status == "failed":
                             self._get_logger().warning(f"Integration failed: {poll_result}")
@@ -1128,6 +1147,9 @@ class MoonMindRunWorkflow:
                     poll_interval_seconds = min(
                         poll_interval_seconds * 2, max_poll_interval_seconds
                     )
+
+            if not workflow.patched(INTEGRATION_POLL_LOOP_PATCH):
+                self._resume_requested = False
 
             if self._external_status != "completed":
                 # If a step failed or was canceled, do not dispatch remaining steps
@@ -1215,7 +1237,7 @@ class MoonMindRunWorkflow:
                         merge_payload["target_branch"] = effective_target
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "integration.jules.merge_pr"
+                        "repo.merge_pr"
                     )
                     merge_result = await workflow.execute_activity(
                         merge_route.activity_type,

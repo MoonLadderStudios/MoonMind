@@ -69,7 +69,7 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ## Migration Phases
 
-**Progress:** Phases **1** and **2** are **complete**. Phase **3** is **in progress**. Phases **4** and **5** are **not started**.
+**Progress:** Phases **1**, **2**, **3**, and **4** are **complete**. Phase **5** is **not started**.
 
 ### Phase 1 — Queue Submission Path → Temporal *(prerequisite)* — **COMPLETE**
 
@@ -124,17 +124,19 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ---
 
-### Phase 4 — Eliminate Compatibility Layer Complexity
+### Phase 4 — Eliminate Compatibility Layer Complexity — **COMPLETE**
 
 **Objective:** Simplify the compatibility adapters now that only one source exists.
 
-- [ ] **4.1** Simplify `TaskCompatibilityService` — remove multi-source routing, source resolution logic
-- [ ] **4.2** Simplify or merge `task_compatibility.py` into `executions.py` — single source means no bridging needed
-- [ ] **4.3** Remove `source_mapping.py` / `TaskResolutionAmbiguousError` — ambiguity is impossible with one source
-- [ ] **4.4** Simplify `TemporalExecutionService` — remove "staging" caveats, make it the direct service
-- [ ] **4.5** Consider merging `/api/tasks/*` and `/api/executions/*` into a single API surface
-- [ ] **4.6** Remove `temporalCompatibility` config block from view model (compatibility is just the default now)
-- [ ] **4.7** Remove `taskSourceResolver` endpoint — no source resolution needed
+**Status:** Finished. Adapter layer removed, dashboard config simplified.
+
+- [x] **4.1** Simplify `TaskCompatibilityService` — remove multi-source routing, source resolution logic
+- [x] **4.2** Simplify or merge `task_compatibility.py` into `executions.py` — single source means no bridging needed
+- [x] **4.3** Remove `source_mapping.py` / `TaskResolutionAmbiguousError` — ambiguity is impossible with one source
+- [x] **4.4** Simplify `TemporalExecutionService` — remove "staging" caveats, make it the direct service
+- [x] **4.5** Consider merging `/api/tasks/*` and `/api/executions/*` into a single API surface
+- [x] **4.6** Remove `temporalCompatibility` config block from view model (compatibility is just the default now)
+- [x] **4.7** Remove `taskSourceResolver` endpoint — no source resolution needed
 
 > **Gate:** No multi-source routing code. API surface is clean.
 

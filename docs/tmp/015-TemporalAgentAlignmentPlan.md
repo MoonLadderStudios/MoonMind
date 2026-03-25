@@ -172,16 +172,16 @@ This plan closes that gap through five phases of work, each independently shippa
 
 **Goal:** Enable safe rolling deploys for workflow code changes.
 
-- [ ] **5.1** Inject build identifier into worker startup
+- [x] **5.1** Inject build identifier into worker startup
   - **Files:** `worker_runtime.py`
   - Read `MOONMIND_BUILD_ID` (default: Git SHA) from environment
   - Pass to `Worker(...)` using the Python SDK's versioning API once stable (or use `workflow.patched()` gates in the interim)
 
-- [ ] **5.2** Document deployment runbook
+- [x] **5.2** Document deployment runbook
   - **Files:** New `docs/Temporal/WorkerDeployment.md`
   - Cover: version registration, compatibility matrix, rollback procedure, two-version side-by-side strategy for workflow changes
 
-- [ ] **5.3** Add `workflow.patched()` gates for in-flight compatibility
+- [x] **5.3** Add `workflow.patched()` gates for in-flight compatibility
   - **Files:** Workflow files as needed
   - For any workflow-shape-changing refactor (e.g., 1.2 loop refactor), use `workflow.patched("patch-id")` to branch between old and new behavior during replay
 

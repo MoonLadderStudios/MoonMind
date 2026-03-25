@@ -154,7 +154,7 @@ class TemporalExecutionListResult:
 
 
 class TemporalExecutionService:
-    """Canonical execution store with a projection mirror for compatibility reads."""
+    """Canonical execution store for Temporal workflows."""
 
     def __init__(
         self,

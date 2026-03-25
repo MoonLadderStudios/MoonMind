@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.schemas.jules_models import JulesIntegrationMergePRResult
+from moonmind.workflows.adapters.github_service import MergePRResult
 from moonmind.workflows.adapters.jules_client import JulesClient
 
 
@@ -20,7 +20,7 @@ async def test_merge_pull_request_rejects_invalid_url():
     """Non-GitHub PR URLs should return merged=False without calling the API."""
     client = JulesClient(base_url="https://unused", api_key="unused")
     result = await client.merge_pull_request(pr_url="https://not-github.com/foo")
-    assert isinstance(result, JulesIntegrationMergePRResult)
+    assert isinstance(result, MergePRResult)
     assert result.merged is False
     assert "Could not parse" in result.summary
 
