@@ -1,7 +1,7 @@
 # Remaining work: `docs/UI/TypeScriptSystem.md`
 
 **Source:** [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md)  
-**Last synced:** 2026-03-24
+**Last synced:** 2026-03-25
 
 This file is the **implementation tracker** for §15 (incremental adoption), §17 (operational rules), and §18 (risks). Canonical behavior and architecture stay in the main doc; this file holds **sequencing, checklists, and page-level status**.
 
@@ -16,12 +16,17 @@ Use this to avoid re-planning work that already exists:
 | `frontend/` tree, Vite multi-entry, `outDir` → `api_service/static/task_dashboard/dist/` | Present |
 | `mountPage` + TanStack `QueryClientProvider` + boot parsing | Present |
 | `api_service/ui_assets.py` + `ViteAssetResolver` + tests | Present |
+| `api_service/ui_boot.py` — centralized `generate_boot_payload` helper | Present |
 | Root `package.json` scripts: `ui:dev`, `ui:build`, `ui:typecheck`, `ui:lint`, `ui:test` | Present |
 | CI (`docker-publish`): `ui:typecheck`, `ui:lint`, `ui:test` | Present |
 | `ui:build` in CI | **Not** in default workflow (see Phase 0) |
 | Sample entrypoint `tasks-home` + test route | Present |
-| `openapi-typescript` in devDependencies; `frontend/src/generated/openapi.ts` | **Likely** still to wire (see Phase 0) |
-| Legacy `api_service/static/task_dashboard/dashboard.js` + Tailwind CLI `dashboard:css` | Still primary for real pages |
+| **Settings** entrypoint `settings.tsx` + live route `/tasks/settings` | Present (Phase 1 slice) |
+| `openapi-typescript` in devDependencies; `frontend/src/generated/openapi.ts` | devDep installed; **no** generated file or npm script yet |
+| `frontend/src/lib/api/` shared API client layer | **Not** present (see Phase 0) |
+| `frontend/src/lib/query/` query key conventions | **Not** present (see Phase 0) |
+| `frontend/src/features/` feature module directories | **Not** present |
+| Legacy `api_service/static/task_dashboard/dashboard.js` + Tailwind CLI `dashboard:css` | Still primary for non-settings pages |
 
 ---
 
@@ -35,7 +40,7 @@ Use this to avoid re-planning work that already exists:
 | Manifests | | | | |
 | Schedules | | | | |
 | Proposals | | | | |
-| Settings | | | | |
+| Settings | `task_dashboard.py` | Removed | `settings` ✅ | Live at `/tasks/settings`; API-key forms via TanStack Query |
 
 ---
 
@@ -45,21 +50,21 @@ Use this to avoid re-planning work that already exists:
 
 ### Verification checklist
 
-- [ ] `npm ci` then `npm run ui:dev` serves Vite against `frontend/vite.config.ts` without extra env hacks.
-- [ ] `npm run ui:build` succeeds and writes `api_service/static/task_dashboard/dist/` including `.vite/manifest.json`.
-- [ ] A FastAPI-rendered page can inject assets via `ui_assets("<entrypoint>")` and load JS/CSS in a browser (manifest keys match `entrypoints/<name>.tsx`).
-- [ ] `npm run ui:typecheck`, `ui:lint`, `ui:test` match what CI runs (or CI is updated to match local truth).
-- [ ] Boot payload: server injects JSON the client expects; `parseBootPayload` (and Zod schema, if used) stays aligned—add/adjust unit tests when the contract changes.
+- [x] `npm ci` then `npm run ui:dev` serves Vite against `frontend/vite.config.ts` without extra env hacks.
+- [x] `npm run ui:build` succeeds and writes `api_service/static/task_dashboard/dist/` including `.vite/manifest.json`.
+- [x] A FastAPI-rendered page can inject assets via `ui_assets("<entrypoint>")` and load JS/CSS in a browser (manifest keys match `entrypoints/<name>.tsx`). — Verified via live `/tasks/settings` route.
+- [x] `npm run ui:typecheck`, `ui:lint`, `ui:test` match what CI runs (or CI is updated to match local truth).
+- [x] Boot payload: server injects JSON the client expects; `parseBootPayload` (and Zod schema, if used) stays aligned—add/adjust unit tests when the contract changes. — `ui_boot.py` centralized.
 
 ### Task list
 
 1. [ ] **CI: add `npm run ui:build`** to the same job that runs typecheck/lint/test (or a dedicated frontend job on PRs), so broken Rollup/Vite config cannot reach `main`.
-2. [ ] **OpenAPI → types path:** add a documented, repeatable command (e.g. npm script calling `openapi-typescript`) that writes `frontend/src/generated/openapi.ts` (or agreed path); gate drift with CI or a scheduled check.
+2. [ ] **OpenAPI → types path:** add a documented, repeatable command (e.g. npm script calling `openapi-typescript`) that writes `frontend/src/generated/openapi.ts` (or agreed path); gate drift with CI or a scheduled check. — `openapi-typescript` installed; no script or generated output yet.
 3. [ ] **Shared API client layer:** introduce `frontend/src/lib/api/` (fetch wrapper, error normalization, credentials/same-origin policy) consistent with [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md) §10–12.
 4. [ ] **Query key + hook conventions:** add `frontend/src/lib/query/` with documented query-key shapes (see canonical §12.2) and a minimal example hook (even if only used by the Phase 1 slice).
-5. [ ] **Boot payload helper (backend):** if multiple routes need payloads, centralize construction in a small testable helper (canonical §14.3)—refactor duplicates as they appear.
-6. [ ] **Contributor docs (minimal):** in `README.md` or existing UI dev section, add 5–10 lines: install deps, `ui:dev` vs `ui:build`, where dist goes, and “do not edit `dist/`” (canonical §17.4).
-7. [ ] **Optional — Vite dev proxy:** if full “UI dev mode” (canonical §8.3 B) is desired, specify and implement proxy to FastAPI for API calls; otherwise explicitly defer and keep “transitional mode” only.
+5. [x] **Boot payload helper (backend):** centralized in `api_service/ui_boot.py` (`generate_boot_payload`), used by both `tasks-home` and `settings` routes, with tests in `test_ui_route.py`.
+6. [ ] **Contributor docs (minimal):** in `README.md` or existing UI dev section, add 5–10 lines: install deps, `ui:dev` vs `ui:build`, where dist goes, and "do not edit `dist/`" (canonical §17.4).
+7. [ ] **Optional — Vite dev proxy:** if full "UI dev mode" (canonical §8.3 B) is desired, specify and implement proxy to FastAPI for API calls; otherwise explicitly defer and keep "transitional mode" only.
 
 **Exit criteria for Phase 0:** Items above are either done or explicitly deferred with a one-line rationale in this file; CI runs `ui:build`; first real page migration (Phase 1) does not require new tooling decisions.
 
@@ -73,21 +78,21 @@ Use this to avoid re-planning work that already exists:
 
 ### Shared tasks (any chosen slice)
 
-1. [ ] **Route and template:** Add or adjust Jinja (or HTML) template with stable root element id (e.g. `mission-control-root`), server-side auth/visibility unchanged.
-2. [ ] **Boot payload contract:** Define TypeScript type + Zod (if needed) for this page’s boot data; document fields in a short comment or `frontend/src/types/boot.ts`.
-3. [ ] **Vite entrypoint:** Add `frontend/src/entrypoints/<slice>.tsx`, register in `rollupOptions.input`, ensure `ui_assets("<slice>")` resolves.
-4. [ ] **Feature module:** Create `frontend/src/features/<slice>/` with page component, subcomponents, and hooks—not logic scattered in the entry file.
-5. [ ] **Data layer:** Implement TanStack Query queries (and mutations if applicable) using the shared API client; define query keys and invalidation for mutations (canonical §12).
-6. [ ] **UX parity:** Match or improve existing legacy behavior for that page (loading, empty, error, polling if any).
-7. [ ] **Tests:** Vitest + Testing Library for at least one critical component or hook; keep `parseBootPayload` tests current.
-8. [ ] **Cutover:** Route traffic to the new template + bundle; legacy script for **this page only** no longer required for happy path.
-9. [ ] **Update migration table** (above) and link the implementing PR.
+1. [x] **Route and template:** `/tasks/settings` route in `task_dashboard.py` renders HTML with `ui_assets("settings")` + boot payload injection.
+2. [x] **Boot payload contract:** `generate_boot_payload("settings")` via `ui_boot.py`; `parseBootPayload` handles client-side.
+3. [x] **Vite entrypoint:** `frontend/src/entrypoints/settings.tsx` registered in `rollupOptions.input` in `vite.config.ts`.
+4. [ ] **Feature module:** Logic currently inline in `settings.tsx`; needs extraction to `frontend/src/features/settings/`.
+5. [x] **Data layer:** TanStack Query `useQuery` (profile fetch) and `useMutation` (profile update) with `invalidateQueries` on success.
+6. [/] **UX parity:** API-key management implemented; remaining settings sub-pages (OAuth, worker toggles) not yet covered.
+7. [ ] **Tests:** No Vitest tests for settings components/hooks yet.
+8. [x] **Cutover:** `/tasks/settings` serves the React bundle; legacy JS not required.
+9. [x] **Update migration table** (above) — updated 2026-03-25.
 
 ### If slice = **Settings**
 
-- [ ] Inventory all settings-related endpoints and form fields from legacy UI.
-- [ ] Map each to generated OpenAPI types or explicit domain types.
-- [ ] Implement forms with client validation + server error display; mutations invalidate relevant queries.
+- [/] Inventory all settings-related endpoints and form fields from legacy UI. — API-key fields (`/me`, `/me/profile`) done; other settings endpoints TBD.
+- [ ] Map each to generated OpenAPI types or explicit domain types. — Blocked on Phase 0 task 2 (OpenAPI → types).
+- [x] Implement forms with client validation + server error display; mutations invalidate relevant queries. — API-key form with `useMutation` + `invalidateQueries` + notice display.
 
 ### If slice = **Proposals** (list + detail or list-only for Phase 1)
 
