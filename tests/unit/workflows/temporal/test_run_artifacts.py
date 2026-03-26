@@ -719,12 +719,17 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
 ) -> None:
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
+    create_pr_called = False
 
     async def fake_execute_activity(
         activity_type: str,
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+
         if activity_type == "artifact.read":
             if payload.get("artifact_ref") == "artifact://registry/1":
                 return json.dumps(
@@ -818,3 +823,5 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
         parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
         plan_ref="art_plan_1",
     )
+
+    assert not create_pr_called, "repo.create_pr should not have been called"

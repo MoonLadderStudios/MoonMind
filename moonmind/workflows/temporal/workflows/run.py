@@ -746,11 +746,9 @@ class MoonMindRunWorkflow:
                 (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get("name") or ""
             ).strip().lower()
             
-            ws = parameters.get("workspaceSpec") or {}
+            ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
             
-            if last_tool in ("jules", "jules_api", "github_pr_creator") or (
-                "jules_session_id" in locals() and jules_session_id
-            ):
+            if last_tool in ("jules", "jules_api", "github_pr_creator") or jules_session_id:
                 self._get_logger().info(
                     "Skipping native PR creation: agent '%s' handles its own PRs.",
                     last_tool or "jules",
@@ -769,7 +767,6 @@ class MoonMindRunWorkflow:
                     or ws.get("targetBranch")
                     or ws.get("branch")
                     or parameters.get("targetBranch")
-                    or ws.get("targetBranch")
                     or last_node_inputs.get("targetBranch")
                     or last_node_inputs.get("branch")
                     or ""

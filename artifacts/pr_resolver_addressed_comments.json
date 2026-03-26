@@ -1,37 +1,52 @@
 [
   {
-    "id": 4124501088,
-    "disposition": "not-applicable",
-    "rationale": "Informational greeting from bot."
+    "id": 2992154596,
+    "disposition": "addressed",
+    "rationale": "Removed the duplicate ws.get('targetBranch') check."
   },
   {
-    "id": 4124502066,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary from bot."
+    "id": 2992154599,
+    "disposition": "addressed",
+    "rationale": "Added boolean assertion to verify repo.create_pr isn't called."
   },
   {
-    "id": 4004700213,
-    "disposition": "not-applicable",
-    "rationale": "Informational review from bot."
+    "id": 2992157719,
+    "disposition": "addressed",
+    "rationale": "Removed 'in locals()' check for jules_session_id in run.py."
   },
   {
-    "id": 2986460273,
-    "disposition": "not-applicable",
-    "rationale": "Heartbeat propagation was already implemented in PR 958 and merged into this branch."
+    "id": 2992157734,
+    "disposition": "addressed",
+    "rationale": "Updated workspaceSpec extraction to use _mapping_value."
   },
   {
-    "id": 4004713842,
-    "disposition": "not-applicable",
-    "rationale": "Informational review overview."
+    "id": 2992157741,
+    "disposition": "addressed",
+    "rationale": "Removed duplicate targetBranch fallback (same issue as 2992154596)."
   },
   {
-    "id": 2986461669,
-    "disposition": "not-applicable",
-    "rationale": "Heartbeat propagation was already implemented in PR 958 and merged into this branch."
+    "id": 2992157749,
+    "disposition": "addressed",
+    "rationale": "Removed trailing whitespace on blank line."
   },
   {
-    "id": 4004715685,
+    "id": 4131196783,
     "disposition": "not-applicable",
-    "rationale": "Informational review overview."
+    "rationale": "Informational summary from bot regarding usage limits."
+  },
+  {
+    "id": 4131197562,
+    "disposition": "not-applicable",
+    "rationale": "Context summary from Gemini."
+  },
+  {
+    "id": 4011094078,
+    "disposition": "not-applicable",
+    "rationale": "Code review summary from Gemini."
+  },
+  {
+    "id": 4011097779,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR summary."
   }
 ]
