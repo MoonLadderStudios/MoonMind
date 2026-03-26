@@ -2,7 +2,7 @@
 
 Running the unit tests resulted in several warnings that can be broken down into the following phases to address systematically:
 
-## Phase 1: Pydantic V2 Migration
+## Phase 1: Pydantic V2 Migration (Complete)
 These warnings are caused by the upgrade to Pydantic V2 and require straightforward search-and-replace changes.
 - **Fields with `env` Argument**: Replace the deprecated `env="VAR"` with `alias="VAR"` or `validation_alias="VAR"` (or via `SettingsConfigDict` features depending on how `settings.py` is configured). Affects many fields in:
   - `moonmind/config/settings.py`
