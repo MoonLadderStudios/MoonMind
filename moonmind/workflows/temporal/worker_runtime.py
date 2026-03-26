@@ -2,7 +2,9 @@ import contextlib
 
 def _build_proposal_service_factory():
     from api_service.db.base import get_async_session_context
-    
+    from moonmind.workflows.task_proposals.repositories import TaskProposalRepository
+    from moonmind.workflows.task_proposals.service import TaskProposalService
+
     @contextlib.asynccontextmanager
     async def factory():
         async with get_async_session_context() as db_session:
@@ -291,12 +293,22 @@ def _build_runtime_planner():
         if failure_mode not in {"FAIL_FAST", "CONTINUE"}:
             failure_mode = "FAIL_FAST"
 
-        # --- Expand task.steps[] into multiple plan nodes ---
+        # --- Expand task.steps[] or stepCount into multiple plan nodes ---
         raw_steps = task_payload.get("steps")
         has_multi_steps = (
             isinstance(raw_steps, list)
             and len(raw_steps) > 1
             and all(isinstance(s, Mapping) for s in raw_steps)
+        )
+
+        # If no explicit steps but stepCount > 1, synthesise N identical
+        # nodes so the Run workflow iterates them and chains jules_session_id
+        # across steps (multi-step session reuse).
+        effective_step_count = node_inputs.get("stepCount")
+        expand_step_count = (
+            not has_multi_steps
+            and isinstance(effective_step_count, int)
+            and effective_step_count > 1
         )
 
         nodes: list[dict[str, Any]] = []
@@ -336,6 +348,25 @@ def _build_runtime_planner():
                     "inputs": step_node_inputs,
                 })
 
+                if prev_step_id:
+                    edges.append({"from": prev_step_id, "to": step_id})
+                prev_step_id = step_id
+        elif expand_step_count:
+            # Expand stepCount into N sequential nodes with the same
+            # instructions.  The Run workflow chains jules_session_id
+            # across nodes so each step continues the previous session.
+            prev_step_id = None
+            for idx in range(effective_step_count):
+                step_id = f"node-{idx + 1}"
+                nodes.append({
+                    "id": step_id,
+                    "tool": {
+                        "type": "agent_runtime",
+                        "name": runtime_mode,
+                        "version": "1.0",
+                    },
+                    "inputs": dict(node_inputs),
+                })
                 if prev_step_id:
                     edges.append({"from": prev_step_id, "to": step_id})
                 prev_step_id = step_id
