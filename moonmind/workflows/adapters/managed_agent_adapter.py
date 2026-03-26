@@ -258,12 +258,11 @@ class ManagedAgentAdapter:
         except ImportError:
             run_id = str(uuid4())
 
-        # Signal AuthProfileManager to acquire a slot lease (DOC-REQ-004).
-        await self._request_slot(
-            requester_workflow_id=self._workflow_id,
-            runtime_id=self._runtime_id or request.agent_id,
-        )
-        
+        # NOTE: Slot acquisition is handled by AgentRun before adapter.start()
+        # is called.  Do NOT request a slot here — a duplicate request_slot
+        # signal triggers the manager loop and can interact with
+        # verify_lease_holders to incorrectly free and reassign slots.
+
         if self._run_launcher is not None:
             runtime_id_for_profile = self._runtime_id or request.agent_id
             cmd_template = profile.get("command_template")

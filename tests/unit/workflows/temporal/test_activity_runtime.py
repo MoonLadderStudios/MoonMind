@@ -723,6 +723,7 @@ async def test_jules_activities_persist_tracking_artifacts(tmp_path: Path):
             )
 
             started = await activities.integration_jules_start(
+                {"workspace_spec": {"repository": "owner/repo"}},
                 principal="user-1",
                 parameters={"title": "Test task", "description": "run tests"},
                 execution_ref=ExecutionRef(
@@ -775,11 +776,13 @@ async def test_jules_start_reuses_external_identity_for_same_idempotency_key(
             )
 
             first = await activities.integration_jules_start(
+                {"workspace_spec": {"repository": "owner/repo"}},
                 principal="user-1",
                 parameters={"title": "same", "description": "same"},
                 idempotency_key="idem-jules-1",
             )
             second = await activities.integration_jules_start(
+                {"workspace_spec": {"repository": "owner/repo"}},
                 principal="user-1",
                 parameters={"title": "same", "description": "same"},
                 idempotency_key="idem-jules-1",
@@ -831,6 +834,7 @@ async def test_jules_start_embeds_correlation_metadata(tmp_path: Path):
             )
 
             await activities.integration_jules_start(
+                {"workspace_spec": {"repository": "owner/repo"}},
                 principal="user-1",
                 correlation_id="corr-jules-1",
                 parameters={"title": "with correlation", "description": "verify"},
@@ -984,6 +988,7 @@ async def test_default_jules_client_uses_shared_runtime_gate_message(monkeypatch
         match=re.escape(JULES_RUNTIME_DISABLED_MESSAGE),
     ):
         await activities.integration_jules_start(
+            {"workspace_spec": {"repository": "owner/repo"}},
             principal="test-user",
             parameters={"title": "gate test", "description": "should fail"},
         )

@@ -15,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     ManagedRunRecord,
     ManagedRuntimeProfile,
+    TERMINAL_AGENT_RUN_STATES,
 )
 
 from .store import ManagedRunStore
@@ -371,22 +372,15 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
-    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process, dict[str, str] | None]:
+    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None, TmateSessionManager | None]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
         without launching a new process.
         """
         existing = self._store.load(run_id)
-        if existing is not None and existing.status not in (
-            "completed",
-            "failed",
-            "canceled",
-            "timed_out",
-        ):
-            raise RuntimeError(
-                f"Active run already exists for run_id={run_id}"
-            )
+        if existing is not None and existing.status not in TERMINAL_AGENT_RUN_STATES:
+            return existing, None, None, None
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)
