@@ -388,3 +388,10 @@ def test_auth_profile_list_activity_in_catalog():
     route = catalog.resolve_activity("auth_profile.list")
     assert route.task_queue == "mm.activity.artifacts"
     assert route.fleet == "artifacts"
+
+
+def test_verify_lease_holders_exists():
+    """Ensure the workflow exposes the expected API."""
+    assert hasattr(MoonMindAuthProfileManagerWorkflow, "_verify_lease_holders")
+    verify_lease_holders = getattr(MoonMindAuthProfileManagerWorkflow, "_verify_lease_holders")
+    assert callable(verify_lease_holders)

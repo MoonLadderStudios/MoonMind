@@ -95,7 +95,7 @@ class ProfileSyncPayload(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-_MAX_LEASE_DURATION_SECONDS = 7200  # 2 hours — safety net for leaked slots
+_MAX_LEASE_DURATION_SECONDS = 5400  # 1.5 hours — safety net for leaked slots
 
 
 @dataclass
