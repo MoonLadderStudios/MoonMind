@@ -2,7 +2,7 @@
 
 **Reference:** [TemporalScheduling.md](../Temporal/TemporalScheduling.md) (desired state)
 **Created:** 2026-03
-**Status:** Active
+**Status:** Mostly complete — Phase 5 (DST/timezone tests and canonical semantics) remaining
 
 ---
 
@@ -12,11 +12,9 @@ MoonMind implements "time-based scheduling" in two ways today:
 
 1. **One-off delayed starts** via Temporal's `start_delay` — fully wired end-to-end from API through `TemporalClientAdapter` to `Client.start_workflow(...)`. Idiomatic and working.
 
-2. **Recurring scheduling** via a DB-backed cron system — `recurring_tasks_service.py` computes cron due times and dispatches work. This duplicates capabilities that Temporal Schedules provide natively and is the largest idiomatic gap.
+2. **Recurring scheduling** via **Temporal Schedules** — `recurring_tasks_service.py` reconciles definitions with Temporal (`create_schedule` / `update_schedule` / pause / trigger, etc.); `RECURRING_DISPATCH_ENGINE` supports cutover and dual mode. Legacy app-layer cron dispatch has been removed per Phase 2.7.
 
-The Temporal Schedule CRUD layer has already been implemented in `client.py` with `schedule_mapping.py` and `schedule_errors.py`, but it is not yet wired as the primary dispatch mechanism.
-
-This plan closes that gap and adds supporting improvements across five phases.
+The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedule_errors.py`) is wired as the primary recurring dispatch path. Phases 1–4 of this plan are done; Phase 5 adds broader DST boundary tests, Temporal Schedule integration coverage at DST transitions, and a consolidated semantics note (partial overlap with [TemporalScheduling.md](../Temporal/TemporalScheduling.md)).
 
 ### Current State Summary
 
@@ -27,10 +25,10 @@ This plan closes that gap and adds supporting improvements across five phases.
 | Child workflow fan-out (dependency-based DAG dispatch) | ✅ Idiomatic, working |
 | Temporal Schedule CRUD in `TemporalClientAdapter` | ✅ Implemented |
 | Schedule policy mapping (overlap, catchup, jitter) | ✅ Implemented |
-| Recurring dispatch via Temporal Schedules (primary path) | 🔲 Not yet wired |
-| `mm_scheduled_for` search attribute | 🔲 Not implemented |
+| Recurring dispatch via Temporal Schedules (primary path) | ✅ Wired |
+| `mm_scheduled_for` search attribute | ✅ Implemented |
 | Reschedulable timer pattern | ✅ Implemented |
-| Cron/timezone correctness tests at DST boundaries | 🔲 Not implemented |
+| Cron/timezone correctness tests at DST boundaries | 🔲 Phase 5 — partial unit coverage (`test_cron.py` spring-forward gap); fall-back / multi-zone / integration still open |
 
 ---
 

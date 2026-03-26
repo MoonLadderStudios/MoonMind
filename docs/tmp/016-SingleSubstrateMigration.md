@@ -2,7 +2,26 @@
 
 > **Goal:** Finish the move to Temporal-backed execution as the **only** real substrate. Remove legacy queue and system paths so MoonMind has one task model, one execution model, one observability model, and one action model.
 >
-> **Last updated:** 2026-03-24
+> **Last updated:** 2026-03-26
+
+---
+
+## Relationship to other Temporal implementation notes (009–018)
+
+These `docs/tmp/` plans overlap in topic but differ in scope. **This document (016)** is about **retiring non-Temporal execution substrates** (legacy queue + system orchestration) in code and UI. The others assume **Temporal is already the control plane** and deepen correctness, contracts, or ergonomics:
+
+| Doc | Focus | How it relates to 016 |
+|-----|--------|------------------------|
+| [009-DefaultNamespace.md](009-DefaultNamespace.md) | Local default `TEMPORAL_NAMESPACE=default`, bootstrap, artifact key alignment | Operational defaults for the same Temporal stack; doc updates should stay consistent with Phase 5 here and with `docs/Temporal/*.md`. |
+| [010-CancellationAnalysis.md](010-CancellationAnalysis.md) | Cancel vs terminate, `ActivityCancellationType`, heartbeats | **Single substrate** means operator cancel is `WorkflowHandle.cancel()` / execution APIs only—no parallel queue cancel path. |
+| [011-TemporalWorkflowExecutionImprovements.md](011-TemporalWorkflowExecutionImprovements.md) | Fleet model, gaps in `MoonMind.Run`, schedules, versioning | Analytical baseline; several gaps are addressed in 014–015. Treat as background, not a second source of execution truth. |
+| [012-TemporalWorkflowMessagePassingImprovements.md](012-TemporalWorkflowMessagePassingImprovements.md) | Signals, Queries, Updates patterns | Message-passing improvements apply **on top of** Temporal-only execution. |
+| [013-TemporalWorkflowMessagePassingInventory.md](013-TemporalWorkflowMessagePassingInventory.md) | Inventory of workflows, handlers, queues | Inventory should describe **Temporal** workflows and `mm.*` task queues only (no legacy queue source). |
+| [014-TemporalSchedulingImprovements.md](014-TemporalSchedulingImprovements.md) | `start_delay`, Temporal Schedules, recurring tasks | Recurring dispatch is **Temporal Schedule–backed** (see that doc); aligns with Phase 1.5 / 1.6 here. |
+| [014-TemporalMessageContracts.md](014-TemporalMessageContracts.md) | `MoonMind.Run` Update/Signal/Query contracts | Control-plane commands on the orchestrator are **Updates** (with validators), not a separate “Mission Control queue.” |
+| [015-TemporalIdempotency.md](015-TemporalIdempotency.md) | `update_id`, idempotency keys, workflow-boundary testing | Applies to APIs and workers once execution is Temporal-only. |
+| [015-TemporalAgentAlignmentPlan.md](015-TemporalAgentAlignmentPlan.md) | Alignment roadmap (queries, schedules, observability) | Sibling roadmap; prefer **014-TemporalMessageContracts** for current **signal vs update** facts if docs disagree. |
+| [017-TemporalTypeSafety.md](017-TemporalTypeSafety.md), [018-TemporalTypeAnnotations.md](018-TemporalTypeAnnotations.md) | Typed activity payloads, binary/json policy | Hardening **Temporal activity boundaries**; unrelated to restoring queue/system sources. |
 
 ---
 
@@ -12,7 +31,7 @@ The docs and codebase still treat Mission Control as transitional — merging qu
 
 - **Weakens the "one control plane" story** — operators see multiple sources instead of a unified model.
 - **Adds permanent UI and API complexity** — dashboard view model, routing, status maps, pagination, and compatibility adapters all branch on `source`.
-- **Blocks doc simplification** — 6+ architecture docs describe mixed-source rules that only exist for migration.
+- **Blocks doc simplification** — several architecture docs still describe mixed-source rules that only existed for migration.
 
 The target state is clean: **Temporal owns execution truth. Period.**
 
@@ -21,49 +40,27 @@ The target state is clean: **Temporal owns execution truth. Period.**
 ## Current State Audit
 
 ### What's Already Done ✅
-- Temporal is the execution engine for all new task submissions
-- `MoonMind.Run` and `MoonMind.AgentRun` workflows handle managed + external agent execution
-- `/api/executions` adapter surface exists with full CRUD + signal/cancel
-- `TemporalExecutionRecord` projection row with sync metadata
-- system code already deleted from `moonmind/workflows/system/` (only `__pycache__` remains)
-- legacy queue router and `moonmind/workflows/agent_queue/` removed; queue backend tables dropped via migration `b92f4891f27c`
-- system DB tables dropped via migration `c1d2e3f4a5b6`
-- External Runs tab removed from dashboard
-- system submissions rejected with error in `dashboard.js`
 
-### What Still References Legacy Sources ⚠️
+- Temporal is the execution engine for new task submissions.
+- `MoonMind.Run` and `MoonMind.AgentRun` workflows handle managed + external agent execution.
+- `/api/executions` (and related dashboard templates) provide CRUD + cancel/signal/update against Temporal.
+- `TemporalExecutionRecord` projection row with sync metadata.
+- Legacy `moonmind/workflows/system/` and `moonmind/workflows/agent_queue/` removed; queue backend tables dropped (e.g. migration `b92f4891f27c`); system DB tables dropped (e.g. migration `c1d2e3f4a5b6`).
+- External Runs tab removed; system submissions rejected from the dashboard.
+- **Phases 1–4 (below)** are complete: queue path gone, dashboard execution views Temporal-first, compatibility/router layer collapsed into executions-oriented APIs.
 
-#### Python Backend
-| Component | File | Legacy Reference |
-|-----------|------|-----------------|
-| View model | [task_dashboard_view_model.py](../../api_service/api/routers/task_dashboard_view_model.py) | Residual **system** block keys (`defaultQueue`, `queueEnv`, `taskSourceResolver`); submit defaults from `moonmind.workflows.tasks.runtime_defaults` |
-| Task compatibility router | [task_compatibility.py](../../api_service/api/routers/task_compatibility.py) | Deprecated `source` / `source_hint` query params; handlers pass `temporal` only — Phase 4 will remove the adapter surface |
-| Task routing | [routing.py](../../moonmind/workflows/tasks/routing.py) | Any remaining non-Temporal routing names |
-| Automation | [automation/](../../moonmind/workflows/automation/) | Naming/orchestration that predates single substrate |
-| Settings | [settings.py](../../moonmind/config/settings.py) | `MOONMIND_QUEUE` alias still used for **Codex worker queue** (`codex_queue`), not the removed agent queue API |
+### Residual naming and doc debt (not separate substrates) ⚠️
 
-#### Frontend (dashboard.js)
-| Area | Legacy Reference |
-|------|-----------------|
-| Worker runtime capabilities | `queueSourceConfig` + default `/api/queue/workers/runtime-capabilities` when `sources.queue` absent — should move to Temporal/worker-auth config (Phase 3+) |
-| Copy / labels | `defaultQueueName` and “Unified queue” strings — cosmetic naming cleanup |
-| Task resolution | Optional calls to `taskSourceResolver` / `taskResolution` endpoints until Phase 4 removes them |
+Code is **Temporal-primary**; remaining items are mostly **vocabulary**, **query parameters**, or **canonical docs** still written for the migration era:
 
-#### Tests
-| Area | Files |
-|------|-------|
-| Queue layout fixtures | [queue_rows.js](../../tests/task_dashboard/__fixtures__/queue_rows.js) — `createsystemRow()` |
-| Submit runtime tests | [test_submit_runtime.js](../../tests/task_dashboard/test_submit_runtime.js) — system validation, priority, UI state |
-| Queue layout tests | [test_queue_layouts.js](../../tests/task_dashboard/test_queue_layouts.js) — system row rendering |
-| View model tests | [test_task_dashboard_view_model.py](../../tests/unit/api/routers/test_task_dashboard_view_model.py) |
-| system removal coverage | [test_doc_req_coverage.py](../../tests/unit/orchestrator_removal/test_doc_req_coverage.py) |
-
-#### Docs
-| Document | Issue |
-|----------|-------|
-| [SourceOfTruthAndProjectionModel.md](../Temporal/SourceOfTruthAndProjectionModel.md) | Describes mixed-source as "migration stance", projection as "temporary implementation posture" |
-| [TaskExecutionCompatibilityModel.md](../Temporal/TaskExecutionCompatibilityModel.md) | Lists `queue`, `system`, `temporal` as execution sources; multi-source pagination rules |
-| [VisibilityAndUiQueryModel.md](../Temporal/VisibilityAndUiQueryModel.md) | References mixed-source pages, `queue`/`system` dashboard sources |
+| Area | Notes |
+|------|--------|
+| **View model** | `build_runtime_config()` exposes `sources.temporal`, `sources.proposals`, `sources.schedules` — no legacy queue execution block. The nested object key **`system`** holds **submit-form defaults** (repository, runtime, attachments policy); it is not the removed "system execution source." |
+| **`normalize_status(source, …)`** | Still takes a `source` discriminator so **proposals** vs **Temporal** rows map into shared dashboard chips — not multi-substrate execution. |
+| **URLs** | List/detail links may still carry `?source=temporal` for routing clarity; that is a **label**, not a second backend. |
+| **Tests / fixtures** | e.g. `createQueueRow` as a legacy alias for Temporal row factories; `queueName: "-"` placeholders on Temporal-shaped rows — cosmetic cleanup optional. |
+| **Settings** | `MOONMIND_QUEUE` (or related env) may still name the **Codex worker task queue**, not the removed agent-queue HTTP API. |
+| **Canonical Temporal docs** | `SourceOfTruthAndProjectionModel.md`, `TaskExecutionCompatibilityModel.md`, `VisibilityAndUiQueryModel.md`, etc. may still describe `queue` / `system` / mixed-source pagination — **Phase 5** below. |
 
 ---
 
@@ -73,87 +70,69 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 ### Phase 1 — Queue Submission Path → Temporal *(prerequisite)* — **COMPLETE**
 
-**Objective:** Ensure every action that currently routes through `/api/queue/jobs` can be performed through the Temporal execution path instead.
+**Objective:** Ensure every action that previously routed through `/api/queue/jobs` could be performed through the Temporal execution path.
 
 **Status:** Finished. Gate met: no user-facing action requires the removed queue path.
 
 - [x] **1.1** Audit queue-only features: attachments, live sessions, operator messages, task control, events/SSE, skills list
 - [x] **1.2** Map each queue feature to its Temporal equivalent or mark as deferred
-- [x] **1.3** Ensure Temporal submit supports all current submit form fields: runtime, model, effort, repository, publish mode, attachments
-- [x] **1.4** Redirect manifest submission (`/api/queue/jobs?type=manifest`) to `MoonMind.ManifestIngest` Temporal workflow
-- [x] **1.5** Confirm recurring tasks (`/api/recurring-tasks`) already use Temporal Schedules (check if still queue-backed)
-- [x] **1.6** Verify step templates work against Temporal execution path
+- [x] **1.3** Ensure Temporal submit supports submit form fields: runtime, model, effort, repository, publish mode, attachments
+- [x] **1.4** Redirect manifest submission to `MoonMind.ManifestIngest` Temporal workflow
+- [x] **1.5** Recurring tasks: **Temporal Schedules** are the primary dispatch path (reconciled in API/service layer; see [014-TemporalSchedulingImprovements.md](014-TemporalSchedulingImprovements.md))
+- [x] **1.6** Step templates verified against the Temporal execution path
 
 ---
 
 ### Phase 2 — Collapse Dashboard to Single Source — **COMPLETE**
 
-**Objective:** Remove `queue` and `system` as dashboard execution sources. All task list/detail goes through `temporal`.
+**Objective:** Remove `queue` and `system` as dashboard **execution** sources. Task list/detail for runs goes through Temporal APIs and projections.
 
-**Status:** Finished. Dashboard execution views use Temporal; residual strings and worker-capability URL fallbacks are Phase 3+ cleanup.
+**Status:** Finished.
 
-- [x] **2.1** Remove `sources.queue` from `build_runtime_config()` in `task_dashboard_view_model.py`
-- [x] **2.2** Remove `sources.manifests` queue-backed endpoint block (manifests should use Temporal source)
-- [x] **2.3** Remove `queue` and `system` from `_STATUS_MAPS` — only `proposals` and `temporal` remain
-- [x] **2.4** Simplify `normalize_status()` — single mapping for Temporal states
-- [x] **2.5** In `dashboard.js`: remove system route matching, form validation stubs, priority normalization, UI state branches
-- [x] **2.6** In `dashboard.js`: remove queue source fetcher/renderer code; point all task list/detail at Temporal endpoints
-- [x] **2.7** Remove `source` filter from compatibility APIs (always `temporal`) or deprecate the parameter
-- [x] **2.8** Update test fixtures: remove `createsystemRow()`, `createQueueRow()`, update to Temporal-only rows
-- [x] **2.9** Update submit runtime tests to remove system validation/priority tests
-- [x] **2.10** Update view model tests for single-source config
+- [x] **2.1–2.10** View model, dashboard JS, status maps, fixtures, and tests updated for Temporal-first execution (proposals remain a separate non-Temporal **proposal** surface where product requires it)
 
 ---
 
 ### Phase 3 — Remove Queue Backend Code — **COMPLETE**
 
-**Objective:** Delete the legacy queue execution substrate code and scrub remaining queue-shaped config, tests, and UI fallbacks.
+**Objective:** Delete the legacy queue execution substrate and scrub queue-shaped operator surfaces.
 
-**Status:** Finished. All backend code, configuration aliases, UI fallbacks, and related tests have been removed or updated.
+**Status:** Finished. `agent_queue` router and module tree removed; migrations dropped queue/system tables as applicable; worker exports are Temporal factories only.
 
-- [x] **3.1** Remove `api_service/api/routers/agent_queue.py` and its inclusion in the API router setup *(removed)*
-- [x] **3.2** Delete `moonmind/workflows/agent_queue/` module (~250 KB of service, repository, model, contract code) *(removed; shared helpers live under `moonmind/workflows/tasks/` where noted in file headers)*
-- [x] **3.3** Remove queue-related DB models and generate Alembic migration to drop queue tables *(see `b92f4891f27c_remove_legacy_queue_backend_tables.py`)*
-- [x] **3.4** Remove or rename queue-shaped dashboard settings: `defaultQueue`, `queueEnv` in view model; align worker queue naming vs Codex `MOONMIND_QUEUE` in settings; update dashboard copy and runtime-capabilities URL config (no default `/api/queue/...` path)
-- [x] **3.5** Remove `moonmind/workflows/system/` directory (empty except `__pycache__`)
-- [x] **3.6** Remove `tests/unit/orchestrator_removal/` directory (e.g. migrate or drop `test_doc_req_coverage.py` once redundant)
-- [x] **3.7** Remove or rewrite queue-related tests: skipped `test_agent_queue_artifacts.py`, JS fixtures still referencing `/api/queue/jobs`, e2e mocks for queue routes
-- [x] **3.8** Clean up `moonmind/workflows/__init__.py` for queue/system exports *(no `get_agent_queue_service`; Temporal factories only)*
+- [x] **3.1–3.5** Agent queue router, module, DB models/migrations, empty system workflow dir
+- [x] **3.6** `tests/unit/orchestrator_removal/` removed or folded when redundant
+- [x] **3.7–3.8** Queue-only tests and package exports cleaned up
 
-> **Gate:** `agent_queue` and `system` workflow modules are deleted; queue tables removed from schema. Open items **3.4–3.7** finish config/test/e2e cleanup so nothing queue-shaped remains in the operator surface.
+**Gate (met):** No `agent_queue` or system workflow modules; queue tables absent from schema; operator surface is not queue-backed.
 
 ---
 
 ### Phase 4 — Eliminate Compatibility Layer Complexity — **COMPLETE**
 
-**Objective:** Simplify the compatibility adapters now that only one source exists.
+**Objective:** Simplify compatibility adapters now that only one execution source exists.
 
-**Status:** Finished. Adapter layer removed, dashboard config simplified.
+**Status:** Finished. Multi-source task compatibility routing removed; executions-oriented APIs are the bridge to Temporal.
 
-- [x] **4.1** Simplify `TaskCompatibilityService` — remove multi-source routing, source resolution logic
-- [x] **4.2** Simplify or merge `task_compatibility.py` into `executions.py` — single source means no bridging needed
-- [x] **4.3** Remove `source_mapping.py` / `TaskResolutionAmbiguousError` — ambiguity is impossible with one source
-- [x] **4.4** Simplify `TemporalExecutionService` — remove "staging" caveats, make it the direct service
-- [x] **4.5** Consider merging `/api/tasks/*` and `/api/executions/*` into a single API surface
-- [x] **4.6** Remove `temporalCompatibility` config block from view model (compatibility is just the default now)
-- [x] **4.7** Remove `taskSourceResolver` endpoint — no source resolution needed
+- [x] **4.1–4.7** Simplify services, remove source resolution endpoints and `temporalCompatibility`-style blocks from the view model where redundant
 
-> **Gate:** No multi-source routing code. API surface is clean.
+**Gate (met):** No multi-source routing for **execution**; API surface reflects Temporal as the run substrate.
 
 ---
 
 ### Phase 5 — Update Documentation
 
-**Objective:** Remove transitional language from architecture docs.
+**Objective:** Remove transitional language from architecture docs so they match the **Temporal-only execution** reality already implemented in code.
 
-- [ ] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; promote steady-state as the only contract
-- [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`system` source definitions, multi-source pagination rules; simplify to Temporal-only or archive the doc
-- [ ] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source references, retire multi-source pagination section
-- [x] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — fully superseded *(removed)*
-- [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/system references remain
-- [ ] **5.6** Update remaining Temporal architecture docs (`TemporalArchitecture.md`, `ActivityCatalogAndWorkerTopology.md`, `WorkflowTypeCatalogAndLifecycle.md`, `RoutingPolicy.md`) to remove transitional queue/system language, purge old feature flags, and promote steady-state Temporal vocabulary *(formerly tracked in 020-026 tracker files)*
-- [ ] **5.7** Update Roadmap: close H.1 (system removal) and mark this plan's items as done
-- [ ] **5.8** Delete this document once complete
+- [ ] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; steady-state contract only
+- [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`system` source definitions and multi-source pagination; Temporal-only (or archive if redundant)
+- [ ] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source pages; retire multi-source pagination section
+- [x] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — superseded *(done)*
+- [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/system execution references remain
+- [ ] **5.6** Update remaining Temporal architecture docs (`TemporalArchitecture.md`, `ActivityCatalogAndWorkerTopology.md`, `WorkflowTypeCatalogAndLifecycle.md`, `RoutingPolicy.md`) to remove transitional queue/system language, purge obsolete feature flags, and use steady-state Temporal vocabulary *(may overlap dedicated trackers under `docs/tmp/remaining-work/`)* 
+- [ ] **5.7** Update Roadmap: close H.1 (system removal) and mark substrate migration items done
+- [ ] **5.8** Delete or archive **this** document once Phase 5 is complete and readers are pointed at canonical `docs/Temporal/` sources
+
+**Cross-links:** When editing canonical docs, align **namespace** story with [009-DefaultNamespace.md](009-DefaultNamespace.md), **scheduling** with [014-TemporalSchedulingImprovements.md](014-TemporalSchedulingImprovements.md), and **control-plane messages** with [014-TemporalMessageContracts.md](014-TemporalMessageContracts.md).
 
 ---
 
@@ -161,21 +140,24 @@ The target state is clean: **Temporal owns execution truth. Period.**
 
 | Risk | Mitigation |
 |------|------------|
-| Existing queue-backed tasks in production DB | Migration must handle or archive in-flight queue jobs. Provide a read-only view or one-time export before dropping tables. |
-| Feature gap in Temporal path | Phase 1 gate: complete feature audit before removing anything |
-| Queue SSE events not replicated in Temporal | Temporal already has SSE via the execution event system; verify parity |
-| Attachment upload path | Verify artifact system handles all attachment use cases |
-| Recurring tasks still queue-backed | Must verify — if so, migrate to Temporal Schedules first |
+| Existing queue-backed tasks in production DB | Addressed by migrations / cutover; any remaining risk is **historical data** in backups — document retention policy separately. |
+| Feature gap in Temporal path | Phase 1 gate met: feature audit completed before queue removal. |
+| Queue SSE events not replicated | Superseded: execution events/SSE follow the **Temporal execution** path. |
+| Attachment upload path | Verified as part of Temporal submit + artifact flows during Phase 1–2. |
+| Recurring tasks still app-cron driven | **Mitigated:** Temporal Schedules are primary (see [014-TemporalSchedulingImprovements.md](014-TemporalSchedulingImprovements.md)). |
+
+---
 
 ## Relationship to Roadmap
 
-This plan **subsumes and extends** Housekeeping item **H.1** (Complete system removal). It goes further by also removing the queue substrate and collapsing the compatibility layer.
+This plan **subsumes and extends** Housekeeping item **H.1** (Complete system removal). It goes further by also removing the queue substrate and collapsing the execution compatibility layer.
 
 Successful completion delivers:
-- ✅ One task model (Temporal workflow execution)
-- ✅ One execution model (Temporal activities + workers)
-- ✅ One observability model (Temporal Visibility + projection cache)
-- ✅ One action model (Temporal start/update/signal/cancel)
-- ✅ Simpler API surface
-- ✅ Simpler dashboard code
-- ✅ Simpler docs
+
+- One task model (Temporal workflow execution)
+- One execution model (Temporal activities + workers)
+- One observability model (Temporal Visibility + projection cache)
+- One action model (Temporal start/update/signal/cancel via executions APIs)
+- Simpler API surface
+- Simpler dashboard code
+- Simpler docs (after Phase 5)
