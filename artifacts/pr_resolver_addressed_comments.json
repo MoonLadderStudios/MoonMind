@@ -1,37 +1,52 @@
 [
   {
-    "id": 4130831033,
-    "disposition": "not-applicable",
-    "rationale": "Informational usage limit message from chatgpt bot."
-  },
-  {
-    "id": 4130831551,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary from gemini code assist."
-  },
-  {
-    "id": 2991905808,
+    "id": 2992154596,
     "disposition": "addressed",
-    "rationale": "Avoided secondary supervision by checking for process is None on idempotent path."
+    "rationale": "Removed the duplicate ws.get('targetBranch') check."
   },
   {
-    "id": 4010808156,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary from gemini code review bot."
-  },
-  {
-    "id": 2991913591,
+    "id": 2992154599,
     "disposition": "addressed",
-    "rationale": "Avoided passing process=None to supervisor in `agent_runtime_launch` on idempotent path."
+    "rationale": "Added boolean assertion to verify repo.create_pr isn't called."
   },
   {
-    "id": 2991913602,
+    "id": 2992157719,
     "disposition": "addressed",
-    "rationale": "Imported and used `TERMINAL_AGENT_RUN_STATES` instead of hardcoded tuple mapping."
+    "rationale": "Removed 'in locals()' check for jules_session_id in run.py."
   },
   {
-    "id": 4010816804,
+    "id": 2992157734,
+    "disposition": "addressed",
+    "rationale": "Updated workspaceSpec extraction to use _mapping_value."
+  },
+  {
+    "id": 2992157741,
+    "disposition": "addressed",
+    "rationale": "Removed duplicate targetBranch fallback (same issue as 2992154596)."
+  },
+  {
+    "id": 2992157749,
+    "disposition": "addressed",
+    "rationale": "Removed trailing whitespace on blank line."
+  },
+  {
+    "id": 4131196783,
     "disposition": "not-applicable",
-    "rationale": "Informational summary from copilot pull request reviewer bot."
+    "rationale": "Informational summary from bot regarding usage limits."
+  },
+  {
+    "id": 4131197562,
+    "disposition": "not-applicable",
+    "rationale": "Context summary from Gemini."
+  },
+  {
+    "id": 4011094078,
+    "disposition": "not-applicable",
+    "rationale": "Code review summary from Gemini."
+  },
+  {
+    "id": 4011097779,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR summary."
   }
 ]
