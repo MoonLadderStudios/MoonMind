@@ -708,9 +708,13 @@ class MoonMindRunWorkflow:
 
             # --- Multi-step Jules: extract session_id only on success ---
             if tool_type == "agent_runtime":
-                extracted_id = self._extract_jules_session_id(child_result)
-                if extracted_id:
-                    jules_session_id = extracted_id
+                node_runtime_mode = str(
+                    node_inputs.get("runtime", {}).get("mode", "")
+                ).strip().lower()
+                if node_runtime_mode == "jules":
+                    extracted_id = self._extract_jules_session_id(child_result)
+                    if extracted_id:
+                        jules_session_id = extracted_id
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
                 
@@ -748,7 +752,7 @@ class MoonMindRunWorkflow:
             
             ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
             
-            if last_tool in ("jules", "jules_api", "github_pr_creator") or jules_session_id:
+            if last_tool in ("jules", "jules_api", "github_pr_creator"):
                 self._get_logger().info(
                     "Skipping native PR creation: agent '%s' handles its own PRs.",
                     last_tool or "jules",
