@@ -2260,6 +2260,94 @@ class TemporalArtifactActivities:
 
         return results
 
+    async def auth_profile_sync_slot_leases(
+        self,
+        *,
+        runtime_id: str,
+        leases: list[dict[str, Any]] | None = None,
+        action: str = "load",
+    ) -> dict[str, Any]:
+        """Sync slot leases with the database for crash recovery.
+
+        **load action**: Returns all persisted leases for the given runtime_id.
+            Returns {"leases": [{"workflow_id": ..., "profile_id": ..., "granted_at": ...}, ...]}
+
+        **save action**: Upserts the provided leases (list of {workflow_id, profile_id}).
+            Returns {"saved": count}
+
+        **remove action**: Removes a specific lease by workflow_id.
+            Returns {"removed": True}
+
+        This enables the AuthProfileManager to recover lease state after a crash,
+        rather than starting with empty state and orphaning all running workflows.
+        """
+        from datetime import datetime, timezone
+
+        from sqlalchemy import delete, select
+
+        from api_service.db.models import AuthProfileSlotLease
+        from api_service.db.base import get_async_session_context
+
+        async with get_async_session_context() as session:
+            if action == "load":
+                stmt = select(AuthProfileSlotLease).where(
+                    AuthProfileSlotLease.runtime_id == runtime_id
+                )
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
+                leases_data = [
+                    {
+                        "workflow_id": row.workflow_id,
+                        "profile_id": row.profile_id,
+                        "granted_at": row.granted_at.isoformat() if row.granted_at else None,
+                    }
+                    for row in rows
+                ]
+                return {"leases": leases_data}
+
+            elif action == "save":
+                if not leases:
+                    return {"saved": 0}
+                saved_count = 0
+                for lease in leases:
+                    workflow_id = lease.get("workflow_id")
+                    profile_id = lease.get("profile_id")
+                    if not workflow_id or not profile_id:
+                        continue
+                    # Upsert: delete then insert
+                    await session.execute(
+                        delete(AuthProfileSlotLease).where(
+                            AuthProfileSlotLease.runtime_id == runtime_id,
+                            AuthProfileSlotLease.workflow_id == workflow_id,
+                        )
+                    )
+                    new_lease = AuthProfileSlotLease(
+                        runtime_id=runtime_id,
+                        workflow_id=workflow_id,
+                        profile_id=profile_id,
+                        granted_at=datetime.now(timezone.utc),
+                    )
+                    session.add(new_lease)
+                    saved_count += 1
+                await session.commit()
+                return {"saved": saved_count}
+
+            elif action == "remove":
+                workflow_id = leases[0].get("workflow_id") if leases else None
+                if not workflow_id:
+                    return {"removed": False}
+                await session.execute(
+                    delete(AuthProfileSlotLease).where(
+                        AuthProfileSlotLease.runtime_id == runtime_id,
+                        AuthProfileSlotLease.workflow_id == workflow_id,
+                    )
+                )
+                await session.commit()
+                return {"removed": True}
+
+            else:
+                return {"error": f"Unknown action: {action}"}
+
     async def oauth_session_ensure_volume(
         self,
         request: Any = None,

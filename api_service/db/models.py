@@ -1986,6 +1986,30 @@ class TaskRunLiveSession(Base):
     )
 
 
+class AuthProfileSlotLease(Base):
+    """Persisted slot lease state for AuthProfileManager crash recovery.
+
+    This table stores the active slot leases in the DB so they survive
+    manager restarts. When the AuthProfileManager starts, it loads leases
+    from this table and sends slot_assigned to any running workflows.
+    """
+
+    __tablename__ = "auth_profile_slot_leases"
+    __table_args__ = (
+        Index("ix_slot_leases_runtime", "runtime_id"),
+        Index("ix_slot_leases_workflow", "workflow_id"),
+        UniqueConstraint("runtime_id", "workflow_id", name="uq_slot_lease_runtime_workflow"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 def _register_workflow_model_dependencies() -> None:
     """Import workflow ORM models so string relationships can resolve."""
 
