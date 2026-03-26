@@ -2306,26 +2306,35 @@ class TemporalArtifactActivities:
                 return {"leases": leases_data}
 
             elif action == "save":
-                if not leases:
-                    return {"saved": 0}
+                # Snapshot semantics: delete ALL rows for this runtime, then
+                # bulk-insert only the leases currently held in memory.
+                # This prevents stale rows from accumulating when leases
+                # disappear from memory (eviction, verify, release).
+                await session.execute(
+                    delete(AuthProfileSlotLease).where(
+                        AuthProfileSlotLease.runtime_id == runtime_id,
+                    )
+                )
                 saved_count = 0
-                for lease in leases:
+                for lease in (leases or []):
                     workflow_id = lease.get("workflow_id")
                     profile_id = lease.get("profile_id")
                     if not workflow_id or not profile_id:
                         continue
-                    # Upsert: delete then insert
-                    await session.execute(
-                        delete(AuthProfileSlotLease).where(
-                            AuthProfileSlotLease.runtime_id == runtime_id,
-                            AuthProfileSlotLease.workflow_id == workflow_id,
-                        )
-                    )
+                    # Preserve the original grant timestamp when provided.
+                    granted_at_str = lease.get("granted_at")
+                    if granted_at_str:
+                        try:
+                            granted_at = datetime.fromisoformat(granted_at_str)
+                        except (ValueError, TypeError):
+                            granted_at = datetime.now(timezone.utc)
+                    else:
+                        granted_at = datetime.now(timezone.utc)
                     new_lease = AuthProfileSlotLease(
                         runtime_id=runtime_id,
                         workflow_id=workflow_id,
                         profile_id=profile_id,
-                        granted_at=datetime.now(timezone.utc),
+                        granted_at=granted_at,
                     )
                     session.add(new_lease)
                     saved_count += 1

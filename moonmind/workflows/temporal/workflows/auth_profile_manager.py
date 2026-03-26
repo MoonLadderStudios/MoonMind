@@ -30,6 +30,7 @@ WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
+DB_LEASE_PERSISTENCE_PATCH = "auth-profile-manager-db-lease-persistence-v1"
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -261,6 +262,9 @@ class MoonMindAuthProfileManagerWorkflow:
         profile = self._profiles.get(profile_id)
         if profile:
             profile.release(requester_id)
+        # Always remove from DB regardless of whether profile exists in memory,
+        # so stale rows don't survive profile removals or disablement.
+        if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._remove_lease_from_db(requester_id)
 
     @workflow.signal
@@ -332,11 +336,12 @@ class MoonMindAuthProfileManagerWorkflow:
         # If we restored state from a crash (not continue-as-new), the
         # pending_requests and current_leases would be empty in the input.
         # In that case, try to restore leases from the database.
-        has_leases = any(p.current_leases for p in self._profiles.values())
-        has_pending = bool(self._pending_requests)
-        if not has_leases and not has_pending:
-            # This looks like a fresh start after a crash - try to restore leases from DB
-            await self._load_leases_from_db()
+        if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+            has_leases = any(p.current_leases for p in self._profiles.values())
+            has_pending = bool(self._pending_requests)
+            if not has_leases and not has_pending:
+                # This looks like a fresh start after a crash - try to restore leases from DB
+                await self._load_leases_from_db()
 
         # Main event loop: process signals, drain queue, clear cooldowns.
         while not self._shutdown_requested:
@@ -348,7 +353,9 @@ class MoonMindAuthProfileManagerWorkflow:
 
             # Evict leases that exceed the max duration (safety net for
             # cancelled/terminated workflows that failed to release).
-            self._evict_expired_leases()
+            evicted_count = self._evict_expired_leases()
+            if evicted_count > 0 and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                await self._sync_leases_to_db()
 
             if workflow.patched(VERIFY_LEASE_HOLDERS_PATCH):
                 # Verify lease holders are still running, reclaiming slots from
@@ -505,7 +512,7 @@ class MoonMindAuthProfileManagerWorkflow:
         self._pending_requests = remaining
 
         # Persist lease changes to DB for crash recovery
-        if leases_changed:
+        if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
 
     def _find_available_profile(self) -> Optional[ProfileSlotState]:
@@ -525,18 +532,21 @@ class MoonMindAuthProfileManagerWorkflow:
         handle = workflow.get_external_workflow_handle(requester_workflow_id)
         await handle.signal("slot_assigned", {"profile_id": profile_id})
 
-    def _evict_expired_leases(self) -> None:
-        """Remove leases held longer than the max duration."""
+    def _evict_expired_leases(self) -> int:
+        """Remove leases held longer than the max duration. Returns total eviction count."""
         now = workflow.now()
+        total_evicted = 0
         for profile in self._profiles.values():
             max_duration = getattr(profile, "max_lease_duration_seconds", None) or _MAX_LEASE_DURATION_SECONDS
             evicted = profile.evict_expired_leases(now, max_duration)
+            total_evicted += len(evicted)
             for wf_id in evicted:
                 self._get_logger().warning(
                     "Evicted stale lease for profile %s held by %s",
                     profile.profile_id,
                     wf_id,
                 )
+        return total_evicted
 
     async def _verify_lease_holders(self) -> None:
         """Remove leases held by workflows that are in a terminal state.
@@ -574,18 +584,23 @@ class MoonMindAuthProfileManagerWorkflow:
             return
 
         lease_statuses: dict[str, dict[str, Any]] = result or {}
+        reclaimed = False
 
         for profile in list(self._profiles.values()):
             for wf_id in list(profile.current_leases):
                 status_info = lease_statuses.get(wf_id, {})
                 if not status_info.get("running", True):
                     profile.release(wf_id)
+                    reclaimed = True
                     self._get_logger().warning(
                         "Reclaimed slot for profile %s from terminated workflow %s (status=%s)",
                         profile.profile_id,
                         wf_id,
                         status_info.get("status", "UNKNOWN"),
                     )
+
+        if reclaimed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+            await self._sync_leases_to_db()
 
     def _clear_expired_cooldowns(self) -> None:
         """Remove cooldown markers that have expired."""
@@ -671,6 +686,7 @@ class MoonMindAuthProfileManagerWorkflow:
                     leases.append({
                         "workflow_id": wf_id,
                         "profile_id": profile.profile_id,
+                        "granted_at": profile.lease_granted_at.get(wf_id),
                     })
             await workflow.execute_activity(
                 "auth_profile.sync_slot_leases",
