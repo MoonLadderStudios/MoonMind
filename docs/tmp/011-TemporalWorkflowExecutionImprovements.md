@@ -445,68 +445,13 @@ If the high-effort items are completed, MoonMind also gains:
 | 10 | - [x] Normalize error taxonomy for retries | **✅ DONE** | Created `docs/Temporal/ErrorTaxonomy.md` and updated `activity_catalog.py` `non_retryable_error_codes` to reference it. |
 
 
-### Phase 2 — Observability and testing (Medium effort, 2-3 sprints)
-
-**Goal:** Systematic structured logging, workflow tests covering signals/updates, and replay determinism.
-
-| Task | Files | Notes |
-|---|---|---|
-| - [ ] **2a.** Add structured logging context to all workflows | `run.py`, `agent_run.py`, `auth_profile_manager.py`, `manifest_ingest.py` | Standardize `extra=` fields: `workflow_id`, `run_id`, `task_queue`, `owner_id`. Use `workflow.info()` consistently. |
-| - [ ] **2b.** Add signal/update round-trip unit tests | `tests/unit/workflows/temporal/workflows/` | Test `pause` → `wait_condition` unblocks on `resume`. Test `cancel` stops execution. Test `update_parameters` is acknowledged. Use Temporal Python SDK test environment (`WorkflowEnvironment.start_time_skipping()`). |
-| - [ ] **2c.** Add replay determinism test harness | `tests/unit/workflows/temporal/` | Capture a workflow history JSON, then replay against current workflow code to catch non-determinism. Critical given `UnsandboxedWorkflowRunner()`. |
-| - [ ] **2d.** Evaluate OpenTelemetry integration | `pyproject.toml`, `worker_runtime.py` | The Temporal Python SDK supports interceptors for tracing. Add `opentelemetry-api` + `opentelemetry-sdk` + `temporalio` tracing interceptor. Gate behind feature flag for initial rollout. |
-
-### Phase 3 — Temporal Schedules integration (High effort, 2-3 sprints)
-
-**Goal:** Wire existing `client.py` Schedule CRUD as the primary dispatch mechanism for recurring tasks.
-
-| Task | Files | Notes |
-|---|---|---|
-| - [ ] **3a.** Add `temporal_schedule_id` column to `RecurringTaskDefinition` | DB migration, `api_service/db/models.py` | Nullable string. When populated, indicates the definition has a corresponding Temporal Schedule. |
-| - [ ] **3b.** Create/update Temporal Schedule on definition CRUD | `recurring_tasks_service.py` | On `create_definition()`: call `TemporalClientAdapter.create_schedule()`. On `update_definition()`: call `update_schedule()`. On enable/disable: call `pause_schedule()` / `unpause_schedule()`. |
-| - [ ] **3c.** Hybrid dispatch: feature-flag dual execution | `recurring_tasks_service.py` | Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` \| `"temporal"` \| `"dual"`). In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing). |
-| - [ ] **3d.** Migrate existing definitions | New migration script | Iterate existing enabled definitions and call `create_schedule()` for each. Populate `temporal_schedule_id`. |
-| - [ ] **3e.** Deprecate app-layer cron computation | `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py` | Once `"temporal"` mode is stable, remove `schedule_due_definitions()` polling loop and `compute_next_occurrence()` dispatch path. Keep cron validation for UI. |
-
-### Phase 4 — Worker versioning and deployment safety (High effort, 1-2 sprints)
-
-**Goal:** Enable safe rolling deploys for workflow code changes.
-
-| Task | Files | Notes |
-|---|---|---|
-| - [ ] **4a.** Inject build identifier into worker startup | `worker_runtime.py` | Read `MOONMIND_BUILD_ID` (default: Git SHA) from environment. Pass to `Worker(...)` using the Python SDK's versioning API once stable (or use `workflow.patched()` gates in the interim). |
-| - [ ] **4b.** Document deployment runbook | New: `docs/Temporal/WorkerDeployment.md` | Cover: version registration, compatibility matrix, rollback procedure, two-version side-by-side strategy for workflow changes. |
-| - [ ] **4c.** Add `workflow.patched()` gates for in-flight compatibility | Workflow files as needed | For any workflow-shape-changing refactor (e.g., Phase 1b loop refactor), use `workflow.patched("patch-id")` to branch between old and new behavior during replay. |
-
-### Phase dependency graph
-
-```mermaid
-flowchart LR
-    P1a["1a: Query handler"]
-    P1b["1b: Integration loop refactor"]
-    P1c["1c: Signal-With-Start"]
-    P1d["1d: Error taxonomy"]
-    P2a["2a: Structured logging"]
-    P2b["2b: Signal/update tests"]
-    P2c["2c: Replay tests"]
-    P2d["2d: OpenTelemetry"]
-    P3a["3a: Schedule column"]
-    P3b["3b: Schedule CRUD wiring"]
-    P3c["3c: Hybrid dispatch"]
-    P3d["3d: Migration script"]
-    P3e["3e: Deprecate app cron"]
-    P4a["4a: Build ID injection"]
-    P4b["4b: Deployment runbook"]
-    P4c["4c: Patched gates"]
-
-    P1a --> P2b
-    P1b --> P4c
-    P1d --> P2b
-    P2b --> P2c
-    P3a --> P3b --> P3c --> P3d --> P3e
-    P4a --> P4b
-    P4c --> P4b
-```
+> [!NOTE]
+> The original roadmap phases (Phase 2 through 4) tracking Observability, Scheduling, and Worker Versioning have been extracted into dedicated implementation plans to prevent overlapping work tracking.
+> 
+> Please refer to the following specification documents for the active implementation states:
+> - **Temporal Message Passing, Observability, and Versioning:** See `docs/tmp/012-TemporalWorkflowMessagePassingImprovements.md` (supersedes Phase 2 and 4).
+> - **Temporal Schedules Integration:** See `docs/tmp/014-TemporalSchedulingImprovements.md` (supersedes Phase 3).
+> - **Idempotency and Substrate Unification:** See `docs/tmp/015-TemporalIdempotency.md` and `docs/tmp/016-SingleSubstrateMigration.md`.
 
 ### Risk mitigation notes
 
