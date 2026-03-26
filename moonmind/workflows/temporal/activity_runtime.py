@@ -214,6 +214,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "auth_profile_verify_lease_holders",
     ),
+    "auth_profile.sync_slot_leases": (
+        "artifacts",
+        "auth_profile_sync_slot_leases",
+    ),
     "oauth_session.ensure_volume": ("artifacts", "oauth_session_ensure_volume"),
     "oauth_session.start_auth_runner": ("artifacts", "oauth_session_start_auth_runner"),
     "oauth_session.stop_auth_runner": ("artifacts", "oauth_session_stop_auth_runner"),
