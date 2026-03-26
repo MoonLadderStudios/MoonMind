@@ -18,6 +18,8 @@ These are standard library and dependency deprecation changes pointing to future
   - `api_service/api/routers/executions.py`
 - **SQLAlchemy/SQLModel**: The `EncryptedType` behavior is changing. Switch from using `LargeBinary` to `String` under the hood by migrating to `StringEncryptedType` in `api_service/db/models.py`.
 
+*Phase 2 is Complete.*
+
 ## Phase 3: Temporalio Configuration 
 - **Pydantic V2 Converter**: `temporalio.converter` is warning about Pydantic V2 payloads. The application needs to explicitly opt into `temporalio.contrib.pydantic.pydantic_data_converter` or switch to the new temporalio data converters for Pydantic V2.
 
