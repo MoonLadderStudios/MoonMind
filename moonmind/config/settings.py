@@ -54,7 +54,7 @@ class TemporalSettings(BaseSettings):
     """Temporal runtime lifecycle settings."""
 
     address: str = Field("temporal:7233", validation_alias="TEMPORAL_ADDRESS")
-    namespace: str = Field("moonmind", validation_alias="TEMPORAL_NAMESPACE")
+    namespace: str = Field("default", validation_alias="TEMPORAL_NAMESPACE")
     worker_fleet: str = Field("workflow", validation_alias="TEMPORAL_WORKER_FLEET")
     workflow_task_queue: str = Field(
         "mm.workflow", validation_alias="TEMPORAL_WORKFLOW_TASK_QUEUE"
@@ -339,7 +339,7 @@ class WorkflowSettings(BaseSettings):
         description="Whether S3-compatible artifact endpoint requires TLS.",
     )
     temporal_artifact_default_namespace: str = Field(
-        "moonmind",
+        "default",
         validation_alias=AliasChoices("TEMPORAL_NAMESPACE"),
         description="Default namespace prefix used for Temporal artifact storage keys.",
     )

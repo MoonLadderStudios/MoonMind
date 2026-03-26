@@ -276,7 +276,7 @@ The Temporal Platform Foundation is “done” when:
    * list/filter works with custom Search Attributes (advanced visibility). ([DeepWiki][1])
 3. Namespace retention management is explicit and automated:
 
-   * namespace `moonmind` is managed with a storage-cap policy (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`) and idempotent retention automation. ([Temporal Community Forum][3])
+   * custom namespaces (e.g. `moonmind`) are managed with a storage-cap policy (`TEMPORAL_RETENTION_MAX_STORAGE_GB`, default `100`) and idempotent retention automation. ([Temporal Community Forum][3])
 4. Worker fleets deployed (workflow + activity fleets) with clear task queue routing.
 5. Worker versioning policy set: **Auto-Upgrade default**. ([GitHub][4])
 6. Shard count decision recorded and signed off; if 1 shard is chosen, the migration implications are acknowledged. ([Temporal Community Forum][5])

@@ -1,5 +1,65 @@
 [
   {
+    "id": 4136995885,
+    "disposition": "not-applicable",
+    "rationale": "Informational or generic bot comment, no action needed."
+  },
+  {
+    "id": 4136996986,
+    "disposition": "not-applicable",
+    "rationale": "Informational or generic bot comment, no action needed."
+  },
+  {
+    "id": 2996705712,
+    "disposition": "addressed",
+    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+  },
+  {
+    "id": 4016220976,
+    "disposition": "not-applicable",
+    "rationale": "Informational or generic bot comment, no action needed."
+  },
+  {
+    "id": 2996705722,
+    "disposition": "addressed",
+    "rationale": "Updated AGENTS.md to clarify that most workflows run in the default namespace."
+  },
+  {
+    "id": 2996718565,
+    "disposition": "addressed",
+    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+  },
+  {
+    "id": 2996718621,
+    "disposition": "addressed",
+    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+  },
+  {
+    "id": 2996718657,
+    "disposition": "addressed",
+    "rationale": "Updated AGENTS.md to clarify that most workflows run in the default namespace."
+  },
+  {
+    "id": 2996718690,
+    "disposition": "addressed",
+    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+  },
+  {
+    "id": 2996718723,
+    "disposition": "addressed",
+    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+  },
+  {
+    "id": 2996718743,
+    "disposition": "addressed",
+    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+  },
+  {
+    "id": 4016236944,
+    "disposition": "not-applicable",
+    "rationale": "Informational or generic bot comment, no action needed."
+  },
+  {
     "id": 4132163844,
     "disposition": "not-applicable",
     "rationale": "Informational greeting from bot."

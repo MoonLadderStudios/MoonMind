@@ -66,7 +66,7 @@ def main():
     print("\\n3. Checking Artifacts...")
     run_id = exec_data.get("runId")
     if run_id:
-        namespace = os.getenv("TEMPORAL_NAMESPACE", "moonmind")
+        namespace = os.getenv("TEMPORAL_NAMESPACE", "default")
         resp = requests.get(
             f"{API_URL}/api/executions/{namespace}/{workflow_id}/{run_id}/artifacts"
         )
