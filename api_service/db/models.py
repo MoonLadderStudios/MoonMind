@@ -1965,11 +1965,11 @@ class TaskRunLiveSession(Base):
     tmate_socket_path: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     attach_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     attach_rw_encrypted: Mapped[Optional[str]] = mapped_column(
-        StringEncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(key=get_encryption_key), nullable=True
     )
     web_ro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     web_rw_encrypted: Mapped[Optional[str]] = mapped_column(
-        StringEncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(key=get_encryption_key), nullable=True
     )
     rw_granted_until: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

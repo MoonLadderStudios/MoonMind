@@ -606,3 +606,9 @@ class TestAuthProfileSyncSlotLeasesActivity:
         assert '"granted_at"' in source
         assert "row.granted_at" in source
 
+
+def test_verify_lease_holders_exists():
+    """Ensure the workflow exposes the expected API."""
+    assert hasattr(MoonMindAuthProfileManagerWorkflow, "_verify_lease_holders")
+    verify_lease_holders = getattr(MoonMindAuthProfileManagerWorkflow, "_verify_lease_holders")
+    assert callable(verify_lease_holders)

@@ -4,10 +4,10 @@ Running the unit tests resulted in several warnings that can be broken down into
 
 ## Phase 1: Pydantic V2 Migration (Complete)
 These warnings are caused by the upgrade to Pydantic V2 and require straightforward search-and-replace changes.
-- **Fields with `env` Argument**: Replace the deprecated `env="VAR"` with `alias="VAR"` or `validation_alias="VAR"` (or via `SettingsConfigDict` features depending on how `settings.py` is configured). Affects many fields in:
+- [x] **Fields with `env` Argument**: Replace the deprecated `env="VAR"` with `alias="VAR"` or `validation_alias="VAR"` (or via `SettingsConfigDict` features depending on how `settings.py` is configured). Affects many fields in:
   - `moonmind/config/settings.py`
   - `moonmind/config/jules_settings.py`
-- **Method Deprecations**:
+- [x] **Method Deprecations**:
   - Replace `.dict()` with `.model_dump()` in `api_service/services/profile_service.py` (line 120) and potentially in Temporalio converter code if within project bounds.
   - Replace `.parse_obj()` with `.model_validate()` where found.
 
@@ -17,6 +17,8 @@ These are standard library and dependency deprecation changes pointing to future
   - `api_service/api/routers/temporal_artifacts.py`
   - `api_service/api/routers/executions.py`
 - **SQLAlchemy/SQLModel**: The `EncryptedType` behavior is changing. Switch from using `LargeBinary` to `String` under the hood by migrating to `StringEncryptedType` in `api_service/db/models.py`.
+
+*Phase 2 is Complete.*
 
 ## Phase 3: Temporalio Configuration 
 - **Pydantic V2 Converter**: `temporalio.converter` is warning about Pydantic V2 payloads. The application needs to explicitly opt into `temporalio.contrib.pydantic.pydantic_data_converter` or switch to the new temporalio data converters for Pydantic V2.
