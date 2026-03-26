@@ -655,16 +655,25 @@ class MoonMindAgentRun:
                     # overall_start is reset once the slot is acquired.
                     # If the manager is stuck (e.g. nondeterminism error), the
                     # wait will time out and we reset the manager automatically.
-                    self.run_status = RunStatus.awaiting_slot
+                    #
+                    # NOTE: The slot_assigned signal may have arrived during
+                    # _sync_manager_profiles (the activity gives the manager
+                    # time to process request_slot).  Only notify the parent
+                    # of awaiting_slot when we actually need to wait — otherwise
+                    # the parent sees awaiting_slot→launching in the same
+                    # workflow task and the "queued" state is never visible.
                     parent_info = workflow.info().parent
-                    if parent_info:
-                        parent_handle = workflow.get_external_workflow_handle(
-                            parent_info.workflow_id, run_id=parent_info.run_id
-                        )
-                        await parent_handle.signal(
-                            "child_state_changed",
-                            args=["awaiting_slot", f"Waiting for auth profile slot on {runtime_id}"]
-                        )
+
+                    if not self.slot_assigned_event.is_set():
+                        self.run_status = RunStatus.awaiting_slot
+                        if parent_info:
+                            parent_handle = workflow.get_external_workflow_handle(
+                                parent_info.workflow_id, run_id=parent_info.run_id
+                            )
+                            await parent_handle.signal(
+                                "child_state_changed",
+                                args=["awaiting_slot", f"Waiting for auth profile slot on {runtime_id}"]
+                            )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0

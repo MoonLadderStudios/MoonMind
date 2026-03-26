@@ -2244,14 +2244,19 @@ class TemporalArtifactActivities:
                 if exc.status.name == "NOT_FOUND":
                     results[wf_id] = {"running": False, "status": "NOT_FOUND"}
                 else:
-                    results[wf_id] = {"running": False, "status": f"RPC_ERROR_{exc.status.name}"}
+                    # Transient RPC errors (UNAVAILABLE, DEADLINE_EXCEEDED, etc.)
+                    # should NOT cause slot release — assume still running.
+                    results[wf_id] = {"running": True, "status": f"RPC_ERROR_{exc.status.name}"}
             except Exception as exc:
+                # Unknown errors should NOT cause slot release — assume
+                # the workflow is still running to prevent incorrect
+                # slot reassignment.
                 logger.warning(
                     "auth_profile.verify_lease_holders failed to describe %s: %s",
                     wf_id,
                     exc,
                 )
-                results[wf_id] = {"running": False, "status": "ERROR"}
+                results[wf_id] = {"running": True, "status": "ERROR"}
 
         return results
 

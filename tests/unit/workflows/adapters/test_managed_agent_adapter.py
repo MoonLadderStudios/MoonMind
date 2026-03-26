@@ -182,7 +182,9 @@ async def test_resolve_profile_by_id():
     assert handle.agent_kind == "managed"
     assert handle.metadata["profile_id"] == "prof-B"
     assert handle.metadata["auth_mode"] == "oauth"
-    assert ("slot_request", "wf-123", "gemini_cli") in calls
+    # Slot acquisition is now handled by AgentRun before adapter.start(),
+    # so the adapter should NOT send a redundant slot request.
+    assert ("slot_request", "wf-123", "gemini_cli") not in calls
 
 
 async def test_resolve_profile_auto_picks_first():
