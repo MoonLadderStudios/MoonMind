@@ -745,6 +745,9 @@ class MoonMindRunWorkflow:
             last_tool = str(
                 (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get("name") or ""
             ).strip().lower()
+            
+            ws = parameters.get("workspaceSpec") or {}
+            
             if last_tool in ("jules", "jules_api", "github_pr_creator") or (
                 "jules_session_id" in locals() and jules_session_id
             ):
@@ -753,76 +756,74 @@ class MoonMindRunWorkflow:
                     last_tool or "jules",
                 )
             else:
-                # Create PR natively since agent push is missing PR URL
-                ws = parameters.get("workspaceSpec") or {}
-            agent_outputs = {}
-            if "execution_result" in locals():
-                agent_outputs = self._get_from_result(execution_result, "outputs") or {}
-                if not isinstance(agent_outputs, dict):
-                    agent_outputs = {}
-            
-            last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
-            head_branch = (
-                agent_outputs.get("branch")
-                or agent_outputs.get("targetBranch")
-                or ws.get("targetBranch")
-                or ws.get("branch")
-                or parameters.get("targetBranch")
-                or ws.get("targetBranch")
-                or last_node_inputs.get("targetBranch")
-                or last_node_inputs.get("branch")
-                or ""
-            )
-            base_branch = (
-                ws.get("startingBranch")
-                or last_node_inputs.get("startingBranch")
-                or "main"
-            )
-            
-            if not self._repo or not head_branch:
-                raise ValueError(
-                    "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                agent_outputs = {}
+                if "execution_result" in locals():
+                    agent_outputs = self._get_from_result(execution_result, "outputs") or {}
+                    if not isinstance(agent_outputs, dict):
+                        agent_outputs = {}
+                
+                last_node_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
+                head_branch = (
+                    agent_outputs.get("branch")
+                    or agent_outputs.get("targetBranch")
+                    or ws.get("targetBranch")
+                    or ws.get("branch")
+                    or parameters.get("targetBranch")
+                    or ws.get("targetBranch")
+                    or last_node_inputs.get("targetBranch")
+                    or last_node_inputs.get("branch")
+                    or ""
                 )
-            
-            self._get_logger().info(
-                f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
-            )
-            create_payload = {
-                "repo": self._repo,
-                "head": head_branch,
-                "base": base_branch,
-                "title": self._title or "Automated changes by MoonMind",
-                "body": self._summary or "Automated changes by MoonMind.",
-            }
-            try:
-                create_result = await workflow.execute_activity(
-                    "repo.create_pr",
-                    create_payload,
-                    start_to_close_timeout=timedelta(minutes=2),
-                    task_queue=INTEGRATIONS_TASK_QUEUE,
-                    retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                base_branch = (
+                    ws.get("startingBranch")
+                    or last_node_inputs.get("startingBranch")
+                    or "main"
                 )
-                pr_url = self._get_from_result(create_result, "url")
-                created = self._get_from_result(create_result, "created")
-                summary = self._get_from_result(create_result, "summary") or ""
-                if pr_url:
-                    pull_request_url = pr_url
-                    self._get_logger().info(f"Natively created PR: {pull_request_url}")
-                else:
-                    if "422" in summary:
-                        self._get_logger().warning(
-                            f"Native PR creation failed with validation error (likely no commits): {summary}"
-                        )
+                
+                if not self._repo or not head_branch:
+                    raise ValueError(
+                        "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
+                    )
+                
+                self._get_logger().info(
+                    f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
+                )
+                create_payload = {
+                    "repo": self._repo,
+                    "head": head_branch,
+                    "base": base_branch,
+                    "title": self._title or "Automated changes by MoonMind",
+                    "body": self._summary or "Automated changes by MoonMind.",
+                }
+                try:
+                    create_result = await workflow.execute_activity(
+                        "repo.create_pr",
+                        create_payload,
+                        start_to_close_timeout=timedelta(minutes=2),
+                        task_queue=INTEGRATIONS_TASK_QUEUE,
+                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                    )
+                    pr_url = self._get_from_result(create_result, "url")
+                    created = self._get_from_result(create_result, "created")
+                    summary = self._get_from_result(create_result, "summary") or ""
+                    if pr_url:
+                        pull_request_url = pr_url
+                        self._get_logger().info(f"Natively created PR: {pull_request_url}")
                     else:
-                        raise ValueError(
-                            f"PR creation activity returned no URL"
-                            f" (created={created}): {summary}"
-                        )
-            except Exception as e:
-                raise ValueError(
-                    f"publishMode 'pr' requested; native PR creation failed: {e}"
-                ) from e
+                        if "422" in summary:
+                            self._get_logger().warning(
+                                f"Native PR creation failed with validation error (likely no commits): {summary}"
+                            )
+                        else:
+                            raise ValueError(
+                                f"PR creation activity returned no URL"
+                                f" (created={created}): {summary}"
+                            )
+                except Exception as e:
+                    raise ValueError(
+                        f"publishMode 'pr' requested; native PR creation failed: {e}"
+                    ) from e
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 

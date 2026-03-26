@@ -711,3 +711,110 @@ def test_activity_result_failure_message_prefers_stderr_tail_over_progress_detai
         }
     )
     assert message == "gemini quota exceeded"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "artifact.read":
+            if payload.get("artifact_ref") == "artifact://registry/1":
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "jules",
+                                "version": "1.0.0",
+                                "description": "Jules",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Publish Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                    "nodes": [
+                        {
+                            "id": "step-1",
+                            "tool": {
+                                "type": "agent_runtime",
+                                "name": "jules",
+                                "version": "1.0.0",
+                            },
+                            "inputs": {"repo_ref": "git:org/repo#branch", "runtime": {"mode": "jules"}},
+                            "options": {},
+                        }
+                    ],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {
+            "status": "COMPLETED",
+            "outputs": {
+                "stdout_tail": "Skipped PR native creation.",
+            },
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: object,
+    ) -> object:
+        return {
+            "summary": "Agent finished",
+            "metadata": {"jules_session_id": "session-123", "branch": "jules-test-branch"},
+            "output_refs": []
+        }
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "pr"},
+        plan_ref="art_plan_1",
+    )
