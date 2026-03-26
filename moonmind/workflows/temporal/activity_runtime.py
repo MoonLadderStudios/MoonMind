@@ -2965,11 +2965,31 @@ class TemporalAgentRuntimeActivities:
                 "run_store is required for agent_runtime.fetch_result"
             )
         run_id, _agent_id = self._agent_runtime_request_identifiers(request)
-        publish_mode = (
-            request.get("publish_mode")
-            or request.get("publishMode")
-            or "none"
-        ) if isinstance(request, Mapping) else "none"
+        if isinstance(request, Mapping):
+            raw_publish_mode = (
+                request.get("publish_mode")
+                or request.get("publishMode")
+                or "none"
+            )
+        else:
+            raw_publish_mode = "none"
+
+        publish_mode = str(raw_publish_mode).strip().lower()
+        _ALLOWED_PUBLISH_MODES = {"none", "pr", "branch"}
+        if publish_mode not in _ALLOWED_PUBLISH_MODES:
+            logger.warning(
+                "Received invalid publish_mode %r for run_id %s; defaulting to 'none'",
+                raw_publish_mode,
+                run_id,
+            )
+            publish_mode = "none"
+
+        target_branch = (
+            request.get("target_branch")
+            or request.get("targetBranch")
+            or request.get("publish_base_branch")
+            or request.get("publishBaseBranch")
+        ) if isinstance(request, Mapping) else None
 
         async def _unused_profile_fetcher(**_kwargs: Any) -> dict[str, Any]:
             return {"profiles": []}
@@ -2992,7 +3012,7 @@ class TemporalAgentRuntimeActivities:
         # Push the agent's work branch if publish_mode requires it and the
         # agent completed without failure.
         if result.failure_class is None and publish_mode != "none":
-            push_info = self._push_workspace_branch(run_id)
+            push_info = await self._push_workspace_branch(run_id, target_branch=target_branch)
             meta.update(push_info)
 
         # Enrich result with pull_request_url detected from workspace git
@@ -3009,13 +3029,21 @@ class TemporalAgentRuntimeActivities:
 
         return result_dict
 
-    def _push_workspace_branch(self, run_id: str) -> dict[str, str]:
+    async def _push_workspace_branch(
+        self,
+        run_id: str,
+        *,
+        target_branch: str | None = None,
+    ) -> dict[str, str]:
         """Push the workspace branch to origin.
 
         Returns a dict with ``push_status``, ``push_branch``, and optionally
         ``push_error`` that the caller merges into result metadata.
+
+        Uses ``asyncio.create_subprocess_exec`` to avoid blocking the event
+        loop.
         """
-        import subprocess
+        import asyncio as _asyncio
 
         if self._run_store is None:
             return {"push_status": "skipped", "push_error": "no run store"}
@@ -3026,19 +3054,25 @@ class TemporalAgentRuntimeActivities:
 
         workspace = record.workspace_path
         try:
-            branch_result = subprocess.run(
-                ["git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=10,
+            branch_proc = await _asyncio.create_subprocess_exec(
+                "git", "-C", workspace, "rev-parse", "--abbrev-ref", "HEAD",
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
             )
-            if branch_result.returncode != 0:
+            stdout_bytes, stderr_bytes = await _asyncio.wait_for(
+                branch_proc.communicate(), timeout=10,
+            )
+            if branch_proc.returncode != 0:
                 return {
                     "push_status": "failed",
-                    "push_error": f"could not determine branch: {branch_result.stderr.strip()}",
+                    "push_error": f"could not determine branch: {stderr_bytes.decode('utf-8', errors='replace').strip()}",
                 }
-            current_branch = branch_result.stdout.strip()
-            if not current_branch or current_branch in ("main", "master", "HEAD"):
+            current_branch = stdout_bytes.decode("utf-8", errors="replace").strip()
+
+            protected = {"main", "master", "HEAD"}
+            if target_branch:
+                protected.add(target_branch)
+            if not current_branch or current_branch in protected:
                 logger.warning(
                     "Post-agent git push skipped for run %s: "
                     "HEAD is on protected branch '%s'",
@@ -3050,20 +3084,22 @@ class TemporalAgentRuntimeActivities:
                     "push_branch": current_branch or "(unknown)",
                 }
 
-            push_result = subprocess.run(
-                ["git", "-C", workspace, "push", "-u", "origin", current_branch],
-                capture_output=True,
-                text=True,
-                timeout=120,
+            push_proc = await _asyncio.create_subprocess_exec(
+                "git", "-C", workspace, "push", "-u", "origin", current_branch,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
             )
-            if push_result.returncode != 0:
-                error_detail = push_result.stderr.strip() or "(no stderr)"
+            push_stdout, push_stderr = await _asyncio.wait_for(
+                push_proc.communicate(), timeout=120,
+            )
+            if push_proc.returncode != 0:
+                error_detail = push_stderr.decode("utf-8", errors="replace").strip() or "(no stderr)"
                 logger.error(
                     "Post-agent git push FAILED for run %s "
                     "(branch=%s, rc=%d): %s",
                     run_id,
                     current_branch,
-                    push_result.returncode,
+                    push_proc.returncode,
                     error_detail,
                 )
                 return {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -65,96 +66,148 @@ def _make_subprocess_result(
 class TestPushWorkspaceBranch:
     """Tests for TemporalAgentRuntimeActivities._push_workspace_branch."""
 
-    def test_push_skipped_no_store(self):
+    @pytest.mark.asyncio
+    async def test_push_skipped_no_store(self):
         activities = TemporalAgentRuntimeActivities(run_store=None)
-        result = activities._push_workspace_branch("run-1")
+        result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "skipped"
         assert "no run store" in result.get("push_error", "")
 
-    def test_push_skipped_no_workspace(self):
+    @pytest.mark.asyncio
+    async def test_push_skipped_no_workspace(self):
         store = _make_mock_store(workspace_path=None)
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "skipped"
         assert "no workspace" in result.get("push_error", "")
 
-    def test_push_skipped_record_not_found(self):
+    @pytest.mark.asyncio
+    async def test_push_skipped_record_not_found(self):
         store = MagicMock()
         store.load.return_value = None
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "skipped"
 
-    @patch("subprocess.run")
-    def test_push_protected_branch_main(self, mock_run):
-        mock_run.return_value = _make_subprocess_result(stdout="main\n")
+    @pytest.mark.asyncio
+    async def test_push_protected_branch_main(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"main\n", b""))
+            proc.returncode = 0
+            mock_exec.return_value = proc
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "protected_branch"
         assert result["push_branch"] == "main"
 
-    @patch("subprocess.run")
-    def test_push_protected_branch_master(self, mock_run):
-        mock_run.return_value = _make_subprocess_result(stdout="master\n")
+    @pytest.mark.asyncio
+    async def test_push_protected_branch_master(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"master\n", b""))
+            proc.returncode = 0
+            mock_exec.return_value = proc
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "protected_branch"
         assert result["push_branch"] == "master"
 
-    @patch("subprocess.run")
-    def test_push_protected_branch_head(self, mock_run):
-        mock_run.return_value = _make_subprocess_result(stdout="HEAD\n")
+    @pytest.mark.asyncio
+    async def test_push_protected_branch_head(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"HEAD\n", b""))
+            proc.returncode = 0
+            mock_exec.return_value = proc
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "protected_branch"
 
-    @patch("subprocess.run")
-    def test_push_success(self, mock_run):
-        # First call: rev-parse returns feature branch
-        # Second call: git push succeeds
-        mock_run.side_effect = [
-            _make_subprocess_result(stdout="feature/delete-spec-048\n"),
-            _make_subprocess_result(returncode=0),
-        ]
+    @pytest.mark.asyncio
+    async def test_push_protected_target_branch(self):
+        """target_branch is included in the protected set."""
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"develop\n", b""))
+            proc.returncode = 0
+            mock_exec.return_value = proc
+            result = await activities._push_workspace_branch("run-1", target_branch="develop")
+        assert result["push_status"] == "protected_branch"
+        assert result["push_branch"] == "develop"
+
+    @pytest.mark.asyncio
+    async def test_push_success(self):
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"feature/delete-spec-048\n", b""))
+                proc.returncode = 0
+            else:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "pushed"
         assert result["push_branch"] == "feature/delete-spec-048"
         assert "push_error" not in result
 
-    @patch("subprocess.run")
-    def test_push_failure(self, mock_run):
-        mock_run.side_effect = [
-            _make_subprocess_result(stdout="feature/delete-spec-048\n"),
-            _make_subprocess_result(returncode=128, stderr="remote: Permission denied"),
-        ]
+    @pytest.mark.asyncio
+    async def test_push_failure(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"feature/delete-spec-048\n", b""))
+                proc.returncode = 0
+            else:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b"remote: Permission denied"))
+                proc.returncode = 128
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "failed"
         assert result["push_branch"] == "feature/delete-spec-048"
         assert "Permission denied" in result["push_error"]
 
-    @patch("subprocess.run")
-    def test_push_branch_detection_failure(self, mock_run):
-        mock_run.return_value = _make_subprocess_result(
-            returncode=1, stderr="fatal: not a git repository",
-        )
+    @pytest.mark.asyncio
+    async def test_push_branch_detection_failure(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            proc = AsyncMock()
+            proc.communicate = AsyncMock(return_value=(b"", b"fatal: not a git repository"))
+            proc.returncode = 1
+            mock_exec.return_value = proc
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "failed"
         assert "could not determine branch" in result["push_error"]
 
-    @patch("subprocess.run", side_effect=OSError("git not found"))
-    def test_push_exception_returns_failed(self, mock_run):
+    @pytest.mark.asyncio
+    async def test_push_exception_returns_failed(self):
         store = _make_mock_store()
         activities = TemporalAgentRuntimeActivities(run_store=store)
-        result = activities._push_workspace_branch("run-1")
+        with patch("asyncio.create_subprocess_exec", side_effect=OSError("git not found")):
+            result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "failed"
         assert "git not found" in result["push_error"]
 
@@ -183,6 +236,7 @@ class TestFetchResultPushIntegration:
         with (
             patch.object(
                 activities, "_push_workspace_branch",
+                new_callable=AsyncMock,
                 return_value={"push_status": "pushed", "push_branch": "my-branch"},
             ) as mock_push,
             patch.object(
@@ -200,7 +254,7 @@ class TestFetchResultPushIntegration:
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
             )
 
-        mock_push.assert_called_once_with("run-1")
+        mock_push.assert_called_once_with("run-1", target_branch=None)
         assert result["metadata"]["push_status"] == "pushed"
         assert result["metadata"]["push_branch"] == "my-branch"
 
@@ -232,7 +286,7 @@ class TestFetchResultPushIntegration:
             adapter_instance = MockAdapter.return_value
             adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
 
-            result = await activities.agent_runtime_fetch_result(
+            await activities.agent_runtime_fetch_result(
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "none"},
             )
 
@@ -267,7 +321,7 @@ class TestFetchResultPushIntegration:
             adapter_instance = MockAdapter.return_value
             adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
 
-            result = await activities.agent_runtime_fetch_result(
+            await activities.agent_runtime_fetch_result(
                 {"run_id": "run-1", "agent_id": "claude", "publish_mode": "pr"},
             )
 
@@ -289,6 +343,7 @@ class TestFetchResultPushIntegration:
         with (
             patch.object(
                 activities, "_push_workspace_branch",
+                new_callable=AsyncMock,
                 return_value={
                     "push_status": "failed",
                     "push_branch": "my-branch",
@@ -342,7 +397,7 @@ class TestFetchResultPushIntegration:
             adapter_instance.fetch_result = AsyncMock(return_value=mock_result)
 
             # No publish_mode key at all
-            result = await activities.agent_runtime_fetch_result(
+            await activities.agent_runtime_fetch_result(
                 {"run_id": "run-1", "agent_id": "claude"},
             )
 
