@@ -1,8 +1,16 @@
 # Temporal Agent Alignment Plan
 
-**Reference:** [TemporalWorkflowExecutionImprovements.md](TemporalWorkflowExecutionImprovements.md) (analysis report)
+**Reference:** [011-TemporalWorkflowExecutionImprovements.md](011-TemporalWorkflowExecutionImprovements.md) (analysis report)
 **Created:** 2026-03
-**Status:** Active
+**Status:** Superseded (Extracted)
+
+> [!NOTE]
+> This plan's structural alignment goals have been absorbed into more specific implementation trackers. To prevent overlapping execution checklists, the phases below should no longer be used as the primary tracking source.
+> 
+> Please refer to the following specification documents for active tracking:
+> - **Temporal Message Passing, Observability, and Versioning:** See `012-TemporalWorkflowMessagePassingImprovements.md` (supersedes Phase 2 and 5 out of this document).
+> - **Temporal Schedules Integration:** See `014-TemporalSchedulingImprovements.md` (supersedes Phase 3).
+> - **Substrate Unification & Idempotency:** See `015-TemporalIdempotency.md` and `016-SingleSubstrateMigration.md`.
 
 ---
 
@@ -58,7 +66,7 @@ This plan closes that gap through five phases of work, each independently shippa
 
 ---
 
-## Phase 2 — Observability & Testing (Medium effort · 2-3 sprints)
+## Phase 2 — Observability & Testing (Superseded by 012)
 
 **Goal:** Systematic structured logging, workflow tests covering signals/updates, and replay determinism.
 
@@ -87,7 +95,7 @@ This plan closes that gap through five phases of work, each independently shippa
 
 ---
 
-## Phase 3 — Temporal Schedules Integration (High effort · 2-3 sprints)
+## Phase 3 — Temporal Schedules Integration (Superseded by 014)
 
 **Goal:** Wire existing `client.py` Schedule CRUD as the primary dispatch mechanism for recurring tasks.
 
@@ -123,7 +131,7 @@ This plan closes that gap through five phases of work, each independently shippa
 
 ---
 
-## Phase 4 — Documentation & Vocabulary Alignment
+## Phase 4 — Documentation & Vocabulary Alignment (Superseded)
 
 **Goal:** Make the docs and codebase vocabulary consistently Temporal-native.
 
@@ -168,7 +176,7 @@ This plan closes that gap through five phases of work, each independently shippa
 
 ---
 
-## Phase 5 — Worker Versioning & Deployment Safety (High effort · 1-2 sprints)
+## Phase 5 — Worker Versioning & Deployment Safety (Superseded by 012)
 
 **Goal:** Enable safe rolling deploys for workflow code changes.
 
