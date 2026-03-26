@@ -353,3 +353,37 @@ const helpers = loadTemporalHelpers();
   assert.strictEqual(rows.length, 1);
   assert.strictEqual(rows[0].runtimeMode, "codex", "targetRuntime (camelCase) should take precedence");
 })();
+
+(function testRenderTemporalDetailMarkupIncludesLiveLogsDomElements() {
+  const html = helpers.renderTemporalDetailMarkup({
+    execution: { state: "executing", workflowType: "MoonMind.Run" },
+    latestWorkflowId: "mm:wf-live-test",
+    latestRunId: "run-live-test",
+    artifacts: { artifacts: [] },
+    waitingReason: "",
+    detailTitle: "Live Logs Test",
+    attentionRequired: false,
+    noticeHtml: "",
+    debugFields: "",
+  });
+
+  const requiredIds = [
+    "temporal-live-output-section",
+    "temporal-live-logs-inactive",
+    "temporal-live-logs-active",
+    "temporal-start-tailing",
+    "temporal-stop-tailing",
+    "temporal-live-output",
+    "temporal-follow-output",
+    "temporal-output-filter",
+    "temporal-copy-output",
+    "temporal-live-transport-status",
+  ];
+
+  for (const id of requiredIds) {
+    assert(
+      html.includes(`id="${id}"`),
+      `Detail markup must include element with id="${id}"`,
+    );
+  }
+})();
