@@ -68,7 +68,7 @@ def test_temporal_persistence_and_visibility_environment_defaults():
     )
 
     namespace_env = _env_map(services["temporal-namespace-init"]["environment"])
-    assert namespace_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-moonmind}"
+    assert namespace_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-default}"
     assert namespace_env["TEMPORAL_RETENTION_MAX_STORAGE_GB"] == (
         "${TEMPORAL_RETENTION_MAX_STORAGE_GB:-100}"
     )
@@ -101,11 +101,11 @@ def test_runtime_services_receive_temporal_namespace_and_address():
 
     api_env = _env_map(services["api"]["environment"])
     assert api_env["TEMPORAL_ADDRESS"] == "${TEMPORAL_ADDRESS:-temporal-internal:7233}"
-    assert api_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-moonmind}"
+    assert api_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-default}"
 
     namespace_init_env = _env_map(services["temporal-namespace-init"]["environment"])
     assert (
         namespace_init_env["TEMPORAL_ADDRESS"]
         == "${TEMPORAL_ADDRESS:-temporal-internal:7233}"
     )
-    assert namespace_init_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-moonmind}"
+    assert namespace_init_env["TEMPORAL_NAMESPACE"] == "${TEMPORAL_NAMESPACE:-default}"

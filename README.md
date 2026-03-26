@@ -9,7 +9,7 @@ WARNING: This project is still pre-release. A release should be ready in April 2
     </picture>
 </p>
 
-MoonMind is the first platform to orchestrate leading AI agents out of the box — Claude Code, Gemini CLI, Codex, and more — with built-in resiliency, secure sandboxing, and managed context.
+MoonMind is the first open-source platform to orchestrate leading AI agents out of the box — Claude Code, Gemini CLI, Codex, and more — adding resiliency, safety, and observability.
 
 ## Quick Start
 
@@ -45,7 +45,7 @@ You don't need ten agents to benefit from a task execution system. MoonMind supe
 - **Step-Based Context Management:** Agents perform better on small, focused tasks. Inject the right context into each step and clear it between steps.
 
 ### 🔓 Free Yourself from Vendor Lock-In
-MoonMind can manage any agent runtime and makes it easy to mix agents and models in even a single workflow.
+MoonMind supports multiple agent runtimes with multiple model providers behind those runtimes and will be adding support for many more.
 * **Open-Source:** MoonMind is 100% free and open-source software.
 * **Workflow Portability:** Swap between proprietary cloud models and local open-source models with a single configuration change. Only use expensive models for the steps that actually need them.
 * **Own Your Data:** Context, artifacts, and memory are stored on your infrastructure. Switch providers without losing what your agents have learned.
