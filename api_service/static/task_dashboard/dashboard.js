@@ -7621,6 +7621,32 @@
       }</tbody>
         </table>
       </section>
+      <section id="temporal-live-output-section"></section>
+      <section>
+        <h3>Live Logs</h3>
+        <div id="temporal-live-logs-inactive">
+          <button type="button" id="temporal-start-tailing" class="secondary">▶ Start Tailing</button>
+        </div>
+        <div id="temporal-live-logs-active" style="display:none;">
+          <div class="queue-live-output-toolbar">
+            <label for="temporal-output-filter" class="queue-inline-filter">Filter:
+            <select id="temporal-output-filter">
+              <option value="all">All</option>
+              <option value="stages">Stages</option>
+              <option value="logs">Logs</option>
+              <option value="warnings">Warnings</option>
+            </select>
+            </label>
+            <label class="queue-inline-toggle">
+              <input type="checkbox" id="temporal-follow-output" checked /> Follow
+            </label>
+            <button type="button" id="temporal-copy-output" class="secondary">Copy</button>
+            <button type="button" id="temporal-stop-tailing" class="secondary queue-action-danger">■ Stop</button>
+            <span id="temporal-live-transport-status" class="small"></span>
+          </div>
+          <pre id="temporal-live-output" class="queue-live-output"></pre>
+        </div>
+      </section>
       ${debugFields}
     `;
   }
