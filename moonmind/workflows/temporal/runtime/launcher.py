@@ -471,6 +471,22 @@ class ManagedRuntimeLauncher:
         # so that `gh` can authenticate even when GITHUB_TOKEN is stripped.
         self._persist_gh_config(env_overrides, resolved_workspace_path)
 
+        # Set git identity env vars so that skills (e.g. fix-merge-conflicts)
+        # that run git merge/commit can configure user.name/user.email without
+        # needing a pre-existing local git config in the workspace repo.
+        # These are also consumed by the Codex worker; we set them here so all
+        # managed runtimes get a consistent identity.
+        from moonmind.config.settings import settings as _mm_settings
+
+        _git_name = str(_mm_settings.workflow.git_user_name or "").strip() or None
+        _git_email = str(_mm_settings.workflow.git_user_email or "").strip() or None
+        if _git_name:
+            env_overrides.setdefault("GIT_AUTHOR_NAME", _git_name)
+            env_overrides.setdefault("GIT_COMMITTER_NAME", _git_name)
+        if _git_email:
+            env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
+            env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
+
         use_tmate = TmateSessionManager.is_available()
         endpoints: dict[str, str] | None = None
         tmate_manager: TmateSessionManager | None = None
