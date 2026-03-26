@@ -89,16 +89,16 @@ class UserProfile(Base):
 
     # Example profile field
     google_api_key_encrypted = Column(
-        StringEncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(String, get_encryption_key), nullable=True
     )
     openai_api_key_encrypted = Column(
-        StringEncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(String, get_encryption_key), nullable=True
     )
     github_token_encrypted = Column(
-        StringEncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(String, get_encryption_key), nullable=True
     )
     anthropic_api_key_encrypted = Column(
-        StringEncryptedType(Text, get_encryption_key), nullable=True
+        StringEncryptedType(String, get_encryption_key), nullable=True
     )
 
     user = relationship("User", back_populates="user_profile")
