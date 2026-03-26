@@ -76,6 +76,7 @@ def _request(*, idempotency_key: str = "idem-1") -> AgentExecutionRequest:
         executionProfileRef="profile:jules-default",
         correlationId="corr-1",
         idempotencyKey=idempotency_key,
+        workspaceSpec={"repository": "owner/repo"},
         parameters={
             "title": "MoonMind task",
             "description": "Run integration checks",
@@ -214,7 +215,8 @@ async def test_start_passes_starting_branch_in_source_context():
     assert create_req.source_context.github_repo_context.starting_branch == "feature-branch"
 
 
-async def test_start_without_workspace_spec_sends_no_source_context():
+async def test_start_without_workspace_spec_raises_value_error():
+    """Jules requires workspace_spec.repository, so missing it must raise ValueError."""
     client = _FakeJulesAdapterClient()
     adapter = JulesAgentAdapter(client_factory=lambda: client)
 
@@ -227,11 +229,10 @@ async def test_start_without_workspace_spec_sends_no_source_context():
         parameters={"description": "foo"}
     )
 
-    await adapter.start(req)
+    with pytest.raises(ValueError, match="workspace_spec.repository"):
+        await adapter.start(req)
 
-    assert len(client.created) == 1
-    create_req = client.created[0]
-    assert create_req.source_context is None
+    assert len(client.created) == 0
 
 
 async def test_start_defaults_automation_mode_for_pr_publish():
@@ -244,6 +245,7 @@ async def test_start_defaults_automation_mode_for_pr_publish():
         executionProfileRef="profile:jules-default",
         correlationId="corr-1",
         idempotencyKey="idem-pr",
+        workspaceSpec={"repository": "owner/repo"},
         parameters={"description": "foo", "publishMode": "pr"}
     )
 
@@ -264,6 +266,7 @@ async def test_start_defaults_automation_mode_for_branch_publish():
         executionProfileRef="profile:jules-default",
         correlationId="corr-1",
         idempotencyKey="idem-branch-pub",
+        workspaceSpec={"repository": "owner/repo"},
         parameters={"description": "foo", "publishMode": "branch"},
     )
 
