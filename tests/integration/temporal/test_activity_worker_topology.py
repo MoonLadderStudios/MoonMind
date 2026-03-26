@@ -30,6 +30,10 @@ from moonmind.workflows.temporal import (
     TemporalSkillActivities,
     build_default_activity_catalog,
 )
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalProposalActivities,
+    TemporalReviewActivities,
+)
 from moonmind.workflows.temporal.workers import build_worker_activity_bindings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -51,14 +55,14 @@ async def _db(tmp_path: Path):
 class _FakeJulesClient:
     async def create_task(self, request):
         return JulesTaskResponse(
-            taskId="task-001",
+            task_id="task-001",
             status="pending",
             url="https://jules.test/task-001",
         )
 
     async def get_task(self, request):
         return JulesTaskResponse(
-            taskId=request.task_id,
+            task_id=request.task_id,
             status="completed",
             url="https://jules.test/task-001",
         )
@@ -155,11 +159,14 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
+                    proposal_activities=TemporalProposalActivities(
+                        artifact_service=service,
+                    ),
+                    review_activities=TemporalReviewActivities(),
                 )
             }
             artifact_ref, _upload = await artifact_bindings["artifact.create"].handler(
-                principal="user-1",
-                content_type="text/plain",
+                {"principal": "user-1", "content_type": "text/plain"}
             )
             assert (
                 artifact_bindings["artifact.create"].task_queue
@@ -186,6 +193,10 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
+                    proposal_activities=TemporalProposalActivities(
+                        artifact_service=service,
+                    ),
+                    review_activities=TemporalReviewActivities(),
                 )
             }
             registry_artifact, _upload = await service.create(
@@ -209,15 +220,17 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                 content_type="application/json",
             )
             plan_result = await llm_bindings["plan.generate"].handler(
-                principal="user-1",
-                inputs_ref=inputs_artifact.artifact_id,
-                registry_snapshot_ref=registry_artifact.artifact_id,
-                execution_ref=ExecutionRef(
-                    namespace="moonmind",
-                    workflow_id="wf-plan",
-                    run_id="run-plan",
-                    link_type="output.primary",
-                ),
+                {
+                    "principal": "user-1",
+                    "inputs_ref": inputs_artifact.artifact_id,
+                    "registry_snapshot_ref": registry_artifact.artifact_id,
+                    "execution_ref": ExecutionRef(
+                        namespace="moonmind",
+                        workflow_id="wf-plan",
+                        run_id="run-plan",
+                        link_type="output.primary",
+                    ),
+                }
             )
             assert llm_bindings["plan.generate"].task_queue == "mm.activity.llm"
             assert plan_result.plan_ref.artifact_id.startswith("art_")
@@ -241,14 +254,20 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
+                    proposal_activities=TemporalProposalActivities(
+                        artifact_service=service,
+                    ),
+                    review_activities=TemporalReviewActivities(),
                 )
             }
             workspace = tmp_path / "workspaces" / "temporal_sandbox" / "workspace"
             workspace.mkdir(parents=True, exist_ok=True)
             sandbox_result = await sandbox_bindings["sandbox.run_command"].handler(
-                workspace_ref=workspace,
-                cmd="printf 'sandbox ok'",
-                principal="user-1",
+                {
+                    "workspace_ref": workspace,
+                    "cmd": "printf 'sandbox ok'",
+                    "principal": "user-1",
+                }
             )
             assert (
                 sandbox_bindings["sandbox.run_command"].task_queue
@@ -278,12 +297,18 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
                         artifact_service=service,
                         client_factory=_FakeJulesClient,
                     ),
+                    proposal_activities=TemporalProposalActivities(
+                        artifact_service=service,
+                    ),
+                    review_activities=TemporalReviewActivities(),
                 )
             }
             started = await integration_bindings["integration.jules.start"].handler(
-                principal="user-1",
-                parameters={"title": "Topology", "description": "verify"},
-                idempotency_key="idem-topology-1",
+                {
+                    "principal": "user-1",
+                    "parameters": {"title": "Topology", "description": "verify"},
+                    "idempotency_key": "idem-topology-1",
+                }
             )
             assert (
                 integration_bindings["integration.jules.start"].task_queue

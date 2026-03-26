@@ -29,25 +29,27 @@ def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
     services = compose["services"]
 
-    assert "temporal-db" in services
+    # temporal-db is now a network alias on the postgres service, not its own service.
+    assert "postgres" in services
+    postgres_aliases = []
+    for _net_name, net_cfg in (services["postgres"].get("networks", {}) or {}).items():
+        if isinstance(net_cfg, dict):
+            postgres_aliases.extend(net_cfg.get("aliases", []))
+    assert "temporal-db" in postgres_aliases
+
     assert "temporal" in services
     assert "temporal-namespace-init" in services
 
     temporal_service = services["temporal"]
-    assert "ports" not in temporal_service
-    assert temporal_service.get("expose") == ["7233"]
-    assert set(temporal_service.get("networks", [])) == {
-        "temporal-network",
-        "local-network",
-    }
+    # Temporal now publishes port 7233 via ports (host-accessible for local dev).
+    assert temporal_service.get("ports") == ["7233:7233"]
+    # Temporal sits on local-network with alias temporal-internal.
+    temporal_networks = temporal_service.get("networks", {})
+    if isinstance(temporal_networks, dict):
+        assert "local-network" in temporal_networks
+    elif isinstance(temporal_networks, list):
+        assert "local-network" in temporal_networks
 
-    temporal_db = services["temporal-db"]
-    assert "ports" not in temporal_db
-    assert temporal_db.get("expose") == ["5432"]
-    assert temporal_db.get("networks") == ["temporal-network"]
-
-    networks = compose["networks"]
-    assert networks["temporal-network"]["internal"] is True
 
 
 def test_temporal_persistence_and_visibility_environment_defaults():
