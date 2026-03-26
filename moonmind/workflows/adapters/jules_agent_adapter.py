@@ -99,16 +99,26 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
         description: str,
         metadata: dict[str, Any],
     ) -> AgentRunHandle:
-        source_context: SourceContext | None = None
-        if request.workspace_spec:
-            repo = request.workspace_spec.get("repository") or request.workspace_spec.get("repo")
-            if repo:
-                branch = str(
-                    request.workspace_spec.get("startingBranch")
-                    or request.workspace_spec.get("branch")
-                    or "main"
-                ).strip() or "main"
-                source_context = SourceContext.from_repo(repo, branch=branch)
+        repo = (
+            request.workspace_spec.get("repository")
+            if request.workspace_spec
+            else None
+        ) or (
+            request.workspace_spec.get("repo")
+            if request.workspace_spec
+            else None
+        )
+        if not repo:
+            raise ValueError(
+                "Jules requires workspace_spec.repository (or workspace_spec.repo) to be set. "
+                "Got workspace_spec: " + str(request.workspace_spec)
+            )
+        branch = str(
+            request.workspace_spec.get("startingBranch")
+            or request.workspace_spec.get("branch")
+            or "main"
+        ).strip() or "main"
+        source_context = SourceContext.from_repo(repo, branch=branch)
 
         automation_mode = None
         if request.parameters:

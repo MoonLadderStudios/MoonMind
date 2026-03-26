@@ -1,37 +1,37 @@
 [
   {
-    "id": 4124501088,
+    "id": 4130831033,
     "disposition": "not-applicable",
-    "rationale": "Informational greeting from bot."
+    "rationale": "Informational usage limit message from chatgpt bot."
   },
   {
-    "id": 4124502066,
+    "id": 4130831551,
     "disposition": "not-applicable",
-    "rationale": "Informational summary from bot."
+    "rationale": "Informational summary from gemini code assist."
   },
   {
-    "id": 4004700213,
-    "disposition": "not-applicable",
-    "rationale": "Informational review from bot."
+    "id": 2991905808,
+    "disposition": "addressed",
+    "rationale": "Avoided secondary supervision by checking for process is None on idempotent path."
   },
   {
-    "id": 2986460273,
+    "id": 4010808156,
     "disposition": "not-applicable",
-    "rationale": "Heartbeat propagation was already implemented in PR 958 and merged into this branch."
+    "rationale": "Informational summary from gemini code review bot."
   },
   {
-    "id": 4004713842,
-    "disposition": "not-applicable",
-    "rationale": "Informational review overview."
+    "id": 2991913591,
+    "disposition": "addressed",
+    "rationale": "Avoided passing process=None to supervisor in `agent_runtime_launch` on idempotent path."
   },
   {
-    "id": 2986461669,
-    "disposition": "not-applicable",
-    "rationale": "Heartbeat propagation was already implemented in PR 958 and merged into this branch."
+    "id": 2991913602,
+    "disposition": "addressed",
+    "rationale": "Imported and used `TERMINAL_AGENT_RUN_STATES` instead of hardcoded tuple mapping."
   },
   {
-    "id": 4004715685,
+    "id": 4010816804,
     "disposition": "not-applicable",
-    "rationale": "Informational review overview."
+    "rationale": "Informational summary from copilot pull request reviewer bot."
   }
 ]
