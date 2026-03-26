@@ -3,6 +3,7 @@ import logging
 import os
 import dataclasses
 from datetime import timedelta
+from typing import Any
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
 from temporalio.workflow import ActivityCancellationType
@@ -1138,12 +1139,23 @@ class MoonMindAgentRun:
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
                         if use_managed_status_activity:
+                            raw_publish_mode = (request.parameters or {}).get("publishMode")
+                            publish_mode = str(raw_publish_mode).strip().lower() if isinstance(raw_publish_mode, str) and raw_publish_mode.strip() else "none"
+                            params = request.parameters or {}
+                            target_branch = params.get("publishBaseBranch") or params.get("startingBranch")
+
+                            activity_input: dict[str, Any] = {
+                                "run_id": self.run_id,
+                                "agent_id": request.agent_id,
+                            }
+                            if publish_mode != "none":
+                                activity_input["publish_mode"] = publish_mode
+                            if target_branch:
+                                activity_input["target_branch"] = target_branch
+
                             result_payload = await self._execute_activity_with_routing(
                                 "agent_runtime.fetch_result",
-                                {
-                                    "run_id": self.run_id,
-                                    "agent_id": request.agent_id,
-                                },
+                                activity_input,
                                 AGENT_RUNTIME_TASK_QUEUE,
                                 AGENT_RUNTIME_ACTIVITY_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
