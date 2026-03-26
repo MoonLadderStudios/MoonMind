@@ -1026,56 +1026,61 @@ class MoonMindAgentRun:
                             self.run_status = status_obj.status
 
                             # --- Jules auto-answer sub-flow (spec 094) ---
+                            # Trigger on awaiting_feedback OR running: the Jules
+                            # task-level API may report IN_PROGRESS even while
+                            # Jules is asking questions in the session activity
+                            # stream.  Probing list_activities on every poll
+                            # cycle ensures we detect questions promptly.
                             if (
-                                getattr(status_obj, "status", None) == RunStatus.awaiting_feedback
+                                getattr(status_obj, "status", None)
+                                in {RunStatus.awaiting_feedback, RunStatus.running}
                                 and request.agent_kind == "external"
                                 and self._external_agent_id == "jules"
                             ):
-                                # Read config via activity (determinism-safe)
-                                q, stc, schedtc, rp, hb = await self._get_route_info("integration.jules.get_auto_answer_config", INTEGRATIONS_TASK_QUEUE, timedelta(seconds=10))
-                                kwargs = {}
-                                if rp:
-                                    kwargs["retry_policy"] = rp
-                                if hb:
-                                    kwargs["heartbeat_timeout"] = hb
-                                auto_answer_config = await workflow.execute_activity(
-                                    "integration.jules.get_auto_answer_config",
-                                    [],
-                                    task_queue=q,
-                                    start_to_close_timeout=stc,
-                                    schedule_to_close_timeout=schedtc,
-                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                                    **kwargs,
-                                )
-                                aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
-                                aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
-
-                                if not aa_enabled or self._auto_answer_count >= aa_max:
-                                    # Opt-out or max cycles exhausted → escalate
-                                    self.run_status = "intervention_requested"
-                                    self._get_logger().warning(
-                                        "Jules auto-answer %s for session %s (count=%d, max=%d)",
-                                        "disabled" if not aa_enabled else "exhausted",
-                                        self.run_id,
-                                        self._auto_answer_count,
-                                        aa_max,
-                                    )
-                                    break
-
-                                # Extract the question
+                                # Probe for an unanswered question first (cheap GET).
                                 activities_result = await self._execute_activity_with_routing(
                                     "integration.jules.list_activities",
                                     {"session_id": self.run_id},
                                     INTEGRATIONS_TASK_QUEUE,
                                     INTEGRATIONS_STATUS_TIMEOUT,
                                     cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
                                 )
 
                                 act_id = activities_result.get("activityId") if isinstance(activities_result, dict) else None
                                 question = activities_result.get("latestAgentQuestion") if isinstance(activities_result, dict) else None
 
                                 if question and act_id and act_id not in self._answered_activity_ids:
+                                    # New question detected — read config via activity (determinism-safe)
+                                    q, stc, schedtc, rp, hb = await self._get_route_info("integration.jules.get_auto_answer_config", INTEGRATIONS_TASK_QUEUE, timedelta(seconds=10))
+                                    kwargs = {}
+                                    if rp:
+                                        kwargs["retry_policy"] = rp
+                                    if hb:
+                                        kwargs["heartbeat_timeout"] = hb
+                                    auto_answer_config = await workflow.execute_activity(
+                                        "integration.jules.get_auto_answer_config",
+                                        [],
+                                        task_queue=q,
+                                        start_to_close_timeout=stc,
+                                        schedule_to_close_timeout=schedtc,
+                                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                        **kwargs,
+                                    )
+                                    aa_enabled = auto_answer_config.get("enabled", True) if isinstance(auto_answer_config, dict) else True
+                                    aa_max = auto_answer_config.get("max_answers", 3) if isinstance(auto_answer_config, dict) else 3
+
+                                    if not aa_enabled or self._auto_answer_count >= aa_max:
+                                        # Opt-out or max cycles exhausted → escalate
+                                        self.run_status = "intervention_requested"
+                                        self._get_logger().warning(
+                                            "Jules auto-answer %s for session %s (count=%d, max=%d)",
+                                            "disabled" if not aa_enabled else "exhausted",
+                                            self.run_id,
+                                            self._auto_answer_count,
+                                            aa_max,
+                                        )
+                                        break
+
                                     # Dispatch question-answer cycle
                                     task_context = request.instruction_ref or request.agent_id or ""
                                     answer_result = await self._execute_activity_with_routing(
@@ -1088,7 +1093,6 @@ class MoonMindAgentRun:
                                         INTEGRATIONS_TASK_QUEUE,
                                         INTEGRATIONS_ACTIVITY_TIMEOUT,
                                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
                                     )
                                     if isinstance(answer_result, dict) and answer_result.get("answered"):
                                         self._answered_activity_ids.add(act_id)
@@ -1105,12 +1109,8 @@ class MoonMindAgentRun:
                                             self.run_id,
                                             answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
                                         )
-                                else:
-                                    # No new question or already answered this one;
-                                    # wait for Jules to transition on its own.
-                                    pass
 
-                                # Continue polling regardless of answer success
+                                # Continue polling regardless of answer outcome
                                 self.run_status = RunStatus.running
                                 continue
                             # --- end auto-answer sub-flow ---

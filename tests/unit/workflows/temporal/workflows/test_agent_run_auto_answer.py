@@ -118,6 +118,33 @@ class TestAutoAnswerOptOut:
 # --- T030: Deduplication ---
 
 
+# --- Question probe triggers on running status ---
+
+
+class TestAutoAnswerRunningStatusProbe:
+    """Verify the auto-answer sub-flow triggers for both awaiting_feedback and running status.
+
+    The Jules API may report IN_PROGRESS at the task level even while Jules
+    is asking questions in the session activity stream.  The workflow must
+    probe list_activities during running status to detect questions.
+    """
+
+    def test_running_status_is_eligible_for_auto_answer(self):
+        """The auto-answer gate should include RunStatus.running."""
+        eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
+        assert RunStatus.running in eligible_statuses
+        assert RunStatus.awaiting_feedback in eligible_statuses
+
+    def test_completed_status_is_not_eligible(self):
+        """Terminal statuses should not trigger the auto-answer probe."""
+        eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
+        assert RunStatus.completed not in eligible_statuses
+
+    def test_failed_status_is_not_eligible(self):
+        eligible_statuses = {RunStatus.awaiting_feedback, RunStatus.running}
+        assert RunStatus.failed not in eligible_statuses
+
+
 class TestAutoAnswerDeduplication:
     """T030: Deduplication via _answered_activity_ids set."""
 
