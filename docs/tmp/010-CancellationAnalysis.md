@@ -52,7 +52,7 @@ When a **workflow cancellation** arrives while the workflow is **blocked inside*
 | **`TRY_CANCEL`** | Request activity cancellation; the workflow’s await can complete with cancellation **without** waiting for the activity to finish all cleanup (exact semantics follow the SDK). Use when the workflow must run its own `CancelledError` handler (slot release, follow-up activities) even if the first activity is still winding down. |
 | **`ABANDON`** | Workflow treats itself as cancelled **without** waiting for activity cancellation to complete—can strand work; use only with strong operational justification. |
 
-MoonMind’s managed-agent path should default to explicit choices per call site (especially **`TRY_CANCEL`** on long-running `agent_runtime.*` and integration polls), not rely blindly on defaults.
+MoonMind’s managed-agent path uses explicit **`TRY_CANCEL`** on long-running `agent_runtime.*` and integration poll call sites in `agent_run.py` and `run.py` (do not revert to default `WAIT_CANCELLATION_COMPLETED` on those paths without replay/workflow review).
 
 ### Explicit activity handle cancellation (advanced)
 
@@ -103,7 +103,7 @@ If `MoonMind.AgentRun` is awaiting **`agent_runtime.launch`**, **`integration.*.
 
 With the default, a **workflow** that has been asked to cancel may still **wait** for the activity side to complete cancellation processing. For minute-scale activities, that dominates latency unless activities heartbeat frequently.
 
-**Idiomatic mitigation:** `cancellation_type=ActivityCancellationType.TRY_CANCEL` on selected `execute_activity` calls (see prioritization below).
+**Idiomatic mitigation:** `cancellation_type=ActivityCancellationType.TRY_CANCEL` on selected `execute_activity` calls (see **Recommendations** below).
 
 ### 3. Follow-up cancel activity + queue contention
 
@@ -125,50 +125,43 @@ If the workflow **signals** `AuthProfileManager` **before** running **`agent_run
 
 ## Recommendations (idiomatic Temporal only)
 
-### P0 — Use `TRY_CANCEL` on long `execute_activity` call sites
+Each phase lists tasks with checkboxes (`[x]` done, `[ ]` open). Last updated 2026-03.
 
-Apply **`ActivityCancellationType.TRY_CANCEL`** to activities in the **hot path** where workflow cancellation should **not** block on full activity cancellation completion (especially `agent_runtime.*` and integration polling loops). Example pattern:
+### Phase P0 — Hot path and activity cooperation
 
-```python
-from temporalio.workflow import ActivityCancellationType
+- [x] **Use `TRY_CANCEL` on long `execute_activity` call sites** — Apply **`ActivityCancellationType.TRY_CANCEL`** in the **hot path** where workflow cancellation should **not** block on full activity cancellation completion (especially `agent_runtime.*` and integration polling). **Status:** `MoonMind.AgentRun` and `MoonMind.Run`. Validate changes with **workflow** and **replay** tests.
 
-await workflow.execute_activity(
-    "agent_runtime.launch",
-    ...,
-    cancellation_type=ActivityCancellationType.TRY_CANCEL,
-)
-```
+  Example pattern:
 
-Validate behavior with **workflow tests** and, where applicable, **replay** tests—changing cancellation semantics affects in-flight histories.
+  ```python
+  from temporalio.workflow import ActivityCancellationType
 
-### ~~P0 — Heartbeats + heartbeat timeouts in long-running activities~~ (Done)
+  await workflow.execute_activity(
+      "agent_runtime.launch",
+      ...,
+      cancellation_type=ActivityCancellationType.TRY_CANCEL,
+  )
+  ```
 
-Ensure activities that can run for minutes:
+- [x] **Heartbeats + heartbeat timeouts in long-running activities** — Activities that can run for minutes should call **`activity.heartbeat(...)`** below the **heartbeat timeout** and set a **heartbeat timeout** on `execute_activity` options ([cancellation doc](https://docs.temporal.io/develop/python/cancellation)).
 
-- call **`activity.heartbeat(...)`** on an interval below the **heartbeat timeout**
-- set a **heartbeat timeout** on the `execute_activity` options
+- [ ] **Re-verify heartbeat coverage** when adding **new** long-running activities or queues.
 
-This matches Temporal’s own guidance for cancellable activities ([cancellation doc](https://docs.temporal.io/develop/python/cancellation)).
+### Phase P1 — Timeouts, retries, and capacity
 
-### P1 — Right-size timeouts and retries
+- [ ] **Right-size timeouts and retries** — Tune **`start_to_close`** and **`schedule_to_close`** with heartbeat-aware bounds so “stuck” is detected without always waiting for the full timeout.
 
-**`start_to_close`** and **`schedule_to_close`** bounds directly cap worst-case time before the workflow can leave a stuck activity. Tune them with **P0** heartbeats so “stuck” is detected without always waiting for the full timeout.
+- [ ] **Operational: agent-runtime worker scaling** — If **`agent_runtime.cancel`** queues behind other work, increase worker throughput on **`mm.activity.agent_runtime`** or reduce exclusive long-running work occupying slots.
 
-### P1 — Operational: agent-runtime worker scaling
+### Phase P2 — UX and product timing
 
-If **`agent_runtime.cancel`** queues behind other work, increase **worker** throughput on **`mm.activity.agent_runtime`** or reduce exclusive long-running work occupying slots.
+- [x] **`workflow.query` for “cancellation in progress”** — **`MoonMind.Run.get_status`** exposes **`cancel_requested`** and **`canceling`** (latter true while cancel was requested and state is not yet fully canceled).
 
-### ~~P2 — `workflow.query` for “cancellation in progress”~~ (Done)
+- [ ] **Supervisor `SIGTERM` / `SIGKILL` timing** — After Temporal-side cancellation is sound, adjust **graceful wait** constants in **`supervisor.py`** if product safety allows (orthogonal to Temporal; reduces tail latency).
 
-Expose read-only state (e.g. `cancelling=True`) so Mission Control can show progress **without** mutating workflow state. Queries are the idiomatic read path.
+### Phase P3 — Last-resort operator actions
 
-### P2 — Supervisor `SIGTERM` / `SIGKILL` timing
-
-After Temporal-side cancellation is sound, adjust **graceful wait** constants for CLI tools if product safety allows—this is **orthogonal** to Temporal but reduces tail latency.
-
-### ~~P3 — Terminate only as a last resort~~ (Done)
-
-For runs that **cannot** honor cancellation (bug, poison pill), operators may use **Terminate** via tooling. Document **when** it is appropriate; do not treat it as the normal Mission Control path.
+- [x] **Terminate only as a last resort** — For runs that **cannot** honor cancellation (bug, poison pill), operators may use **Terminate** via tooling; document **when** it is appropriate; do not treat it as the normal Mission Control path.
 
 ---
 
@@ -188,11 +181,7 @@ The following were previously suggested in earlier drafts but **conflict** with 
 
 ## Prioritization
 
-1. **`TRY_CANCEL`** on the right `execute_activity` sites + tests.
-2. **Heartbeats** + **heartbeat timeouts** for long activities (`agent_runtime`, integrations).
-3. **Timeout / retry** tuning and **worker** capacity for `mm.activity.agent_runtime`.
-4. **Query** for UX; **supervisor** timing tweaks last.
-5. **Auth profile slot leak prevention** — active lease-holder verification in `AuthProfileManager` (see below).
+Remaining work is anything still **`[ ]`** under **Recommendations** (P0 ongoing heartbeat review, P1, partial P2) and **Implementation Tasks** (Task 3).
 
 ---
 
@@ -224,9 +213,9 @@ except CancelledError:
 
 **Contributing factor:** The workflow was stuck on `integration.get_activity_route` (unregistered activity, now fixed) when the cancel arrived. Even with `TRY_CANCEL`, the cleanup handler's signal may still be swallowed depending on SDK workflow-task finalization ordering.
 
-### Why the Safety Net Did Not Help Quickly
+### Why the Safety Net Did Not Help Quickly (historical)
 
-The `AuthProfileManager` runs `evict_expired_leases()` every 60 seconds with `_MAX_LEASE_DURATION_SECONDS = 7200` (2 hours). This is intentionally conservative, as legitimate runs may last up to an hour. However, it means a leaked slot from a cancelled workflow could block the queue for up to **2 hours** — far too long for a single-slot profile.
+At the time of the incident, `evict_expired_leases()` ran every 60 seconds with `_MAX_LEASE_DURATION_SECONDS = 7200` (2 hours). **Current code** uses **`_MAX_LEASE_DURATION_SECONDS = 5400`** (1.5 hours) as the workflow-side default and **`auth_profile.verify_lease_holders`** to reclaim leases when the holder workflow is already terminal—so orphaned slots from cancelled workflows should clear much faster than waiting for max lease duration alone.
 
 ### Failure Modes Where Slot Cleanup Can Fail
 
@@ -244,63 +233,27 @@ The `AuthProfileManager` runs `evict_expired_leases()` every 60 seconds with `_M
 
 > **Design principle:** Do not rely on the child workflow's cleanup code as the sole mechanism for slot recovery. The `AuthProfileManager` (the slot owner) must independently detect and reclaim orphaned leases using idiomatic Temporal patterns.
 
-### Task 1: Active Lease Holder Verification in `AuthProfileManager`
+### Phase — Auth profile slot leak mitigation
 
-**What:** Add a periodic check in `_evict_expired_leases()` (or a new `_verify_lease_holders()` method) that queries whether each lease-holding workflow is still running.
+- [x] **Task 1: Active lease holder verification in `AuthProfileManager`** — Periodic check that lease-holding workflows are still running. **Implemented:** `_verify_lease_holders()` in [`auth_profile_manager.py`](../../moonmind/workflows/temporal/workflows/auth_profile_manager.py), invoked from the manager’s eviction loop, calling activity **`auth_profile.verify_lease_holders`** (in [`artifacts.py`](../../moonmind/workflows/temporal/artifacts.py) as `auth_profile_verify_lease_holders`; registered via [`activity_catalog.py`](../../moonmind/workflows/temporal/activity_catalog.py) / [`activity_runtime.py`](../../moonmind/workflows/temporal/activity_runtime.py)). Batch describe replaces the single-ID sketch below.
 
-**How (idiomatic Temporal):** Use `workflow.execute_activity()` to call a new verification activity on the workflow fleet that uses the Temporal Client's `describe_workflow_execution(workflow_id)` API to check whether the lease-holder workflow is in a terminal state (`COMPLETED`, `CANCELED`, `TERMINATED`, `FAILED`, `TIMED_OUT`).
+  **Original sketch (superseded by batch activity):**
 
-```python
-# New activity on mm.workflow fleet
-@activity.defn(name="auth_profile.verify_lease_holder")
-async def verify_lease_holder(workflow_id: str) -> dict:
-    """Check if a workflow is still running. Returns {"running": bool, "status": str}."""
-    client = await Client.connect(...)
-    handle = client.get_workflow_handle(workflow_id)
-    try:
-        desc = await handle.describe()
-        status = desc.status.name  # RUNNING, COMPLETED, CANCELED, etc.
-        return {"running": status == "RUNNING", "status": status}
-    except RPCError:
-        return {"running": False, "status": "NOT_FOUND"}
-```
+  ```python
+  # Sketch only — shipped as auth_profile.verify_lease_holders (batch)
+  @activity.defn(name="auth_profile.verify_lease_holder")
+  async def verify_lease_holder(workflow_id: str) -> dict:
+      """Check if a workflow is still running. Returns {"running": bool, "status": str}."""
+      ...
+  ```
 
-**Why idiomatic:** Activities are the correct place for non-deterministic operations (RPC calls) in Temporal. The manager workflow stays deterministic; verification is delegated to an activity.
+  **Reclaim policy:** If a lease holder is in a terminal state, release the lease and drain the queue; log for observability.
 
-**Where:**
-- New activity: `auth_profile_manager.py` or `activity_catalog.py`
-- Manager integration: `_evict_expired_leases()` in `auth_profile_manager.py`
-- Registration: `worker_runtime.py` (workflow fleet activities list)
+- [x] **Task 2: Reduce `_MAX_LEASE_DURATION_SECONDS` or make it profile-configurable** — Workflow default **`_MAX_LEASE_DURATION_SECONDS = 5400`** (1.5 hours) in `auth_profile_manager.py`; **`max_lease_duration_seconds`** on profile state and DB/API (`managed_agent_auth_profiles`, API router). Stored-row default from migration remains **7200** unless operators set a shorter value per profile (optional: align one global default).
 
-**Reclaim policy:** If a lease holder is in a terminal state, release the lease immediately and proceed to drain the pending request queue. Log a warning for observability.
+- [ ] **Task 3: Verify `CancelledError` slot release reliability (workflow boundary)** — **What:** workflow-level test: managed `AgentRun` holds a slot → cancel → manager state has no lease. **Current state:** [`tests/integration/services/temporal/workflows/test_agent_run.py`](../../tests/integration/services/temporal/workflows/test_agent_run.py) **`test_cancellation_releases_auth_profile_slot`** is **`@pytest.mark.xfail`** when **`MoonMind.AgentRun`** runs without a **`MoonMind.Run`** parent. [`tests/unit/workflows/temporal/test_auth_profile_manager.py`](../../tests/unit/workflows/temporal/test_auth_profile_manager.py) has **`test_verify_lease_holders_exists`**. **Follow-up:** remove `xfail` using a full parent workflow or assert reclaim via `_verify_lease_holders` under time-skipping.
 
-### Task 2: Reduce `_MAX_LEASE_DURATION_SECONDS` or Make It Profile-Configurable
-
-**What:** The current 2-hour default is too conservative for profiles with `max_parallel_runs: 1`. Either:
-- Reduce the global default to a shorter value (e.g., 90 minutes)
-- Allow per-profile `max_lease_duration_seconds` configuration (e.g., in the DB-backed profile definition)
-
-**Where:** `auth_profile_manager.py` constant and/or `ProfileSlotState` dataclass.
-
-### Task 3: Verify `CancelledError` Slot Release Reliability
-
-**What:** Add a workflow-level test that:
-1. Starts a `MoonMind.AgentRun` with a managed agent kind
-2. Assigns an auth profile slot
-3. Cancels the workflow
-4. Asserts that the `AuthProfileManager` state no longer contains the lease
-
-**Where:** `tests/unit/workflows/temporal/test_auth_profile_manager.py` or a new test file.
-
-**Why:** The existing `CancelledError` handler has never been tested at the workflow boundary. The `asyncio.shield` + Temporal cancel interaction must be validated empirically.
-
-### Task 4: (Optional) Parent-Initiated Slot Release Fallback
-
-**What:** If `MoonMind.Run` (the parent) observes that its child `MoonMind.AgentRun` exited as `CANCELED` or `FAILED`, the parent can send a defensive `release_slot` signal to the `AuthProfileManager` as a fallback.
-
-**Why idiomatic:** The parent workflow is still running after the child terminates; it can issue signals. This adds a second release attempt without introducing any non-Temporal control plane.
-
-**Where:** `_run_execution_stage()` in `run.py`, in the child workflow completion handling.
+- [x] **Task 4: Parent-initiated `release_slot` fallback** — On **`MoonMind.Run`**, **`child_state_changed`** with terminal child states triggers **`_release_slot_defensive()`** → **`release_slot`** on the right **`AuthProfileManager`** ([`run.py`](../../moonmind/workflows/temporal/workflows/run.py)); gated by **`RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH`** for replay safety.
 
 ---
 
