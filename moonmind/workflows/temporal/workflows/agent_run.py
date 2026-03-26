@@ -1026,14 +1026,14 @@ class MoonMindAgentRun:
                             self.run_status = status_obj.status
 
                             # --- Jules auto-answer sub-flow (spec 094) ---
-                            # Trigger on awaiting_feedback OR running: the Jules
-                            # task-level API may report IN_PROGRESS even while
-                            # Jules is asking questions in the session activity
-                            # stream.  Probing list_activities on every poll
-                            # cycle ensures we detect questions promptly.
+                            # Only react when Jules explicitly signals
+                            # awaiting_user_feedback (normalized to
+                            # awaiting_feedback).  Probing during "running"
+                            # caused every progress message to be treated as
+                            # a question and spammed with auto-answers.
                             if (
                                 getattr(status_obj, "status", None)
-                                in {RunStatus.awaiting_feedback, RunStatus.running}
+                                == RunStatus.awaiting_feedback
                                 and request.agent_kind == "external"
                                 and self._external_agent_id == "jules"
                             ):
@@ -1082,7 +1082,7 @@ class MoonMindAgentRun:
                                         break
 
                                     # Dispatch question-answer cycle
-                                    task_context = request.instruction_ref or request.agent_id or ""
+                                    task_context = request.agent_id or ""
                                     answer_result = await self._execute_activity_with_routing(
                                         "integration.jules.answer_question",
                                         {
@@ -1110,9 +1110,6 @@ class MoonMindAgentRun:
                                             answer_result.get("error") if isinstance(answer_result, dict) else "unknown",
                                         )
 
-                                # Continue polling regardless of answer outcome
-                                self.run_status = RunStatus.running
-                                continue
                             # --- end auto-answer sub-flow ---
 
                             if status_obj.status in _TERMINAL_RUN_STATUSES:
