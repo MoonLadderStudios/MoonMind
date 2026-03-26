@@ -4,16 +4,17 @@ Tests the launcher→supervisor→teardown paths that exercise tmate
 session management — specifically the fallback behavior when tmate
 fails and the teardown guarantees in the supervisor's ``finally``.
 
-All tests use mocked subprocesses; no real tmate binary is needed.
+The tmate subprocess is always mocked; no real tmate binary is needed,
+though some tests still spawn short-lived real commands (for example,
+``echo``).
 """
 
 from __future__ import annotations
 
 import asyncio
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -137,13 +138,12 @@ async def test_tmate_start_failure_falls_back_to_plain_subprocess(
     # Make tmate appear available.
     monkeypatch.setattr(TmateSessionManager, "is_available", staticmethod(lambda: True))
 
+    # Track teardown.
     teardown_called = False
-    original_teardown = TmateSessionManager.teardown
 
     async def _tracking_teardown(self):
         nonlocal teardown_called
         teardown_called = True
-        await original_teardown(self)
 
     monkeypatch.setattr(TmateSessionManager, "teardown", _tracking_teardown)
 
@@ -326,9 +326,12 @@ async def test_full_tmate_launcher_supervisor_lifecycle(
     )
     real_pid = real_process.pid
 
+    run_id = "tmate-lifecycle-1"
+    expected_session_name = "mm-" + run_id.replace("-", "")[:16]
+
     fake_endpoints = TmateEndpoints(
-        session_name="mm-lifecycle1",
-        socket_path="/tmp/moonmind/tmate/mm-lifecycle1.sock",
+        session_name=expected_session_name,
+        socket_path=f"/tmp/moonmind/tmate/{expected_session_name}.sock",
         attach_ro="ssh ro@host",
         web_ro="https://tmate.io/t/ro",
     )
@@ -352,11 +355,11 @@ async def test_full_tmate_launcher_supervisor_lifecycle(
 
     # Launch
     record, process, endpoints, tmate_manager = await launcher.launch(
-        run_id="tmate-lifecycle-1", request=request, profile=profile
+        run_id=run_id, request=request, profile=profile
     )
 
     assert endpoints is not None
-    assert endpoints["tmate_session_name"] == "mm-lifecycle1"
+    assert endpoints["tmate_session_name"] == expected_session_name
     assert tmate_manager is not None
     assert process.pid == real_pid
 
