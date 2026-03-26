@@ -1203,7 +1203,7 @@ class MoonMindAgentRun:
                 # Jules session reuse across plan nodes.
                 if self.run_id and hasattr(self.final_result, "metadata"):
                     result_meta = dict(self.final_result.metadata or {})
-                    if self._external_agent_id == "jules":
+                    if self._external_agent_id in {"jules", "jules_api"}:
                         result_meta["jules_session_id"] = self.run_id
                     self.final_result = self.final_result.model_copy(
                         update={"metadata": result_meta}
