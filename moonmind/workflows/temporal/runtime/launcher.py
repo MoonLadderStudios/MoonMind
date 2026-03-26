@@ -15,6 +15,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     ManagedRunRecord,
     ManagedRuntimeProfile,
+    TERMINAL_AGENT_RUN_STATES,
 )
 
 from .store import ManagedRunStore
@@ -378,12 +379,7 @@ class ManagedRuntimeLauncher:
         without launching a new process.
         """
         existing = self._store.load(run_id)
-        if existing is not None and existing.status not in (
-            "completed",
-            "failed",
-            "canceled",
-            "timed_out",
-        ):
+        if existing is not None and existing.status not in TERMINAL_AGENT_RUN_STATES:
             return existing, None, None, None
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy

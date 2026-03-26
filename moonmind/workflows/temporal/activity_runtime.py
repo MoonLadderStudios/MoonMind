@@ -2758,6 +2758,10 @@ class TemporalAgentRuntimeActivities:
             workspace_path=workspace_path,
         )
 
+        if process is None:
+            # Idempotent path: run is already active, skip secondary supervision
+            return record.model_dump(mode="json")
+
         if endpoints:
             pass
 
