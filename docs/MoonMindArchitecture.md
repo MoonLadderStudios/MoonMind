@@ -259,7 +259,7 @@ MoonMind deploys as a set of decoupled containers from a single `docker-compose.
 | Service | Purpose |
 |---|---|
 | `init-db` | Bootstrap DB schema, Qdrant indexes |
-| `temporal-namespace-init` | Create `moonmind` namespace, register search attributes |
+| `temporal-namespace-init` | Apply custom namespace retention policies, register search attributes |
 | `agent-workspaces-init` | Fix volume permissions for `/work/agent_jobs` |
 | `codex-auth-init`, `gemini-auth-init`, `claude-auth-init`, `cursor-auth-init` | Initialize auth volumes |
 
@@ -279,7 +279,7 @@ MoonMind deploys as a set of decoupled containers from a single `docker-compose.
 1. Postgres starts and becomes healthy.
 2. `init-db` bootstraps the API schema and Qdrant indexes, then exits.
 3. Temporal server starts and auto-creates persistence databases.
-4. `temporal-namespace-init` registers the `moonmind` namespace and search attributes, then exits.
+4. `temporal-namespace-init` registers search attributes (and applies retention to custom namespaces), then exits.
 5. Auth-init and workspace-init containers prepare volumes, then exit.
 6. API and all worker containers start.
 

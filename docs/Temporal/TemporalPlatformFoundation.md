@@ -78,7 +78,8 @@ Because we are using **SQL-based visibility**, we must manage visibility schema 
 
 We will operate with:
 
-* `moonmind`
+* `default` (local default)
+* shared/enterprise deployments should use a dedicated namespace (e.g., `moonmind`)
 
 ### 5.2 Retention policy (non-compliance, storage-cap driven)
 
