@@ -77,7 +77,7 @@ Key diagnostics:
 - **Pending Activities > 0 with no progress**: worker may be down — check `docker ps` and worker logs.
 - **TimerStarted as last event**: workflow is sleeping between poll cycles — normal, wait for it to fire.
 - **ActivityTaskFailed / WorkflowTaskFailed**: read the failure details in the event history JSON output (`--output json`).
-- **"workflow not found"**: always retry with `--namespace default` — the default namespace is empty.
+- **"workflow not found"**: always retry with `--namespace default` — most workflows run in the `default` namespace.
 
 ## Tool Execution Guardrails
 - **Strict Verification of Tool Results**: Never hallucinate success or fabricate data when a tool execution fails. If a tool (e.g., `read_file`, `run_shell_command`) returns an error such as 'File not found', you must correctly identify the failure and take appropriate remediating action instead of silently bypassing it.
