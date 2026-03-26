@@ -310,6 +310,13 @@ class ManagedRuntimeLauncher:
 
         Sets ``GH_CONFIG_DIR`` in *env* to a per-workspace directory
         containing ``hosts.yml`` with the GitHub token.
+
+        Also injects a git credential helper into the workspace's
+        ``.git/config`` so that ``git push`` can authenticate even when
+        env vars like ``GITHUB_TOKEN`` are stripped from tool-call
+        subprocesses (e.g. Claude Code, Gemini CLI).  Writing into
+        ``.git/config`` is robust because git always reads this file
+        regardless of the subprocess environment.
         """
         token = env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
         if not token or not workspace_path:
@@ -328,6 +335,39 @@ class ManagedRuntimeLauncher:
             env["GH_CONFIG_DIR"] = str(gh_dir)
         except OSError:
             logger.debug("Failed to persist gh config", exc_info=True)
+
+        # Inject git credential helper into .git/config so git push works
+        # even when the AI CLI strips env vars from tool-call subprocesses.
+        try:
+            git_config_path = Path(workspace_path) / ".git" / "config"
+            if not git_config_path.exists():
+                return
+
+            # Write a git-credential-store file with the token
+            cred_store_path = gh_dir / "git-credentials"
+            cred_store_path.write_text(
+                f"https://x-access-token:{token}@github.com\n",
+                encoding="utf-8",
+            )
+            cred_store_path.chmod(0o600)
+
+            # Append credential helper config to .git/config if not already
+            # present.  We check for our marker to avoid duplicating on
+            # idempotent re-launches.
+            marker = "# moonmind-credential-helper"
+            existing_config = git_config_path.read_text(encoding="utf-8")
+            if marker not in existing_config:
+                credential_section = (
+                    f"\n{marker}\n"
+                    f"[credential]\n"
+                    f"\thelper = store --file={cred_store_path}\n"
+                )
+                git_config_path.write_text(
+                    existing_config + credential_section,
+                    encoding="utf-8",
+                )
+        except OSError:
+            logger.debug("Failed to persist git credential config", exc_info=True)
 
     def build_command(
         self,

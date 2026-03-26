@@ -246,6 +246,66 @@ def test_persist_gh_config_skips_without_workspace():
     assert "GH_CONFIG_DIR" not in env
 
 
+def test_persist_gh_config_writes_git_credential_helper(tmp_path):
+    """When a .git/config exists, _persist_gh_config injects a credential
+    helper pointing to a git-credentials store file."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    git_config = git_dir / "config"
+    git_config.write_text(
+        "[core]\n\trepositoryformatversion = 0\n",
+        encoding="utf-8",
+    )
+
+    env = {"GITHUB_TOKEN": "ghp_credtest456", "PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+
+    # gh hosts.yml should still be written
+    assert (tmp_path / ".moonmind" / "gh" / "hosts.yml").exists()
+
+    # git-credentials store file should contain the token
+    cred_store = tmp_path / ".moonmind" / "gh" / "git-credentials"
+    assert cred_store.exists()
+    cred_content = cred_store.read_text()
+    assert "ghp_credtest456" in cred_content
+    assert "github.com" in cred_content
+    assert (cred_store.stat().st_mode & 0o777) == 0o600
+
+    # .git/config should have the credential helper section
+    updated_config = git_config.read_text()
+    assert "# moonmind-credential-helper" in updated_config
+    assert "[credential]" in updated_config
+    assert "store --file=" in updated_config
+    assert str(cred_store) in updated_config
+
+
+def test_persist_gh_config_git_credential_idempotent(tmp_path):
+    """Calling _persist_gh_config twice should not duplicate the credential section."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    git_config = git_dir / "config"
+    git_config.write_text("[core]\n\tbare = false\n", encoding="utf-8")
+
+    env = {"GITHUB_TOKEN": "ghp_idempotent", "PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+
+    updated_config = git_config.read_text()
+    assert updated_config.count("# moonmind-credential-helper") == 1
+    assert updated_config.count("[credential]") == 1
+
+
+def test_persist_gh_config_skips_git_cred_without_git_dir(tmp_path):
+    """When no .git/config exists, only gh hosts.yml should be written."""
+    env = {"GITHUB_TOKEN": "ghp_nogitdir", "PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+
+    # gh config should still be written
+    assert (tmp_path / ".moonmind" / "gh" / "hosts.yml").exists()
+    # But no git-credentials file since there's no .git/config
+    assert not (tmp_path / ".moonmind" / "gh" / "git-credentials").exists()
+
+
 @pytest.mark.asyncio
 async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda _cmd: None)

@@ -744,7 +744,9 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
         run_store=store,
     )
 
-    result = await adapter.fetch_result("run-result-pr-failure")
+    result = await adapter.fetch_result(
+        "run-result-pr-failure", pr_resolver_expected=True
+    )
     assert result.failure_class == "execution_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'failed'" in result.summary
@@ -794,7 +796,9 @@ async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
         run_store=store,
     )
 
-    result = await adapter.fetch_result("run-result-pr-blocked")
+    result = await adapter.fetch_result(
+        "run-result-pr-blocked", pr_resolver_expected=True
+    )
     assert result.failure_class == "user_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
@@ -846,7 +850,9 @@ async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
         run_store=store,
     )
 
-    result = await adapter.fetch_result("run-result-pr-generic-failed")
+    result = await adapter.fetch_result(
+        "run-result-pr-generic-failed", pr_resolver_expected=True
+    )
     assert result.failure_class == "user_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
@@ -888,7 +894,9 @@ async def test_fetch_result_ignores_merged_pr_resolver_artifact(tmp_path: Path):
         run_store=store,
     )
 
-    result = await adapter.fetch_result("run-result-pr-merged")
+    result = await adapter.fetch_result(
+        "run-result-pr-merged", pr_resolver_expected=True
+    )
     assert result.failure_class is None
 
 
@@ -922,3 +930,58 @@ async def test_fetch_result_returns_empty_for_non_terminal(tmp_path: Path):
     # Non-terminal: should return default empty result
     assert result.failure_class is None
     assert result.output_refs == []
+
+
+async def test_fetch_result_ignores_pr_resolver_artifact_when_not_expected(
+    tmp_path: Path,
+):
+    """When pr_resolver_expected=False (default), pr-resolver artifacts
+    in the workspace must NOT override the run result.  This protects
+    against agents that autonomously invoke pr-resolver for tasks that
+    were not PR-resolution tasks."""
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "attempts_exhausted",\n'
+            '  "final_reason": "merge_conflicts",\n'
+            '  "next_step": "run_fix_merge_conflicts_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-unexpected",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-unexpected",
+        run_store=store,
+    )
+
+    # Default: pr_resolver_expected=False
+    result = await adapter.fetch_result("run-result-pr-unexpected")
+    # The pr-resolver artifact should be ignored — no override
+    assert result.failure_class is None
+    assert result.summary is not None
+    assert "pr-resolver" not in result.summary

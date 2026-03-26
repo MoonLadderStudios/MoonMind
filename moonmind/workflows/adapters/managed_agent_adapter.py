@@ -343,8 +343,24 @@ class ManagedAgentAdapter:
             status="running",
         )
 
-    async def fetch_result(self, run_id: str) -> AgentRunResult:
-        """Return result from the run store, falling back to empty if no store."""
+    async def fetch_result(
+        self,
+        run_id: str,
+        *,
+        pr_resolver_expected: bool = False,
+    ) -> AgentRunResult:
+        """Return result from the run store, falling back to empty if no store.
+
+        Parameters
+        ----------
+        pr_resolver_expected:
+            When ``True``, the adapter checks for a ``pr-resolver`` result
+            artifact in the workspace and may override the run result with
+            structured failure metadata.  Defaults to ``False`` so that
+            autonomous/incidental pr-resolver invocations (e.g. the agent
+            deciding on its own to run the skill) do not override the
+            actual task result.
+        """
         if self._run_store is not None:
             record = self._run_store.load(run_id)
             if record is not None and record.status in TERMINAL_AGENT_RUN_STATES:
@@ -355,23 +371,24 @@ class ManagedAgentAdapter:
                     output_refs.append(record.diagnostics_ref)
                 summary = record.error_message or f"Completed with status {record.status}"
                 failure_class = record.failure_class
-                derived_failure_class, derived_summary = _derive_pr_resolver_failure(
-                    record.workspace_path
-                )
-                if derived_failure_class is not None:
-                    should_apply_derived = False
-                    if record.status == "completed" and failure_class is None:
-                        should_apply_derived = True
-                    elif (
-                        record.status == "failed"
-                        and failure_class in {None, "execution_error"}
-                        and _is_generic_process_exit_summary(summary)
-                    ):
-                        should_apply_derived = True
-                    if should_apply_derived:
-                        failure_class = derived_failure_class
-                        if derived_summary:
-                            summary = derived_summary
+                if pr_resolver_expected:
+                    derived_failure_class, derived_summary = _derive_pr_resolver_failure(
+                        record.workspace_path
+                    )
+                    if derived_failure_class is not None:
+                        should_apply_derived = False
+                        if record.status == "completed" and failure_class is None:
+                            should_apply_derived = True
+                        elif (
+                            record.status == "failed"
+                            and failure_class in {None, "execution_error"}
+                            and _is_generic_process_exit_summary(summary)
+                        ):
+                            should_apply_derived = True
+                        if should_apply_derived:
+                            failure_class = derived_failure_class
+                            if derived_summary:
+                                summary = derived_summary
                 return AgentRunResult(
                     summary=summary,
                     output_refs=output_refs,
