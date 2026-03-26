@@ -7628,22 +7628,23 @@
           <button type="button" id="temporal-start-tailing" class="secondary">▶ Start Tailing</button>
         </div>
         <div id="temporal-live-logs-active" style="display:none;">
-          <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap;">
-            <label for="temporal-output-filter" style="font-size:0.85rem;">Filter:</label>
-            <select id="temporal-output-filter" style="font-size:0.85rem;">
+          <div class="queue-live-output-toolbar">
+            <label for="temporal-output-filter" class="queue-inline-filter">Filter:
+            <select id="temporal-output-filter">
               <option value="all">All</option>
               <option value="stages">Stages</option>
               <option value="logs">Logs</option>
               <option value="warnings">Warnings</option>
             </select>
-            <label style="font-size:0.85rem;display:flex;align-items:center;gap:0.25rem;">
+            </label>
+            <label class="queue-inline-toggle">
               <input type="checkbox" id="temporal-follow-output" checked /> Follow
             </label>
-            <button type="button" id="temporal-copy-output" class="secondary" style="font-size:0.8rem;">Copy</button>
-            <button type="button" id="temporal-stop-tailing" class="secondary queue-action-danger" style="font-size:0.8rem;">■ Stop</button>
-            <span id="temporal-live-transport-status" class="small" style="margin-left:auto;opacity:0.7;"></span>
+            <button type="button" id="temporal-copy-output" class="secondary">Copy</button>
+            <button type="button" id="temporal-stop-tailing" class="secondary queue-action-danger">■ Stop</button>
+            <span id="temporal-live-transport-status" class="small"></span>
           </div>
-          <pre id="temporal-live-output" style="max-height:400px;overflow:auto;background:var(--card-bg,#16213e);padding:0.75rem;border-radius:6px;font-size:0.8rem;white-space:pre-wrap;word-break:break-all;"></pre>
+          <pre id="temporal-live-output" class="queue-live-output"></pre>
         </div>
       </section>
       ${debugFields}

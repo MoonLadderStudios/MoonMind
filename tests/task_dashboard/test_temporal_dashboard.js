@@ -380,9 +380,15 @@ const helpers = loadTemporalHelpers();
     "temporal-live-transport-status",
   ];
 
+  function htmlHasElementWithId(htmlString, elementId) {
+    const escapedId = elementId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const idPattern = new RegExp(`id\\s*=\\s*(['"])${escapedId}\\1`);
+    return idPattern.test(htmlString);
+  }
+
   for (const id of requiredIds) {
     assert(
-      html.includes(`id="${id}"`),
+      htmlHasElementWithId(html, id),
       `Detail markup must include element with id="${id}"`,
     );
   }
