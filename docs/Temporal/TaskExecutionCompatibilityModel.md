@@ -51,8 +51,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 ### 3.2 Out of scope
 
 - full replacement of `/tasks/*` with a Temporal-native operator UI
-- redesign of queue, system, proposal, or schedule product modules
-- exposing Temporal task queues as a user-facing queue model
+- redesign of proposal or schedule product modules
 - collapsing every execution source into a single physical database table
 - deciding all long-term post-migration public API names
 
@@ -63,7 +62,7 @@ This is a **bridge contract**, not a claim that the product is already fully Tem
 MoonMind is in an explicit transition state:
 
 - the current dashboard remains **task-oriented** and source-oriented
-- the current runtime config still centers on **queue**, **system**, **proposals**, **manifests**, and **schedules**
+- the current runtime config centers on **proposals**, **manifests**, and **schedules**
 - Temporal-backed lifecycle APIs already exist under `/api/executions`
 - a `TemporalExecutionRecord` projection already exists for lifecycle APIs, filtering, and compatibility behavior
 
@@ -84,22 +83,19 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 2a. **Execution payloads should use `tool` as the canonical executable field.**  
    During migration, `skill` may remain as a compatibility alias where needed.
 
-3. **A Temporal-backed task is not a fake queue item.**  
-   It may render in the Mission Control, but it must not inherit queue-order semantics or leasing semantics.
-
-4. **Identifiers are opaque.**  
+3. **Identifiers are opaque.**
    Clients must not parse source, entry type, or lifecycle meaning from the textual shape of an ID.
 
-5. **Compatibility adapters should translate task actions into Temporal controls.**  
+4. **Compatibility adapters should translate task actions into Temporal controls.**
    The UI should think in terms like edit, approve, rerun, pause, resume, and cancel, not raw Signal and Update names.
 
-6. **Temporal state should not be flattened so aggressively that operators lose meaning.**  
+5. **Temporal state should not be flattened so aggressively that operators lose meaning.**
    The dashboard can show normalized task statuses, but raw execution state and Temporal status must remain available.
 
-7. **Temporal-managed list/detail truth moves toward Temporal visibility and workflow state.**  
+6. **Temporal-managed list/detail truth moves toward Temporal visibility and workflow state.**
    Transitional projections are allowed, but they must mirror the documented execution contract instead of inventing a parallel model.
 
-8. **Skill is a tool subtype, not a competing top-level noun.**  
+7. **Skill is a tool subtype, not a competing top-level noun.**
    Task/step payload contracts should standardize on `task.tool` and `step.tool` with `tool.type="skill"` for current implementations.
 
 ---
@@ -110,8 +106,6 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 
 For task list/detail purposes, the execution sources are:
 
-- `queue`
-- `system`
 - `temporal`
 
 ### 6.2 What is **not** an execution source in this document
@@ -134,14 +128,6 @@ Rules:
 - manifest pages may later become filtered task views over `source=temporal` + `entry=manifest`
 - source answers **where the execution lives**; entry answers **what kind of product flow it represents**
 
-### 6.4 Current manifest migration rule
-
-Manifest flows remain source-specific during migration:
-
-- queue-backed manifest jobs continue to render as `source=queue`
-- only Temporal-managed manifest executions use `source=temporal` + `entry=manifest`
-- compatibility layers must not relabel queue-backed manifest work as Temporal-backed before the execution substrate has actually moved
-
 ---
 
 ## 7. Vocabulary and identifier model
@@ -152,7 +138,6 @@ Manifest flows remain source-specific during migration:
 | --- | --- | --- |
 | Current product UI | `task` | Current dashboard contract |
 | Temporal runtime | `workflow execution` | Canonical runtime term |
-| Legacy system compatibility | `run` | Transitional only |
 
 ### 7.2 Identifier fields
 
@@ -161,14 +146,12 @@ Manifest flows remain source-specific during migration:
 | `taskId` | Product-facing handle used by `/tasks/*` | Must equal `workflowId` for Temporal-backed rows |
 | `workflowId` | Canonical Temporal durable execution identifier | Required for Temporal-backed rows |
 | `temporalRunId` | Current Temporal run instance identifier | Detail/debug only |
-| `runId` | Legacy system compatibility identifier | Must **not** be reused to mean Temporal run ID in task-facing compatibility payloads |
 
 ### 7.3 Rules
 
 - For `source=temporal`, **`taskId == workflowId`**.
 - `workflowId` is the durable handle that survives Continue-As-New.
 - `temporalRunId` may change during rerun or Continue-As-New and must never be used as the primary task route key.
-- `runId` remains reserved for legacy system compatibility and should not be overloaded.
 - Clients must treat all IDs as opaque strings.
 - Path routing may use explicit `source` or a persisted source mapping; ID shape may be used as an optimization, but not as the compatibility contract.
 
@@ -178,7 +161,7 @@ For unified task detail routing, MoonMind should use a **persisted source mappin
 
 Rules:
 
-- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing queue, system, and Temporal backends heuristically
+- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing Temporal backends heuristically
 - Temporal-backed rows must resolve through the durable `workflowId` because `taskId == workflowId`
 - legacy source-specific routes may redirect into `/tasks/{taskId}`, but the server must preserve canonical source resolution metadata
 - ID text shape must not be the contract for backend selection
@@ -306,7 +289,6 @@ Rules:
 
 The current dashboard status family remains:
 
-- `queued`
 - `running`
 - `awaiting_action`
 - `succeeded`
@@ -317,8 +299,7 @@ The current dashboard status family remains:
 
 | `mm_state` value | Normalized task status | Notes |
 | --- | --- | --- |
-| `initializing` | `queued` | Workflow exists but has not reached meaningful work yet |
-| `planning` | `running` | Active execution work, not queue wait |
+| `planning` | `running` | Active execution work |
 | `executing` | `running` | Active execution |
 | `awaiting_external` | `awaiting_action` | Compatibility collapse for approval/pause/external wait |
 | `finalizing` | `running` | Still active until close |
@@ -421,18 +402,7 @@ For views that are purely Temporal-backed:
 - `nextPageToken` may remain Temporal-specific
 - exact counts are allowed when cheaply available
 
-### 11.2 Mixed-source task queries
-
-For unified multi-source task lists:
-
-- the compatibility layer must own the merged pagination contract
-- do **not** leak a raw Temporal `nextPageToken` as the universal cursor for a mixed-source list
-- global sorting should remain consistent across sources, typically by `updatedAt DESC`
-- aggregated counts may be:
-  - exact, when all participating sources can provide stable exact counts cheaply, or
-  - `estimated_or_unknown` / omitted when exact aggregation would be misleading or expensive
-
-### 11.3 Count mode contract
+### 11.2 Count mode contract
 
 Where counts are returned, adapters should expose:
 
@@ -447,7 +417,6 @@ Allowed `countMode` values:
 Rules:
 
 - `countMode=exact` is allowed for current `/api/executions` responses
-- unified `/tasks/*` compatibility views must not claim exact counts unless they truly have them
 
 ---
 
@@ -548,7 +517,6 @@ However, operator/debug views should be able to display:
 Active product flows may continue to use:
 
 - `/tasks/*`
-- active system compatibility routes where still required
 
 ### 14.2 Execution adapter posture
 
@@ -578,12 +546,10 @@ The bridge is **in force** when Temporal-backed executions participate honestly 
 
 This document is considered successfully implemented for a Temporal-backed flow when all of the following are true:
 
-1. a Temporal-backed execution can appear in the current task list without pretending to be a queue lease
-2. `/tasks/{taskId}` remains stable across rerun / Continue-As-New
-3. task edit and rerun controls surface `accepted/applied/message` semantics honestly
-4. dashboard filters and sorting can include Temporal-backed rows without leaking raw Temporal cursor semantics into mixed-source pagination
-5. operators can see raw execution identifiers and status data when needed
-6. the compatibility layer does not overload legacy system `runId` to mean Temporal run ID
+1. `/tasks/{taskId}` remains stable across rerun / Continue-As-New
+2. task edit and rerun controls surface `accepted/applied/message` semantics honestly
+3. dashboard filters and sorting can include Temporal-backed rows without leaking raw Temporal cursor semantics
+4. operators can see raw execution identifiers and status data when needed
 
 ---
 
