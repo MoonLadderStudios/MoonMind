@@ -371,7 +371,7 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
-    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process, dict[str, str] | None]:
+    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None, TmateSessionManager | None]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
@@ -384,9 +384,7 @@ class ManagedRuntimeLauncher:
             "canceled",
             "timed_out",
         ):
-            raise RuntimeError(
-                f"Active run already exists for run_id={run_id}"
-            )
+            return existing, None, None, None
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)

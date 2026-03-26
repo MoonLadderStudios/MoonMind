@@ -247,7 +247,7 @@ def test_persist_gh_config_skips_without_workspace():
 
 
 @pytest.mark.asyncio
-async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
+async def test_idempotent_launch_returns_existing_for_active(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda _cmd: None)
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
@@ -260,11 +260,14 @@ async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
     )
     await process.wait()
 
-    # Second launch with same run_id should raise (record is still "launching")
-    with pytest.raises(RuntimeError, match="Active run already exists"):
-        await launcher.launch(
-            run_id="run-1", request=request, profile=profile
-        )
+    # Second launch with same run_id returns existing record (idempotent)
+    existing, exc_process, exc_endpoints, exc_tmate = await launcher.launch(
+        run_id="run-1", request=request, profile=profile
+    )
+    assert existing.run_id == "run-1"
+    assert exc_process is None
+    assert exc_endpoints is None
+    assert exc_tmate is None
 
 
 @pytest.mark.asyncio
