@@ -24,6 +24,7 @@ async def test_agent_run_cancelled_releases_slot():
     try:
         await task
     except asyncio.CancelledError:
+        # Cancellation is expected in this test; ignore the exception.
         pass
 
     # Verify that cancellation caused the slot to be released exactly once.

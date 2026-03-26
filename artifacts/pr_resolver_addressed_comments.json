@@ -103,5 +103,10 @@
     "id": 2997415072,
     "disposition": "addressed",
     "rationale": "Replaced pytest.raises context manager with try-except to avoid the statement has no effect warning."
+  },
+  {
+    "id": 2997440092,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to the empty except block."
   }
 ]
