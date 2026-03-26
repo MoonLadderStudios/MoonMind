@@ -1776,4 +1776,80 @@ async def reschedule_execution(
     return _serialize_execution(record)
 
 
+@router.post(
+    "/{workflow_id}/rerun",
+    response_model=ExecutionModel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rerun_execution(
+    workflow_id: str,
+    response: Response,
+    service: TemporalExecutionService = Depends(_get_service),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user()),
+    _submit_enabled: None = Depends(_ensure_submit_enabled),
+) -> ExecutionModel:
+    """Rerun an existing failed/completed workflow with the same parameters.
+
+    This endpoint fetches the original execution's parameters and creates
+    a new workflow execution with identical settings.
+    """
+    from uuid import uuid4 as _uuid4
+
+    # Fetch the original execution
+    original = await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
+
+    # Fetch the canonical record to get full initial_parameters
+    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+
+    if canonical is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "canonical_record_not_found",
+                "message": f"Canonical record not found for workflow {workflow_id}. Cannot rerun.",
+            },
+        )
+
+    # Use canonical parameters which have targetRuntime, targetSkill, etc.
+    initial_params = dict(canonical.parameters or {})
+
+    # Generate a new idempotency key based on the original workflow ID
+    new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
+
+    try:
+        record = await service.create_execution(
+            workflow_type=canonical.workflow_type.value,
+            owner_id=canonical.owner_id or user.id,
+            owner_type=canonical.owner_type.value if canonical.owner_type else "user",
+            title=canonical.memo.get("title") if canonical.memo else None,
+            input_artifact_ref=canonical.input_ref,
+            plan_artifact_ref=canonical.plan_ref,
+            manifest_artifact_ref=canonical.manifest_ref,
+            failure_policy=None,
+            initial_parameters=initial_params,
+            idempotency_key=new_idempotency_key,
+            repository=None,
+            integration=None,
+        )
+    except TemporalExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "rerun_validation_failed",
+                "message": str(exc),
+            },
+        ) from exc
+
+    canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    if alias_used:
+        _mark_execution_alias_usage(
+            response,
+            raw_identifier=workflow_id,
+            canonical_identifier=canonical_workflow_id,
+        )
+
+    return _serialize_execution(record)
+
+
 __all__ = ["router"]
