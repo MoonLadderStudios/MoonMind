@@ -121,4 +121,56 @@
 - [ ] **5.5** Operator messages into tmate session.
 - [ ] **5.6** Pause/resume workflow signals.
 
+---
 
+## Diagnostics — Tmate Production Startup Failures
+
+**Problem:** tmate is installed (2.4.0) and `is_available()` returns `True`, but `start()` fails in the `temporal-worker-agent-runtime` container, causing silent fallback to plain subprocess. Live Output never appears in Mission Control.
+
+**Failure chain:** `launcher.py:409` → `TmateSessionManager.start()` → `tmate -S <sock> -f <conf> -F new-session` → `tmate wait tmate-ready` (30s timeout) → exception → catch at line 430 → teardown → `use_tmate = False` → plain subprocess.
+
+### Step 1 — Check worker logs for the exception
+
+```bash
+docker logs moonmind-temporal-worker-agent-runtime-1 2>&1 | grep -A10 "Tmate session failed"
+```
+
+The launcher logs `exc_info=True` at `WARNING` level, so the full traceback will show the actual error.
+
+### Step 2 — Manual tmate test inside the container
+
+```bash
+# As root:
+docker exec -it moonmind-temporal-worker-agent-runtime-1 tmate -F new-session
+
+# As the app user (uid 1000) — matches runtime context:
+docker exec -it moonmind-temporal-worker-agent-runtime-1 runuser -u app -- tmate -F new-session
+```
+
+If tmate hangs without printing session URLs, the relay connection is failing.
+
+### Step 3 — Test outbound SSH connectivity
+
+```bash
+docker exec moonmind-temporal-worker-agent-runtime-1 \
+  bash -c "timeout 5 bash -c 'echo | nc -w3 ssh.tmate.io 22' && echo OK || echo BLOCKED"
+```
+
+### Likely causes (version 2.4.0 confirmed)
+
+| # | Cause | Fix |
+|---|-------|-----|
+| 1 | **Outbound port 22 blocked** (firewall/security group) | Open egress to `ssh.tmate.io:22`, or deploy self-hosted relay |
+| 2 | **Public `tmate.io` relay unreliable** (rate limits, capacity) | Deploy self-hosted relay; set `MOONMIND_TMATE_SERVER_HOST` |
+| 3 | **`app` user context issue** | Check if tmate works as root but not as `app` (step 2) |
+
+### Configuration gap
+
+`docker-compose.yaml` does **not** pass `MOONMIND_TMATE_SERVER_*` env vars to `temporal-worker-agent-runtime`. The service relies on `.env` via `env_file`, but `MOONMIND_TMATE_SERVER_HOST` defaults to `""` in `.env-template`. To use a self-hosted relay, add to `.env`:
+
+```
+MOONMIND_TMATE_SERVER_HOST=your-relay.example.com
+MOONMIND_TMATE_SERVER_PORT=22
+MOONMIND_TMATE_SERVER_RSA_FINGERPRINT=SHA256:...
+MOONMIND_TMATE_SERVER_ED25519_FINGERPRINT=SHA256:...
+```
