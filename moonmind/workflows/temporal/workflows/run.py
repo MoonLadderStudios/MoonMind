@@ -708,9 +708,18 @@ class MoonMindRunWorkflow:
 
             # --- Multi-step Jules: extract session_id only on success ---
             if tool_type == "agent_runtime":
-                extracted_id = self._extract_jules_session_id(child_result)
-                if extracted_id:
-                    jules_session_id = extracted_id
+                _rt = node_inputs.get("runtime") or {}
+                _node_agent_id = (
+                    _rt.get("mode")
+                    or _rt.get("agent_id")
+                    or node_inputs.get("targetRuntime")
+                    or tool_name
+                    or ""
+                ).strip().lower()
+                if _node_agent_id in {"jules", "jules_api"}:
+                    extracted_id = self._extract_jules_session_id(child_result)
+                    if extracted_id:
+                        jules_session_id = extracted_id
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
                 
@@ -745,13 +754,26 @@ class MoonMindRunWorkflow:
             last_tool = str(
                 (ordered_nodes[-1].get("tool", {}) if ordered_nodes else {}).get("name") or ""
             ).strip().lower()
+            # Derive the last node's effective agent_id using the same
+            # resolution logic as _build_agent_execution_request so that
+            # Jules-via-runtime-settings (e.g. tool.name="auto" with
+            # inputs.runtime.mode="jules") is correctly detected.
+            _last_inputs = ordered_nodes[-1].get("inputs", {}) if ordered_nodes else {}
+            _last_rt = _last_inputs.get("runtime") or {}
+            last_agent_id = (
+                _last_rt.get("mode")
+                or _last_rt.get("agent_id")
+                or _last_inputs.get("targetRuntime")
+                or last_tool
+                or ""
+            ).strip().lower()
             
             ws = self._mapping_value(parameters, "workspaceSpec", "workspace_spec") or {}
             
-            if last_tool in ("jules", "jules_api", "github_pr_creator") or jules_session_id:
+            if last_agent_id in ("jules", "jules_api", "github_pr_creator"):
                 self._get_logger().info(
                     "Skipping native PR creation: agent '%s' handles its own PRs.",
-                    last_tool or "jules",
+                    last_agent_id,
                 )
             else:
                 agent_outputs = {}
