@@ -4,10 +4,10 @@ Running the unit tests resulted in several warnings that can be broken down into
 
 ## Phase 1: Pydantic V2 Migration (Complete)
 These warnings are caused by the upgrade to Pydantic V2 and require straightforward search-and-replace changes.
-- **Fields with `env` Argument**: Replace the deprecated `env="VAR"` with `alias="VAR"` or `validation_alias="VAR"` (or via `SettingsConfigDict` features depending on how `settings.py` is configured). Affects many fields in:
+- [x] **Fields with `env` Argument**: Replace the deprecated `env="VAR"` with `alias="VAR"` or `validation_alias="VAR"` (or via `SettingsConfigDict` features depending on how `settings.py` is configured). Affects many fields in:
   - `moonmind/config/settings.py`
   - `moonmind/config/jules_settings.py`
-- **Method Deprecations**:
+- [x] **Method Deprecations**:
   - Replace `.dict()` with `.model_dump()` in `api_service/services/profile_service.py` (line 120) and potentially in Temporalio converter code if within project bounds.
   - Replace `.parse_obj()` with `.model_validate()` where found.
 
