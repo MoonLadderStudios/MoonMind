@@ -1141,11 +1141,13 @@ class MoonMindAgentRun:
                         self.final_result = AgentRunResult(**result_dict) if isinstance(result_dict, dict) else result_dict
                     else:
                         if use_managed_status_activity:
+                            publish_mode = (request.parameters or {}).get("publishMode", "none")
                             result_payload = await self._execute_activity_with_routing(
                                 "agent_runtime.fetch_result",
                                 {
                                     "run_id": self.run_id,
                                     "agent_id": request.agent_id,
+                                    "publish_mode": publish_mode,
                                 },
                                 AGENT_RUNTIME_TASK_QUEUE,
                                 AGENT_RUNTIME_ACTIVITY_TIMEOUT,
