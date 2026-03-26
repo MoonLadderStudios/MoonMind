@@ -12,9 +12,9 @@ MoonMind implements "time-based scheduling" in two ways today:
 
 1. **One-off delayed starts** via Temporal's `start_delay` — fully wired end-to-end from API through `TemporalClientAdapter` to `Client.start_workflow(...)`. Idiomatic and working.
 
-2. **Recurring scheduling** via **Temporal Schedules** — `recurring_tasks_service.py` reconciles definitions with Temporal (`create_schedule` / `update_schedule` / pause / trigger, etc.); `RECURRING_DISPATCH_ENGINE` supports cutover and dual mode. Legacy app-layer cron dispatch has been removed per Phase 2.7.
+2. **Recurring scheduling** via **Temporal Schedules only** — `recurring_tasks_service.py` reconciles definitions with Temporal (`create_schedule` / `update_schedule` / pause / trigger, etc.). There is no app-layer recurring dispatcher; Phase 2.7 removed that path. A short-lived `RECURRING_DISPATCH_ENGINE` cutover (`dual` → `temporal`) existed only to validate timing during migration; **operational standard is Temporal Schedules end-to-end.**
 
-The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedule_errors.py`) is wired as the primary recurring dispatch path. Phases 1–4 of this plan are done; Phase 5 adds broader DST boundary tests, Temporal Schedule integration coverage at DST transitions, and a consolidated semantics note (partial overlap with [TemporalScheduling.md](../Temporal/TemporalScheduling.md)).
+The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedule_errors.py`) is the recurring dispatch path. Phases 1–4 of this plan are done; Phase 5 adds broader DST boundary tests, Temporal Schedule integration coverage at DST transitions, and a consolidated semantics note (partial overlap with [TemporalScheduling.md](../Temporal/TemporalScheduling.md)).
 
 ### Current State Summary
 
@@ -25,7 +25,7 @@ The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedul
 | Child workflow fan-out (dependency-based DAG dispatch) | ✅ Idiomatic, working |
 | Temporal Schedule CRUD in `TemporalClientAdapter` | ✅ Implemented |
 | Schedule policy mapping (overlap, catchup, jitter) | ✅ Implemented |
-| Recurring dispatch via Temporal Schedules (primary path) | ✅ Wired |
+| Recurring dispatch via Temporal Schedules (sole path) | ✅ Wired |
 | `mm_scheduled_for` search attribute | ✅ Implemented |
 | Reschedulable timer pattern | ✅ Implemented |
 | Cron/timezone correctness tests at DST boundaries | 🔲 Phase 5 — partial unit coverage (`test_cron.py` spring-forward gap); fall-back / multi-zone / integration still open |
@@ -89,11 +89,9 @@ The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedul
   - On enable/disable: call `pause_schedule()` / `unpause_schedule()`
   - On manual run: call `trigger_schedule()`
 
-- [x] **2.3** Add hybrid dispatch with feature flag
+- [x] **2.3** Cutover validation via `RECURRING_DISPATCH_ENGINE` (migration-only)
   - **Files:** `recurring_tasks_service.py`
-  - Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` | `"temporal"` | `"dual"`)
-  - In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing)
-  - ⚠️ Run in dual mode for at least one full cron cycle before switching to `"temporal"` mode
+  - Used during migration: `"dual"` briefly validated Temporal timing against read-only app-side bookkeeping, then **`"temporal"` only**. MoonMind does not support recurring dispatch outside Temporal Schedules; do not reintroduce app-layer cron as an alternative.
 
 - [x] **2.4** Migrate existing definitions to Temporal Schedules
   - **Files:** New migration script
@@ -111,9 +109,9 @@ The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedul
   - Implement a reconciliation sweep (invoked periodically or on next access) that re-applies DB state to Temporal
   - Add logs and metrics to track reconciliation mismatches
 
-- [x] **2.7** Deprecate app-layer cron computation
+- [x] **2.7** Remove app-layer recurring dispatch
   - **Files:** `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py`
-  - Once `"temporal"` mode is stable, remove: `schedule_due_definitions()`, `_compute_due_occurrences()`, `_insert_run_if_missing()`, `dispatch_pending_runs()`, `_dispatch_run()`, `_dispatch_temporal_task()`, `_dispatch_temporal_task_template()`, `_dispatch_manifest_run()`, `_count_active_runs()`, `_bulk_fetch_active_counts()`, `_bulk_fetch_existing_executions()`, `_find_existing_temporal_execution_for_run()`, `run_scheduler_tick()`
+  - After Temporal Schedules were validated, remove: `schedule_due_definitions()`, `_compute_due_occurrences()`, `_insert_run_if_missing()`, `dispatch_pending_runs()`, `_dispatch_run()`, `_dispatch_temporal_task()`, `_dispatch_temporal_task_template()`, `_dispatch_manifest_run()`, `_count_active_runs()`, `_bulk_fetch_active_counts()`, `_bulk_fetch_existing_executions()`, `_find_existing_temporal_execution_for_run()`, `run_scheduler_tick()`
   - Keep: cron/timezone validation helpers for UI, `RecurringTaskDefinition` model, CRUD methods, `/api/recurring-tasks` routes
 
 ### Verification
@@ -195,14 +193,14 @@ The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedul
 
 ## Phase 5 — DST & Timezone Correctness (Low-Medium effort · 1 sprint)
 
-**Goal:** Ensure cron/timezone handling is correct at DST boundaries, whether using Temporal Schedules or app-layer cron.
+**Goal:** Ensure cron/timezone handling is correct at DST boundaries for **Temporal Schedules** (and shared expression validation used by the API/UI), with no separate app-layer scheduler to duplicate or contradict.
 
-- [ ] **5.1** Add DST boundary tests for cron evaluation
-  - Test cron expression evaluation across spring-forward and fall-back transitions
+- [ ] **5.1** Add DST boundary tests for schedule spec semantics
+  - Test the same cron/calendar inputs MoonMind stores and passes to Temporal across spring-forward and fall-back transitions (aligned with what `ScheduleSpec` uses)
   - Cover UTC, US/Eastern, Europe/London at minimum
 
 - [ ] **5.2** Add integration tests for Temporal Schedule timezone handling
-  - Verify that Temporal Schedules fire correctly across DST transitions in the deployed Temporal version
+  - Verify Temporal Schedules fire at expected instants across DST transitions in the deployed Temporal version
   - Document any Temporal server–level timezone caveats
 
 - [ ] **5.3** Document canonical scheduling semantics
@@ -235,7 +233,7 @@ flowchart LR
 
 ## Risk Mitigation Notes
 
-1. **Phase 2 (Schedules migration)** should run in dual mode (`"dual"`) for at least one full cron cycle before switching to `"temporal"` mode to validate schedule timing accuracy.
+1. **Phase 2 (Schedules migration)** used a short dual-mode window during cutover to compare Temporal firing times against historical expectations; ongoing operation assumes **Temporal Schedules only**.
 2. **Phase 2.5 (target resolution)** removes a service dependency — ensure the workflow-side Activity for target resolution is robust and tested before deprecating the service-side path.
 3. **Phase 4 (reschedulable timer)** is optional and depends on product need. The pattern is well-established but adds signal handler complexity to `MoonMind.Run`.
 4. **Phase 5 (DST)** is high-impact if timezone bugs occur in production — prioritize regardless of other phase ordering.
