@@ -433,16 +433,16 @@ If the high-effort items are completed, MoonMind also gains:
 
 | # | Recommendation | Current status | Evidence |
 |---|---|---|---|
-| 1 | Add `pause`/`resume`/`cancel` signal handlers to `MoonMind.Run` | **✅ DONE** | `@workflow.signal` handlers for `pause`, `resume`, `cancel`, `approve`, and `ExternalEvent` exist at lines 1341-1412 of `run.py`. `child_state_changed` signal also implemented. |
-| 2 | Add `update_parameters` Update handler | **✅ DONE** | `@workflow.update` handlers for `update_parameters` (line 1417) and `update_title` (line 1413) exist. |
-| 3 | Add `@workflow.query` status snapshot to `MoonMind.Run` | **✅ DONE** | `@workflow.query` decorator for `get_status` is implemented in `run.py`. |
-| 4 | Fix integration polling loop termination logic | **✅ DONE** | Cleanup (`_resume_requested = False`, `_awaiting_external = False`, etc.) is now **outside** the `while` loop, and the loop properly uses `_poll_terminal` without conflating it. |
-| 5 | Replace "auto-start on missing workflow" with Signal-With-Start | **✅ DONE** | Evaluated and documented limitation in `ErrorTaxonomy.md` and inline comments. |
-| 6 | Migrate recurring dispatch to Temporal Schedules | **⚠️ PARTIALLY DONE** | Temporal Schedule CRUD is fully implemented in `client.py` (lines 325-618) with `schedule_mapping.py` (overlap/catchup policy mapping, spec/state builders) and `schedule_errors.py`. However, `recurring_tasks_service.py` (1363 lines) still computes cron occurrences in application code and manages dispatch as the primary execution path. The Schedule CRUD is available but not yet wired as the primary dispatch mechanism. |
-| 7 | Adopt Worker Versioning / Build IDs | **🔲 OPEN** | No `build_id`, `worker_versioning`, or `deployment_series` references found in `moonmind/workflows/temporal/`. `worker_runtime.py` constructs `Worker(...)` without any versioning kwargs. |
-| 8 | Improve observability (tracing/metrics) | **🔲 OPEN** | No OpenTelemetry, Prometheus, Sentry, or Datadog dependencies in `pyproject.toml`. Worker runtime logs fleet startup and runs a healthcheck server; workflow code logs selectively but without systematic structured fields. |
-| 9 | Add Temporal SDK workflow/signal tests | **⚠️ PARTIALLY DONE** | Unit tests exist for `MoonMind.Run` (`test_run.py`, `test_run_agent_dispatch.py`) and `MoonMind.AgentRun` (multiple test files including auto-answer, slot wait, status payloads). However, no tests exercise signal/update handler round-trips or replay determinism. |
-| 10 | Normalize error taxonomy for retries | **✅ DONE** | Created `docs/Temporal/ErrorTaxonomy.md` and updated `activity_catalog.py` `non_retryable_error_codes` to reference it. |
+| 1 | - [x] Add `pause`/`resume`/`cancel` signal handlers to `MoonMind.Run` | **✅ DONE** | `@workflow.signal` handlers for `pause`, `resume`, `cancel`, `approve`, and `ExternalEvent` exist at lines 1341-1412 of `run.py`. `child_state_changed` signal also implemented. |
+| 2 | - [x] Add `update_parameters` Update handler | **✅ DONE** | `@workflow.update` handlers for `update_parameters` (line 1417) and `update_title` (line 1413) exist. |
+| 3 | - [x] Add `@workflow.query` status snapshot to `MoonMind.Run` | **✅ DONE** | `@workflow.query` decorator for `get_status` is implemented in `run.py`. |
+| 4 | - [x] Fix integration polling loop termination logic | **✅ DONE** | Cleanup (`_resume_requested = False`, `_awaiting_external = False`, etc.) is now **outside** the `while` loop, and the loop properly uses `_poll_terminal` without conflating it. |
+| 5 | - [x] Replace "auto-start on missing workflow" with Signal-With-Start | **✅ DONE** | Evaluated and documented limitation in `ErrorTaxonomy.md` and inline comments. |
+| 6 | - [ ] Migrate recurring dispatch to Temporal Schedules | **⚠️ PARTIALLY DONE** | Temporal Schedule CRUD is fully implemented in `client.py` (lines 325-618) with `schedule_mapping.py` (overlap/catchup policy mapping, spec/state builders) and `schedule_errors.py`. However, `recurring_tasks_service.py` (1363 lines) still computes cron occurrences in application code and manages dispatch as the primary execution path. The Schedule CRUD is available but not yet wired as the primary dispatch mechanism. |
+| 7 | - [ ] Adopt Worker Versioning / Build IDs | **🔲 OPEN** | No `build_id`, `worker_versioning`, or `deployment_series` references found in `moonmind/workflows/temporal/`. `worker_runtime.py` constructs `Worker(...)` without any versioning kwargs. |
+| 8 | - [ ] Improve observability (tracing/metrics) | **🔲 OPEN** | No OpenTelemetry, Prometheus, Sentry, or Datadog dependencies in `pyproject.toml`. Worker runtime logs fleet startup and runs a healthcheck server; workflow code logs selectively but without systematic structured fields. |
+| 9 | - [ ] Add Temporal SDK workflow/signal tests | **⚠️ PARTIALLY DONE** | Unit tests exist for `MoonMind.Run` (`test_run.py`, `test_run_agent_dispatch.py`) and `MoonMind.AgentRun` (multiple test files including auto-answer, slot wait, status payloads). However, no tests exercise signal/update handler round-trips or replay determinism. |
+| 10 | - [x] Normalize error taxonomy for retries | **✅ DONE** | Created `docs/Temporal/ErrorTaxonomy.md` and updated `activity_catalog.py` `non_retryable_error_codes` to reference it. |
 
 
 ### Phase 2 — Observability and testing (Medium effort, 2-3 sprints)
@@ -451,10 +451,10 @@ If the high-effort items are completed, MoonMind also gains:
 
 | Task | Files | Notes |
 |---|---|---|
-| **2a.** Add structured logging context to all workflows | `run.py`, `agent_run.py`, `auth_profile_manager.py`, `manifest_ingest.py` | Standardize `extra=` fields: `workflow_id`, `run_id`, `task_queue`, `owner_id`. Use `workflow.info()` consistently. |
-| **2b.** Add signal/update round-trip unit tests | `tests/unit/workflows/temporal/workflows/` | Test `pause` → `wait_condition` unblocks on `resume`. Test `cancel` stops execution. Test `update_parameters` is acknowledged. Use Temporal Python SDK test environment (`WorkflowEnvironment.start_time_skipping()`). |
-| **2c.** Add replay determinism test harness | `tests/unit/workflows/temporal/` | Capture a workflow history JSON, then replay against current workflow code to catch non-determinism. Critical given `UnsandboxedWorkflowRunner()`. |
-| **2d.** Evaluate OpenTelemetry integration | `pyproject.toml`, `worker_runtime.py` | The Temporal Python SDK supports interceptors for tracing. Add `opentelemetry-api` + `opentelemetry-sdk` + `temporalio` tracing interceptor. Gate behind feature flag for initial rollout. |
+| - [ ] **2a.** Add structured logging context to all workflows | `run.py`, `agent_run.py`, `auth_profile_manager.py`, `manifest_ingest.py` | Standardize `extra=` fields: `workflow_id`, `run_id`, `task_queue`, `owner_id`. Use `workflow.info()` consistently. |
+| - [ ] **2b.** Add signal/update round-trip unit tests | `tests/unit/workflows/temporal/workflows/` | Test `pause` → `wait_condition` unblocks on `resume`. Test `cancel` stops execution. Test `update_parameters` is acknowledged. Use Temporal Python SDK test environment (`WorkflowEnvironment.start_time_skipping()`). |
+| - [ ] **2c.** Add replay determinism test harness | `tests/unit/workflows/temporal/` | Capture a workflow history JSON, then replay against current workflow code to catch non-determinism. Critical given `UnsandboxedWorkflowRunner()`. |
+| - [ ] **2d.** Evaluate OpenTelemetry integration | `pyproject.toml`, `worker_runtime.py` | The Temporal Python SDK supports interceptors for tracing. Add `opentelemetry-api` + `opentelemetry-sdk` + `temporalio` tracing interceptor. Gate behind feature flag for initial rollout. |
 
 ### Phase 3 — Temporal Schedules integration (High effort, 2-3 sprints)
 
@@ -462,11 +462,11 @@ If the high-effort items are completed, MoonMind also gains:
 
 | Task | Files | Notes |
 |---|---|---|
-| **3a.** Add `temporal_schedule_id` column to `RecurringTaskDefinition` | DB migration, `api_service/db/models.py` | Nullable string. When populated, indicates the definition has a corresponding Temporal Schedule. |
-| **3b.** Create/update Temporal Schedule on definition CRUD | `recurring_tasks_service.py` | On `create_definition()`: call `TemporalClientAdapter.create_schedule()`. On `update_definition()`: call `update_schedule()`. On enable/disable: call `pause_schedule()` / `unpause_schedule()`. |
-| **3c.** Hybrid dispatch: feature-flag dual execution | `recurring_tasks_service.py` | Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` \| `"temporal"` \| `"dual"`). In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing). |
-| **3d.** Migrate existing definitions | New migration script | Iterate existing enabled definitions and call `create_schedule()` for each. Populate `temporal_schedule_id`. |
-| **3e.** Deprecate app-layer cron computation | `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py` | Once `"temporal"` mode is stable, remove `schedule_due_definitions()` polling loop and `compute_next_occurrence()` dispatch path. Keep cron validation for UI. |
+| - [ ] **3a.** Add `temporal_schedule_id` column to `RecurringTaskDefinition` | DB migration, `api_service/db/models.py` | Nullable string. When populated, indicates the definition has a corresponding Temporal Schedule. |
+| - [ ] **3b.** Create/update Temporal Schedule on definition CRUD | `recurring_tasks_service.py` | On `create_definition()`: call `TemporalClientAdapter.create_schedule()`. On `update_definition()`: call `update_schedule()`. On enable/disable: call `pause_schedule()` / `unpause_schedule()`. |
+| - [ ] **3c.** Hybrid dispatch: feature-flag dual execution | `recurring_tasks_service.py` | Introduce `RECURRING_DISPATCH_ENGINE` setting (`"app"` \| `"temporal"` \| `"dual"`). In `"dual"` mode, both systems schedule but only the temporal-backed one dispatches (app path becomes read-only auditing). |
+| - [ ] **3d.** Migrate existing definitions | New migration script | Iterate existing enabled definitions and call `create_schedule()` for each. Populate `temporal_schedule_id`. |
+| - [ ] **3e.** Deprecate app-layer cron computation | `recurring_tasks_service.py`, `moonmind/workflows/recurring_tasks/cron.py` | Once `"temporal"` mode is stable, remove `schedule_due_definitions()` polling loop and `compute_next_occurrence()` dispatch path. Keep cron validation for UI. |
 
 ### Phase 4 — Worker versioning and deployment safety (High effort, 1-2 sprints)
 
@@ -474,9 +474,9 @@ If the high-effort items are completed, MoonMind also gains:
 
 | Task | Files | Notes |
 |---|---|---|
-| **4a.** Inject build identifier into worker startup | `worker_runtime.py` | Read `MOONMIND_BUILD_ID` (default: Git SHA) from environment. Pass to `Worker(...)` using the Python SDK's versioning API once stable (or use `workflow.patched()` gates in the interim). |
-| **4b.** Document deployment runbook | New: `docs/Temporal/WorkerDeployment.md` | Cover: version registration, compatibility matrix, rollback procedure, two-version side-by-side strategy for workflow changes. |
-| **4c.** Add `workflow.patched()` gates for in-flight compatibility | Workflow files as needed | For any workflow-shape-changing refactor (e.g., Phase 1b loop refactor), use `workflow.patched("patch-id")` to branch between old and new behavior during replay. |
+| - [ ] **4a.** Inject build identifier into worker startup | `worker_runtime.py` | Read `MOONMIND_BUILD_ID` (default: Git SHA) from environment. Pass to `Worker(...)` using the Python SDK's versioning API once stable (or use `workflow.patched()` gates in the interim). |
+| - [ ] **4b.** Document deployment runbook | New: `docs/Temporal/WorkerDeployment.md` | Cover: version registration, compatibility matrix, rollback procedure, two-version side-by-side strategy for workflow changes. |
+| - [ ] **4c.** Add `workflow.patched()` gates for in-flight compatibility | Workflow files as needed | For any workflow-shape-changing refactor (e.g., Phase 1b loop refactor), use `workflow.patched("patch-id")` to branch between old and new behavior during replay. |
 
 ### Phase dependency graph
 
