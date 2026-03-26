@@ -1,10 +1,10 @@
 # Live Task Management
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-LiveTaskManagement.md`](../tmp/remaining-work/Temporal-LiveTaskManagement.md)
+**Implementation tracking:** [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) · [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/)
 
 Status: Draft  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-24
+Last Updated: 2026-03-26
 
 ---
 
@@ -59,17 +59,15 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 - **ENDED**: Workflow completed; worker tore down the session normally.
 - **ERROR**: tmate setup failed; the agent keeps running headless.
 
-### 4.2 Session Bootstrap (ManagedRuntimeLauncher)
+### 4.2 Session bootstrap (managed runtime and workers)
 
 > [!NOTE]
-> The description below is **target architecture**. Currently, `ManagedRuntimeLauncher.launch()` contains inline tmate lifecycle logic (~100 lines) that handles socket creation, config file generation, readiness waiting, and endpoint extraction directly. The target state refactors this into the shared `TmateSessionManager` (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) §4).
+> **`ManagedRuntimeLauncher.launch()`** delegates tmate wrapping to **`TmateSessionManager`** (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) section 4). The **codex worker** also runs an inline tmate bootstrap in `_ensure_live_session_started` for HTTP live-session reporting; consolidating with the manager is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
 
-In the target architecture, the launcher delegates tmate concerns to `TmateSessionManager`:
-
-1. **Launcher wrapping**: When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. The manager handles socket creation, config file generation (including self-hosted server settings), readiness detection, and endpoint extraction.
-2. **Endpoint persistence**: After `start()` returns `TmateEndpoints`, the launcher (or supervisor callback) invokes the `agent_runtime.report_live_session` activity to persist endpoints to the `workflow_live_sessions` table.
-3. **UI embedding**: The Mission Control task detail page fetches `GET /api/workflows/{id}/live-session` and embeds the `web_ro` URL in the Live Output panel.
-4. **Teardown**: The supervisor calls `TmateSessionManager.teardown()` on process completion, and the `agent_runtime.end_live_session` activity transitions the session status to `ENDED`.
+1. **Launcher wrapping (agent-runtime worker):** When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. On tmate failure it falls back to a plain subprocess so the agent still runs.
+2. **Endpoint persistence:** Rows live in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report via **`POST /api/task-runs/{id}/live-session/report`** and **`POST /api/task-runs/{id}/live-session/heartbeat`** (HTTP). Operators read **`GET /api/task-runs/{id}/live-session`** for the Live Output panel.
+3. **UI embedding:** Mission Control embeds the `web_ro` URL from the task-run live-session payload.
+4. **Teardown:** The supervisor calls `TmateSessionManager.teardown()` when the managed-runtime path completes; the codex worker reports session end (or error) through the same HTTP report API.
 
 ```bash
 # Conceptual wrapper executed by ManagedRuntimeLauncher
@@ -260,8 +258,8 @@ Pauses and takeovers use standard **Temporal Signals**:
 
 The task detail page (`/tasks/:taskId`) should include two live-session UI elements:
 
-1. **Live Output Panel** (§5): Collapsible panel with embedded web RO terminal view. Toggle on/off. Available whenever the live session is `READY`.
-2. **Live Session Card** (§6): Shows session status, RO attach instructions, optional web view link, pause/resume signal buttons, RW grant UI, and operator message composer. Available for full handoff workflows.
+1. **Live Output Panel** (section 5): Collapsible panel with embedded web RO terminal view. Toggle on/off. Available whenever the live session is `READY`.
+2. **Live Session Card** (section 6): Shows session status, RO attach instructions, optional web view link, pause/resume signal buttons, RW grant UI, and operator message composer. Available for full handoff workflows.
 
 ### 10.2 Feature Flags
 

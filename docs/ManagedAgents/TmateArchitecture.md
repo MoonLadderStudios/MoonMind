@@ -1,6 +1,6 @@
 # Tmate Architecture in MoonMind
 
-**Implementation plan:** [`docs/tmp/TmatePlan.md`](../tmp/TmatePlan.md)  
+**Implementation plan:** [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md)  
 **Remaining-work tracker:** [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md)
 
 Status: **Design Draft**
@@ -30,7 +30,7 @@ The MVP transport for all three use cases is tmate. The architecture standardize
 | **Runtime wrapping** | Every managed agent run (Gemini, Codex, Claude, Cursor) is wrapped in a tmate session to enable live log tailing and terminal handoff from Mission Control. | `ManagedRuntimeLauncher.launch()` |
 | **OAuth sessions** | Short-lived Docker containers with tmate give users an interactive terminal to complete provider OAuth login flows. | `oauth_session_activities.start_auth_runner()` |
 
-Both share identical lifecycle concerns (session creation, readiness detection, endpoint extraction, teardown). The `TmateSessionManager` defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4 is the **target abstraction** that unifies them.
+Both share identical lifecycle concerns (session creation, readiness detection, endpoint extraction, teardown). The `TmateSessionManager` defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) (section 4) is the **shared abstraction**; the launcher uses it today; OAuth still uses a separate Docker-exec path (see that document’s section 4.4).
 
 ---
 
@@ -38,9 +38,9 @@ Both share identical lifecycle concerns (session creation, readiness detection, 
 
 ### 3.1 Live Log Tailing
 
-When a managed agent run starts, the worker launches a tmate session wrapping the CLI process. The tmate read-only web endpoint (`web_ro`) is persisted to the `workflow_live_sessions` table and exposed via `GET /api/workflows/{id}/live-session`. The Mission Control dashboard embeds this endpoint in the Live Output panel, giving operators real-time visibility into agent execution without SSH access to the worker.
+When a managed agent run starts, the worker exposes a tmate read-only web endpoint (`web_ro`). Session metadata is persisted in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report lifecycle updates via **`POST /api/task-runs/{id}/live-session/report`** (and **`.../heartbeat`**); operators use **`GET /api/task-runs/{id}/live-session`** for the Live Output panel. The codex worker owns a parallel tmate bootstrap for that HTTP path, while the Temporal agent-runtime worker uses **`ManagedRuntimeLauncher`** + **`TmateSessionManager`** for subprocess wrapping (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5).
 
-See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §5 for the endpoint persistence data model and API.
+See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5 for the persistence model and API shape.
 
 ### 3.2 Live Terminal Handoff
 
@@ -150,19 +150,19 @@ A small provider-specific contract that defines:
 
 Calls the existing auth-profile registration path (see [AuthProfiles.md](../Security/AuthProfiles.md)) after successful verification.
 
-#### F. TmateSessionManager (shared — target architecture)
+#### F. TmateSessionManager (shared abstraction)
 
 > [!NOTE]
-> `TmateSessionManager` does not exist yet. Currently, `oauth_session_activities.py` uses a Docker-exec polling approach with hardcoded `/tmp/tmate.sock`. The target architecture delegates tmate lifecycle management to the shared abstraction defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.
+> **`TmateSessionManager`** is implemented in `moonmind/workflows/temporal/runtime/tmate_session.py`. **`ManagedRuntimeLauncher.launch()`** delegates runtime wrapping to it. OAuth **`start_auth_runner`** still runs tmate inside a Docker container with **host-side** `docker exec` polling (shared display-key constants only). Consolidation work is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
 
-In the target state, the session orchestrator will delegate tmate lifecycle management to `TmateSessionManager`. This includes:
+`TmateSessionManager` covers:
 
 * session creation with per-session config (including self-hosted server options)
 * readiness detection via `tmate wait tmate-ready`
-* endpoint extraction (`web_ro`, `web_rw`, `ssh_ro`, `ssh_rw`)
+* endpoint extraction (`web_ro`, `web_rw`, RO/RW attach strings)
 * teardown and socket cleanup
 
-The same abstraction will also be used by `ManagedRuntimeLauncher` for runtime session wrapping, ensuring consistent behavior across both use cases.
+OAuth orchestration should converge on the same command and config semantics as the manager (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 4.4).
 
 ---
 
@@ -488,7 +488,7 @@ Credentials remain in the mounted Docker volume.
 
 ### 11.4 Self-Hosted Tmate Server
 
-For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) §4.3 for configuration details.
+For production deployments, configure `MOONMIND_TMATE_SERVER_HOST` and related environment variables to use a private relay server. Sessions on the public `tmate.io` infrastructure traverse third-party servers. See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 4.3 for configuration details.
 
 ### 11.5 Audit
 
@@ -610,4 +610,4 @@ That migration becomes small if the rest of the system already thinks in terms o
 
 ## 16. Delivery Milestones
 
-**MVP:** OAuth session store + API + Mission Control modal + tmate-backed runner (Gemini first), then Codex/Claude via the same transport with profile registration, then cleanup/audit/hardening/reconnect flows, then optional provider-specific driver splits. Task-level tracking: [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).
+**MVP:** OAuth session store + API + Mission Control modal + tmate-backed runner (Gemini first), then Codex/Claude via the same transport with profile registration, then cleanup/audit/hardening/reconnect flows, then optional provider-specific driver splits. Task-level tracking: [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) and [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).

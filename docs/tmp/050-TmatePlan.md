@@ -1,9 +1,11 @@
 # Tmate Architecture — Implementation Plan
 
-**Source:** [`docs/ManagedAgents/TmateArchitecture.md`](../ManagedAgents/TmateArchitecture.md)
-**Last synced:** 2026-03-25
+**Source:** [`docs/ManagedAgents/TmateArchitecture.md`](../ManagedAgents/TmateArchitecture.md)  
+**Session lifecycle reference:** [`docs/Temporal/TmateSessionArchitecture.md`](../Temporal/TmateSessionArchitecture.md) (authoritative for `TmateSessionManager` vs OAuth split)  
+**Spec overlap:** [`specs/104-tmate-session-manager`](../../specs/104-tmate-session-manager/) (design/tasks may lag; treat this tmp plan + `TmateSessionArchitecture.md` as the operational tracker)  
+**Last synced:** 2026-03-26
 
-**Phase rollout (status):** **Phase 1** complete (integration test 1.9 still open). **Phase 2** in progress (2.2 `start_auth_runner` still uses Docker-exec polling; other Phase 2 items done). **Phase 3** largely complete — `TaskRunLiveSession` ORM model, `task_runs` router (`GET`, `report`, `heartbeat`, worker endpoints), worker HTTP reporting, and unit tests all implemented; live persistence follows [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/). **Phase 4** complete for MVP surfaces (Live Output + OAuth modal wired to `/api/v1/oauth-sessions`). **Phase 5** not started.
+**Phase rollout (status):** **Phase 1** complete except **1.9** (no integration test for the full Temporal OAuth workflow). **Phase 2** partially complete: **2.1** launcher → `TmateSessionManager` is done; **2.2** OAuth `start_auth_runner` still runs tmate inside Docker with **host-side `docker exec` polling** and only shares **`_ENDPOINT_KEYS` / display key names** with the manager (see `TmateSessionArchitecture.md` section 4 note). **2.x backlog:** **`codex_worker`** (`_ensure_live_session_started` in `worker.py`) still implements its **own** socket/config/`wait tmate-ready`/display loop for HTTP live-session reporting — a third tmate bootstrap, not using `TmateSessionManager`. **Phase 3** complete — `task_run_live_sessions`, `/api/task-runs/{id}/live-session*`, worker HTTP report/heartbeat; contracts in [`specs/024-live-task-handoff`](../../specs/024-live-task-handoff/). **Phase 4** MVP done (Live Output + OAuth modal). **Phase 5** (RW grants, audit, operator messages, pause/resume) not started. **Docs:** [`LiveTaskManagement.md`](../Temporal/LiveTaskManagement.md) section 4.2 and [`TmateSessionArchitecture.md`](../Temporal/TmateSessionArchitecture.md) section 5 were aligned on **task-run** persistence and HTTP reporting (2026-03-26).
 
 ---
 
@@ -11,12 +13,12 @@
 
 | Component | Status | Files |
 |-----------|--------|-------|
-| `TmateSessionManager` | ✅ Implemented (405 LOC) | `moonmind/workflows/temporal/runtime/tmate_session.py` |
+| `TmateSessionManager` | ✅ Implemented (~350 LOC) | `moonmind/workflows/temporal/runtime/tmate_session.py` |
 | `TmateServerConfig` / self-hosted relay | ✅ Implemented | `tmate_session.py`, `.env-template` |
 | OAuth session Temporal workflow | ✅ Implemented | `moonmind/workflows/temporal/workflows/oauth_session.py` |
 | OAuth session activities (8 of 8) | ✅ `ensure_volume`, `start_auth_runner`, `stop_auth_runner`, `update_status`, `mark_failed`, `update_session_urls`, `verify_volume`, `register_profile` | `activities/oauth_session_activities.py` |
 | OAuth session cleanup activity | ✅ Implemented (+ docker `stop`/`rm` on stale rows) | `activities/oauth_session_cleanup.py` |
-| OAuth session DB table + migration | ✅ `managed_agent_oauth_sessions` | `api_service/db/models.py`, migration `f1b2c3d4e5f6` |
+| OAuth session DB table + migration | ✅ `managed_agent_oauth_sessions` | `api_service/db/models.py`, migration `f1b2c3d4e5f6_add_oauth_sessions.py` |
 | OAuth session API router | ✅ Create, Get, Cancel, Finalize | `api_service/api/routers/oauth_sessions.py` |
 | OAuth session Pydantic schemas | ✅ Implemented | `api_service/api/schemas_oauth_sessions.py` |
 | `OAuthProviderSpec` + provider registry | ✅ Implemented | `moonmind/workflows/temporal/runtime/providers/base.py`, `registry.py` |
@@ -28,7 +30,7 @@
 | Supervisor tmate teardown + socket GC | ✅ `teardown()` in finally; `gc_orphaned_sockets` on reconcile | `moonmind/workflows/temporal/runtime/supervisor.py` |
 | Mission Control — Live Output panel | ✅ iframe + polling (task-run live-session URL from view model) | `api_service/static/task_dashboard/dashboard.js` |
 | Mission Control — OAuth Session modal | ✅ Create / poll / cancel wired to `/api/v1/oauth-sessions` | `dashboard.js` (`oauth-session-modal`) |
-| Worker live-session reporting (HTTP) | ✅ `report_live_session` / `heartbeat_live_session` → `/api/task-runs/.../live-session/...` | `moonmind/agents/codex_worker/worker.py` |
+| Worker live-session reporting (HTTP) | ✅ `report_live_session` / `heartbeat_live_session` → `/api/task-runs/.../live-session/...` | `moonmind/agents/codex_worker/worker.py` (tmate bootstrap in `_ensure_live_session_started` is **inline**, not `TmateSessionManager`) |
 | `TaskRunLiveSession` ORM model | ✅ Implemented (with encrypted RW fields, `rw_granted_until`) | `api_service/db/models.py` (lines 1939-1986) |
 | `task_runs` API router (live-session) | ✅ `GET`, `report`, `heartbeat`, worker-get endpoints with auth | `api_service/api/routers/task_runs.py` |
 | Live-session Pydantic schemas | ✅ Request/response models implemented | `api_service/api/schemas_task_runs.py` |
@@ -38,9 +40,11 @@
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `TmateSessionManager` inside `start_auth_runner` | ❌ Open | Still bash + `docker exec` polling; shares `_ENDPOINT_KEYS` with manager only |
-| End-to-end OAuth session **integration** test | ❌ Open | Phase 1.9 — unit coverage exists; full lifecycle test still absent |
-| Phase 5 — RW grant API, audit, auto-revoke, operator messages | ❌ Not implemented | `rw_granted_until` column exists in `TaskRunLiveSession` schema (ready for Phase 5); no grant button in dashboard JS |
+| `TmateSessionManager` (or shared helpers) inside OAuth `start_auth_runner` | ❌ Open | Container entrypoint is still bash loops + fixed `/tmp/tmate.sock`; host polls via `docker exec` using shared display **key** constants from `tmate_session.py` — not subprocess lifecycle unification |
+| **Codex worker** live tmate unified with manager | ❌ Open | Same semantics as launcher (socket dir, optional relay config, `wait tmate-ready`, four endpoints) but duplicated in `worker.py`; consolidation would reduce drift with `TmateSessionManager` / relay env behavior |
+| End-to-end OAuth session **integration** test | ❌ Open | Phase 1.9 — Temporal workflow create → tmate URLs → verify/register (no `tests/integration/**/oauth*` today). Separate: `tests/integration/temporal/test_tmate_live_logs.py` exercises launcher + log pipeline with **mocked** tmate, not OAuth |
+| Other canonical docs vs `task_run` live-session naming | 🔶 Sweep | Spot-check specs (`084-live-log-tailing` plan text, etc.) for legacy `workflow_live_sessions` / workflow GET examples |
+| Phase 5 — RW grant API, audit, auto-revoke, operator messages | ❌ Not implemented | `rw_granted_until` + encrypted RW fields on `TaskRunLiveSession`; no grant API or Mission Control “request terminal” flow yet |
 
 
 ---
@@ -59,22 +63,23 @@
 - [x] **1.6** `oauth_session.register_profile` activity.
 - [x] **1.7** Workflow wiring in `oauth_session.py` (verify → register → succeeded).
 - [x] **1.8** Unit tests — `tests/unit/auth/test_volume_verifiers.py`, `tests/unit/auth/test_oauth_session_activities.py`, etc.
-- [ ] **1.9** Integration test: full OAuth session lifecycle (pending → … → succeeded).
+- [ ] **1.9** Integration test: full OAuth session lifecycle over Temporal (pending → … → succeeded), including real or containerized tmate if CI allows; minimum bar is workflow + activities + DB assertions without mocking the whole runner.
 
 ---
 
 ## Phase 2 — TmateSessionManager Consolidation
 
-**Goal:** Replace inline tmate logic in both consumers with the shared `TmateSessionManager`.
+**Goal:** One coherent tmate strategy across **runtime wrapping**, **OAuth containers**, and **codex worker live-session bootstrap** (today only the launcher fully delegates to `TmateSessionManager`).
 
-**Phase status:** **In progress** — **2.2** remains.
+**Phase status:** **In progress** — **2.2** (OAuth) and **2.7** (codex worker) remain.
 
 - [x] **2.1** Refactor `ManagedRuntimeLauncher.launch()` to use `TmateSessionManager`.
-- [ ] **2.2** Refactor `oauth_session_activities.start_auth_runner()` to use `TmateSessionManager` inside the auth container entrypoint (or docker exec via manager); still Docker-exec polling today.
+- [ ] **2.2** Refactor `oauth_session_activities.start_auth_runner()` so tmate readiness and endpoint extraction reuse the same **commands, config, and timeouts** as `TmateSessionManager` (likely a small shared helper module callable from bash or from `docker exec`, plus optional self-hosted relay env parity — not only `_ENDPOINT_KEYS`).
 - [x] **2.3** `TmateSessionManager.teardown()` in supervisor `finally` for managed runs; OAuth path uses `stop_auth_runner` (docker stop/rm).
 - [x] **2.4** Orphaned socket GC on worker startup (`gc_orphaned_sockets` in supervisor reconcile).
 - [x] **2.5** Regression tests — `tests/unit/workflows/temporal/runtime/test_tmate_session.py`, `tests/unit/services/temporal/runtime/test_launcher.py`.
 - [x] **2.6** `oauth_session_cleanup.cleanup_stale` calls `docker stop` + `docker rm` when `container_name` is set.
+- [ ] **2.7** Refactor `codex_worker` `_ensure_live_session_started` to call `TmateSessionManager` (or extracted shared primitives) so relay config, readiness wait, and endpoint extraction cannot diverge from `agent_runtime.launch`.
 
 ---
 
@@ -88,7 +93,7 @@
 - [x] **3.2** SQLAlchemy model — `TaskRunLiveSession` at `api_service/db/models.py` (lines 1939-1986). Includes encrypted RW fields (`attach_rw_encrypted`, `web_rw_encrypted` via `StringEncryptedType`), `rw_granted_until`, heartbeat/status/worker tracking.
 - [x] **3.3** Worker reports live-session via HTTP — `report_live_session` / `heartbeat_live_session` in `codex_worker/worker.py` → `POST /api/task-runs/{id}/live-session/report` and `/heartbeat`. **No Temporal activity wrapper** — direct HTTP reporting.
 - [x] **3.4** End-of-session behaviour — worker sends `status: ended` via `report_live_session`; `ended_at` auto-set by router.
-- [x] **3.5** Wire report/end into managed agent run — worker calls active (`report_live_session` at lines 7627-7833 of `worker.py`).
+- [x] **3.5** Wire report/end into managed agent run — codex worker (`_ensure_live_session_started` and teardown paths in `worker.py`, ~7606+).
 - [x] **3.6** Operator live-session GET API — `GET /api/task-runs/{id}/live-session` with user auth; `GET /api/task-runs/{id}/live-session/worker` with worker auth. Both in `task_runs.py` router.
 - [x] **3.7** Unit tests — `tests/unit/api/routers/test_task_runs.py` (7 tests: GET 200/404, worker endpoint with encrypted fields, report create, provider validation, heartbeat 200, heartbeat worker-id mismatch 403).
 
@@ -98,7 +103,7 @@
 
 **Goal:** Add UI surfaces for live output viewing and OAuth session management.
 
-**Phase status:** **Complete** for MVP surfaces; polish and parity with the full §3 spec may remain.
+**Phase status:** **Complete** for MVP surfaces; polish and parity with the full section 3 spec in `TmateArchitecture.md` may remain.
 
 - [x] **4.1** Live Output panel — `web_ro` iframe, polls live-session payload from task detail flow.
 - [x] **4.2** OAuth Session modal — `/api/v1/oauth-sessions` create + poll + cancel.
@@ -125,9 +130,9 @@
 
 ## Diagnostics — Tmate Production Startup Failures
 
-**Problem:** tmate is installed (2.4.0) and `is_available()` returns `True`, but `start()` fails in the `temporal-worker-agent-runtime` container, causing silent fallback to plain subprocess. Live Output never appears in Mission Control.
+**Problem:** tmate is installed (2.4.0) and `is_available()` returns `True`, but `start()` fails in the `temporal-worker-agent-runtime` container, causing silent fallback to plain subprocess (no RO URLs from `agent_runtime.launch`). **Note:** Live-session URLs can also be produced by the **codex worker** (`_ensure_live_session_started`), which uses a separate tmate stack — diagnose the container that actually runs the task path you care about.
 
-**Failure chain:** `launcher.py:409` → `TmateSessionManager.start()` → `tmate -S <sock> -f <conf> -F new-session` → `tmate wait tmate-ready` (30s timeout) → exception → catch at line 430 → teardown → `use_tmate = False` → plain subprocess.
+**Failure chain (agent runtime worker):** `launcher.py` → `TmateSessionManager.start()` → `tmate -S <sock> -f <conf> ...` → `tmate wait tmate-ready` (timeout from manager) → exception → teardown → headless fallback. **Codex worker path:** failures occur inside `_ensure_live_session_started` with `report_live_session(status="error", ...)` and no shared stack trace with the launcher.
 
 ### Step 1 — Check worker logs for the exception
 
