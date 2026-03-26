@@ -221,6 +221,31 @@ async def test_launch_injects_secret_passthrough_env_keys(tmp_path, monkeypatch)
     assert captured_env["GITHUB_TOKEN"] == "ghp-legacy"
 
 
+def test_persist_gh_config_writes_hosts_yml(tmp_path):
+    env = {"GITHUB_TOKEN": "ghp_testtoken123", "PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+    hosts = tmp_path / ".moonmind" / "gh" / "hosts.yml"
+    assert hosts.exists()
+    content = hosts.read_text()
+    assert "ghp_testtoken123" in content
+    assert "github.com" in content
+    assert env["GH_CONFIG_DIR"] == str(tmp_path / ".moonmind" / "gh")
+    assert (hosts.stat().st_mode & 0o777) == 0o600
+
+
+def test_persist_gh_config_skips_without_token(tmp_path):
+    env = {"PATH": "/usr/bin"}
+    ManagedRuntimeLauncher._persist_gh_config(env, str(tmp_path))
+    assert not (tmp_path / ".moonmind" / "gh").exists()
+    assert "GH_CONFIG_DIR" not in env
+
+
+def test_persist_gh_config_skips_without_workspace():
+    env = {"GITHUB_TOKEN": "ghp_test"}
+    ManagedRuntimeLauncher._persist_gh_config(env, None)
+    assert "GH_CONFIG_DIR" not in env
+
+
 @pytest.mark.asyncio
 async def test_idempotent_launch_rejects_active(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda _cmd: None)

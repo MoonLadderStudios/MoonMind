@@ -299,6 +299,35 @@ class ManagedRuntimeLauncher:
 
         return str(repo_path)
 
+    @staticmethod
+    def _persist_gh_config(
+        env: dict[str, str],
+        workspace_path: str | None,
+    ) -> None:
+        """Write ``gh`` file-based auth so ``gh`` works even when AI CLIs
+        strip secret env vars from tool-call subprocesses.
+
+        Sets ``GH_CONFIG_DIR`` in *env* to a per-workspace directory
+        containing ``hosts.yml`` with the GitHub token.
+        """
+        token = env.get("GITHUB_TOKEN") or env.get("GH_TOKEN")
+        if not token or not workspace_path:
+            return
+        try:
+            gh_dir = Path(workspace_path) / ".moonmind" / "gh"
+            gh_dir.mkdir(parents=True, exist_ok=True)
+            hosts_path = gh_dir / "hosts.yml"
+            hosts_path.write_text(
+                f"github.com:\n"
+                f"  oauth_token: {token}\n"
+                f"  git_protocol: https\n",
+                encoding="utf-8",
+            )
+            hosts_path.chmod(0o600)
+            env["GH_CONFIG_DIR"] = str(gh_dir)
+        except OSError:
+            logger.debug("Failed to persist gh config", exc_info=True)
+
     def build_command(
         self,
         profile: ManagedRuntimeProfile,
@@ -402,6 +431,12 @@ class ManagedRuntimeLauncher:
             if value is None or not str(value).strip():
                 continue
             env_overrides[key] = value
+
+        # Some AI CLIs (e.g. Gemini CLI) strip secret-like env vars from
+        # their tool-call subprocess environment.  Persist gh auth to disk
+        # so that `gh` can authenticate even when GITHUB_TOKEN is stripped.
+        self._persist_gh_config(env_overrides, resolved_workspace_path)
+
         use_tmate = TmateSessionManager.is_available()
         endpoints: dict[str, str] | None = None
         tmate_manager: TmateSessionManager | None = None
