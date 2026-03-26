@@ -388,8 +388,13 @@ class TestStart:
         assert endpoints.web_ro is None
 
     @pytest.mark.asyncio
-    async def test_wait_ready_raises_on_nonzero_exit(self):
+    async def test_wait_ready_raises_on_nonzero_exit(self, tmp_path: Path):
         """_wait_ready raises RuntimeError when tmate exits non-zero."""
+        # _wait_ready polls for the socket file before calling tmate wait,
+        # so we must create the file for the polling phase to pass.
+        sock = tmp_path / "test.sock"
+        sock.touch()
+
         fake_proc = MagicMock()
         fake_proc.wait = AsyncMock(return_value=1)
 
@@ -400,7 +405,7 @@ class TestStart:
         ):
             with pytest.raises(RuntimeError, match="exited with code 1"):
                 await TmateSessionManager._wait_ready(
-                    Path("/tmp/test.sock"), timeout=5.0
+                    sock, timeout=5.0
                 )
 
 

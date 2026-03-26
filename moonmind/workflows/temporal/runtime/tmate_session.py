@@ -364,8 +364,20 @@ class TmateSessionManager:
 
     @staticmethod
     async def _wait_ready(socket_path: Path, timeout: float) -> None:
-        """Block until ``tmate wait tmate-ready`` succeeds or timeout."""
+        """Block until ``tmate wait tmate-ready`` succeeds or timeout.
+
+        The tmate process creates its socket file asynchronously after
+        launch.  We must wait for the socket to appear on disk before
+        invoking ``tmate wait tmate-ready``, otherwise the wait command
+        fails immediately with exit-code 1 ("You must specify a socket
+        name with -S").
+        """
         async def _inner() -> None:
+            # Phase 1: poll until the socket file exists.
+            while not socket_path.exists():
+                await asyncio.sleep(0.1)
+
+            # Phase 2: ask tmate to signal readiness.
             proc = await asyncio.create_subprocess_exec(
                 "tmate", "-S", str(socket_path), "wait", "tmate-ready",
             )
