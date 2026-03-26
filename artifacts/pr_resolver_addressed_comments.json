@@ -1,92 +1,112 @@
 [
   {
-    "id": 4136995885,
+    "id": 4137065088,
     "disposition": "not-applicable",
-    "rationale": "Informational or generic bot comment, no action needed."
+    "rationale": "Informational bot introductory message."
   },
   {
-    "id": 4136996986,
+    "id": 4137065801,
     "disposition": "not-applicable",
-    "rationale": "Informational or generic bot comment, no action needed."
+    "rationale": "Informational codex limit warning."
   },
   {
-    "id": 2996705712,
-    "disposition": "addressed",
-    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
-  },
-  {
-    "id": 4016220976,
+    "id": 4016285160,
     "disposition": "not-applicable",
-    "rationale": "Informational or generic bot comment, no action needed."
+    "rationale": "Code review summary, not an actionable comment."
   },
   {
-    "id": 2996705722,
+    "id": 2996754948,
     "disposition": "addressed",
-    "rationale": "Updated AGENTS.md to clarify that most workflows run in the default namespace."
+    "rationale": "Implemented the missing verify_lease_holders test."
   },
   {
-    "id": 2996718565,
+    "id": 2996754952,
     "disposition": "addressed",
-    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+    "rationale": "Implemented the missing agent run cancellation test."
   },
   {
-    "id": 2996718621,
+    "id": 2996760868,
     "disposition": "addressed",
-    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+    "rationale": "Cleaned up unused import in agent run cancellation test."
   },
   {
-    "id": 2996718657,
+    "id": 2996760875,
     "disposition": "addressed",
-    "rationale": "Updated AGENTS.md to clarify that most workflows run in the default namespace."
+    "rationale": "Cleaned up unused import in agent run cancellation test."
   },
   {
-    "id": 2996718690,
+    "id": 2996760877,
     "disposition": "addressed",
-    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+    "rationale": "Reduced _MAX_LEASE_DURATION_SECONDS to 5400 and added the required tests."
   },
   {
-    "id": 2996718723,
+    "id": 2996760885,
     "disposition": "addressed",
-    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+    "rationale": "Cleaned up unused import in agent run cancellation test."
   },
   {
-    "id": 2996718743,
+    "id": 2996760888,
     "disposition": "addressed",
-    "rationale": "Restored default namespace update in bootstrap script, which resolves this and several related documentation/compose inconsistencies."
+    "rationale": "Cleaned up unused import in agent run cancellation test."
   },
   {
-    "id": 4016236944,
+    "id": 2996760896,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760899,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760907,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760916,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant test_auth_manager.py file."
+  },
+  {
+    "id": 2996760923,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant test_auth_manager.py file."
+  },
+  {
+    "id": 2996760929,
+    "disposition": "addressed",
+    "rationale": "Added verify_lease_holders test implementation to the appropriate module."
+  },
+  {
+    "id": 2996760953,
+    "disposition": "addressed",
+    "rationale": "Moved the verify_lease_holders test to test_auth_profile_manager.py."
+  },
+  {
+    "id": 2996760967,
+    "disposition": "addressed",
+    "rationale": "Removed unused imports from the test file."
+  },
+  {
+    "id": 2996760978,
+    "disposition": "addressed",
+    "rationale": "Replaced the placeholder with a simulated async cancellation test."
+  },
+  {
+    "id": 4016292494,
     "disposition": "not-applicable",
-    "rationale": "Informational or generic bot comment, no action needed."
+    "rationale": "Automated PR review summary."
   },
   {
-    "id": 4132163844,
-    "disposition": "not-applicable",
-    "rationale": "Informational greeting from bot."
-  },
-  {
-    "id": 4132164345,
-    "disposition": "not-applicable",
-    "rationale": "Informational usage limit message."
-  },
-  {
-    "id": 4132164612,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary."
-  },
-  {
-    "id": 4011856370,
-    "disposition": "not-applicable",
-    "rationale": "High-level review body for the specific code line comment."
-  },
-  {
-    "id": 2992867208,
+    "id": 2997415072,
     "disposition": "addressed",
-    "rationale": "Updated StringEncryptedType initialization to use keyword argument for key instead of positional String argument."
+    "rationale": "Replaced pytest.raises context manager with try-except to avoid the statement has no effect warning."
   },
   {
-    "id": 4011859162,
-    "disposition": "not-applicable",
-    "rationale": "Informational summary."
+    "id": 2997440092,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to the empty except block."
   }
 ]
