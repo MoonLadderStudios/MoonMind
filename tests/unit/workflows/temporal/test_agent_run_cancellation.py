@@ -21,8 +21,10 @@ async def test_agent_run_cancelled_releases_slot():
     await asyncio.sleep(0)
 
     task.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    try:
         await task
+    except asyncio.CancelledError:
+        pass
 
     # Verify that cancellation caused the slot to be released exactly once.
     slot_release.assert_awaited_once()

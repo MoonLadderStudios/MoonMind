@@ -1,52 +1,107 @@
 [
   {
-    "id": 2992154596,
-    "disposition": "addressed",
-    "rationale": "Removed the duplicate ws.get('targetBranch') check."
-  },
-  {
-    "id": 2992154599,
-    "disposition": "addressed",
-    "rationale": "Added boolean assertion to verify repo.create_pr isn't called."
-  },
-  {
-    "id": 2992157719,
-    "disposition": "addressed",
-    "rationale": "Removed 'in locals()' check for jules_session_id in run.py."
-  },
-  {
-    "id": 2992157734,
-    "disposition": "addressed",
-    "rationale": "Updated workspaceSpec extraction to use _mapping_value."
-  },
-  {
-    "id": 2992157741,
-    "disposition": "addressed",
-    "rationale": "Removed duplicate targetBranch fallback (same issue as 2992154596)."
-  },
-  {
-    "id": 2992157749,
-    "disposition": "addressed",
-    "rationale": "Removed trailing whitespace on blank line."
-  },
-  {
-    "id": 4131196783,
+    "id": 4137065088,
     "disposition": "not-applicable",
-    "rationale": "Informational summary from bot regarding usage limits."
+    "rationale": "Informational bot introductory message."
   },
   {
-    "id": 4131197562,
+    "id": 4137065801,
     "disposition": "not-applicable",
-    "rationale": "Context summary from Gemini."
+    "rationale": "Informational codex limit warning."
   },
   {
-    "id": 4011094078,
+    "id": 4016285160,
     "disposition": "not-applicable",
-    "rationale": "Code review summary from Gemini."
+    "rationale": "Code review summary, not an actionable comment."
   },
   {
-    "id": 4011097779,
+    "id": 2996754948,
+    "disposition": "addressed",
+    "rationale": "Implemented the missing verify_lease_holders test."
+  },
+  {
+    "id": 2996754952,
+    "disposition": "addressed",
+    "rationale": "Implemented the missing agent run cancellation test."
+  },
+  {
+    "id": 2996760868,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760875,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760877,
+    "disposition": "addressed",
+    "rationale": "Reduced _MAX_LEASE_DURATION_SECONDS to 5400 and added the required tests."
+  },
+  {
+    "id": 2996760885,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760888,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760896,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760899,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760907,
+    "disposition": "addressed",
+    "rationale": "Cleaned up unused import in agent run cancellation test."
+  },
+  {
+    "id": 2996760916,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant test_auth_manager.py file."
+  },
+  {
+    "id": 2996760923,
+    "disposition": "addressed",
+    "rationale": "Removed the redundant test_auth_manager.py file."
+  },
+  {
+    "id": 2996760929,
+    "disposition": "addressed",
+    "rationale": "Added verify_lease_holders test implementation to the appropriate module."
+  },
+  {
+    "id": 2996760953,
+    "disposition": "addressed",
+    "rationale": "Moved the verify_lease_holders test to test_auth_profile_manager.py."
+  },
+  {
+    "id": 2996760967,
+    "disposition": "addressed",
+    "rationale": "Removed unused imports from the test file."
+  },
+  {
+    "id": 2996760978,
+    "disposition": "addressed",
+    "rationale": "Replaced the placeholder with a simulated async cancellation test."
+  },
+  {
+    "id": 4016292494,
     "disposition": "not-applicable",
-    "rationale": "Copilot PR summary."
+    "rationale": "Automated PR review summary."
+  },
+  {
+    "id": 2997415072,
+    "disposition": "addressed",
+    "rationale": "Replaced pytest.raises context manager with try-except to avoid the statement has no effect warning."
   }
 ]
