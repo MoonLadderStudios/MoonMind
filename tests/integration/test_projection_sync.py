@@ -39,14 +39,20 @@ async def test_sync_execution_projection_upsert_no_duplicates(db_session: AsyncS
     desc.workflow_type = "MoonMind.Run"
     desc.status = WorkflowExecutionStatus.RUNNING
     desc.start_time = start_time
+    desc.execution_time = None
     desc.close_time = None
 
-    desc.memo = {
+    class _CallableDict(dict):
+        """Dict subclass that also works as an async callable (returns self)."""
+        async def __call__(self):
+            return dict(self)
+
+    desc.memo = _CallableDict({
         "entry": "run",
         "owner_id": "owner-1",
         "owner_type": "user",
         "step_count": 1,
-    }
+    })
     desc.search_attributes = {}
 
     # First insert
