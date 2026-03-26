@@ -167,7 +167,7 @@ All Temporal-related containers are defined in `docker-compose.yaml`. The table 
 | Container | Image | Always on? | Purpose |
 | --- | --- | --- | --- |
 | `temporal` | `temporalio/auto-setup` | Yes | Temporal server (history, matching, frontend, internal-frontend) |
-| `temporal-namespace-init` | `temporalio/admin-tools` | Yes (run-once) | Creates/updates the `moonmind` namespace and registers custom search attributes |
+| `temporal-namespace-init` | `temporalio/admin-tools` | Yes (run-once) | Creates/updates the configured (default: `default`) namespace and registers custom search attributes |
 | `temporal-visibility-rehearsal` | `temporalio/admin-tools` | No (`temporal-tools` profile) | Dry-runs a visibility-schema upgrade against Postgres |
 | `temporal-admin-tools` | `temporalio/admin-tools` | No (`temporal-tools` profile) | Long-running shell for ad-hoc `temporal` / `tctl` commands |
 | `temporal-ui` | `temporalio/ui` | No (`temporal-ui` profile) | Web dashboard for browsing workflows, activities, and schedules |
@@ -221,7 +221,7 @@ MinIO provides the S3-compatible object store used by Temporal workflow artifact
 Runs `services/temporal/bootstrap-namespace.sh` on startup. This script:
 
 1. Waits for the Temporal server to become healthy (up to 90 retries).
-2. Creates the `moonmind` namespace if it does not exist, or updates retention if it does.
+2. Creates the configured namespace (default `default`) if it does not exist, or updates retention if it does.
 3. Derives retention days from `TEMPORAL_RETENTION_MAX_STORAGE_GB` and `TEMPORAL_RETENTION_ESTIMATED_GB_PER_DAY` unless an explicit `TEMPORAL_NAMESPACE_RETENTION_DAYS` is set.
 4. Registers MoonMind custom search attributes (`mm_entry`, `mm_owner_id`, `mm_owner_type`, `mm_state`, `mm_updated_at`, `mm_repo`, `mm_integration`, `mm_continue_as_new_cause`).
 

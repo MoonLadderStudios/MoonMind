@@ -308,7 +308,7 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
     def build_storage_key(
         self, *, namespace: str, artifact_id: str, now: datetime
     ) -> str:
-        safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "moonmind"
+        safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "default"
         if ".." in safe_namespace.split("/"):
             raise TemporalArtifactValidationError(
                 "namespace must not contain traversal"
@@ -434,7 +434,7 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
     def build_storage_key(
         self, *, namespace: str, artifact_id: str, now: datetime
     ) -> str:
-        safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "moonmind"
+        safe_namespace = namespace.strip().replace("\\", "/").strip("/") or "default"
         if ".." in safe_namespace.split("/"):
             raise TemporalArtifactValidationError(
                 "namespace must not contain traversal"
@@ -855,7 +855,7 @@ class TemporalArtifactService:
         self._default_namespace = (
             default_namespace
             or settings.workflow.temporal_artifact_default_namespace
-            or "moonmind"
+            or "default"
         )
         self._presign_ttl_seconds = max(
             1,

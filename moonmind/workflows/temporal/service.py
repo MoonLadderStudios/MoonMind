@@ -161,7 +161,7 @@ class TemporalExecutionService:
         session: AsyncSession,
         *,
         client_adapter: TemporalClientAdapter | None = None,
-        namespace: str = "moonmind",
+        namespace: str = "default",
         integration_task_queue: str = "mm.activity.integrations",
         integration_poll_initial_seconds: int = 5,
         integration_poll_max_seconds: int = 300,
