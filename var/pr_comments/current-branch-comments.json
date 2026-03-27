@@ -8,7 +8,7 @@
     "base_ref": "main"
   },
   "repository": "MoonLadderStudios/MoonMind",
-  "comment_count": 28,
+  "comment_count": 29,
   "comments": [
     {
       "type": "issue_comment",
@@ -102,7 +102,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495814",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 16,
       "side": "RIGHT",
@@ -118,7 +118,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495815",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 17,
       "side": "RIGHT",
@@ -166,7 +166,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495830",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 13,
       "side": "RIGHT",
@@ -182,7 +182,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495838",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 14,
       "side": "RIGHT",
@@ -320,7 +320,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578342",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 8,
       "side": "RIGHT",
@@ -336,7 +336,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578346",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 8,
       "side": "RIGHT",
@@ -352,7 +352,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578354",
       "path": "api_service/api/routers/auth_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 21,
       "side": "RIGHT",
@@ -368,11 +368,11 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578361",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 13,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -384,11 +384,11 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578367",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 14,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -400,11 +400,11 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578369",
       "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 11,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -416,11 +416,11 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578374",
       "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
-      "commit_id": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
       "line": 12,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -436,8 +436,24 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
+    },
+    {
+      "type": "review_comment",
+      "id": 2999603060,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'Sequence' is not used.\n\n---\n\nTo fix an unused import, remove the specific name that is not used while preserving any that are. In this file, only <code>Union</code> is actually referenced, so we should stop importing <code>Sequence</code> and keep the <code>Union</code> import unchanged.</p>\n<p>Concretely, in <code>api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py</code>, update the import on line 8 from <code>from typing import Sequence, Union</code> to <code>from typing import Union</code>. No other lines need modification, because there is no reference to <code>Sequence</code> anywhere else in the snippet. This preserves the existing type annotation for <code>down_revision</code> and removes the unused import that CodeQL flagged.",
+      "created_at": "2026-03-27T08:17:16Z",
+      "updated_at": "2026-03-27T08:17:17Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999603060",
+      "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "in_reply_to_id": null,
+      "line": 8,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
     }
   ]
 }
