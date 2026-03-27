@@ -54,6 +54,14 @@ jobs:
       run: |
         npm run dashboard:css:min
         git diff --exit-code -- api_service/static/task_dashboard/dashboard.css
+
+    - name: Run frontend tests and build
+      run: |
+        npm run ui:typecheck
+        npm run ui:lint
+        npm run ui:test
+        npm run ui:build
+        npm run api:types:check
     - name: Run pytest unit tests
       env:
         GITHUB_TOKEN: ${{ github.token }}
