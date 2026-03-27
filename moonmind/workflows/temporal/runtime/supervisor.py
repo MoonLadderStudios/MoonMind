@@ -208,6 +208,11 @@ class ManagedRunSupervisor:
         Returns ``(exit_code, timed_out)`` so callers can unpack both
         the process exit code and the timeout flag from a single awaitable,
         making it composable with ``asyncio.gather()``.
+
+        On timeout, the process is terminated immediately so that any
+        concurrent streaming task observes EOF and exits promptly.
+        Without this, ``asyncio.gather()`` would block indefinitely on
+        the stream task waiting for EOF that never arrives.
         """
         try:
             exit_code = await asyncio.wait_for(
@@ -216,6 +221,9 @@ class ManagedRunSupervisor:
             )
             return exit_code, False
         except asyncio.TimeoutError:
+            # Terminate the process so the concurrent streaming task sees EOF
+            # and can complete, allowing asyncio.gather() to unblock.
+            await self._terminate_process(process)
             return None, True
 
     async def cancel(self, run_id: str) -> None:

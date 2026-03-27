@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -117,8 +117,12 @@ async def test_heartbeat_and_wait_with_timeout_timed_out(tmp_path: Path):
         assert exit_code is None
         assert timed_out is True
     finally:
-        process.kill()
-        await process.wait()
+        # Process may already be terminated by _heartbeat_and_wait_with_timeout.
+        try:
+            process.kill()
+            await process.wait()
+        except ProcessLookupError:
+            pass
 
 
 # ---------------------------------------------------------------------------
