@@ -50,15 +50,16 @@ def upgrade() -> None:
             modified = True
 
         if modified:
-            # We construct a parameterized string if the driver requires json.dumps,
-            # but SQLAlchemy handles dict -> JSON for postgres and sqlite.
+            # sa.text() with named bindparams cannot adapt raw Python dicts to JSONB;
+            # always serialize to JSON string. Use CAST(... AS jsonb) instead of ::jsonb
+            # because :: conflicts with SQLAlchemy's :param notation.
             conn.execute(
                 sa.text(
-                    "UPDATE managed_agent_provider_profiles SET env_template = :env_template, secret_refs = :secret_refs WHERE profile_id = 'claude_minimax'"
-                ).bindparams(
-                    sa.bindparam("env_template", value=json.dumps(env_template) if isinstance(row[0], str) else env_template),
-                    sa.bindparam("secret_refs", value=json.dumps(secret_refs) if isinstance(row[1], str) else secret_refs)
-                )
+                    "UPDATE managed_agent_provider_profiles"
+                    " SET env_template = CAST(:env_template AS jsonb), secret_refs = CAST(:secret_refs AS jsonb)"
+                    " WHERE profile_id = 'claude_minimax'"
+                ),
+                {"env_template": json.dumps(env_template), "secret_refs": json.dumps(secret_refs)},
             )
 
 def downgrade() -> None:
@@ -88,9 +89,9 @@ def downgrade() -> None:
         if modified:
             conn.execute(
                 sa.text(
-                    "UPDATE managed_agent_provider_profiles SET env_template = :env_template, secret_refs = :secret_refs WHERE profile_id = 'claude_minimax'"
-                ).bindparams(
-                    sa.bindparam("env_template", value=json.dumps(env_template) if isinstance(row[0], str) else env_template),
-                    sa.bindparam("secret_refs", value=json.dumps(secret_refs) if isinstance(row[1], str) else secret_refs)
-                )
+                    "UPDATE managed_agent_provider_profiles"
+                    " SET env_template = CAST(:env_template AS jsonb), secret_refs = CAST(:secret_refs AS jsonb)"
+                    " WHERE profile_id = 'claude_minimax'"
+                ),
+                {"env_template": json.dumps(env_template), "secret_refs": json.dumps(secret_refs)},
             )
