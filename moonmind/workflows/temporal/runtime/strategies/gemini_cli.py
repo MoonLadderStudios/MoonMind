@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from moonmind.workflows.temporal.runtime.strategies.base import (
@@ -64,23 +63,9 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
         worker process environment when present, adding them to base_env.
         """
         import os
-        
+
         env = dict(base_env)
         for k in _GEMINI_ENV_PASSTHROUGH_KEYS:
             if k not in env and k in os.environ:
                 env[k] = os.environ[k]
         return env
-
-    async def prepare_workspace(
-        self,
-        workspace_path: Path,
-        request: Any,
-    ) -> None:
-        """Write .gemini/instruction.md in the workspace."""
-        if not getattr(request, "instruction_ref", None):
-            return
-
-        gemini_dir = workspace_path / ".gemini"
-        gemini_dir.mkdir(parents=True, exist_ok=True)
-        instruction_path = gemini_dir / "instruction.md"
-        instruction_path.write_text(request.instruction_ref, encoding="utf-8")
