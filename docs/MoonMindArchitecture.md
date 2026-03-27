@@ -59,7 +59,7 @@ The FastAPI-based [API service](../api_service/) is MoonMind's central control p
 
 Mission Control is MoonMind's purpose-built operator dashboard — a thin, server-hosted web app served directly by the API service.
 
-* **Task list** — unified view of workflow executions across sources, with filtering, sorting, and pagination via Temporal Visibility.
+* **Task list** — unified view of workflow executions, with filtering, sorting, and pagination via Temporal Visibility.
 * **Task detail** — execution state, artifact browsing, timeline, and operator actions (pause, resume, cancel, approve, rerun).
 * **Task submission** — form wizard for creating new tasks with runtime/model selection, scheduling, and artifact upload.
 * **Proposals** — triage queue for reviewing, promoting, or dismissing agent-generated task proposals.

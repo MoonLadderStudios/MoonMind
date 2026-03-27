@@ -8,6 +8,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
     MoonMindRun,
+    _enforce_codex_config_for_managed_fleet,
     _build_runtime_planner,
     _build_runtime_activities,
     get_activity_route,
@@ -17,7 +18,7 @@ from moonmind.workflows.temporal.worker_runtime import (
 from moonmind.workflows.temporal.workflows.agent_run import (
     external_adapter_execution_style,
 )
-from moonmind.workflows.temporal.workers import WORKFLOW_FLEET
+from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
 
 
 def test_runtime_planner_preserves_execution_profile_ref():
@@ -352,6 +353,20 @@ def test_runtime_planner_publish_pr_skips_gh_suffix_for_jules():
     text = plan["nodes"][-1]["inputs"]["instructions"]
     assert text == "Do work"
     assert "gh pr create" not in text
+
+
+def test_enforce_codex_config_skips_non_managed_fleet() -> None:
+    with patch("api_service.scripts.ensure_codex_config.ensure_codex_config") as mock_ensure:
+        _enforce_codex_config_for_managed_fleet(WORKFLOW_FLEET)
+    mock_ensure.assert_not_called()
+
+
+@pytest.mark.parametrize("fleet", [SANDBOX_FLEET, AGENT_RUNTIME_FLEET])
+def test_enforce_codex_config_runs_for_managed_fleets(fleet: str) -> None:
+    with patch("api_service.scripts.ensure_codex_config.ensure_codex_config") as mock_ensure:
+        mock_ensure.return_value = SimpleNamespace(path="/tmp/codex-config.toml")
+        _enforce_codex_config_for_managed_fleet(fleet)
+    mock_ensure.assert_called_once_with()
 
 
 @pytest.mark.asyncio

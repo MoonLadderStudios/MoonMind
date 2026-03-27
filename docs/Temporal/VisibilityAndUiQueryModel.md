@@ -84,7 +84,7 @@ Current implemented behavior:
 - current ordering: `updated_at DESC`, then `workflow_id DESC`
 - current token implementation: opaque base64-encoded JSON carrying an offset
 
-The current dashboard runtime config and route shell still only model explicit sources such as `queue`, `system`, `proposals`, `manifests`, and `schedules`; there is not yet a first-class `temporal` dashboard source.
+The dashboard runtime config and route shell model `temporal` as the primary execution source (alongside explicit distinct flows like `proposals`, `manifests`, and `schedules`).
 
 ### 4.2 Target contract
 
@@ -518,20 +518,9 @@ Target rule:
 - pure Temporal-backed list endpoints should return exact count when it is available and operationally acceptable,
 - otherwise they may return `estimated_or_unknown` or omit `count`.
 
-### 11.5 Unified multi-source pages
+### 11.5 Freshness and degraded-read behavior
 
-A unified `/tasks/list` page must **not** pretend that queue rows, system rows, and Temporal-backed rows share a single native cursor/count model.
-
-During migration, a unified page should do one of the following:
-
-1. keep **separate source cursors/tokens** internally, or
-2. use a backend aggregator that owns the merged pagination contract.
-
-It must not reuse Temporal page tokens as if they were universal task-list tokens.
-
-### 11.6 Freshness and degraded-read behavior
-
-During migration, MoonMind should assume list surfaces can be temporarily less fresh than the detail/action response that just mutated one execution.
+In an eventually consistent system, MoonMind should assume list surfaces can be temporarily less fresh than the detail/action response that just mutated one execution.
 
 Rules:
 
@@ -590,41 +579,16 @@ List views should not require artifact hydration to render basic rows.
 
 ## 13. UI integration requirements
 
-### 13.1 Current dashboard constraint
+The dashboard runtime config and route shell expose a first-class `temporal` source, which is the primary execution source. Tasks from this source are resolved under the unified `/tasks/{taskId}` path, not a source-specific `/tasks/temporal` route.
 
-The current dashboard runtime config and route shell do not yet expose a first-class `temporal` source.
-
-Therefore, Temporal-backed work must initially be shown in one of two ways:
-
-1. through existing `/tasks/*` compatibility adapters, or
-2. by explicitly extending the dashboard to understand a `temporal` source.
-
-### 13.2 Minimum requirements for a first-class `temporal` dashboard source
-
-If MoonMind adds a first-class `temporal` source to the dashboard, the minimum required changes are:
-
-- add `temporal` endpoints to the dashboard runtime config,
-- extend route/path allowlists to support Temporal-backed detail pages,
-- add Temporal status normalization,
-- add Temporal list/detail fetchers,
-- add Temporal action handlers for:
-  - update,
-  - signal,
-  - cancel,
-  - optional rerun,
-- display `workflowId` as the durable handle,
-- label `runId` as run/debug metadata.
-
-### 13.3 Minimum requirements for compatibility-only integration
-
-If the dashboard continues to stay task-oriented for now, compatibility adapters must still preserve:
-
-- `taskId == workflowId` for Temporal-backed rows,
-- `workflowId` as a first-class field rather than only in debug metadata,
-- exact Temporal-backed `state` and `temporalStatus`,
-- the canonical `updatedAt` ordering semantics,
-- `waitingReason` / `attentionRequired` when `state = awaiting_external`,
-- the `dashboardStatus` mapping defined above.
+The dashboard uses:
+- `temporal` endpoints in the runtime config,
+- Route/path allowlists to support Temporal-backed detail pages,
+- Temporal status normalization,
+- Temporal list/detail fetchers,
+- Temporal action handlers for core Temporal primitives (update, signal, cancel, and rerun); higher-level dashboard actions (for example, reschedule and task controls like pause, resume, and approve) are composed from these primitives and related Temporal endpoints,
+- `workflowId` as the durable handle,
+- `runId` as run/debug metadata.
 
 ---
 
@@ -682,7 +646,7 @@ This document is operationally done when:
 7. The identifier bridge for task-oriented surfaces is fixed (`taskId == workflowId` for Temporal-backed rows).
 8. Owner semantics are fixed (`mm_owner_type` + `mm_owner_id`, no `unknown` in the target contract).
 9. Waiting-state metadata is fixed (`waitingReason` + `attentionRequired`).
-10. The UI path for Temporal-backed rows is chosen: compatibility-only for now, or first-class `temporal` source.
+10. The UI path for Temporal-backed rows is implemented as a first-class `temporal` source.
 
 ---
 

@@ -233,12 +233,15 @@ When `targetBranch` is the same as `startingBranch` (or not specified), the base
 
 ### 6.4 Error Handling
 
-The auto-merge step is **best-effort**:
+The auto-merge step is part of the requested outcome when `publishMode == "branch"`.
 
-* If the PR URL cannot be extracted from the session result, the workflow logs a warning and continues.
-* If the base-branch update fails (e.g., target branch does not exist), the merge is **not attempted** and the PR remains open for manual resolution.
-* If the GitHub merge API returns an error (e.g., merge conflicts, branch protection rules), the merge fails gracefully and the PR remains open for manual resolution.
-* Network or timeout errors are caught and logged without failing the workflow.
+Rules:
+
+* If `publishMode == "pr"`, MoonMind should report the Jules PR URL and stop. No merge is attempted.
+* If `publishMode == "branch"`, extracting the PR URL, optionally updating the base branch, and merging the PR are part of successful completion semantics.
+* If the PR URL cannot be extracted, the base update fails, or the merge API rejects the merge, MoonMind must **not** report the run as successful branch publication.
+* In those cases, MoonMind should surface a MoonMind-owned terminal outcome such as `intervention_requested` or `failed`, with the PR left open for manual resolution when possible.
+* Network or timeout errors during the branch-publication phase should also prevent a successful `"branch"` outcome unless a later retry completes the merge.
 
 ### 6.5 Configuration
 
@@ -289,16 +292,17 @@ For Jules, the more reliable approach is to provide the **entire Jules-targeted 
 
 ### 7.2 Solution: One-Shot Consolidated Execution Brief
 
-MoonMind should treat a multi-step Jules workflow as **one Jules execution**, not one session per step and not one session with multiple workflow-driving follow-up turns.
+MoonMind should treat a multi-step Jules workflow as **one Jules execution node**, not one session per step and not one session with multiple workflow-driving follow-up turns.
 
 The orchestration rule is:
 
 1. Collect the ordered workflow steps that should be executed by Jules.
-2. Compile them into one consolidated execution brief.
-3. Start exactly one Jules session with that brief.
-4. Poll that session until terminal completion.
-5. Fetch one final result and PR URL.
-6. Do **not** drive normal step progression through `sendMessage`.
+2. Collapse them into one synthetic Jules bundle node in MoonMind's execution graph.
+3. Compile that node into one consolidated execution brief.
+4. Start exactly one Jules session with that brief.
+5. Poll that session until terminal completion.
+6. Fetch one final result and PR URL.
+7. Do **not** drive normal step progression through `sendMessage`.
 
 This yields:
 
@@ -314,6 +318,7 @@ This yields:
 ```text
 MoonMind plan
   ↓ select contiguous or bundled Jules-targeted work
+  ↓ collapse that work into one synthetic Jules bundle node
   ↓ compile one-shot execution brief
   ↓ sessions.create(prompt=consolidated_brief)
   ↓ Jules: QUEUED → PLANNING → IN_PROGRESS → COMPLETED
@@ -332,10 +337,25 @@ For Jules, MoonMind should introduce a provider-specific **workflow bundling** p
 The bundling rule is:
 
 * when multiple ordered steps are intended for Jules and are safe to execute together, MoonMind compiles them into one consolidated brief
+* that bundle is represented as one synthetic execution node for dispatch, idempotency, retry, and result reporting
 * the consolidated brief becomes the `instructions` payload for a single `AgentExecutionRequest`
-* the individual plan nodes remain part of MoonMind's logical workflow history, but Jules receives one combined execution package
+* the original logical step IDs remain attached as bundle metadata and UI/reporting context, not as independently executing peer nodes while Jules is running
 
-This preserves MoonMind's internal structure without forcing Jules to mirror that structure turn by turn.
+This preserves planning traceability without forcing Jules to mirror MoonMind's step structure turn by turn.
+
+#### 7.4.1 Execution-Node Rule
+
+For Jules, a bundled run is one `MoonMind.AgentRun` child workflow and one provider session.
+
+That means:
+
+* one execution node
+* one idempotency boundary
+* one provider run handle
+* one terminal result boundary
+* one publish outcome
+
+MoonMind may retain the original pre-bundle steps for auditability, bundle manifest generation, and operator explanation, but not as separately executing runtime nodes once the bundle is dispatched to Jules.
 
 ### 7.5 Bundling Scope
 
@@ -356,6 +376,8 @@ MoonMind should **not** bundle across clear workflow boundaries such as:
 * steps with incompatible side-effect profiles
 
 The point is not "always bundle everything." The point is: **when Jules is chosen, prefer one-shot bundles over multi-turn progression.**
+
+When a boundary blocks safe bundling, MoonMind should emit a second synthetic Jules bundle node rather than reviving turn-by-turn `sendMessage` progression inside the first node.
 
 ### 7.6 One-Shot Brief Design
 
@@ -400,6 +422,7 @@ MoonMind should compile the brief into the following structure.
    * linters or formatters to run
    * static analysis or build steps if relevant
    * what to report if validation cannot be completed
+   * for acceptance-critical workflows, MoonMind may also run independent post-run verification outside Jules rather than relying only on provider self-reporting
 
 6. **Deliverable Requirements**
 
@@ -539,7 +562,9 @@ That means the division of responsibility is:
 **Workflow / planner side**
 
 * decide which steps are bundled
+* collapse those steps into one synthetic Jules bundle node
 * compile the ordered one-shot brief
+* persist a bundle manifest describing represented logical step IDs, acceptance notes, and verification expectations
 * create one `AgentExecutionRequest`
 
 **Jules adapter side**
@@ -561,11 +586,13 @@ Recommendations:
 * persist the compiled brief as an artifact or artifact-backed payload when it is large
 * include metadata indicating which logical plan node IDs were bundled into the run
 * ensure workflow replay reconstructs the same compiled brief deterministically
+* make bundle splitting deterministic when size or policy boundaries require more than one Jules node
 
 Suggested metadata:
 
 * `moonmind.bundleId`
 * `moonmind.bundledNodeIds`
+* `moonmind.bundleManifestRef`
 * `moonmind.bundleStrategy = "one_shot_jules"`
 * `moonmind.correlationId`
 * `moonmind.idempotencyKey`
@@ -574,9 +601,21 @@ Suggested metadata:
 
 * **Session failure**: If Jules reaches `FAILED`, the bundled run fails as one unit.
 * **Transport failure**: Create/start retries use the same policy as normal create-task requests.
-* **Checklist under-completion**: If Jules succeeds but leaves checklist items incomplete, MoonMind should surface that in the result summary rather than pretending all logical steps succeeded. Structured checklist reporting may improve explainability when present, but the canonical success signal remains provider run status plus fetched result, not exact output formatting.
-* **Oversized brief**: If the bundled brief exceeds practical provider limits, MoonMind should fail early or split into multiple bundles using an explicit bundling policy rather than silently truncating.
+* **Checklist under-completion**: If Jules succeeds but leaves checklist items incomplete, MoonMind should surface that in the result summary and completion metadata rather than pretending all bundled logical work succeeded.
+* **Verification mismatch**: If independent MoonMind verification fails after Jules reports success, MoonMind should report a MoonMind-owned terminal outcome such as `failed` or `intervention_requested` based on the failure class. Provider success must not override MoonMind verification.
+* **Oversized brief**: If the bundled brief exceeds practical provider limits, MoonMind should fail early or split into multiple synthetic Jules bundle nodes using a deterministic bundling policy rather than silently truncating.
 * **Ambiguity**: If Jules requires clarification, the `AWAITING_USER_FEEDBACK` path remains available as an exception path, not the primary workflow progression mechanism.
+
+### 7.11.1 Status Ownership Rule
+
+Jules provider statuses and MoonMind execution statuses are different layers.
+
+Rules:
+
+* Jules raw/provider values remain provider status data.
+* Jules-specific normalization aliases remain owned by `normalize_jules_status()`.
+* `intervention_requested` is a MoonMind-owned execution status, not a Jules-native status value.
+* MoonMind may use `intervention_requested` when a bundled run is blocked by unanswered clarification, rejected cancellation, branch-publication failure, incomplete deliverables that require human review, or verification gaps that cannot be resolved automatically.
 
 ### 7.12 Backward Compatibility
 
@@ -645,6 +684,8 @@ When Jules enters `AWAITING_USER_FEEDBACK`, the `MoonMind.AgentRun` polling loop
 
 This is now an **exception path**, not the normal multi-step execution path.
 
+`intervention_requested` remains a MoonMind lifecycle status used when MoonMind decides the run now requires operator help. It is not a Jules-native provider status.
+
 ### 10.1 Scope
 
 Auto-answer logic lives **exclusively** in `MoonMind.AgentRun` (`agent_run.py`). The parent `MoonMind.Run` workflow does not duplicate this logic — it delegates to `AgentRun` child workflows for all external agent execution.
@@ -683,12 +724,14 @@ To align Jules with the shared external-agent design and the new one-shot execut
 
 1. Keep `JulesClient` focused on transport.
 2. Remove `sendMessage` as the normal step-to-step workflow progression strategy.
-3. Add a deterministic bundling/compiler phase that converts ordered Jules-targeted steps into one consolidated execution brief.
-4. Persist bundle metadata so MoonMind can explain which logical steps were represented in the one-shot run.
+3. Add a deterministic bundling/compiler phase that converts ordered Jules-targeted steps into one synthetic Jules bundle node with one consolidated execution brief.
+4. Persist bundle metadata so MoonMind can explain which logical steps were represented in the one-shot run without treating them as separate runtime nodes.
 5. Keep Jules-specific status normalization in `normalize_jules_status()`.
 6. Ensure workflow orchestration remains in `MoonMind.AgentRun`, not in Jules-specific code.
 7. Ensure MCP, dashboard, and REST surfaces consume the same Jules normalization and runtime-gate logic.
-8. Surface incomplete checklist items clearly in final result summaries when Jules only partially completes the bundled brief.
+8. Surface incomplete checklist items clearly in final result summaries and bundle metadata when Jules only partially completes the bundled brief.
+9. Keep branch publication truthful: `publishMode == "branch"` should only succeed when changes actually land on the target branch.
+10. Preserve independent MoonMind verification for acceptance-critical bundles.
 
 ## 12. Summary
 
@@ -698,7 +741,7 @@ The correct standard is:
 
 * Jules transport lives in schemas and `JulesClient`
 * Jules runtime translation lives in `JulesAgentAdapter`
-* MoonMind compiles multi-step Jules work into one consolidated execution brief
+* MoonMind collapses multi-step Jules work into one synthetic execution node with one consolidated execution brief
 * generic execution lifecycle lives in `MoonMind.AgentRun`
 * `sendMessage` is reserved for clarification/intervention flows
 * MCP tooling is optional and sits on top of the same provider foundations

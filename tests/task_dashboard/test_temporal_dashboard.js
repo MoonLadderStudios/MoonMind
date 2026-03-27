@@ -268,6 +268,79 @@ const helpers = loadTemporalHelpers();
   assert.strictEqual(rows[0].rawState, "executing");
 })();
 
+(function testResolveTemporalTaskRunIdPrefersExplicitFieldAndFallsBackToRunId() {
+  assert.strictEqual(
+    helpers.resolveTemporalTaskRunId({
+      taskRunId: "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+      runId: "11111111-1111-4111-8111-111111111111",
+    }),
+    "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+  );
+
+  assert.strictEqual(
+    helpers.resolveTemporalTaskRunId({
+      runId: "11111111-1111-4111-8111-111111111111",
+    }),
+    "11111111-1111-4111-8111-111111111111",
+  );
+
+  assert.strictEqual(
+    helpers.resolveTemporalTaskRunId({
+      workflowId: "mm:workflow-123",
+      runId: "not-a-uuid",
+    }),
+    "",
+  );
+})();
+
+(function testTemporalLogTailingAvailableRequiresConfiguredTemporalEndpoint() {
+  assert.strictEqual(
+    helpers.temporalLogTailingAvailable(
+      {
+        events: "/api/task-runs/{taskRunId}/events",
+      },
+      {
+        runId: "11111111-1111-4111-8111-111111111111",
+      },
+    ),
+    true,
+  );
+
+  assert.strictEqual(
+    helpers.temporalLogTailingAvailable(
+      {},
+      {
+        runId: "11111111-1111-4111-8111-111111111111",
+      },
+    ),
+    false,
+  );
+})();
+
+(function testRenderTemporalDetailMarkupSuppressesBrokenLiveLogControlsWithoutTemporalSource() {
+  const html = helpers.renderTemporalDetailMarkup({
+    execution: {
+      workflowType: "MoonMind.Run",
+      status: "running",
+      state: "executing",
+      createdAt: "2026-03-26T00:00:00Z",
+      updatedAt: "2026-03-26T00:00:00Z",
+    },
+    latestWorkflowId: "mm:workflow-123",
+    latestRunId: "11111111-1111-4111-8111-111111111111",
+    artifacts: { artifacts: [] },
+    waitingReason: "",
+    detailTitle: "Temporal task",
+    attentionRequired: false,
+    noticeHtml: "",
+    debugFields: "",
+    liveLogsAvailable: false,
+  });
+
+  assert(html.includes("Live log tailing is not configured for Temporal tasks."));
+  assert(!html.includes('id="temporal-start-tailing"'));
+})();
+
 (function testTemporalTitleAndRouteNormalizationStayTaskOriented() {
   assert.strictEqual(
     helpers.deriveTemporalTitle({ workflowType: "MoonMind.Run", title: "Review PR" }),
@@ -365,6 +438,7 @@ const helpers = loadTemporalHelpers();
     attentionRequired: false,
     noticeHtml: "",
     debugFields: "",
+    liveLogsAvailable: true,
   });
 
   const requiredIds = [

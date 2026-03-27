@@ -360,8 +360,8 @@ RUN runuser -u app -- env -u NODE_OPTIONS -u npm_config_node_options \
     sh -c 'codex --version && agentkit --version && gemini --version && claude --version && cursor-agent --version && rg --version'
 
 # Provide a managed Codex configuration template that enforces non-interactive
-# approvals. The template will be merged into the worker's home directory at
-# runtime to keep the `approval_policy` pinned to "never".
+# approvals and managed sandbox defaults. The template is merged into the
+# worker's home directory at runtime.
 RUN install -d -o root -g app -m 0750 /etc/codex
 COPY --chown=root:app --chmod=0640 api_service/config.template.toml /etc/codex/config.toml
 
