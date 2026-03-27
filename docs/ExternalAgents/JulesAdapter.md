@@ -1,6 +1,6 @@
 # Technical Design: Jules Provider Adapter
 
-**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesAdapter.md`](../tmp/remaining-work/ExternalAgents-JulesAdapter.md)
+**Implementation tracking:** [`docs/tmp/remaining-work/ExternalAgents-JulesClientAdapter.md`](../tmp/remaining-work/ExternalAgents-JulesClientAdapter.md)
 
 ## 1. Objective
 
@@ -185,7 +185,6 @@ These behaviors should eventually move into a reusable universal external-adapte
 The following logic should remain Jules-specific:
 
 - mapping MoonMind task inputs into Jules `title`, `description`, and `metadata`
-- building a **single consolidated execution brief** when multiple workflow steps target Jules
 - deciding how to derive a fallback description from instruction or artifact refs
 - Jules status normalization aliases
 - Jules-specific result summary construction
@@ -360,7 +359,7 @@ The point is not "always bundle everything." The point is: **when Jules is chose
 
 ### 7.6 One-Shot Brief Design
 
-The one-shot brief should be designed to help Jules create a stable internal checklist.
+The one-shot brief should be designed to help Jules create and follow a stable internal checklist.
 
 MoonMind should compile the brief into the following structure.
 
@@ -380,17 +379,20 @@ MoonMind should compile the brief into the following structure.
 
 3. **Execution Rules**
 
-   * preserve user intent
+   * complete the work as one cohesive implementation
+   * follow the ordered checklist sequentially
    * make minimal necessary changes
    * avoid unrelated refactors
-   * do not change generated/vendor files unless required
-   * stop and ask if blocked by ambiguity that cannot be safely resolved
+   * preserve existing architecture and conventions unless the checklist requires otherwise
+   * if blocked by ambiguity or an unsafe condition, stop and clearly report the blocker rather than guessing past it
+   * track progress against the checklist explicitly in the working response and final summary when practical
 
 4. **Ordered Work Checklist**
 
-   * a numbered list of concrete tasks
+   * a concrete checklist of tasks
    * each task should be phrased as an outcome, not just a topic
    * each task may include sub-bullets with files, constraints, or acceptance conditions
+   * MoonMind should prefer checklist-shaped formatting because it tends to help Jules stay on plan
 
 5. **Validation Checklist**
 
@@ -402,9 +404,9 @@ MoonMind should compile the brief into the following structure.
 6. **Deliverable Requirements**
 
    * summarize changes
-   * note tradeoffs / assumptions
+   * state which checklist items were completed
+   * note tradeoffs, assumptions, blockers, or incomplete items
    * include validation results
-   * identify any incomplete or risky items
 
 #### 7.6.2 Style Guidance
 
@@ -444,11 +446,12 @@ Repository Context:
 
 Execution Rules:
 - Complete the work as one cohesive implementation.
-- Follow the ordered checklist below.
+- Follow the ordered checklist below sequentially. Do not skip ahead unless a prior item is complete.
 - Make the minimum necessary code and documentation changes.
 - Avoid unrelated refactors.
 - Preserve existing architecture and conventions unless the checklist requires otherwise.
-- If a checklist item cannot be completed safely, explain why in the final summary.
+- If a checklist item cannot be completed safely, stop and explain the blocker clearly rather than guessing.
+- Track progress explicitly against the checklist in your working process and final summary when practical.
 
 Ordered Checklist:
 1. <clear task outcome>
@@ -477,6 +480,8 @@ Final Response Requirements:
 - Note any incomplete items, blockers, assumptions, or follow-up recommendations.
 - Include validation results.
 ```
+
+MoonMind may prefer more explicitly checklist-shaped formatting when Jules responds well to it, but the architecture should not depend on exact formatting tokens for correctness.
 
 ### 7.8 Checklist Compilation Heuristics
 
@@ -569,7 +574,7 @@ Suggested metadata:
 
 * **Session failure**: If Jules reaches `FAILED`, the bundled run fails as one unit.
 * **Transport failure**: Create/start retries use the same policy as normal create-task requests.
-* **Checklist under-completion**: If Jules succeeds but leaves checklist items incomplete, MoonMind should surface that in the result summary rather than pretending all logical steps succeeded.
+* **Checklist under-completion**: If Jules succeeds but leaves checklist items incomplete, MoonMind should surface that in the result summary rather than pretending all logical steps succeeded. Structured checklist reporting may improve explainability when present, but the canonical success signal remains provider run status plus fetched result, not exact output formatting.
 * **Oversized brief**: If the bundled brief exceeds practical provider limits, MoonMind should fail early or split into multiple bundles using an explicit bundling policy rather than silently truncating.
 * **Ambiguity**: If Jules requires clarification, the `AWAITING_USER_FEEDBACK` path remains available as an exception path, not the primary workflow progression mechanism.
 
@@ -619,7 +624,6 @@ That means future refactoring should aim to preserve this separation:
 * provider response parsing
 * provider status normalization
 * provider cancel translation
-* provider-specific prompt assembly hints when the execution style is one-shot bundled work
 
 If a future provider requires materially different behavior, it should justify that divergence explicitly rather than silently bypassing the shared pattern.
 
