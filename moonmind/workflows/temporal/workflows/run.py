@@ -581,7 +581,10 @@ class MoonMindRunWorkflow:
             nodes=plan_definition.nodes,
             edges=plan_definition.edges,
         )
-        ordered_nodes = await self._bundle_ordered_nodes_for_execution(ordered_nodes)
+        if workflow.patched("jules-bundling-v1"):
+            ordered_nodes = await self._bundle_ordered_nodes_for_execution(
+                ordered_nodes
+            )
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         failure_mode = plan_definition.policy.failure_mode
