@@ -3116,20 +3116,32 @@ class TemporalAgentRuntimeActivities:
             # git push succeeds as a no-op when the branch is already
             # up-to-date, which would cause repo.create_pr to fail
             # with HTTP 422 ("No commits between main and <branch>").
+            base_ref = f"origin/{target_branch or 'main'}"
             try:
                 count_proc = await _asyncio.create_subprocess_exec(
                     "git", "-C", workspace,
-                    "rev-list", "--count", f"origin/main..{current_branch}",
+                    "rev-list", "--count", f"{base_ref}..{current_branch}",
                     stdout=_asyncio.subprocess.PIPE,
                     stderr=_asyncio.subprocess.PIPE,
                 )
                 count_stdout, _ = await _asyncio.wait_for(
                     count_proc.communicate(), timeout=10,
                 )
+                if count_proc.returncode != 0:
+                    raise RuntimeError(
+                        f"git rev-list failed with return code {count_proc.returncode}"
+                    )
                 commit_count = int(
                     count_stdout.decode("utf-8", errors="replace").strip() or "0"
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Failed to count commits for run %s, falling back to "
+                    "assuming commits exist: %s",
+                    run_id,
+                    exc,
+                    exc_info=True,
+                )
                 # If rev-list fails, assume commits exist and let PR
                 # creation handle it.
                 commit_count = -1
@@ -3137,9 +3149,10 @@ class TemporalAgentRuntimeActivities:
             if commit_count == 0:
                 logger.warning(
                     "Post-agent git push completed for run %s but branch "
-                    "'%s' has no commits over origin/main",
+                    "'%s' has no commits over %s",
                     run_id,
                     current_branch,
+                    base_ref,
                 )
                 return {
                     "push_status": "no_commits",
