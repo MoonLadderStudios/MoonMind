@@ -19,7 +19,6 @@ from api_service.api.routers.task_dashboard import (
     _resolve_user_dependency_overrides,
     router,
 )
-from api_service.db.base import get_async_session
 
 
 def _build_mock_temporal_service() -> AsyncMock:
@@ -68,7 +67,6 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("manifests")
     assert _is_allowed_path("manifests/new")
     assert _is_allowed_path("schedules")
-    assert _is_allowed_path("schedules/new")
     assert _is_allowed_path("settings")
     assert _is_allowed_path("workers")
 
@@ -101,7 +99,6 @@ def test_static_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         "/tasks/manifests",
         "/tasks/manifests/new",
         "/tasks/schedules",
-        "/tasks/schedules/new",
         "/tasks/workers",
     ):
         response = client.get(path)
@@ -174,7 +171,7 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
         "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
         "/tasks/create, /tasks/new, "
         "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-        "/tasks/schedules, /tasks/schedules/new, /tasks/workers, /tasks/skills, or /tasks/settings."
+        "/tasks/schedules, /tasks/workers, /tasks/skills, or /tasks/settings."
     )
 
 

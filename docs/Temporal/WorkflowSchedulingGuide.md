@@ -28,7 +28,7 @@ MoonMind supports three scheduling patterns for workflow execution:
 | --- | --- | --- | --- |
 | **Immediate execution** | Run a workflow right now | `POST /api/executions` (no `schedule`) | `/tasks/new` → Submit |
 | **Deferred one-time execution** | Run a workflow once at a specific future time | `POST /api/executions` with `schedule.mode=once` | `/tasks/new` → Schedule panel → "Run Once At" |
-| **Recurring schedule** | Run a workflow on a repeating cron cadence | `POST /api/executions` with `schedule.mode=recurring`, or `POST /api/recurring-tasks` | `/tasks/new` → Schedule panel → "Recurring", or `/tasks/schedules/new` |
+| **Recurring schedule** | Run a workflow on a repeating cron cadence | `POST /api/executions` with `schedule.mode=recurring`, or `POST /api/recurring-tasks` | `/tasks/new` → Schedule panel → "Recurring" |
 
 > [!NOTE]
 > The standalone `/api/recurring-tasks` API remains fully supported. The inline `schedule` parameter on the create endpoint is a convenience that unifies the submit experience — it delegates to the same recurring tasks service on the backend.
@@ -472,7 +472,6 @@ A recurring schedule creates `RecurringTaskRun` records on a cron-based cadence.
 | Route | Purpose |
 | --- | --- |
 | `/tasks/schedules` | List all recurring schedules (personal scope by default) |
-| `/tasks/schedules/new` | Create a new recurring schedule |
 | `/tasks/schedules/:scheduleId` | Schedule detail and run history |
 
 #### Schedule List Page (`/tasks/schedules`)
@@ -484,10 +483,10 @@ The list page shows all schedules for the current user (personal scope) with:
 - **Cron expression** and **timezone**
 - **Status** badge (enabled/disabled)
 - **Next run** timestamp
-- **"New Schedule"** button for creation
 
-#### Create Schedule Page (`/tasks/schedules/new`)
+#### Schedule Creation (via `/tasks/new`)
 
+Schedule creation is now performed via the standard task submit page, not a dedicated "New Schedule" route.
 The form allows the user to define:
 
 1. **Schedule name** — descriptive label
