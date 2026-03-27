@@ -1,6 +1,6 @@
 # Secrets System
 
-**Implementation tracking:** [`docs/tmp/SecretsSystemPlan.md`](../tmp/SecretsSystemPlan.md)
+**Implementation tracking:** [`docs/tmp/010-SecretsSystemPlan.md`](../tmp/010-SecretsSystemPlan.md)
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
@@ -9,7 +9,7 @@ Last Updated: 2026-03-27
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
 > It is a declarative contract for how secrets are referenced, stored, resolved, materialized, and audited.
-> Phase sequencing, migration work, and implementation checklists belong in [`docs/tmp/SecretsSystemPlan.md`](../tmp/SecretsSystemPlan.md).
+> Phase sequencing, migration work, and implementation checklists belong in [`docs/tmp/010-SecretsSystemPlan.md`](../tmp/010-SecretsSystemPlan.md).
 
 ---
 
@@ -135,7 +135,8 @@ Secret resolution failures must be explicit and actionable:
 - decryption failure,
 - revoked backend credential,
 - unsupported backend type,
-- access denied, or
+- access denied,
+- resolution timeout, or
 - expired OAuth state.
 
 The system must not silently fall back to another secret source.
@@ -152,15 +153,54 @@ Provider Profiles, task configuration, and runtime materialization templates may
 
 ### 5.2 SecretRef Shape
 
-The exact schema may evolve, but the contract must preserve these concepts:
+A `SecretRef` uses a URI scheme to encode the backend type and locator in a single parseable string.
 
-- stable secret identifier,
-- backend type,
-- backend-specific locator or lookup key,
-- optional metadata for scoping, ownership, or versioning,
-- no embedded raw secret value.
+The canonical form is:
 
-### 5.3 SecretRef Use Sites
+```
+<backend>://<locator>
+```
+
+Examples:
+
+- `env://MINIMAX_API_KEY` — resolve from the process environment variable `MINIMAX_API_KEY`.
+- `db://provider-minimax-api-key` — resolve from the `db_encrypted` managed secret store by identifier.
+- `exec://op?vault=MoonMind&item=minimax&field=api_key` — resolve by invoking an allowlisted external command.
+- `vault://kv/providers/minimax#api_key` — resolve from a Vault KV-v2 mount (convenience alias for operators already using Vault directly).
+
+The contract must preserve these concepts regardless of how the schema evolves:
+
+- backend type is encoded in the URI scheme,
+- locator is backend-specific and encoded in the URI authority/path/query/fragment,
+- the reference string contains no embedded raw secret value,
+- references are parseable and validatable without resolving the secret,
+- optional metadata for scoping, ownership, or versioning may accompany the reference but is not part of the URI itself.
+
+### 5.3 SecretRef Identity and Naming
+
+Managed secrets (`db_encrypted`) must have a stable, human-readable identifier that serves as the canonical name in `db://` references.
+
+Naming rules:
+
+- identifiers must be lowercase alphanumeric with hyphens and optional path separators (e.g., `provider-anthropic-api-key`, `providers/minimax/api-key`),
+- identifiers must be unique within the MoonMind instance,
+- identifiers must not encode the secret value or any portion of it.
+
+Scoping:
+
+- managed secrets are instance-scoped by default (visible to all profiles and users within the MoonMind deployment),
+- the system should support optional ownership metadata to restrict which operators or profiles may bind a given secret,
+- per-user or per-team scoping is a future extension, not a baseline requirement.
+
+### 5.4 SecretRef Versioning
+
+A `SecretRef` always resolves to the **current active value** of the referenced secret.
+
+When an operator rotates a managed secret, all profiles referencing that secret automatically receive the new value at their next resolution point. This is intentional — it means rotation does not require rewriting durable provider-profile contracts.
+
+If a use case requires pinning to a specific version, that must be modeled explicitly (e.g., a versioned locator). The default behavior is always-latest.
+
+### 5.5 SecretRef Use Sites
 
 Secret references may appear in:
 
@@ -219,11 +259,26 @@ Examples:
 
 This backend is the main escape hatch for integrating external secret managers without coupling the core system to one provider.
 
-### 6.4 `oauth_volume`
+Security envelope:
 
-Represents credentials or session state that live in a dedicated mounted runtime volume rather than in the managed secret store.
+- **Allowlist required.** Only commands registered in an operator-managed allowlist may be invoked. The allowlist maps logical command names to executable paths and argument templates. Commands not in the allowlist must be rejected unconditionally.
+- **Timeout.** Each exec invocation must have a bounded timeout. Resolution must fail fast if the command does not return within the configured limit.
+- **Output contract.** The command must return the secret value on stdout. Non-zero exit codes are resolution failures. Stderr is captured for diagnostics but must be redacted before persistence or display.
+- **No ambient shell.** Commands must be invoked directly (exec-style), not through a shell interpreter, to prevent injection via argument values.
+- **Scope.** Exec resolution inherits the MoonMind process environment but must not receive resolved values from other secrets in that invocation.
 
-This is not the same as `db_encrypted`, but it is still part of the overall secrets system because provider profiles need a unified way to describe sensitive credential sources.
+### 6.4 `oauth_volume` — Credential Source, Not Resolver Backend
+
+OAuth volume credentials (session state living in a dedicated mounted runtime volume) are a recognized credential source in the Provider Profile model (`ProviderCredentialSource.OAUTH_VOLUME`), but they are **not** a `SecretRef` resolver backend.
+
+The distinction is:
+
+- `SecretRef` backends (`env`, `db_encrypted`, `exec`) resolve a reference to a **value** in memory.
+- `oauth_volume` resolves to a **mount path** and runtime environment shaping, not a discrete secret value.
+
+OAuth volumes share the secrets system's observability and audit interfaces (who created the session, which profiles use it, whether the session is healthy), but they do not participate in the `SecretRef` resolution contract.
+
+Provider Profiles that use `oauth_volume` as their credential source set `credential_source = oauth_volume` and use the runtime materialization pipeline directly, without routing through the `SecretRef` resolver.
 
 ### 6.5 Future Backend Classes
 
@@ -240,7 +295,13 @@ Additional backend types may be added behind the same resolver boundary as long 
 
 ### 7.1 Managed Secret Storage
 
-For `db_encrypted`, MoonMind must encrypt secret values before persistence using authenticated encryption such as AES-GCM.
+For `db_encrypted`, MoonMind must encrypt secret values before persistence using AES-256-GCM authenticated encryption.
+
+Required cryptographic properties:
+
+- confidentiality — ciphertext does not reveal plaintext,
+- authentication — ciphertext includes a tag that detects tampering or corruption,
+- nonce uniqueness — each encryption operation must use a unique nonce (IV); nonce reuse under the same key is a security failure.
 
 The encryption root must come from an operator-managed source outside the main application database, such as:
 
@@ -249,13 +310,33 @@ The encryption root must come from an operator-managed source outside the main a
 - OS keychain,
 - optional external KMS or Vault integration.
 
-### 7.2 Key Separation
+### 7.2 Envelope Encryption
+
+MoonMind should use envelope encryption for managed secrets:
+
+- A **root key** (KEK — key encryption key) is loaded from the operator-managed external source.
+- Each managed secret is encrypted with its own **data encryption key** (DEK).
+- The DEK is itself encrypted (wrapped) by the root key and stored alongside the ciphertext.
+
+This structure means root key rotation requires re-wrapping the DEKs, not re-encrypting every secret value, which keeps rotation operationally practical.
+
+### 7.3 Root Key Source Requirements
+
+The operator-managed root key source must satisfy all of the following:
+
+- it must survive container restarts (an in-memory-only source is not acceptable for production),
+- it must not reside in the application database,
+- it must be accessible to all MoonMind worker processes that perform secret resolution,
+- it must have a clear first-run operator story (either generate-and-persist or operator-provides),
+- loss of the root key source renders all `db_encrypted` secrets unrecoverable — this trade-off must be explicit in operator documentation.
+
+### 7.4 Key Separation
 
 The database must not contain everything needed to decrypt stored secret values on its own.
 
-If the database is copied or dumped without the external root key source, the attacker should obtain ciphertext, metadata, and references, but not the plaintext secret values.
+If the database is copied or dumped without the external root key source, the attacker should obtain ciphertext, wrapped DEKs, metadata, and references, but not the plaintext secret values.
 
-### 7.3 Optional Hardened Modes
+### 7.5 Optional Hardened Modes
 
 MoonMind may support stronger operator-selected key custody modes, including:
 
@@ -286,19 +367,23 @@ The resolver returns an in-memory secret value or a narrow launch-time materiali
 The resolved value must not be written back into:
 
 - workflow payloads,
+- Temporal workflow state, activity inputs, or activity outputs,
 - provider profile rows,
 - task definitions,
 - durable run metadata,
 - artifacts by default.
 
+In a multi-worker deployment, each worker that needs a secret must resolve it independently at its own execution boundary. Resolved values must not be passed between workers via Temporal or any other workflow transport.
+
 ### 8.3 Resolution Caching
 
-Short-lived in-memory caching may be used for performance if:
+Short-lived in-memory caching may be used for performance within the following bounds:
 
-- scope is explicit,
-- eviction rules are clear,
-- cache lifetime is bounded,
-- logs never expose raw values.
+- cache lifetime must not exceed the lifetime of a single task run,
+- cache entries must not be shared across runs,
+- cache entries must not be serializable, persistable, or written to disk,
+- cache must be invalidated when the system learns of a rotation or revocation event,
+- logs must never expose cached or resolved values.
 
 There must be no long-lived plaintext secret cache written to disk by default.
 
@@ -409,6 +494,11 @@ Provider Profiles and runtime launches should fail explicitly when a referenced 
 
 The system should make it possible to rotate secrets without rewriting durable provider-profile contracts when the reference identity remains the same.
 
+There are two distinct rotation operations:
+
+- **Secret value rotation** — an operator replaces the plaintext value of a managed secret. The encrypted ciphertext and DEK are replaced; the secret identifier and all `SecretRef` bindings remain unchanged.
+- **Root key rotation** — an operator replaces the root key (KEK). With envelope encryption this requires re-wrapping all DEKs with the new root key, but does not require re-encrypting the secret values themselves. The system must support root key rotation without downtime.
+
 ---
 
 ## 13. Observability and Audit
@@ -426,6 +516,24 @@ Required observability includes:
 
 Audit records should identify objects and events, not reveal secret contents.
 
+### 13.1 Redaction Contract
+
+MoonMind must apply secret redaction at system output boundaries to prevent plaintext leakage.
+
+Redaction scope:
+
+- structured logs emitted by the secrets system and the runtime launcher,
+- API responses (secret values must never be returned after initial creation),
+- artifact and summary content written to durable stores,
+- diagnostic and error messages surfaced to operators or the UI,
+- subprocess stderr captured from `exec` backend invocations.
+
+Redaction strategy:
+
+- known `SecretRef` URIs and their resolved values must be tracked during a resolution session so that any appearance in downstream output can be matched and replaced,
+- pattern-based redaction (e.g., matching common secret prefixes like `sk-`, `ghp_`, `AKIA`, bearer tokens) should be applied as defense-in-depth at log and artifact serialization boundaries,
+- redaction must be best-effort with fail-open logging — a failed redaction must not suppress the log entry entirely, but must replace suspect values with a placeholder such as `[REDACTED]`.
+
 ---
 
 ## 14. Backup and Recovery
@@ -439,6 +547,8 @@ The desired-state system assumes:
 - losing the root key source may render encrypted managed secrets unrecoverable.
 
 That trade-off is acceptable and should be explicit.
+
+Operator documentation must recommend that the root key source is backed up alongside database backups and that backup runbooks explicitly name the key source dependency.
 
 ---
 

@@ -31,6 +31,8 @@ Based on the current repo state:
 - `docs/Security/ProviderProfiles.md` already assumes `secret_ref` as a credential source and launch-time resolution boundary.
 - The concrete Secrets System contracts, persistence model, UI flows, and implementation boundaries are not yet established.
 - `docs/Security/SecretsAnalysis.md` contains comparative analysis but not the final desired-state contract.
+- **Existing encrypted fields**: `UserProfile` stores per-user encrypted API keys (`google_api_key_encrypted`, `openai_api_key_encrypted`, `github_token_encrypted`, `anthropic_api_key_encrypted`) and `TaskRunLiveSession` stores encrypted attach/web URLs. Both use `sqlalchemy_utils.StringEncryptedType`, which defaults to AES-CBC (not authenticated encryption). These predate the Provider Profile system.
+- **Existing resolution code**: `managed_api_key_resolve.py` and `moonmind/auth/secret_refs.py` implement secret resolution with two incompatible reference conventions (bare env var names and `vault://` URIs). The new `SecretRef` URI contract in the canonical doc supersedes both.
 
 ---
 
@@ -63,8 +65,8 @@ Tasks:
   - protected local file,
   - OS keychain,
   - or a clearly ordered fallback strategy.
-- Decide whether `oauth_volume` remains modeled inside the secrets resolver layer or as an adjacent credential-source adapter with shared observability.
-- Define the initial `SecretRef` schema and validation rules.
+- Confirm `oauth_volume` modeling as a credential source with shared observability, not a `SecretRef` resolver backend (per canonical doc Section 6.4).
+- Implement the `SecretRef` URI parser and validation rules per the canonical URI scheme (Section 5.2).
 
 Exit criteria:
 
@@ -81,12 +83,20 @@ Outcome:
 Tasks:
 
 - Add a secrets persistence model for managed secrets and metadata.
-- Implement application-layer authenticated encryption for `db_encrypted`.
+- Implement AES-256-GCM authenticated encryption with envelope encryption (per-secret DEK wrapped by root KEK), replacing the `StringEncryptedType` (AES-CBC) pattern used by existing fields.
 - Implement root-key loading from the selected baseline source.
 - Ensure the database never contains everything needed to decrypt by itself.
 - Add create, update, rotate, delete, and metadata-list operations at the service layer.
 - Define secret state transitions such as active, disabled, rotated, deleted, or invalid.
 - Add migration primitives for future import of existing `.env` values.
+
+Legacy crypto migration:
+
+- `UserProfile` encrypted API key columns (`google_api_key_encrypted`, `openai_api_key_encrypted`, `github_token_encrypted`, `anthropic_api_key_encrypted`) and `TaskRunLiveSession` encrypted URL columns currently use `StringEncryptedType` (AES-CBC). Determine their disposition:
+  - Option A: Migrate these values into `db_encrypted` managed secrets and replace the columns with `SecretRef` pointers. This is the cleanest end state but requires a data migration.
+  - Option B: Upgrade the column encryption in-place to AES-256-GCM while keeping the per-user column model for non-profile-bound credentials. This avoids coupling user-level keys to the managed secret lifecycle.
+  - Option C: Leave as-is for now if these fields are on a deprecation path (replaced by provider-profile-bound secrets). Document the gap explicitly.
+- Whichever option is chosen, the existing `ENCRYPTION_MASTER_KEY` env var and `api_service/core/encryption.py` must be reconciled with the new root key source so operators are not managing two separate key hierarchies.
 
 Validation:
 
@@ -102,14 +112,15 @@ Outcome:
 
 Tasks:
 
-- Define the `SecretRef` model and parser.
+- Implement the `SecretRef` URI parser per canonical doc Section 5.2 (scheme-based dispatch to backend adapters).
 - Implement backend adapters for:
   - `env`,
   - `db_encrypted`,
   - `exec`.
-- Decide whether `oauth_volume` plugs into the same interface or a sibling credential-source abstraction.
-- Add allowlisting and trust constraints for `exec` resolution.
-- Standardize error types for missing refs, unsupported backends, access denied, and decryption failures.
+- Implement `exec` backend security envelope: operator allowlist file, direct exec (no shell), bounded timeout, stdout-only output contract, stderr redaction (per canonical doc Section 6.3).
+- Unify the existing resolution code in `managed_api_key_resolve.py` and `moonmind/auth/secret_refs.py` into the new resolver layer. The existing `vault://` support should map to either an `exec` adapter wrapping the Vault CLI or a dedicated `vault` convenience backend, depending on the decision in Phase 0.
+- `oauth_volume` does not participate in the resolver — confirm that Provider Profile launch paths route `oauth_volume` credential sources through the materialization pipeline directly.
+- Standardize error types for missing refs, unsupported backends, access denied, resolution timeout, and decryption failures.
 - Add redaction-safe tracing and metrics around resolution attempts.
 
 Validation:
@@ -261,17 +272,26 @@ The following backlog is a practical first slice for implementation:
 Open decisions:
 
 - Which baseline root-key source provides the best local UX without weakening the security model too much?
-- Should `exec` support arbitrary commands initially, or only operator-allowlisted integrations?
-- How much in-memory caching of resolved secrets is acceptable in the first release?
 - Which MoonMind-owned provider/tool path should be the first proxy-first implementation target?
-- How should OAuth-volume credentials appear in audit and metadata views relative to `SecretRef`-backed secrets?
+- How should the existing `vault://` support in `secret_refs.py` be mapped into the new resolver — as a dedicated backend or as an `exec` adapter wrapping the Vault CLI?
+- What is the disposition of the existing `UserProfile` per-user encrypted API key columns? (See Phase 1 options A/B/C.)
+- How should the existing `ENCRYPTION_MASTER_KEY` env var be reconciled with the new root key source?
+
+Resolved decisions (now in canonical doc):
+
+- `exec` backend requires an operator-managed allowlist; arbitrary commands are not supported (Section 6.3).
+- `oauth_volume` is a credential source with shared observability, not a `SecretRef` resolver backend (Section 6.4).
+- Resolution caching is bounded to a single task run lifetime with no cross-run sharing (Section 8.3).
+- `SecretRef` uses a URI scheme for backend dispatch (Section 5.2).
+- References resolve to always-latest; version pinning is an explicit extension (Section 5.4).
 
 Primary risks:
 
 - leaking resolved secrets through runtime logs or generated config files,
 - overcomplicating the local-first setup path,
 - leaving mixed legacy `.env` and managed-secret behavior ambiguous,
-- adding secret indirection without enough boundary testing around launcher and workflow behavior.
+- adding secret indirection without enough boundary testing around launcher and workflow behavior,
+- managing two separate encryption key hierarchies (existing `ENCRYPTION_MASTER_KEY` and new root key source) during transition.
 
 ---
 
