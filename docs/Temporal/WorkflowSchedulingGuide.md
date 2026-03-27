@@ -90,7 +90,7 @@ POST /api/executions
 2. **If `schedule` is absent or null**, the execution starts immediately:
    - **`TemporalExecutionService.create_execution()`** generates a workflow ID (`mm:<ulid>`), persists a `TemporalExecutionRecord` in Postgres, and calls `TemporalClientAdapter.start_workflow()`.
    - **`TemporalClientAdapter.start_workflow()`** calls the Temporal SDK's `client.start_workflow()` with the workflow type, ID, task queue (`mm.workflow`), memo (title, summary), and search attributes (`mm_owner_id`, `mm_state`, `mm_entry`, `mm_updated_at`).
-  - The **workflow worker** (`temporal-worker-workflow`) picks up the execution and drives it through the lifecycle: `initializing → planning → executing → proposals → finalizing → completed/failed`.
+   - The **workflow worker** (`temporal-worker-workflow`) picks up the execution and drives it through the lifecycle: `initializing → planning → executing → proposals → finalizing → completed/failed`.
 3. **If `schedule` is present**, the API routes to the scheduling path instead (see Section 4.4).
 
 #### Response (Immediate Execution)

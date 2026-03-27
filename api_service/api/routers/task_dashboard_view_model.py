@@ -30,9 +30,11 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
         "rejected": "failed",
     },
     "temporal": {
+        "scheduled": "queued",
         "initializing": "queued",
         "planning": "running",
         "executing": "running",
+        "proposals": "running",
         "awaiting_external": "awaiting_action",
         "awaiting_slot": "queued",
         "waiting_on_dependencies": "waiting",

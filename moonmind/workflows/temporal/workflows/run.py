@@ -11,9 +11,6 @@ from temporalio.workflow import ActivityCancellationType
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from moonmind.schemas.agent_runtime_models import (
-        AgentExecutionRequest,
-    )
     from moonmind.workflows.tasks.routing import _coerce_bool
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -83,9 +80,6 @@ _GITHUB_PR_URL_PATTERN = re.compile(
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
 # Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
-_MANAGED_AGENT_IDS = frozenset(
-    {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
-)
 
 
 @workflow.defn(name="MoonMind.Run")
@@ -506,13 +500,6 @@ class MoonMindRunWorkflow:
         pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
 
-        # Track the Jules session ID across plan nodes for multi-step
-        # session reuse.  After the first Jules step completes, its
-        # session_id is extracted from the result metadata.  Subsequent
-        # Jules steps receive this ID so MoonMind.AgentRun calls
-        # sendMessage instead of creating a new session.
-        jules_session_id: str | None = None
-
         if registry_snapshot_ref:
             registry_payload = await workflow.execute_activity(
                 "artifact.read",
@@ -565,45 +552,7 @@ class MoonMindRunWorkflow:
 
             system_retries = 0
             while system_retries <= 3:
-                if tool_type == "agent_runtime":
-                    # --- Agent dispatch: child workflow ---
-                    try:
-                        request = self._build_agent_execution_request(
-                            node_inputs=node_inputs,
-                            node_id=node_id,
-                            tool_name=tool_name,
-                        )
-                        # --- Multi-step Jules: adjust parameters for proper PR creation ---
-                        if request.agent_id == "jules":
-                            new_params = dict(request.parameters or {})
-                            if publish_mode == "pr":
-                                new_params["publishMode"] = "branch"
-                                new_params.pop("automationMode", None)
-                            if jules_session_id:
-                                new_params["jules_session_id"] = jules_session_id
-                            
-                            if new_params != (request.parameters or {}):
-                                request = request.model_copy(update={"parameters": new_params})
-                        child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
-                        if system_retries > 0:
-                            child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
-                        child_result = await workflow.execute_child_workflow(
-                            "MoonMind.AgentRun",
-                            request,
-                            id=child_workflow_id,
-                            task_queue=WORKFLOW_TASK_QUEUE,
-                        )
-                        execution_result = self._map_agent_run_result(child_result)
-                    except Exception:
-                        if failure_mode == "FAIL_FAST":
-                            raise
-                        # Clear session on failure so later Jules steps start fresh.
-                        if "request" in dir() and getattr(request, "agent_id", None) == "jules":
-                            jules_session_id = None
-                        result_status = "FAILED"
-                        break
-
-                elif tool_type == "skill":
+                if tool_type == "skill":
                     # --- Activity dispatch: existing skill path ---
                     if not tool_name or not tool_version:
                         raise ValueError("plan node tool name/version is required")
@@ -662,7 +611,7 @@ class MoonMindRunWorkflow:
                 else:
                     raise ValueError(
                         f"unsupported plan node tool.type: '{tool_type}'; "
-                        "expected 'skill' or 'agent_runtime'"
+                        "expected 'skill'"
                     )
 
                 result_status = self._activity_result_status(execution_result)
@@ -679,10 +628,6 @@ class MoonMindRunWorkflow:
 
                     retryable = (
                         failure_message == "system_error"
-                        or (
-                            failure_message == "execution_error"
-                            and tool_type == "agent_runtime"
-                        )
                     )
                     if retryable and system_retries < 3:
                         system_retries += 1
@@ -690,8 +635,6 @@ class MoonMindRunWorkflow:
                             f"Retrying plan node {node_id} after {failure_message} "
                             f"(attempt {system_retries} of 3)"
                         )
-                        if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
-                            jules_session_id = None
                         continue
 
                     if failure_mode == "FAIL_FAST":
@@ -703,9 +646,6 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"plan node execution returned status {result_status}{detail}"
                         )
-                    # Clear session on failure so later Jules steps start fresh.
-                    if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
-                        jules_session_id = None
                     break
 
                 break
@@ -713,49 +653,8 @@ class MoonMindRunWorkflow:
             if result_status is None or result_status != "COMPLETED":
                 continue
 
-            # --- Multi-step Jules: extract session_id only on success ---
-            if tool_type == "agent_runtime":
-                _rt = node_inputs.get("runtime") or {}
-                _node_agent_id = (
-                    _rt.get("mode")
-                    or _rt.get("agent_id")
-                    or node_inputs.get("targetRuntime")
-                    or tool_name
-                    or ""
-                ).strip().lower()
-                if _node_agent_id in {"jules", "jules_api"}:
-                    extracted_id = self._extract_jules_session_id(child_result)
-                    if extracted_id:
-                        jules_session_id = extracted_id
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
-                
-                # If still not found, check the diagnostics artifact if present
-                if pull_request_url is None and tool_type == "agent_runtime":
-                    outputs = self._get_from_result(execution_result, "outputs") or {}
-                    diag_ref = outputs.get("diagnostics_ref")
-                    if diag_ref:
-                        try:
-                            diag_payload = await workflow.execute_activity(
-                                "artifact.read",
-                                {
-                                    "principal": self._principal(),
-                                    "artifact_ref": diag_ref,
-                                },
-                                **self._execute_kwargs_for_route(artifact_read_route),
-                            )
-                            if isinstance(diag_payload, bytes):
-                                diag_text = diag_payload.decode("utf-8", errors="replace")
-                            elif isinstance(diag_payload, str):
-                                diag_text = diag_payload
-                            else:
-                                diag_text = str(diag_payload)
-                                
-                            pr_match = _GITHUB_PR_URL_PATTERN.search(diag_text)
-                            if pr_match:
-                                pull_request_url = pr_match.group(0)
-                        except Exception as e:
-                            self._get_logger().warning(f"Failed to extract PR URL from diagnostics_ref {diag_ref}: {e}")
                             
         if require_pull_request_url and pull_request_url is None:
             last_tool = str(
@@ -927,109 +826,6 @@ class MoonMindRunWorkflow:
             if match is not None:
                 return match.group(0)
         return None
-
-    def _build_agent_execution_request(
-        self,
-        *,
-        node_inputs: dict[str, Any],
-        node_id: str,
-        tool_name: str,
-    ) -> "AgentExecutionRequest":
-        """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
-        runtime_block = node_inputs.get("runtime") or {}
-        agent_id = str(
-            runtime_block.get("mode")
-            or runtime_block.get("agent_id")
-            or node_inputs.get("targetRuntime")
-            or tool_name
-        ).strip()
-        if not agent_id:
-            raise ValueError(
-                "agent_runtime plan node must specify an agent_id "
-                "(via inputs.runtime.mode, inputs.targetRuntime, or tool.name)"
-            )
-
-        agent_kind = self._agent_kind_for_id(agent_id)
-        execution_profile_ref = str(
-            node_inputs.get("executionProfileRef")
-            or runtime_block.get("executionProfileRef")
-            or f"default:{agent_id}"
-        )
-        wf_info = workflow.info()
-        correlation_id = wf_info.workflow_id
-        idempotency_key = f"{wf_info.workflow_id}:{node_id}:{wf_info.run_id}"
-
-        workspace_spec: dict[str, Any] = {}
-        for ws_key in ("repository", "repo", "startingBranch", "targetBranch", "branch"):
-            ws_val = node_inputs.get(ws_key)
-            if ws_val is not None:
-                workspace_spec[ws_key] = ws_val
-
-        parameters: dict[str, Any] = {}
-        for param_key in ("model", "effort", "publishMode", "allowed_tools", "stepCount", "maxAttempts", "steps"):
-            param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
-            if param_val is not None:
-                parameters[param_key] = param_val
-
-        return AgentExecutionRequest(
-            agent_kind=agent_kind,
-            agent_id=agent_id,
-            execution_profile_ref=execution_profile_ref,
-            correlation_id=correlation_id,
-            idempotency_key=idempotency_key,
-            instruction_ref=node_inputs.get("instructions") or node_inputs.get("instructionRef"),
-            input_refs=node_inputs.get("inputRefs") or [],
-            workspace_spec=workspace_spec,
-            parameters=parameters,
-            timeout_policy=node_inputs.get("timeoutPolicy") or {},
-            retry_policy=node_inputs.get("retryPolicy") or {},
-            approval_policy=node_inputs.get("approvalPolicy") or {},
-            callback_policy=node_inputs.get("callbackPolicy") or {},
-        )
-
-    def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
-        """Convert ``AgentRunResult`` to the dict format the execution loop expects."""
-        if isinstance(result, dict):
-            failure = result.get("failure_class") or result.get("failureClass")
-            summary = result.get("summary") or ""
-            output_refs = result.get("output_refs") or result.get("outputRefs") or []
-            diagnostics_ref = result.get("diagnostics_ref") or result.get("diagnosticsRef")
-            metadata = result.get("metadata") or {}
-        else:
-            failure = getattr(result, "failure_class", None)
-            summary = getattr(result, "summary", "") or ""
-            output_refs = getattr(result, "output_refs", []) or []
-            diagnostics_ref = getattr(result, "diagnostics_ref", None)
-            metadata = getattr(result, "metadata", {}) or {}
-
-        status = "FAILED" if failure else "COMPLETED"
-        outputs = {
-            "summary": summary,
-            "output_refs": output_refs,
-            "error": failure or "",
-        }
-        if diagnostics_ref:
-            outputs["diagnostics_ref"] = diagnostics_ref
-        outputs.update(metadata)
-
-        return {
-            "status": status,
-            "outputs": outputs,
-        }
-
-    @staticmethod
-    def _extract_jules_session_id(result: Any) -> str | None:
-        """Extract the Jules session ID from an ``AgentRunResult`` for multi-step reuse."""
-        if isinstance(result, dict):
-            metadata = result.get("metadata") or {}
-        else:
-            metadata = getattr(result, "metadata", {}) or {}
-        return metadata.get("jules_session_id")
-
-    @staticmethod
-    def _agent_kind_for_id(agent_id: str) -> str:
-        """Derive ``agent_kind`` from ``agent_id``."""
-        return "managed" if agent_id.lower() in _MANAGED_AGENT_IDS else "external"
 
     async def _run_integration_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]

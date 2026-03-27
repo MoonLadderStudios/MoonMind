@@ -773,7 +773,7 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
                         {
                             "id": "step-1",
                             "tool": {
-                                "type": "agent_runtime",
+                                "type": "skill",
                                 "name": "jules",
                                 "version": "1.0.0",
                             },
@@ -899,7 +899,7 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
                         {
                             "id": "node-1",
                             "tool": {
-                                "type": "agent_runtime",
+                                "type": "skill",
                                 "name": "auto",
                                 "version": "1.0",
                             },
@@ -913,28 +913,17 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
                     "edges": [],
                 }
             ).encode("utf-8")
-        return {"status": "COMPLETED", "outputs": {}}
-
-    async def fake_execute_child_workflow(
-        workflow_type: str,
-        args: object,
-        **_kwargs: object,
-    ) -> object:
-        # Simulates a Claude agent result that spuriously includes
-        # jules_session_id (the old bug).
         return {
-            "summary": "Completed with status completed",
-            "metadata": {
+            "status": "COMPLETED",
+            "outputs": {
                 "push_status": "pushed",
                 "push_branch": "auto-0526d401",
                 "branch": "auto-0526d401",
                 "jules_session_id": "cb4cca35-fake-session-id",
-            },
-            "output_refs": [],
+            }
         }
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
     monkeypatch.setattr(
         run_workflow_module.workflow,

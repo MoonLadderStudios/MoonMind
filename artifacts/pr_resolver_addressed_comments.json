@@ -1,37 +1,42 @@
 [
   {
-    "id": 4140314860,
+    "id": 4140955156,
     "disposition": "not-applicable",
-    "rationale": "Codex usage limit notification from bot, not actionable feedback."
+    "rationale": "Informational codex limits warning."
   },
   {
-    "id": 2999078770,
-    "disposition": "not-applicable",
-    "rationale": "CodeQL false positive: the logged values are profile_id strings (e.g. 'claude_anthropic'), not credentials."
-  },
-  {
-    "id": 4018984796,
-    "disposition": "not-applicable",
-    "rationale": "Gemini review summary with 'no feedback to provide'."
-  },
-  {
-    "id": 2999086104,
+    "id": 2999643522,
     "disposition": "addressed",
-    "rationale": "Changed docstring from 'Upsert' to 'Seed' to match insert-only behavior."
+    "rationale": "Removed 'agent_runtime' handling from run.py and cleaned up unit tests to enforce 'skill' tool type."
   },
   {
-    "id": 2999086110,
-    "disposition": "addressed",
-    "rationale": "Added non-blank value check for ANTHROPIC_MODEL env override to prevent launching Claude without model selection."
-  },
-  {
-    "id": 2999086122,
-    "disposition": "addressed",
-    "rationale": "Already fixed in previous commit: migration now uses convert_from/convert_to instead of ::text/::bytea casts."
-  },
-  {
-    "id": 4018990233,
+    "id": 4019616450,
     "disposition": "not-applicable",
-    "rationale": "Copilot PR overview/summary comment, not actionable feedback."
+    "rationale": "Summary review comment, no direct action needed."
+  },
+  {
+    "id": 2999652254,
+    "disposition": "addressed",
+    "rationale": "Fixed markdown list indentation in docs/Temporal/WorkflowSchedulingGuide.md."
+  },
+  {
+    "id": 2999652291,
+    "disposition": "addressed",
+    "rationale": "Added 'scheduled' and 'proposals' to temporal status maps in task_dashboard_view_model.py."
+  },
+  {
+    "id": 2999652305,
+    "disposition": "addressed",
+    "rationale": "Added 'proposals' state to MoonMindWorkflowState enum in api_service/db/models.py."
+  },
+  {
+    "id": 2999652317,
+    "disposition": "addressed",
+    "rationale": "Added 'proposals' state to MoonMindWorkflowState enum in api_service/db/models.py."
+  },
+  {
+    "id": 4019626055,
+    "disposition": "not-applicable",
+    "rationale": "Summary review comment, no direct action needed."
   }
 ]
