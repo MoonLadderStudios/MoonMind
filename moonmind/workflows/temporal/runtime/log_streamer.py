@@ -34,15 +34,17 @@ class RuntimeLogStreamer:
         """
         chunks: list[bytes] = []
         events: list[dict] = []
+        _CHUNK = 65536  # 64KB read chunks — no per-line size limit
 
         while True:
-            line = await reader.readline()
-            if not line:
+            chunk = await reader.read(_CHUNK)
+            if not chunk:
                 break
-            chunks.append(line)
+            chunks.append(chunk)
             if parser is not None:
-                decoded_line = line.decode("utf-8", errors="replace")
-                parsed_events = parser.parse_stream_chunk(decoded_line)
+                # Decode and split by newlines for structured event extraction.
+                decoded_chunk = chunk.decode("utf-8", errors="replace")
+                parsed_events = parser.parse_stream_chunk(decoded_chunk)
                 events.extend(parsed_events)
 
         data = b"".join(chunks)
