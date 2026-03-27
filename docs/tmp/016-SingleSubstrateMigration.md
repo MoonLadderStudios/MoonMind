@@ -20,7 +20,7 @@ These `docs/tmp/` plans overlap in topic but differ in scope. **This document (0
 | [014-TemporalSchedulingImprovements.md](014-TemporalSchedulingImprovements.md) | `start_delay`, Temporal Schedules, recurring tasks | Recurring dispatch is **Temporal Schedule–backed** (see that doc); aligns with Phase 1.5 / 1.6 here. |
 | [014-TemporalMessageContracts.md](014-TemporalMessageContracts.md) | `MoonMind.Run` Update/Signal/Query contracts | Control-plane commands on the orchestrator are **Updates** (with validators), not a separate “Mission Control queue.” |
 | [015-TemporalIdempotency.md](015-TemporalIdempotency.md) | `update_id`, idempotency keys, workflow-boundary testing | Applies to APIs and workers once execution is Temporal-only. |
-| [015-TemporalAgentAlignmentPlan.md](015-TemporalAgentAlignmentPlan.md) | Alignment roadmap (queries, schedules, observability) | Sibling roadmap; prefer **014-TemporalMessageContracts** for current **signal vs update** facts if docs disagree. |
+| *(retired)* `015-TemporalAgentAlignmentPlan.md` | Was: alignment roadmap (queries, schedules, observability) | Removed 2026-03; use **012** (messages/versioning/observability themes), **014-TemporalSchedulingImprovements**, and **015-TemporalIdempotency**; prefer **014-TemporalMessageContracts** for signal vs update facts if docs disagree. |
 | [017-TemporalTypeSafety.md](017-TemporalTypeSafety.md), [018-TemporalTypeAnnotations.md](018-TemporalTypeAnnotations.md) | Typed activity payloads, binary/json policy | Hardening **Temporal activity boundaries**; unrelated to restoring queue/system sources. |
 
 ---

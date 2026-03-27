@@ -728,31 +728,7 @@ Where MoonMind supports multiple owners/operators:
 
 ## 18. Rollout plan
 
-### Phase 1: Foundations
-- add collector and Grafana stack to Compose
-- standardize structured JSON logs
-- instrument FastAPI
-- expose metrics endpoints
-- add Temporal client interceptors
-- attach workflow_id/run_id/correlation_id to logs
-
-### Phase 2: Temporal worker instrumentation
-- add worker interceptors
-- add activity span wrappers
-- add minimal workflow spans
-- add trace/log correlation fields everywhere
-
-### Phase 3: Domain telemetry
-- add LLM/tool/sandbox/integration spans
-- add cost/token/business metrics
-- route large diagnostics to artifacts
-- add Mission Control links to traces/logs/artifacts
-
-### Phase 4: Hardening
-- add privacy toggles
-- add sampling policy
-- add SLO dashboards and alerts
-- add load/failure tests for telemetry paths
+Phased delivery and actionable checklists are maintained in **`docs/tmp/090-OpenTelemetryPlans.md`** so this design doc stays declarative. That tracker expands the four rollout themes used here—**Foundations → Temporal worker instrumentation → Domain telemetry → Hardening**—and maps them to §15 (service-by-service), §19 (testing expectations), and privacy/hardening notes in §17.
 
 ## 19. Testing strategy
 
@@ -787,15 +763,6 @@ Telemetry failure must never break workflow correctness.
 6. **Default export target is a self-hosted OTel Collector in Docker Compose.**
 7. **Mission Control links to telemetry systems; it does not replace them.**
 
-## 21. Immediate implementation checklist
+## 21. Implementation tracker
 
-1. Add OTel Collector + Tempo + Loki + Prometheus + Grafana to Compose.
-2. Add common telemetry bootstrap module shared by API and workers.
-3. Add FastAPI instrumentation.
-4. Add Temporal client interceptors for start/update/signal/cancel/query.
-5. Add Temporal worker interceptors for workflow/activity boundaries.
-6. Standardize structlog JSON context with trace/workflow/run IDs.
-7. Add activity helper wrappers for LLM/tool/sandbox/integration spans.
-8. Add Prometheus business metrics module.
-9. Add privacy/content-capture config flags.
-10. Add Mission Control trace/log/artifact link surfaces.
+The former numbered implementation checklist is folded into the phase checklists in **`docs/tmp/090-OpenTelemetryPlans.md`** (see §18).
