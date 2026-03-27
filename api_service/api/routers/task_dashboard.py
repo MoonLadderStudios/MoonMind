@@ -52,7 +52,6 @@ _STATIC_PATHS = {
     "manifests",
     "manifests/new",
     "schedules",
-    "schedules/new",
     "settings",
     "skills",
     "workers",
@@ -268,7 +267,7 @@ async def task_dashboard_route(
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
                     "/tasks/create, /tasks/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/schedules/new, /tasks/workers, /tasks/skills, or /tasks/settings."
+                    "/tasks/schedules, /tasks/workers, /tasks/skills, or /tasks/settings."
                 ),
             },
         )

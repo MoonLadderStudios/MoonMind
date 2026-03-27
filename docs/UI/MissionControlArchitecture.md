@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-24  
+Last Updated: 2026-03-27  
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlArchitecture.md`](../tmp/remaining-work/UI-MissionControlArchitecture.md)
 
@@ -144,7 +144,7 @@ Rules:
 
 ### 5.3 Temporal Is Not a Worker Runtime
 
-Temporal is an orchestration substrate, not a replacement for `codex`, `gemini`, `claude`, `jules`, or `universal` runtime choices.
+Temporal is an orchestration substrate, not a replacement for `codex`, `gemini_cli`, `claude`, or `jules` runtime choices.
 
 Rules:
 
@@ -198,14 +198,18 @@ Client-side fallback mapping (mirrors canonical mapping from `docs/Temporal/Visi
 ```json
 {
   "temporal": {
+    "scheduled": "queued",
     "initializing": "queued",
-    "planning": "queued",
+    "waiting_on_dependencies": "waiting",
+    "planning": "running",
+    "awaiting_slot": "queued",
     "executing": "running",
+    "proposals": "running",
     "awaiting_external": "awaiting_action",
     "finalizing": "running",
-    "succeeded": "succeeded",
+    "completed": "completed",
     "failed": "failed",
-    "canceled": "cancelled"
+    "canceled": "canceled"
   }
 }
 ```
@@ -406,11 +410,11 @@ For mixed-source views:
 
 | Temporal state | Allowed actions |
 | --- | --- |
-| `initializing` / `planning` | cancel, set title |
-| `executing` | cancel, pause, set title |
+| `scheduled` / `initializing` / `waiting_on_dependencies` / `awaiting_slot` / `planning` | cancel, set title |
+| `executing` / `proposals` | cancel, pause, set title |
 | `awaiting_external` | cancel, pause, resume, approve when applicable |
 | `finalizing` | cancel only if policy allows |
-| terminal (`succeeded`, `failed`, `canceled`) | rerun, view/download artifacts |
+| terminal (`completed`, `failed`, `canceled`) | rerun, view/download artifacts |
 
 ### 9.3 Copy Guidance
 

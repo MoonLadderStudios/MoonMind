@@ -4,7 +4,7 @@
 **Doc type:** API contract  
 **Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-06 (America/Los_Angeles)  
+**Last updated:** 2026-03-27 (America/Los_Angeles)  
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Api-ExecutionsApiContract.md`](../tmp/remaining-work/Api-ExecutionsApiContract.md)
@@ -175,12 +175,16 @@ The current allowed values for `workflowType` are:
 
 The current allowed values for `state` are:
 
+- `scheduled`
 - `initializing`
+- `waiting_on_dependencies`
 - `planning`
+- `awaiting_slot`
 - `executing`
+- `proposals`
 - `awaiting_external`
 - `finalizing`
-- `succeeded`
+- `completed`
 - `failed`
 - `canceled`
 
@@ -377,7 +381,11 @@ Example:
 | --- | --- | --- | --- | --- |
 | `workflowType` | string | no | none | Filter by workflow type |
 | `state` | string | no | none | Filter by MoonMind domain state |
+| `ownerType` | string | no | none | Admin-capable owner-type filter |
 | `ownerId` | UUID | no | none | Admin-capable owner filter |
+| `entry` | string | no | none | Filter by `mm_entry` |
+| `repo` | string | no | none | Optional repo-scoped filter |
+| `integration` | string | no | none | Optional integration filter |
 | `pageSize` | integer | no | `50` | Must be between `1` and `200` |
 | `nextPageToken` | string | no | none | Opaque pagination token |
 
@@ -385,6 +393,7 @@ Example:
 
 - `workflowType` filters on the root workflow type.
 - `state` filters on MoonMind domain state.
+- `ownerType`, `entry`, `repo`, and `integration` are supported exact-match filters.
 - `ownerId` is optional for admins.
 - Non-admin callers are implicitly scoped to themselves when `ownerId` is omitted.
 
@@ -788,7 +797,8 @@ Malformed request bodies, wrong JSON types, and invalid query/path coercions may
 
 - `workflowId` is the canonical Temporal execution identity,
 - compatibility adapters may transform execution responses into task-shaped payloads,
-- for task-shaped create/update payloads, `task.tool` / `step.tool` are canonical while `task.skill` / `step.skill` remain compatibility aliases where supported,
+- for task-shaped create and promotion payloads, `task.tool` / `step.tool` are canonical while `task.skill` / `step.skill` remain compatibility aliases where supported,
+- when a tool selector is present on Temporal-backed task-shaped submit payloads, `task.tool.type` must be `skill`,
 - task-oriented compatibility surfaces preserve `taskId == workflowId` for Temporal-backed work.
 
 The JSON shapes in this document should remain stable even if the backing implementation shifts among projection, Visibility, or mixed adapters.

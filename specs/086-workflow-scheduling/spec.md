@@ -53,7 +53,7 @@ An operator wants to schedule a code deployment task to run at 2 AM when traffic
 
 A developer wants to run a daily code review at 9 AM on weekdays. On the `/tasks/new` form, they type their instructions, select "Set up recurring schedule", enter `0 9 * * 1-5`, and submit. A schedule definition is created and they are redirected to its detail page showing the next run time.
 
-**Why this priority**: Unified scheduling from the submit form is a major UX improvement over navigating separately to `/tasks/schedules/new`, but can leverage existing `RecurringTasksService` with lighter backend changes.
+**Why this priority**: Unified scheduling from the submit form is a major UX improvement over navigating separately to a dedicated schedule creation page, but can leverage existing `RecurringTasksService` with lighter backend changes.
 
 **Independent Test**: Can be tested by submitting a task with `schedule.mode=recurring` via API and verifying (a) a `RecurringTaskDefinition` is created, (b) the cron and timezone are correct, (c) the response includes `definitionId` and `nextRunAt`.
 
