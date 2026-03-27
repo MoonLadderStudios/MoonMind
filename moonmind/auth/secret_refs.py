@@ -65,6 +65,14 @@ def parse_secret_ref(ref: str) -> ParsedSecretRef:
     elif backend == SecretBackend.DB_ENCRYPTED:
         if not re.fullmatch(r"^[a-z0-9/-]+$", locator):
             raise SecretReferenceError("invalid db locator format")
+    elif backend == SecretBackend.EXEC:
+        command = locator.split("?", 1)[0]
+        if not command or not re.fullmatch(r"^[a-zA-Z0-9_.-]+$", command):
+            raise SecretReferenceError(
+                "invalid exec locator format: command contains invalid characters"
+            )
+    elif backend == SecretBackend.VAULT:
+        parse_vault_reference(candidate, allowed_mounts=())
 
     return ParsedSecretRef(
         backend=backend,
