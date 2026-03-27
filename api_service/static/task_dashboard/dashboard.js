@@ -4640,7 +4640,7 @@
           </select>
         </label>
         <div id="queue-auth-profile-wrap" class="hidden">
-          <label>Auth profile
+          <label>Provider Profile
             <select name="authProfile">
               <option value="">Default (system chooses)</option>
             </select>
