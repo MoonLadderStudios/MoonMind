@@ -7527,7 +7527,7 @@
         endpoint(
           temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
           {
-            namespace: pick(execution, "namespace") || "default",
+            namespace: String(pick(execution, "namespace") || "").trim() || "default",
             workflowId: latestWorkflowId,
             temporalRunId: latestRunId,
             id: latestWorkflowId,
