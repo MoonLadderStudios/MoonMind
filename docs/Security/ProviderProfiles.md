@@ -450,7 +450,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  anthropic_api_key: secret://providers/anthropic/team-default
+  anthropic_api_key: db://providers/anthropic/team-default
 clear_env_keys:
   - ANTHROPIC_AUTH_TOKEN
   - ANTHROPIC_BASE_URL
@@ -484,7 +484,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  provider_api_key: secret://providers/minimax/m27
+  provider_api_key: db://providers/minimax/m27
 clear_env_keys:
   - ANTHROPIC_API_KEY
 env_template:
@@ -526,7 +526,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  provider_api_key: secret://providers/zai/default
+  provider_api_key: db://providers/zai/default
 clear_env_keys:
   - ANTHROPIC_API_KEY
 env_template:
@@ -591,7 +591,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  provider_api_key: secret://providers/minimax/m27
+  provider_api_key: db://providers/minimax/m27
 clear_env_keys:
   - OPENAI_API_KEY
 env_template:

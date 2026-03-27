@@ -15,7 +15,7 @@
 - `priority` (int): default 100
 - `volume_ref` (str | null)
 - `volume_mount_path` (str | null)
-- `secret_refs` (JSONB): dict of internal name to secret literal `secret://...`
+- `secret_refs` (JSONB): dict of internal name to secret literal `db://...`
 - `clear_env_keys` (JSONB): list of strings to blank from environment
 - `env_template` (JSONB): dict of string to dict mapping literals or secret_refs
 - `file_templates` (JSONB): list of file generation instructions

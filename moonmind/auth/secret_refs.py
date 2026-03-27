@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlsplit
@@ -17,6 +18,67 @@ _VAULT_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 class SecretReferenceError(RuntimeError):
     """Raised when secret references are invalid or cannot be resolved safely."""
+
+
+class SecretBackend(str, Enum):
+    ENV = "env"
+    DB_ENCRYPTED = "db"
+    EXEC = "exec"
+    VAULT = "vault"
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedSecretRef:
+    """Normalized general secret reference."""
+
+    backend: SecretBackend
+    locator: str
+    normalized_ref: str
+
+
+def parse_secret_ref(ref: str) -> ParsedSecretRef:
+    """Parse and validate ``<backend>://<locator>`` reference values."""
+
+    candidate = str(ref or "").strip()
+    if not candidate:
+        raise SecretReferenceError("secret reference is required")
+    if len(candidate) > 512:
+        raise SecretReferenceError("secret reference exceeds max length")
+
+    if "://" not in candidate:
+        raise SecretReferenceError("secret reference must use <backend>://<locator> format")
+
+    scheme, locator = candidate.split("://", 1)
+    scheme = scheme.lower()
+
+    if not locator:
+        raise SecretReferenceError("secret reference locator cannot be empty")
+
+    try:
+        backend = SecretBackend(scheme)
+    except ValueError:
+        raise SecretReferenceError(f"unsupported secret backend: {scheme}")
+
+    if backend == SecretBackend.ENV:
+        if not re.fullmatch(r"^[A-Za-z_][A-Za-z0-9_]*$", locator):
+            raise SecretReferenceError("invalid env locator format")
+    elif backend == SecretBackend.DB_ENCRYPTED:
+        if not re.fullmatch(r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)*$", locator):
+            raise SecretReferenceError("invalid db locator format")
+    elif backend == SecretBackend.EXEC:
+        command = locator.split("?", 1)[0]
+        if not command or not re.fullmatch(r"^[a-zA-Z0-9_.-]+$", command):
+            raise SecretReferenceError(
+                "invalid exec locator format: command contains invalid characters"
+            )
+    elif backend == SecretBackend.VAULT:
+        parse_vault_reference(candidate, allowed_mounts=())
+
+    return ParsedSecretRef(
+        backend=backend,
+        locator=locator,
+        normalized_ref=f"{scheme}://{locator}",
+    )
 
 
 @dataclass(frozen=True, slots=True)

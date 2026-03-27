@@ -1,57 +1,47 @@
 [
   {
-    "id": 4145692089,
+    "id": 4145758607,
     "disposition": "not-applicable",
-    "rationale": "Intro comment from bot, no action needed."
+    "rationale": "Informational summary from bot, no action needed."
   },
   {
-    "id": 4145692353,
+    "id": 3003571635,
+    "disposition": "addressed",
+    "rationale": "Added validation for exec and vault backends as requested."
+  },
+  {
+    "id": 4024057390,
     "disposition": "not-applicable",
-    "rationale": "Codex usage limits information, no action needed."
+    "rationale": "Informational summary from bot, no action needed."
   },
   {
-    "id": 3003517802,
+    "id": 3003578250,
     "disposition": "addressed",
-    "rationale": "Updated compatibility rules in docs/Temporal/TemporalSignalsSystem.md to enforce versioned cutover instead of translation layers."
+    "rationale": "Validation for exec and vault was added."
   },
   {
-    "id": 3003517804,
+    "id": 3003578266,
     "disposition": "addressed",
-    "rationale": "Fixed payload types and added missing handlers in the table in docs/Temporal/TemporalSignalsResearch.md."
+    "rationale": "Tightened db locator validation."
   },
   {
-    "id": 3003517805,
+    "id": 3003578278,
     "disposition": "addressed",
-    "rationale": "Replaced '[DONE]' with '- [x]' for checkboxes in docs/tmp/020-TemporalSignalsPlan.md."
+    "rationale": "Removed unused ParsedSecretRef import."
   },
   {
-    "id": 3003517812,
+    "id": 3003578284,
     "disposition": "addressed",
-    "rationale": "Removed the accidental artifact file var/worker-relative/ac74a9da-9060-4127-8ddb-8bb7d599ffee/artifacts/changes.patch and added var/worker-relative/ to .gitignore."
+    "rationale": "Added negative test cases for exec and vault."
   },
   {
-    "id": 4023993139,
+    "id": 3003578290,
+    "disposition": "addressed",
+    "rationale": "Updated specs/105-provider-profiles/data-model.md to use db://."
+  },
+  {
+    "id": 4024065559,
     "disposition": "not-applicable",
-    "rationale": "Code review summary, no action needed."
-  },
-  {
-    "id": 3003525799,
-    "disposition": "addressed",
-    "rationale": "Fixed reschedule payload type in the table in docs/Temporal/TemporalSignalsResearch.md."
-  },
-  {
-    "id": 3003525825,
-    "disposition": "addressed",
-    "rationale": "Updated 'Key gaps and anti-patterns' section in docs/Temporal/TemporalSignalsResearch.md to clarify that Run workflow has update handlers but higher layers send signals."
-  },
-  {
-    "id": 3003525839,
-    "disposition": "addressed",
-    "rationale": "Removed the translation rule entirely in favor of an explicit versioned cutover plan, resolving the mismatch."
-  },
-  {
-    "id": 4024000284,
-    "disposition": "not-applicable",
-    "rationale": "Code review summary, no action needed."
+    "rationale": "Review summary from Copilot, no action needed."
   }
 ]
