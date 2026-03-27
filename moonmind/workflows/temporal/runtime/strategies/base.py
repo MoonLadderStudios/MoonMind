@@ -100,7 +100,6 @@ class ManagedRuntimeStrategy(ABC):
 
         Override for runtimes that need workspace files:
         - Cursor: ``.cursor/rules/``, ``.cursor/cli.json``
-        - Gemini: ``.gemini/`` instruction files
         - Claude: ``CLAUDE.md``
         """
 

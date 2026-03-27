@@ -443,8 +443,22 @@ class ManagedRuntimeLauncher:
         # layered on top so they take precedence over system defaults without
         # discarding the base environment entirely.
         env_overrides = dict(os.environ)
+        
+        for key in getattr(profile, "clear_env_keys", []):
+            env_overrides.pop(key, None)
+
         if profile.env_overrides:
             env_overrides.update(profile.env_overrides)
+
+        secret_refs = getattr(profile, "secret_refs", None)
+        if secret_refs:
+            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import resolve_managed_api_key_reference
+            for ref_key, secret_name in secret_refs.items():
+                secret_value = await resolve_managed_api_key_reference(secret_name)
+                placeholder = f"${{{ref_key}}}"
+                for k, v in env_overrides.items():
+                    if isinstance(v, str) and placeholder in v:
+                        env_overrides[k] = v.replace(placeholder, secret_value)
 
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).

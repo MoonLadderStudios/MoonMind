@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -149,3 +151,47 @@ async def test_cancel_handles_none_request():
     activities = TemporalAgentRuntimeActivities()
     # Should not raise
     await activities.agent_runtime_cancel(None)
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_launch_binds_workflow_id_to_task_run_before_launch():
+    mock_launcher = MagicMock()
+    mock_launcher.launch = AsyncMock(
+        return_value=(SimpleNamespace(model_dump=lambda mode="json": {"status": "launching"}), None, None, None)
+    )
+    mock_supervisor = MagicMock()
+
+    activities = TemporalAgentRuntimeActivities(
+        run_launcher=mock_launcher,
+        run_supervisor=mock_supervisor,
+    )
+    activities._report_task_run_binding = AsyncMock()
+
+    payload = {
+        "run_id": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+        "workflow_id": "mm:workflow-123",
+        "request": {
+            "agentKind": "managed",
+            "agentId": "codex_cli",
+            "executionProfileRef": "default",
+            "correlationId": "corr-1",
+            "idempotencyKey": "idem-1",
+        },
+        "profile": {
+            "runtimeId": "codex_cli",
+            "commandTemplate": ["codex", "exec"],
+            "defaultModel": "gpt-5.3-codex",
+            "defaultEffort": "medium",
+            "defaultTimeoutSeconds": 3600,
+            "workspaceMode": "tempdir",
+            "envOverrides": {},
+        },
+    }
+
+    result = await activities.agent_runtime_launch(payload)
+
+    activities._report_task_run_binding.assert_awaited_once_with(
+        "mm:workflow-123",
+        "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+    )
+    assert result == {"status": "launching"}

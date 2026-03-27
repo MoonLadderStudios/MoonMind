@@ -126,7 +126,7 @@ Rules:
 * `mm_state` MUST be set immediately at workflow start (`initializing`).
 * `scheduled` indicates a deferred one-time execution that has been created but is waiting for its start time.
 * `waiting_on_dependencies` indicates the workflow is blocked on prerequisite work outside its own active execution loop.
-* `awaiting_slot` indicates the workflow is waiting for a bounded runtime resource such as an auth-profile slot.
+* `awaiting_slot` indicates the workflow is waiting for a bounded runtime resource such as an auth-profile slot. This is distinct from `planning` (generating a plan) and `executing` (actively running agent work).
 * `proposals` indicates the workflow is generating or submitting follow-up proposals after execution and before finalization.
 * `mm_state` MUST transition to a terminal value on completion (`completed|failed|canceled`).
 * Terminal `mm_state` must be consistent with Temporal close status:

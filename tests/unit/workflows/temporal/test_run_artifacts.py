@@ -295,6 +295,39 @@ async def test_run_execution_stage_routes_mm_tool_execute_from_registry(
     assert captured[2][1]["registry_snapshot_ref"] == "artifact://registry/1"
 
 
+def test_build_agent_execution_request_includes_bundle_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    request = workflow._build_agent_execution_request(
+        node_inputs={
+            "instructions": "Bundled work",
+            "repository": "org/repo",
+            "startingBranch": "main",
+            "publishMode": "branch",
+            "bundleId": "bundle-1",
+            "bundledNodeIds": ["node-1", "node-2"],
+            "bundleManifestRef": "artifact://bundle/1",
+            "bundleStrategy": "one_shot_jules",
+        },
+        node_id="bundle-1",
+        tool_name="jules",
+    )
+
+    moonmind_meta = request.parameters["metadata"]["moonmind"]
+    assert moonmind_meta["bundleId"] == "bundle-1"
+    assert moonmind_meta["bundledNodeIds"] == ["node-1", "node-2"]
+    assert moonmind_meta["bundleManifestRef"] == "artifact://bundle/1"
+    assert moonmind_meta["bundleStrategy"] == "one_shot_jules"
+
+
 @pytest.mark.asyncio
 async def test_run_execution_stage_fail_fast_raises_when_tool_returns_failed_status(
     monkeypatch: pytest.MonkeyPatch,

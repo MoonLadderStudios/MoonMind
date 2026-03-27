@@ -279,6 +279,8 @@ class ManagedAgentAdapter:
                 env_overrides=shaped_env,
                 passthrough_env_keys=passthrough_env_keys,
                 command_template=cmd_template,
+                secret_refs=profile.get("secret_refs") or {},
+                clear_env_keys=profile.get("clear_env_keys") or [],
             )
             
             # The workspace path is usually managed by the worker, but we can pass it if known
@@ -287,6 +289,7 @@ class ManagedAgentAdapter:
             record_dict = await self._run_launcher(
                 payload={
                     "run_id": run_id,
+                    "workflow_id": self._workflow_id,
                     "request": request.model_dump(mode="json", by_alias=True) if hasattr(request, "model_dump") else request,
                     "profile": profile_obj.model_dump(mode="json", by_alias=True),
                     "workspace_path": workspace_path,

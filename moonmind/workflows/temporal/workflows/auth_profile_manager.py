@@ -112,6 +112,10 @@ class ProfileSlotState:
     current_leases: list[str] = field(default_factory=list)
     lease_granted_at: dict[str, str] = field(default_factory=dict)  # wf_id -> ISO ts
     cooldown_until: Optional[str] = None  # ISO timestamp string or None
+    provider_id: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    priority: int = 100
+    runtime_materialization_mode: Optional[str] = None
 
     @property
     def available_slots(self) -> int:
@@ -175,6 +179,10 @@ class ProfileSlotState:
             "current_leases": list(self.current_leases),
             "lease_granted_at": dict(self.lease_granted_at),
             "cooldown_until": self.cooldown_until,
+            "provider_id": self.provider_id,
+            "tags": list(self.tags),
+            "priority": self.priority,
+            "runtime_materialization_mode": self.runtime_materialization_mode,
         }
 
 
@@ -184,6 +192,7 @@ class PendingRequest:
 
     requester_workflow_id: str
     runtime_id: str
+    profile_selector: Optional[dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +258,7 @@ class MoonMindAuthProfileManagerWorkflow:
             PendingRequest(
                 requester_workflow_id=payload["requester_workflow_id"],
                 runtime_id=payload.get("runtime_id", self._runtime_id or ""),
+                profile_selector=payload.get("profile_selector"),
             )
         )
 
@@ -308,6 +318,7 @@ class MoonMindAuthProfileManagerWorkflow:
                 {
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
+                    "profile_selector": r.profile_selector,
                 }
                 for r in self._pending_requests
             ],
@@ -400,7 +411,8 @@ class MoonMindAuthProfileManagerWorkflow:
         self._pending_requests = [
             PendingRequest(
                 requester_workflow_id=req.get("requester_workflow_id", ""),
-                runtime_id=req.get("runtime_id", "")
+                runtime_id=req.get("runtime_id", ""),
+                profile_selector=req.get("profile_selector"),
             )
             for req in pending_data
             if req.get("requester_workflow_id")
@@ -420,6 +432,10 @@ class MoonMindAuthProfileManagerWorkflow:
                 current_leases=list(leases_data.get(pid, [])),
                 lease_granted_at=dict(lease_times_data.get(pid, {})),
                 cooldown_until=cooldowns_data.get(pid),
+                provider_id=p.get("provider_id"),
+                tags=p.get("tags") or [],
+                priority=p.get("priority", 100),
+                runtime_materialization_mode=p.get("runtime_materialization_mode"),
             )
             self._profiles[pid] = state
 
@@ -445,6 +461,12 @@ class MoonMindAuthProfileManagerWorkflow:
                 existing.max_lease_duration_seconds = p.get(
                     "max_lease_duration_seconds", existing.max_lease_duration_seconds
                 )
+                existing.provider_id = p.get("provider_id", existing.provider_id)
+                existing.tags = p.get("tags") or existing.tags
+                existing.priority = p.get("priority", existing.priority)
+                existing.runtime_materialization_mode = p.get(
+                    "runtime_materialization_mode", existing.runtime_materialization_mode
+                )
             else:
                 self._profiles[pid] = ProfileSlotState(
                     profile_id=pid,
@@ -457,6 +479,10 @@ class MoonMindAuthProfileManagerWorkflow:
                     max_lease_duration_seconds=p.get(
                         "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
                     ),
+                    provider_id=p.get("provider_id"),
+                    tags=p.get("tags") or [],
+                    priority=p.get("priority", 100),
+                    runtime_materialization_mode=p.get("runtime_materialization_mode"),
                 )
 
         # Disable profiles that were removed from DB (but don't drop leases).
@@ -492,7 +518,7 @@ class MoonMindAuthProfileManagerWorkflow:
                     leases_changed = True
                 continue
 
-            profile = self._find_available_profile()
+            profile = self._find_available_profile(req.profile_selector)
             if profile and profile.reserve(req.requester_workflow_id, now):
                 leases_changed = True
                 try:
@@ -515,15 +541,35 @@ class MoonMindAuthProfileManagerWorkflow:
         if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
 
-    def _find_available_profile(self) -> Optional[ProfileSlotState]:
-        """Find the best available profile (most free slots)."""
-        best: Optional[ProfileSlotState] = None
+    def _find_available_profile(self, selector: Optional[dict[str, Any]] = None) -> Optional[ProfileSlotState]:
+        """Find the best available profile matching the selector."""
+        eligible_profiles: list[ProfileSlotState] = []
         for profile in self._profiles.values():
             if not profile.is_available():
                 continue
-            if best is None or profile.available_slots > best.available_slots:
-                best = profile
-        return best
+                
+            if selector:
+                if selector.get("providerId") and profile.provider_id != selector.get("providerId"):
+                    continue
+                if selector.get("runtimeMaterializationMode") and profile.runtime_materialization_mode != selector.get("runtimeMaterializationMode"):
+                    continue
+                
+                tags_any = selector.get("tagsAny", [])
+                if tags_any and not set(tags_any).intersection(set(profile.tags)):
+                    continue
+                    
+                tags_all = selector.get("tagsAll", [])
+                if tags_all and not set(tags_all).issubset(set(profile.tags)):
+                    continue
+
+            eligible_profiles.append(profile)
+
+        if not eligible_profiles:
+            return None
+            
+        # Sort descending by priority, then by available slots
+        eligible_profiles.sort(key=lambda p: (p.priority, p.available_slots), reverse=True)
+        return eligible_profiles[0]
 
     async def _signal_slot_assigned(
         self, requester_workflow_id: str, profile_id: str
@@ -632,6 +678,10 @@ class MoonMindAuthProfileManagerWorkflow:
                     "rate_limit_policy": state.rate_limit_policy,
                     "enabled": state.enabled,
                     "max_lease_duration_seconds": state.max_lease_duration_seconds,
+                    "provider_id": state.provider_id,
+                    "tags": list(state.tags),
+                    "priority": state.priority,
+                    "runtime_materialization_mode": state.runtime_materialization_mode,
                 }
             )
             if state.current_leases:
@@ -651,6 +701,7 @@ class MoonMindAuthProfileManagerWorkflow:
                 {
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
+                    "profile_selector": r.profile_selector,
                 }
                 for r in self._pending_requests
             ],

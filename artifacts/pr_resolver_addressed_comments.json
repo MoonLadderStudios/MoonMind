@@ -2,41 +2,108 @@
   {
     "id": 4140955156,
     "disposition": "not-applicable",
-    "rationale": "Informational codex limits warning."
-  },
+    "rationale": "Informational codex limits warning."  },
   {
     "id": 2999643522,
     "disposition": "addressed",
-    "rationale": "Removed 'agent_runtime' handling from run.py and cleaned up unit tests to enforce 'skill' tool type."
-  },
+    "rationale": "Removed 'agent_runtime' handling from run.py and cleaned up unit tests to enforce 'skill' tool type."  },
   {
     "id": 4019616450,
     "disposition": "not-applicable",
-    "rationale": "Summary review comment, no direct action needed."
-  },
+    "rationale": "Summary review comment, no direct action needed."  },
   {
     "id": 2999652254,
     "disposition": "addressed",
-    "rationale": "Fixed markdown list indentation in docs/Temporal/WorkflowSchedulingGuide.md."
-  },
+    "rationale": "Fixed markdown list indentation in docs/Temporal/WorkflowSchedulingGuide.md."  },
   {
     "id": 2999652291,
     "disposition": "addressed",
-    "rationale": "Added 'scheduled' and 'proposals' to temporal status maps in task_dashboard_view_model.py."
-  },
+    "rationale": "Added 'scheduled' and 'proposals' to temporal status maps in task_dashboard_view_model.py."  },
   {
     "id": 2999652305,
     "disposition": "addressed",
-    "rationale": "Added 'proposals' state to MoonMindWorkflowState enum in api_service/db/models.py."
-  },
+    "rationale": "Added 'proposals' state to MoonMindWorkflowState enum in api_service/db/models.py."  },
   {
     "id": 2999652317,
     "disposition": "addressed",
-    "rationale": "Added 'proposals' state to MoonMindWorkflowState enum in api_service/db/models.py."
-  },
+    "rationale": "Added 'proposals' state to MoonMindWorkflowState enum in api_service/db/models.py."  },
   {
     "id": 4019626055,
     "disposition": "not-applicable",
     "rationale": "Summary review comment, no direct action needed."
-  }
+  },
+  {
+    "id": 4140946136,
+    "disposition": "not-applicable",
+    "rationale": "Informational greeting from bot, no action needed."
+  },
+  {
+    "id": 4140946365,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot comment about usage limits."
+  },
+  {
+    "id": 4019593582,
+    "disposition": "not-applicable",
+    "rationale": "Bot review summary with no actionable feedback."
+  },
+  {
+    "id": 2999644167,
+    "disposition": "addressed",
+    "rationale": "Updated section 2 to correctly reference PUT /api/queue/jobs/{id} and POST /api/executions/{workflowId}/update."
+  },
+  {
+    "id": 2999644181,
+    "disposition": "addressed",
+    "rationale": "Rewrote section 3 to describe the implemented Temporal Workflow Updates approach instead of cancel and restart."
+  },
+  {
+    "id": 4019617115,
+    "disposition": "not-applicable",
+    "rationale": "Informational PR overview from bot, no action needed."
+  },
+  {
+    "id": 2999534543,
+    "disposition": "addressed",
+    "rationale": "Refactored mutli-source extraction into a loop over shared constants."
+  },
+  {
+    "id": 4019480679,
+    "disposition": "not-applicable",
+    "rationale": "General PR review summary comment."
+  },
+  {
+    "id": 2999534550,
+    "disposition": "addressed",
+    "rationale": "Defined shared task run keys in schemas."
+  },
+  {
+    "id": 4140840805,
+    "disposition": "not-applicable",
+    "rationale": "Codex usage limit warning from bot."
+  },
+  {
+    "id": 2999548693,
+    "disposition": "addressed",
+    "rationale": "Cleared task_run_id from record.parameters during continue_as_new."
+  },
+  {
+    "id": 2999548723,
+    "disposition": "addressed",
+    "rationale": "Added parameter cleanup logic to _continue_as_new and added unit test assertions."
+  },
+  {
+    "id": 2999548746,
+    "disposition": "addressed",
+    "rationale": "Fixed import order in test_agent_runtime_activities.py."
+  },
+  {
+    "id": 2999548778,
+    "disposition": "addressed",
+    "rationale": "Added UUID validation logic in _report_task_run_binding activity."
+  },
+  {
+    "id": 4019501946,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR review summary comment."  }
 ]

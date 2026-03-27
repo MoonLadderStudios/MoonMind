@@ -7,8 +7,8 @@ from sqlalchemy.future import select
 from api_service.db.base import get_async_session
 from api_service.auth_providers import get_current_user
 from api_service.api.schemas_oauth_sessions import CreateOAuthSessionRequest, OAuthSessionResponse
-from api_service.services.auth_profile_service import sync_auth_profile_manager
-from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentAuthProfile, ManagedAgentAuthMode, ManagedAgentRateLimitPolicy
+from api_service.services.auth_profile_service import sync_provider_profile_manager
+from api_service.db.models import ManagedAgentOAuthSession, OAuthSessionStatus, User, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
 
 router = APIRouter(prefix="/oauth-sessions", tags=["oauth-sessions"])
 
@@ -226,8 +226,8 @@ async def finalize_oauth_session(
     session_obj.completed_at = datetime.now(timezone.utc)
     
     profile_result = await db.execute(
-        select(ManagedAgentAuthProfile).where(
-            ManagedAgentAuthProfile.profile_id == session_obj.profile_id
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == session_obj.profile_id
         )
     )
     existing_profile = profile_result.scalars().first()
@@ -248,7 +248,7 @@ async def finalize_oauth_session(
 
     profile_data = {
         "runtime_id": session_obj.runtime_id,
-        "auth_mode": ManagedAgentAuthMode.OAUTH,
+        "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,
@@ -262,7 +262,7 @@ async def finalize_oauth_session(
         for key, value in profile_data.items():
             setattr(existing_profile, key, value)
     else:
-        new_profile = ManagedAgentAuthProfile(
+        new_profile = ManagedAgentProviderProfile(
             profile_id=session_obj.profile_id,
             owner_user_id=current_user.id,
             **profile_data
@@ -271,7 +271,7 @@ async def finalize_oauth_session(
 
     await db.commit()
     
-    await sync_auth_profile_manager(session=db, runtime_id=session_obj.runtime_id)
+    await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
     
     return {"status": "succeeded"}
 
