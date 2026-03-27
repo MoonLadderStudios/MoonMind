@@ -28,5 +28,7 @@ These are actual bugs in test cases or application code where asynchronous funct
 - **Unawaited Coroutines in Tests**: The tests `TestVerifyVolumeCredentials.test_successful_verification` and `TestVerifyVolumeCredentials.test_no_credentials_found` have an unawaited mock coroutine (`mock_communicate`). Apply `await` to fix these. Also, `AsyncMockMixin._execute_mock_call` unawaited in pytest.
 - **`api_service/main.py` Unawaited Coroutines**: Likely related to an unawaited async shutdown or startup function (lines 529, 633). 
 
-## Phase 5: Third-party Library Upgrades
-- **Qdrant Version Mismatch**: `qdrant_client` version 1.17.1 is complaining that the server is on an incompatible version (1.14.1). Either downgrade the client, upgrade the Qdrant server container, or explicitly suppress the warning with `check_compatibility=False`.
+## Phase 5: Third-party Library Upgrades (Complete)
+- [x] **Qdrant Version Mismatch**: `qdrant_client` version 1.17.1 is complaining that the server is on an incompatible version (1.14.1). Either downgrade the client, upgrade the Qdrant server container, or explicitly suppress the warning with `check_compatibility=False`.
+
+*Phase 5 is Complete.*

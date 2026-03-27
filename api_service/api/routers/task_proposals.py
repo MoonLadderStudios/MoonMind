@@ -140,7 +140,6 @@ def _serialize_proposal(
         "priorityOverrideReason": proposal.priority_override_reason,
         "proposedByWorkerId": proposal.proposed_by_worker_id,
         "proposedByUserId": proposal.proposed_by_user_id,
-        "promotedJobId": proposal.promoted_job_id,
         "promotedAt": proposal.promoted_at,
         "promotedByUserId": proposal.promoted_by_user_id,
         "decidedByUserId": proposal.decided_by_user_id,
