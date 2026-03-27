@@ -1980,18 +1980,16 @@ class TaskRunLiveSession(Base):
         Enum(
             AgentJobLiveSessionProvider,
             name="agentjoblivesessionprovider",
-            native_enum=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
             validate_strings=True,
-            values_callable=_enum_values,
         )
     )
     status: Mapped[AgentJobLiveSessionStatus] = mapped_column(
         Enum(
             AgentJobLiveSessionStatus,
             name="agentjoblivesessionstatus",
-            native_enum=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
             validate_strings=True,
-            values_callable=_enum_values,
         )
     )
     ready_at: Mapped[Optional[datetime]] = mapped_column(

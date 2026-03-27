@@ -9,7 +9,7 @@ WARNING: This project is still pre-release. A release should be ready in April 2
     </picture>
 </p>
 
-MoonMind is the first open-source platform to orchestrate leading AI agents out of the box — Claude Code, Gemini CLI, Codex, and more — adding resiliency, safety, and observability.
+MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, Gemini CLI, and more — adding resiliency, safety, and observability.
 
 ## Quick Start
 
@@ -68,3 +68,6 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 ## License
 
 MIT — free for personal and commercial use.
+
+### UI Development
+To develop the frontend UI, run `npm install` first. Then run `npm run ui:dev` to start the Vite development server (note: you still need the FastAPI backend running for API calls and template rendering). For production builds, run `npm run ui:build` which outputs assets to the `api_service/static/dist/` directory. **Do not edit files in `dist/` directly**, as they are generated build artifacts.

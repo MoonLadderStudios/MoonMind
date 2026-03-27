@@ -60,12 +60,12 @@ Outcome:
 
 Detailed tasks:
 
-1. Compare `TemporalSignalsSystem.md` against `WorkflowTypeCatalogAndLifecycle.md`, `TemporalScheduling.md`, `IntegrationsMonitoringDesign.md`, `WorkerPauseSystem.md`, and `ManagedAndExternalAgentExecutionModel.md` and identify any remaining conflicts in signal-vs-update ownership.
-2. Decide which names are public execution-control contracts versus internal workflow-only coordination contracts, and remove ambiguous references that imply the same action can be driven interchangeably through both paths.
-3. Document the public rule that `Pause`, `Resume`, `Approve`, and `Cancel` are update-style controls, while `ExternalEvent` and `reschedule` remain signal-style controls.
-4. Document the internal rule that `request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`, `slot_assigned`, `completion_signal`, `child_state_changed`, `profile_assigned`, `finalize`, and `cancel` are workflow-local coordination contracts.
-5. Replace stale research assumptions in any remaining docs that still claim `MoonMind.Run` lacks update or signal handlers.
-6. Record explicit compatibility notes for any signal shape changes that could affect in-flight workflow histories.
+1. - [x] Compare `TemporalSignalsSystem.md` against `WorkflowTypeCatalogAndLifecycle.md`, `TemporalScheduling.md`, `IntegrationsMonitoringDesign.md`, `WorkerPauseSystem.md`, and `ManagedAndExternalAgentExecutionModel.md` and identify any remaining conflicts in signal-vs-update ownership.
+2. - [x] Decide which names are public execution-control contracts versus internal workflow-only coordination contracts, and remove ambiguous references that imply the same action can be driven interchangeably through both paths.
+3. - [x] Document the public rule that `Pause`, `Resume`, `Approve`, and `Cancel` are update-style controls, while `ExternalEvent` and `reschedule` remain signal-style controls.
+4. - [x] Document the internal rule that `request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`, `slot_assigned`, `completion_signal`, `child_state_changed`, `profile_assigned`, `finalize`, and `cancel` are workflow-local coordination contracts.
+5. - [x] Replace stale research assumptions in any remaining docs that still claim `MoonMind.Run` lacks update or signal handlers.
+6. - [x] Record explicit compatibility notes for any signal shape changes that could affect in-flight workflow histories.
 
 Exit criteria:
 

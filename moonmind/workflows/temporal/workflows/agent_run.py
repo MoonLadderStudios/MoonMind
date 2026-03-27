@@ -182,6 +182,7 @@ class MoonMindAgentRun:
         # Auto-answer state (Jules question auto-answer, spec 094)
         self._answered_activity_ids: set[str] = set()
         self._auto_answer_count: int = 0
+        self._pending_operator_messages: list[str] = []
         self._route_cache: dict[str, tuple[str, timedelta, timedelta, RetryPolicy | None, timedelta | None]] = {}
 
     async def _get_route_info(self, activity_name: str, fallback_queue: str, fallback_timeout: timedelta) -> tuple[str, timedelta, timedelta, RetryPolicy | None, timedelta | None]:
@@ -408,6 +409,18 @@ class MoonMindAgentRun:
     def slot_assigned(self, payload: dict) -> None:
         self._assigned_profile_id = payload.get("profile_id")
         self.slot_assigned_event.set()
+
+    @workflow.signal
+    def operator_message(self, payload: dict[str, Any] | None = None) -> None:
+        payload = payload or {}
+        message = str(
+            payload.get("message")
+            or payload.get("clarification_response")
+            or payload.get("clarificationResponse")
+            or ""
+        ).strip()
+        if message:
+            self._pending_operator_messages.append(message)
 
     @staticmethod
     def _normalize_external_status(
@@ -980,6 +993,26 @@ class MoonMindAgentRun:
                 # Wait for completion checking periodically
                 if not skip_poll_and_fetch:
                     while True:
+                        if (
+                            request.agent_kind == "external"
+                            and self._external_agent_id == "jules"
+                            and self.run_id
+                            and self._pending_operator_messages
+                        ):
+                            while self._pending_operator_messages:
+                                operator_message = self._pending_operator_messages.pop(0)
+                                await self._execute_activity_with_routing(
+                                    "integration.jules.send_message",
+                                    {
+                                        "session_id": self.run_id,
+                                        "prompt": operator_message,
+                                    },
+                                    INTEGRATIONS_TASK_QUEUE,
+                                    INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                    cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                )
+                            self.run_status = RunStatus.running
+
                         remaining_timeout = timeout_seconds - (workflow.now() - overall_start).total_seconds()
                         if remaining_timeout <= 0:
                             break

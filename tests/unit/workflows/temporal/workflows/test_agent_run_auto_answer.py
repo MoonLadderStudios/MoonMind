@@ -171,3 +171,23 @@ class TestAutoAnswerDeduplication:
         act_id = "act-2"
         should_answer = act_id not in run._answered_activity_ids
         assert should_answer is True
+
+
+class TestOperatorMessageQueue:
+    """Operator clarification replies should be queued for explicit sendMessage flows."""
+
+    def test_operator_message_signal_queues_non_empty_message(self):
+        run = MoonMindAgentRun()
+
+        run.operator_message({"message": "Use the Provider Profiles name."})
+
+        assert run._pending_operator_messages == [
+            "Use the Provider Profiles name."
+        ]
+
+    def test_operator_message_signal_ignores_blank_message(self):
+        run = MoonMindAgentRun()
+
+        run.operator_message({"message": "   "})
+
+        assert run._pending_operator_messages == []

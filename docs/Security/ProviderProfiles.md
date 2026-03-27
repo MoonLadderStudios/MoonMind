@@ -4,11 +4,10 @@
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-03-27
 
 > [!NOTE]
 > This document replaces the older **Auth Profiles** framing with **Provider Profiles**.
-> A provider profile is broader than authentication alone: it defines which provider a runtime targets, how credentials are sourced, how provider-specific configuration is materialized into the runtime environment, which default model should be used for that provider profile, and how concurrency / cooldown policy is enforced.
+> A provider profile is broader than authentication alone: it defines which provider a runtime targets, how credentials are sourced, how provider-specific configuration is materialized into the runtime environment, and how concurrency / cooldown policy is enforced.
 >
 > For tmate session architecture, OAuth session UX, and provider bootstrap behavior, see [TmateArchitecture.md](../ManagedAgents/TmateArchitecture.md). For the shared `TmateSessionManager` abstraction and session lifecycle, see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md).
 
@@ -16,7 +15,7 @@ Last Updated: 2026-03-27
 
 ## 1. Summary
 
-MoonMind-managed agent runtimes such as Gemini CLI, Claude Code, and Codex CLI do not always map one-to-one to a single upstream company, credential method, or model family.
+MoonMind-managed agent runtimes such as Gemini CLI, Claude Code, and Codex CLI do not always map one-to-one to a single upstream company or authentication model.
 
 Examples:
 
@@ -30,24 +29,13 @@ Examples:
   - OpenAI via API key
   - MiniMax via config-file + environment configuration
 
-The old **auth profile** concept is too narrow for this reality. It assumes the main question is only:
+The old **auth profile** concept is too narrow for this reality. It assumes the main question is “which auth method does this runtime use?” In practice, MoonMind must answer a larger question:
 
-> Which auth method does this runtime use?
-
-In practice, MoonMind must answer a larger question:
-
-> For this run, which runtime should launch against which provider, using which credential source, materialized in which runtime-specific way, with which default model, and with which concurrency and cooldown policy?
+> For this run, which runtime should launch against which provider, using which credential source, materialized in which runtime-specific way, with which concurrency and cooldown policy?
 
 This document defines the **Provider Profile** system that answers that question.
 
-This design makes one boundary explicit:
-
-- **Runtime profiles** define how a runtime is launched in general.
-- **Provider profiles** define which provider-specific defaults and configuration are applied to that launch.
-
-That means **default model selection belongs to the provider profile**, not the runtime profile.
-
-This document builds on the execution model defined in [ManagedAndExternalAgentExecutionModel](../Temporal/ManagedAndExternalAgentExecutionModel.md), especially the sections covering managed runtimes, first-class profile selection, and runtime worker topology.
+This document builds on the execution model defined in [ManagedAndExternalAgentExecutionModel](../Temporal/ManagedAndExternalAgentExecutionModel.md), specifically the sections covering managed runtimes, first-class profile selection, and runtime worker topology.
 
 ---
 
@@ -78,14 +66,8 @@ The Provider Profile system must support all of the following:
 6. **Explicit or selector-based routing**
    - A run may request an exact profile or select from compatible profiles using provider / tags / policy constraints.
 
-7. **Provider-profile-owned model defaults**
-   - Example: `claude_code + anthropic` may default to one model while `claude_code + minimax` defaults to another.
-
-8. **No raw credentials in workflow payloads or persistent profile rows**
+7. **No raw credentials in workflow payloads or persistent profile rows**
    - Provider Profiles store references and templates, not secrets.
-
-9. **No duplicated model truth across top-level fields and provider-specific materialization**
-   - The semantic default model must be declared once and then materialized by runtime strategy code.
 
 ---
 
@@ -98,9 +80,8 @@ This design does **not** attempt to:
 - Replace runtime-specific strategy code entirely.
 - Eliminate the need for per-runtime launch strategies such as Claude, Gemini, or Codex command shaping.
 - Solve pricing / billing attribution by itself.
-- Require every runtime to expose models in the same way.
 
-Provider Profiles define **selection, defaults, and materialization**, not a universal provider protocol.
+Provider Profiles define **selection and materialization**, not a universal provider protocol.
 
 ---
 
@@ -181,57 +162,11 @@ A **Provider Profile** is a named, persistent record that binds:
 - provider
 - credential source
 - materialization strategy
-- default model
 - concurrency / cooldown policy
 - selection metadata
 - runtime-specific launch behavior
 
 into one reusable execution target.
-
-### 4.5 Default Model Ownership
-
-The **default model** is the provider-specific model that MoonMind should use when a run does not specify a model override.
-
-This field belongs to the **Provider Profile**, not the runtime profile.
-
-Why:
-
-- The same runtime may target different providers.
-- Different providers expose different model identifiers.
-- Different providers may require model materialization in different ways.
-- A runtime-global default model is ambiguous once multiple providers exist for that runtime.
-
-Correct examples:
-
-- `claude_code + anthropic` default model: provider-profile field
-- `claude_code + minimax` default model: provider-profile field
-- `codex_cli + minimax` default model: provider-profile field
-
-Incorrect example:
-
-- one `claude_code` runtime-global default model shared across Anthropic, MiniMax, and Z.AI
-
-### 4.6 Runtime Profile vs Provider Profile
-
-The split of responsibility should be:
-
-**Runtime Profile**
-- command template
-- workspace mode
-- runtime-global timeout defaults
-- generic runtime behavior
-- generic passthrough behavior
-- runtime launch semantics that do not depend on which provider is selected
-
-**Provider Profile**
-- provider selection
-- credential source
-- provider-specific env / file materialization
-- model defaults
-- provider-specific command behavior
-- concurrency and cooldown policy
-
-This boundary avoids duplication and prevents provider concerns from leaking into runtime-global config.
 
 ---
 
@@ -252,9 +187,6 @@ ManagedAgentProviderProfile:
   enabled:                       bool
   tags:                          [str]
   priority:                      int
-
-  # provider-level defaults
-  default_model:                 str | null
 
   # concurrency / rate limiting
   max_parallel_runs:             int
@@ -284,7 +216,7 @@ RuntimeFileTemplate:
   merge_strategy:                str            # replace | deep_merge | append
   content_template:              object
   permissions:                   str | null
-````
+```
 
 ### 5.2 Important Semantics
 
@@ -323,19 +255,6 @@ Defines how the runtime is prepared:
 * `config_bundle`: generate provider-specific config file(s).
 * `composite`: combine multiple techniques.
 
-#### `default_model`
-
-The provider-profile-owned default model identifier.
-
-This field is the **semantic source of truth** for model defaulting. It is not just a convenience value. Runtime strategies should use it to shape CLI arguments, environment variables, or generated config files.
-
-Rules:
-
-* It is optional.
-* It is used only when the run request does not supply a model override.
-* It must not be duplicated as a conflicting second truth in runtime-global config.
-* It may be materialized into env variables or config files by the runtime strategy.
-
 #### `clear_env_keys`
 
 Keys that must be removed or blanked before launch to prevent accidental fallback to another provider or auth path.
@@ -356,37 +275,25 @@ env_template:
   API_TIMEOUT_MS: "3000000"
 ```
 
-Important rule:
-
-`env_template` is **not** the semantic owner of the default model. If model-related env vars are needed, the runtime strategy should derive them from `default_model` rather than relying on a second manually maintained model string buried inside the template.
-
 #### `file_templates`
 
 Provider-specific config files to generate before launch.
 
-Examples:
+Example:
 
 * Codex TOML provider stanza
 * Runtime-local JSON settings
 * Generated config fragments under `.moonmind/`
 
-Important rule:
-
-`file_templates` may contain materialized model values, but the semantic default still comes from `default_model`.
-
 #### `max_lease_duration_seconds`
 
-Maximum time a slot lease is valid. The `ProviderProfileManager` evicts leases exceeding this bound as a safety net for cases where a workflow terminates without explicitly releasing its slot.
+Maximum time a slot lease is valid. The `ProviderProfileManager` evicts leases exceeding this bound as a safety net for cases where a workflow terminates without explicitly releasing its slot. See [TaskCancellation.md §6](../Tasks/TaskCancellation.md) for the full defense-in-depth model.
 
 #### `priority`
 
 Higher values mean "try this profile first." When multiple profiles match a selector and have available slots, the profile with the highest `priority` value is selected. Ties are broken by most available slots.
 
-Convention:
-
-* `100` = normal default
-* `110`–`130` = preferred alternatives
-* `50`–`90` = fallback / lower-priority profiles
+Convention: `100` = default, `110`–`130` = preferred alternatives, `50`–`90` = fallback / lower-priority profiles.
 
 #### `command_behavior`
 
@@ -397,55 +304,11 @@ Examples:
 * `suppress_cli_model_flag_when_env_model_present: true`
 * `default_codex_profile_name: "m27"`
 
-This field may affect **how** the resolved model is applied, but should not replace `default_model` as the source of truth.
-
 ---
 
-## 6. Model Resolution Rules
+## 6. Supported Materialization Modes
 
-### 6.1 Resolution Order
-
-The effective model for a run must be resolved in this order:
-
-1. `AgentExecutionRequest.parameters.model`, if explicitly provided
-2. `ManagedAgentProviderProfile.default_model`
-3. runtime/provider native fallback, if omission is intentionally allowed
-
-This is the required precedence rule.
-
-### 6.2 Why This Order Matters
-
-This gives MoonMind the correct behavior:
-
-* a task step can explicitly ask for a model
-* otherwise the provider profile supplies the provider-appropriate default
-* otherwise the runtime may fall back to its native behavior, but only intentionally
-
-This keeps the system explicit without forcing every run to specify a model manually.
-
-### 6.3 Materialization Rule
-
-After the effective model is resolved, runtime strategy code is responsible for materializing it correctly.
-
-Examples:
-
-* Claude-compatible providers may need model env vars
-* Codex may need a generated profile name or model field in TOML
-* Gemini may need a CLI flag or provider-specific config shape
-
-The semantic model decision happens once. Materialization happens later.
-
-### 6.4 Anti-Pattern to Avoid
-
-Do **not** independently hardcode one model in `default_model` and another inside `env_template` or `file_templates`.
-
-That creates configuration drift and makes behavior hard to debug.
-
----
-
-## 7. Supported Materialization Modes
-
-### 7.1 `oauth_home`
+### 6.1 `oauth_home`
 
 Use when the runtime reads OAuth/session state from a home directory or config directory.
 
@@ -466,7 +329,7 @@ env = {
 }
 ```
 
-### 7.2 `api_key_env`
+### 6.2 `api_key_env`
 
 Use when the provider requires a small number of environment variables, often one key.
 
@@ -476,19 +339,19 @@ Typical behavior:
 * Inject values into environment.
 * Clear competing OAuth / alternative-provider keys when necessary.
 
-### 7.3 `env_bundle`
+### 6.3 `env_bundle`
 
 Use when a provider requires a block of environment variables rather than one API key.
 
 This is the correct model for Anthropic-compatible third-party providers used through Claude Code, such as MiniMax and Z.AI.
 
-### 7.4 `config_bundle`
+### 6.4 `config_bundle`
 
 Use when the runtime expects config files to declare model providers, profiles, or transport details.
 
 This is the correct model for Codex CLI providers declared in config.
 
-### 7.5 `composite`
+### 6.5 `composite`
 
 Use when the runtime requires both generated files and environment injection.
 
@@ -499,9 +362,9 @@ This is the expected model for Codex CLI + MiniMax:
 
 ---
 
-## 8. Examples
+## 7. Examples
 
-### 8.1 Gemini CLI + Google OAuth
+### 7.1 Gemini CLI + Google OAuth
 
 The simplest possible profile — a single OAuth volume with no provider-specific env overrides.
 
@@ -516,7 +379,6 @@ account_label: "nsticco@gmail.com (Ultra)"
 enabled: true
 tags: ["default", "oauth"]
 priority: 100
-default_model: null
 max_parallel_runs: 1
 cooldown_after_429_seconds: 300
 rate_limit_policy: backoff
@@ -535,7 +397,7 @@ home_path_overrides:
 command_behavior: {}
 ```
 
-### 8.2 Claude Code + Anthropic OAuth
+### 7.2 Claude Code + Anthropic OAuth
 
 ```yaml
 profile_id: claude_anthropic_oauth_nsticco
@@ -548,7 +410,6 @@ account_label: "nsticco@gmail.com"
 enabled: true
 tags: ["default", "oauth"]
 priority: 100
-default_model: "claude-sonnet-4"
 max_parallel_runs: 1
 cooldown_after_429_seconds: 300
 rate_limit_policy: backoff
@@ -569,7 +430,7 @@ command_behavior: {}
 > [!NOTE]
 > `ANTHROPIC_BASE_URL` is **not** in `clear_env_keys` for the OAuth profile. Transport-layer variables should only be cleared when they would cause the runtime to reach the wrong provider. If the OAuth profile should never use a non-default base URL, the runtime strategy can enforce that separately.
 
-### 8.3 Claude Code + Anthropic API Key
+### 7.3 Claude Code + Anthropic API Key
 
 ```yaml
 profile_id: claude_anthropic_api_team
@@ -582,7 +443,6 @@ account_label: "team-default"
 enabled: true
 tags: ["api-key", "team"]
 priority: 100
-default_model: "claude-sonnet-4"
 max_parallel_runs: 4
 cooldown_after_429_seconds: 300
 rate_limit_policy: backoff
@@ -590,7 +450,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  anthropic_api_key: secret://providers/anthropic/team-default
+  anthropic_api_key: db://providers/anthropic/team-default
 clear_env_keys:
   - ANTHROPIC_AUTH_TOKEN
   - ANTHROPIC_BASE_URL
@@ -602,7 +462,7 @@ home_path_overrides: {}
 command_behavior: {}
 ```
 
-### 8.4 Claude Code + MiniMax
+### 7.4 Claude Code + MiniMax
 
 MiniMax exposes Anthropic-compatible configuration for Claude Code through environment variables. This is not well-modeled as “just API key mode”; it is a provider-specific `env_bundle`.
 
@@ -617,7 +477,6 @@ account_label: "MiniMax M2.7"
 enabled: true
 tags: ["minimax", "m27"]
 priority: 120
-default_model: "MiniMax-M2.7"
 max_parallel_runs: 4
 cooldown_after_429_seconds: 600
 rate_limit_policy: backoff
@@ -625,7 +484,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  provider_api_key: secret://providers/minimax/m27
+  provider_api_key: db://providers/minimax/m27
 clear_env_keys:
   - ANTHROPIC_API_KEY
 env_template:
@@ -634,15 +493,18 @@ env_template:
     secret_ref: provider_api_key
   API_TIMEOUT_MS: "3000000"
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+  ANTHROPIC_MODEL: "MiniMax-M2.7"
+  ANTHROPIC_SMALL_FAST_MODEL: "MiniMax-M2.7"
+  ANTHROPIC_DEFAULT_SONNET_MODEL: "MiniMax-M2.7"
+  ANTHROPIC_DEFAULT_OPUS_MODEL: "MiniMax-M2.7"
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: "MiniMax-M2.7"
 file_templates: []
 home_path_overrides: {}
 command_behavior:
   suppress_cli_model_flag_when_env_model_present: true
 ```
 
-Runtime strategy behavior for this profile should derive model-related Anthropic-compatible variables from `default_model`, rather than storing those model strings as a second manual truth in `env_template`.
-
-### 8.5 Claude Code + Z.AI
+### 7.5 Claude Code + Z.AI
 
 Z.AI is another Claude-compatible provider materialized through an environment bundle.
 
@@ -657,7 +519,6 @@ account_label: "Z.AI Default"
 enabled: true
 tags: ["zai"]
 priority: 110
-default_model: "glm-4.6"
 max_parallel_runs: 4
 cooldown_after_429_seconds: 600
 rate_limit_policy: backoff
@@ -665,7 +526,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  provider_api_key: secret://providers/zai/default
+  provider_api_key: db://providers/zai/default
 clear_env_keys:
   - ANTHROPIC_API_KEY
 env_template:
@@ -678,7 +539,7 @@ home_path_overrides: {}
 command_behavior: {}
 ```
 
-### 8.6 Codex CLI + OpenAI OAuth
+### 7.6 Codex CLI + OpenAI OAuth
 
 ```yaml
 profile_id: codex_openai_oauth_team
@@ -691,7 +552,6 @@ account_label: "team-oauth"
 enabled: true
 tags: ["default", "oauth"]
 priority: 100
-default_model: "codex-mini-latest"
 max_parallel_runs: 1
 cooldown_after_429_seconds: 300
 rate_limit_policy: backoff
@@ -709,7 +569,7 @@ home_path_overrides:
 command_behavior: {}
 ```
 
-### 8.7 Codex CLI + MiniMax
+### 7.7 Codex CLI + MiniMax
 
 Codex CLI uses a provider config entry plus a profile entry, backed by an environment variable containing the provider key. This is a `composite` profile.
 
@@ -724,7 +584,6 @@ account_label: "MiniMax M2.7"
 enabled: true
 tags: ["minimax", "m27"]
 priority: 120
-default_model: "codex-MiniMax-M2.7"
 max_parallel_runs: 4
 cooldown_after_429_seconds: 600
 rate_limit_policy: backoff
@@ -732,7 +591,7 @@ max_lease_duration_seconds: 7200
 volume_ref: null
 volume_mount_path: null
 secret_refs:
-  provider_api_key: secret://providers/minimax/m27
+  provider_api_key: db://providers/minimax/m27
 clear_env_keys:
   - OPENAI_API_KEY
 env_template:
@@ -756,19 +615,18 @@ file_templates:
           stream_idle_timeout_ms: 300000
       profiles:
         m27:
+          model: "codex-MiniMax-M2.7"
           model_provider: "minimax"
 home_path_overrides: {}
 command_behavior:
   default_codex_profile_name: "m27"
 ```
 
-Runtime strategy behavior for this profile should write the effective model derived from `default_model` or request override into the generated Codex profile content.
-
 ---
 
-## 9. Request and Selection Model
+## 8. Request and Selection Model
 
-### 9.1 Why Runtime-Only Selection Is No Longer Enough
+### 8.1 Why Runtime-Only Selection Is No Longer Enough
 
 A request that says only:
 
@@ -782,7 +640,7 @@ MoonMind must not route a generic Claude request to MiniMax, Z.AI, or Anthropic 
 
 Selection must become provider-aware.
 
-### 9.2 Request Contract
+### 8.2 Request Contract
 
 ```yaml
 AgentExecutionRequest:
@@ -793,11 +651,9 @@ AgentExecutionRequest:
     tags_any: [str]
     tags_all: [str]
     runtime_materialization_mode: str | null
-  parameters:
-    model: str | null
 ```
 
-### 9.3 Resolution Order
+### 8.3 Resolution Order
 
 Provider Profile resolution must follow this order:
 
@@ -813,33 +669,23 @@ Provider Profile resolution must follow this order:
 
 This behavior is required for correctness.
 
-### 9.4 Default Provider Fallback
+### 8.4 Default Provider Fallback
 
 When neither `execution_profile_ref` nor `profile_selector.provider_id` is specified, the resolution order above applies across **all** providers for the runtime. This could route a generic `claude_code` request to MiniMax or Z.AI if those profiles happen to have open slots and higher priority.
 
 To prevent unintentional cross-provider routing, one of the following must be true:
 
-1. **Explicit provider in request** — The UI or API caller includes `profile_selector.provider_id`.
+1. **Explicit provider in request** — The UI or API caller includes `profile_selector.provider_id` (recommended default behavior for the Task Dashboard).
 2. **Default tag convention** — Only the primary provider's profiles carry the `default` tag, and the request includes `tags_all: ["default"]`.
-3. **Priority ordering** — The primary provider's profiles have higher `priority` values than alternative providers, making them win when slots are available.
+3. **Priority ordering** — The primary provider's profiles have higher `priority` values than alternative providers, making them always win when slots are available.
 
-### 9.5 Model Override vs Profile Default
-
-Profile selection and model selection are separate decisions.
-
-* Provider profile selection chooses the execution target.
-* Model resolution chooses the effective model on that target.
-
-This matters because:
-
-* a request may explicitly choose `claude_minimax_m27`
-* but still override the model for that one run if the provider/runtime combination supports it
+Option 3 is the lowest-friction approach and works out of the box with the priority convention defined in §5.2. However, operators managing multiple providers should be aware that during periods when all primary-provider slots are in cooldown, runs **will** fall through to lower-priority alternative providers if any are available and compatible.
 
 ---
 
-## 10. Provider Profile Manager Workflow
+## 9. Provider Profile Manager Workflow
 
-### 10.1 Renamed Concept
+### 9.1 Renamed Concept
 
 The older `MoonMind.AuthProfileManager` concept should evolve to **`MoonMind.ProviderProfileManager`**.
 
@@ -848,7 +694,7 @@ The responsibilities remain similar, but the meaning of the managed resource cha
 * before: auth slots
 * now: provider-profile slots
 
-### 10.2 Scope
+### 9.2 Scope
 
 Each runtime family gets one singleton manager workflow:
 
@@ -866,7 +712,7 @@ The manager remains the single source of truth for:
 * queued requests
 * assignment decisions
 
-### 10.3 Signals
+### 9.3 Signals
 
 | Signal            | Direction          | Payload                                                                                                                         |
 | ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -877,7 +723,7 @@ The manager remains the single source of truth for:
 | `slot_assigned`   | Manager → AgentRun | `{profile_id}`                                                                                                                  |
 | `shutdown`        | System → Manager   | none                                                                                                                            |
 
-### 10.4 Waiting Semantics
+### 9.4 Waiting Semantics
 
 If no compatible profile is available, the run waits durably in `awaiting_slot`.
 
@@ -891,7 +737,7 @@ Example summary:
 
 > Waiting for provider profile slot on `claude_code` (`provider=minimax`)
 
-### 10.5 Cooldown Behavior
+### 9.5 Cooldown Behavior
 
 On detected provider 429 or equivalent quota exhaustion:
 
@@ -903,26 +749,24 @@ If another compatible profile exists, the run may continue on a different profil
 
 ---
 
-## 11. Runtime Materialization Pipeline
+## 10. Runtime Materialization Pipeline
 
 The launcher must build the final runtime environment in a predictable, layered way.
 
-### 11.1 Required Order
+### 10.1 Required Order
 
 1. Start from a sane base environment.
 2. Apply runtime-global defaults.
-3. Resolve provider profile selection.
-4. Resolve effective model using request override then provider-profile default.
-5. Remove or blank `clear_env_keys`.
-6. Resolve `secret_refs` into ephemeral launch-only values.
-7. Materialize `file_templates`.
-8. Apply `env_template`.
-9. Apply `home_path_overrides`.
-10. Apply runtime strategy shaping.
-11. Build command.
-12. Launch subprocess.
+3. Remove or blank `clear_env_keys`.
+4. Resolve `secret_refs` into ephemeral launch-only values.
+5. Materialize `file_templates`.
+6. Apply `env_template`.
+7. Apply `home_path_overrides`.
+8. Apply runtime strategy shaping.
+9. Build command.
+10. Launch subprocess.
 
-### 11.2 Critical Rule: Layer, Do Not Replace
+### 10.2 Critical Rule: Layer, Do Not Replace
 
 Provider Profile materialization must **layer onto** a base environment.
 
@@ -930,35 +774,24 @@ It must **not** replace the subprocess environment wholesale with only the profi
 
 Otherwise, essential variables such as `PATH`, `HOME`, and runtime-specific process context may be lost.
 
-### 11.3 Runtime Strategy Integration
+### 10.3 Runtime Strategy Integration
 
 Provider Profiles do not eliminate runtime strategies. Instead:
 
 * Provider Profiles define the data needed to prepare the environment and files.
 * Runtime strategies interpret `command_behavior` and runtime-specific launch rules.
-* Runtime strategies materialize the already-resolved effective model.
 
 Examples:
 
 * Claude strategy may suppress `--model` when model env variables are present.
-* Codex strategy may select a generated named profile and write the effective model into it.
-* Gemini strategy may pass the effective model via CLI or config.
-* OAuth-mode strategies may clear conflicting API-key variables.
-
-### 11.4 Semantic vs Materialized Model
-
-MoonMind must distinguish between:
-
-* **semantic model**: the resolved effective model for the run
-* **materialized model**: the way that model is expressed to the runtime
-
-This distinction is required for correctness, observability, and future UI clarity.
+* Codex strategy may select a generated named profile.
+* Gemini strategy may clear conflicting keys in OAuth mode.
 
 ---
 
-## 12. Persistence Model
+## 11. Persistence Model
 
-### 12.1 Table
+### 11.1 Table
 
 The provider-aware registry supersedes `managed_agent_auth_profiles` with `managed_agent_provider_profiles`.
 
@@ -975,8 +808,6 @@ CREATE TABLE managed_agent_provider_profiles (
     enabled                           BOOLEAN NOT NULL DEFAULT TRUE,
     tags                              JSONB NOT NULL DEFAULT '[]'::jsonb,
     priority                          INTEGER NOT NULL DEFAULT 100,
-
-    default_model                     TEXT,
 
     volume_ref                        TEXT,
     volume_mount_path                 TEXT,
@@ -1008,7 +839,7 @@ CREATE INDEX ix_provider_profiles_enabled
     ON managed_agent_provider_profiles(enabled);
 ```
 
-### 12.2 Secrets
+### 11.2 Secrets
 
 Secrets are never stored directly in:
 
@@ -1018,17 +849,11 @@ Secrets are never stored directly in:
 
 Any sensitive value must be represented indirectly by a secret reference resolved at launch time.
 
-### 12.3 Runtime Profile Cleanup
-
-`default_model` must be removed from runtime-profile persistence and runtime-profile contracts.
-
-Runtime profiles should not own provider-specific model defaults.
-
 ---
 
-## 13. Security Requirements
+## 12. Security Requirements
 
-### 13.1 No Raw Secrets in Workflow Payloads
+### 12.1 No Raw Secrets in Workflow Payloads
 
 Workflows must reference only:
 
@@ -1042,7 +867,7 @@ They must never carry:
 * OAuth access tokens
 * config blobs containing raw secrets
 
-### 13.2 No Raw Secrets in Profile Rows
+### 12.2 No Raw Secrets in Profile Rows
 
 Provider Profiles store:
 
@@ -1053,7 +878,7 @@ Provider Profiles store:
 
 They do not store secret values.
 
-### 13.3 Redaction
+### 12.3 Redaction
 
 Logs, artifacts, run metadata, and diagnostics must redact:
 
@@ -1063,13 +888,13 @@ Logs, artifacts, run metadata, and diagnostics must redact:
 
 Generated config files that contain secrets must be treated as sensitive runtime files, not durable artifacts by default.
 
-### 13.4 Volume Isolation
+### 12.4 Volume Isolation
 
 OAuth volumes remain dedicated, named volumes with controlled ownership and permissions.
 
 One runtime should not read another runtime's credential state unless explicitly designed to do so.
 
-### 13.5 Clear Competing Variables
+### 12.5 Clear Competing Variables
 
 Before launch, conflicting variables must be cleared to avoid accidental provider fallback.
 
@@ -1079,15 +904,15 @@ Examples:
 * MiniMax Claude profile clears `ANTHROPIC_API_KEY`.
 * Codex MiniMax profile clears `OPENAI_API_KEY`.
 
-### 13.6 Launch-Only Secret Resolution
+### 12.6 Launch-Only Secret Resolution
 
 Secret refs are resolved immediately before subprocess launch and should exist only in memory for the minimum possible duration.
 
 ---
 
-## 14. Backward Compatibility and Migration
+## 13. Backward Compatibility and Migration
 
-### 14.1 Terminology Migration
+### 13.1 Terminology Migration
 
 The older “Auth Profile” language is deprecated in favor of “Provider Profile.”
 
@@ -1097,86 +922,26 @@ Expected renames:
 * `MoonMind.AuthProfileManager` → `MoonMind.ProviderProfileManager`
 * `managed_agent_auth_profiles` → `managed_agent_provider_profiles`
 
-### 14.2 Default Model Migration
-
-The old location for default model configuration on `ManagedRuntimeProfile` is deprecated.
-
-The new rule is:
-
-* `ManagedRuntimeProfile.default_model` is removed
-* `ManagedAgentProviderProfile.default_model` is added
-* all effective model resolution must read from request override then provider profile
-
-### 14.3 Migration Strategy
+### 13.2 Migration Strategy
 
 Per Constitution Principle XIII (pre-release project), the migration from Auth Profiles to Provider Profiles is **atomic, not phased**:
 
 * Rename the table (`managed_agent_auth_profiles` → `managed_agent_provider_profiles`) and add new columns in a single Alembic migration.
-* Add `default_model` to `managed_agent_provider_profiles`.
-* Remove `default_model` from runtime-profile contracts and storage in the same change.
 * Update all callers, tests, mocks, and doc references in the same change.
 * Do **not** introduce compatibility aliases, translation layers, or dual-read paths. The old names are removed entirely.
 
-### 14.4 Old Profile Mapping
+### 13.3 Old Profile Mapping
 
 Existing auth profile rows map into the new model as follows:
 
-* OAuth auth profile → `credential_source=oauth_volume`, `runtime_materialization_mode=oauth_home`, `provider_id` inferred from `runtime_id`
-* API key auth profile → `credential_source=secret_ref`, `runtime_materialization_mode=api_key_env`, `provider_id` inferred from `runtime_id` or secret naming
+* OAuth auth profile → `credential_source=oauth_volume`, `runtime_materialization_mode=oauth_home`, `provider_id` inferred from `runtime_id`.
+* API key auth profile → `credential_source=secret_ref`, `runtime_materialization_mode=api_key_env`, `provider_id` inferred from `runtime_id` or `api_key_ref` naming.
 
-Default model migration rules:
-
-* If a runtime has exactly one provider profile, the old runtime default model may be moved directly into that provider profile.
-* If a runtime has multiple provider profiles, the migration must not blindly copy one runtime-global model into all provider profiles.
-* Any ambiguous case must be left null and filled intentionally by the operator or migration logic that can infer the correct provider-specific model.
-
-This migration is lossy only in config shape, not in intended behavior.
+This migration is lossy only in name, not in behavior.
 
 ---
 
-## 15. UI and API Implications
-
-### 15.1 Mission Control
-
-Mission Control should allow Provider Profile creation, inspection, cooldown visibility, testing, enable/disable, and default model editing.
-
-The Provider Profile editor should include:
-
-* runtime
-* provider
-* credential source
-* materialization mode
-* default model
-* concurrency / cooldown settings
-* selection tags
-* profile-specific launch behavior
-
-### 15.2 Runtime Profile UI
-
-Runtime Profile UI should **not** include a default model field.
-
-Runtime Profile editing should remain focused on runtime-global concerns.
-
-### 15.3 Run Details
-
-Run details should expose:
-
-* requested model override, if any
-* provider profile used
-* effective model resolved
-* runtime/provider materialization notes where useful
-
-This will make operator debugging significantly easier.
-
-### 15.4 API Surface
-
-Any API that returns provider profile details should include `default_model`.
-
-Any API that returns runtime profile details should not include `default_model`.
-
----
-
-## 16. Evolution Path
+## 14. Evolution Path
 
 The Provider Profile system should be implemented in phases:
 
@@ -1184,7 +949,6 @@ The Provider Profile system should be implemented in phases:
 
 * Rename Auth Profiles to Provider Profiles in docs and contracts.
 * Add `provider_id`, `credential_source`, and `runtime_materialization_mode`.
-* Add `default_model`.
 * Add `clear_env_keys`, `env_template`, `file_templates`, `command_behavior`.
 
 ### Phase 2 — Selector-Based Resolution
@@ -1192,24 +956,13 @@ The Provider Profile system should be implemented in phases:
 * Extend `AgentExecutionRequest` to include provider-aware selectors.
 * Update the profile manager to route by runtime + provider intent, not runtime alone.
 
-### Phase 3 — Model Resolution Unification
-
-* Remove runtime-profile-owned default model behavior.
-* Resolve model as:
-
-  * request override
-  * provider-profile default
-  * runtime/provider native fallback
-* Make runtime strategies responsible for materializing the resolved model.
-
-### Phase 4 — Runtime Materialization Engine
+### Phase 3 — Runtime Materialization Engine
 
 * Add shared materialization pipeline for env and file templates.
 * Ensure secrets resolve at launch only.
 * Layer environment rather than replacing it.
-* Ensure model materialization uses one semantic source of truth.
 
-### Phase 5 — Provider-Specific Profiles
+### Phase 4 — Provider-Specific Profiles
 
 * Add first-class profile presets for:
 
@@ -1219,17 +972,15 @@ The Provider Profile system should be implemented in phases:
   * Claude + Z.AI
   * Codex + OpenAI
   * Codex + MiniMax
-  * Gemini + Google OAuth
 
-### Phase 6 — UI and Mission Control
+### Phase 5 — UI and Mission Control
 
 * Allow Provider Profile creation, inspection, cooldown visibility, testing, and enable/disable from Mission Control.
 * Show which provider profile each run used.
-* Show the effective model for each run.
 
 ---
 
-## 17. Summary
+## 15. Summary
 
 Provider Profiles replace the narrower Auth Profile model with a provider-aware execution contract.
 
@@ -1239,7 +990,6 @@ A Provider Profile answers all of the following for a managed runtime launch:
 * which upstream provider it should talk to
 * where credentials come from
 * how provider-specific configuration is materialized
-* which default model should be used when the run does not override one
 * which concurrency and cooldown policy applies
 * how compatible profiles are selected when no exact profile is specified
 
@@ -1251,11 +1001,5 @@ This model is required for MoonMind to support modern runtime/provider combinati
 * Claude Code with Z.AI
 * Codex CLI with OpenAI
 * Codex CLI with MiniMax
-* Gemini CLI with Google OAuth
 
-The key architectural rule is simple:
-
-> Runtime profiles define how to launch a runtime.
-> Provider profiles define which provider-specific defaults and configuration that launch should use.
-
-With that rule in place, model ownership becomes unambiguous, provider-specific behavior becomes easier to reason about, and MoonMind's managed runtime system becomes more correct, more explicit, and more extensible.
+The result is a system that is more explicit, more correct, more extensible, and better aligned with how real managed runtimes work in practice.

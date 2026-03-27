@@ -8,13 +8,77 @@ import httpx
 import pytest
 
 from moonmind.auth.secret_refs import (
+    SecretBackend,
     SecretReferenceError,
     VaultSecretResolver,
     load_vault_token,
+    parse_secret_ref,
     parse_vault_reference,
 )
 
 pytestmark = [pytest.mark.asyncio]
+
+
+def test_parse_secret_ref_env() -> None:
+    """Parser should validate env:// references."""
+    parsed = parse_secret_ref("env://MINIMAX_API_KEY")
+    assert parsed.backend == SecretBackend.ENV
+    assert parsed.locator == "MINIMAX_API_KEY"
+    assert parsed.normalized_ref == "env://MINIMAX_API_KEY"
+
+
+def test_parse_secret_ref_db() -> None:
+    """Parser should validate db:// references."""
+    parsed = parse_secret_ref("db://provider-minimax-api-key")
+    assert parsed.backend == SecretBackend.DB_ENCRYPTED
+    assert parsed.locator == "provider-minimax-api-key"
+    assert parsed.normalized_ref == "db://provider-minimax-api-key"
+
+
+def test_parse_secret_ref_exec() -> None:
+    """Parser should validate exec:// references."""
+    parsed = parse_secret_ref("exec://op?vault=MoonMind&item=minimax&field=api_key")
+    assert parsed.backend == SecretBackend.EXEC
+    assert parsed.locator == "op?vault=MoonMind&item=minimax&field=api_key"
+    assert parsed.normalized_ref == "exec://op?vault=MoonMind&item=minimax&field=api_key"
+
+
+def test_parse_secret_ref_vault() -> None:
+    """Parser should validate vault:// references."""
+    parsed = parse_secret_ref("vault://kv/providers/minimax#api_key")
+    assert parsed.backend == SecretBackend.VAULT
+    assert parsed.locator == "kv/providers/minimax#api_key"
+    assert parsed.normalized_ref == "vault://kv/providers/minimax#api_key"
+
+
+def test_parse_secret_ref_invalid_scheme() -> None:
+    """Parser should reject unsupported schemes."""
+    with pytest.raises(SecretReferenceError, match="unsupported secret backend"):
+        parse_secret_ref("https://example.com/secret")
+
+
+def test_parse_secret_ref_invalid_env() -> None:
+    """Parser should reject invalid env locators."""
+    with pytest.raises(SecretReferenceError, match="invalid env locator format"):
+        parse_secret_ref("env://my-key-with-dashes")
+
+
+def test_parse_secret_ref_invalid_db() -> None:
+    """Parser should reject invalid db locators."""
+    with pytest.raises(SecretReferenceError, match="invalid db locator format"):
+        parse_secret_ref("db://My_Key_With_Uppercase")
+
+
+def test_parse_secret_ref_invalid_exec() -> None:
+    """Parser should reject invalid exec locators."""
+    with pytest.raises(SecretReferenceError, match="invalid exec locator format"):
+        parse_secret_ref("exec://?vault=foo")
+
+
+def test_parse_secret_ref_invalid_vault() -> None:
+    """Parser should reject invalid vault locators via parse_vault_reference."""
+    with pytest.raises(SecretReferenceError, match="vault path traversal is not allowed"):
+        parse_secret_ref("vault://kv/../secret#field")
 
 
 async def test_parse_vault_reference_accepts_valid_ref() -> None:

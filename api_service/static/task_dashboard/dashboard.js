@@ -4639,9 +4639,9 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div id="queue-provider-profile-wrap" class="hidden">
-          <label>Provider Profile
-            <select name="providerProfile">
+        <div id="queue-auth-profile-wrap" class="hidden">
+          <label>Auth profile
+            <select name="authProfile">
               <option value="">Default (system chooses)</option>
             </select>
           </label>
@@ -8112,6 +8112,30 @@
         return;
       }
       if (normalizedAction === "pause" || normalizedAction === "resume") {
+        let payload = {};
+        const awaitingAction =
+          String(pick(execution, "rawState", "state") || "")
+            .trim()
+            .toLowerCase() === "awaiting_external";
+        const integrationName = String(
+          pick(execution, "searchAttributes", "mm_integration") ||
+            pick(execution, "targetRuntime") ||
+            "",
+        )
+          .trim()
+          .toLowerCase();
+        if (normalizedAction === "resume" && awaitingAction && integrationName === "jules") {
+          const clarificationReply = window.prompt(
+            "Optional clarification reply for Jules",
+            "",
+          );
+          if (clarificationReply === null) {
+            return;
+          }
+          if (clarificationReply.trim()) {
+            payload = { message: clarificationReply.trim() };
+          }
+        }
         await fetchJson(
           endpoint(
             temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
@@ -8121,6 +8145,7 @@
             method: "POST",
             body: JSON.stringify({
               signalName: normalizedAction === "pause" ? "Pause" : "Resume",
+              payload,
             }),
           },
         );
@@ -8133,6 +8158,30 @@
         if (approvalType === null) {
           return;
         }
+        let payload = { approval_type: approvalType || "operator" };
+        const integrationName = String(
+          pick(execution, "searchAttributes", "mm_integration") ||
+            pick(execution, "targetRuntime") ||
+            "",
+        )
+          .trim()
+          .toLowerCase();
+        const awaitingAction =
+          String(pick(execution, "rawState", "state") || "")
+            .trim()
+            .toLowerCase() === "awaiting_external";
+        if (awaitingAction && integrationName === "jules") {
+          const clarificationReply = window.prompt(
+            "Optional clarification reply for Jules",
+            "",
+          );
+          if (clarificationReply === null) {
+            return;
+          }
+          if (clarificationReply.trim()) {
+            payload.message = clarificationReply.trim();
+          }
+        }
         await fetchJson(
           endpoint(
             temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
@@ -8142,7 +8191,7 @@
             method: "POST",
             body: JSON.stringify({
               signalName: "Approve",
-              payload: { approval_type: approvalType || "operator" },
+              payload,
             }),
           },
         );

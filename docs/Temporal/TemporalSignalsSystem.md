@@ -552,6 +552,16 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 
 ---
 
+
+### 10.1 Explicit Compatibility Notes (Phase 0)
+
+To protect in-flight workflow histories during the transition to this desired-state contract without violating the strict "no internal compatibility wrappers" policy:
+
+1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.Run` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `AuthProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
+2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring safety without polluting the new codebase with backward-compatibility logic.
+
+---
+
 ## 11. Relationship to Other Temporal Controls
 
 The Temporal Signals System works alongside, not instead of, the rest of MoonMind's Temporal control model.

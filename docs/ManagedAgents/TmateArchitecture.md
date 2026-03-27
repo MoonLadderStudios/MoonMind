@@ -38,18 +38,7 @@ Both share identical lifecycle concerns (session creation, readiness detection, 
 
 ### 3.1 Live Log Tailing
 
-When a managed agent run starts, the worker exposes a tmate read-only web
-endpoint (`web_ro`). Session metadata is persisted in
-**`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report lifecycle
-updates via **`POST /api/task-runs/{id}/live-session/report`** (and
-**`.../heartbeat`**); operators use **`GET /api/task-runs/{id}/live-session`**
-for the Live Output panel. The legacy managed CLI worker path
-(`moonmind/agents/codex_worker`, historical package name) owns a parallel tmate
-bootstrap for that HTTP path for **all** runtimes it executes; the Temporal
-agent-runtime worker uses **`ManagedRuntimeLauncher`** +
-**`TmateSessionManager`** for subprocess wrapping (see
-[TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section
-5).
+When a managed agent run starts, the worker exposes a tmate read-only web endpoint (`web_ro`). Session metadata is persisted in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report lifecycle updates via **`POST /api/task-runs/{id}/live-session/report`** (and **`.../heartbeat`**); operators use **`GET /api/task-runs/{id}/live-session`** for the Live Output panel. The **managed agent queue worker** (`moonmind/agents/codex_worker`, historical package name) owns a parallel tmate bootstrap for that HTTP path for **all** runtimes it executes; the Temporal agent-runtime worker uses **`ManagedRuntimeLauncher`** + **`TmateSessionManager`** for subprocess wrapping (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5).
 
 See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5 for the persistence model and API shape.
 
