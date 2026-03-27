@@ -289,7 +289,7 @@
 
   const listSubmitRuntimes = () => Array.from(new Set([...supportedTaskRuntimes]));
 
-  /** Maps task submit runtime (dashboard) to managed_agent_auth_profiles.runtime_id. */
+  /** Maps task submit runtime (dashboard) to managed_agent_provider_profiles.runtime_id. */
   const mapTaskRuntimeToAuthProfileRuntimeId = (mode) => {
     const runtimeMap = {
       gemini: "gemini_cli",
@@ -536,16 +536,16 @@
       ? systemConfig.workerPause
       : null;
   const workerPauseTransport = createWorkerPauseTransport(workerPauseConfig);
-  const authProfileEndpoints =
-    systemConfig.authProfiles &&
-      typeof systemConfig.authProfiles === "object" &&
-      !Array.isArray(systemConfig.authProfiles)
+  const providerProfileEndpoints =
+    systemConfig.providerProfiles &&
+      typeof systemConfig.providerProfiles === "object" &&
+      !Array.isArray(systemConfig.providerProfiles)
       ? {
-        list: String(systemConfig.authProfiles.list || "/api/v1/auth-profiles"),
-        create: String(systemConfig.authProfiles.create || "/api/v1/auth-profiles"),
-        detail: String(systemConfig.authProfiles.detail || "/api/v1/auth-profiles/{profileId}"),
-        update: String(systemConfig.authProfiles.update || "/api/v1/auth-profiles/{profileId}"),
-        delete: String(systemConfig.authProfiles.delete || "/api/v1/auth-profiles/{profileId}"),
+        list: String(systemConfig.providerProfiles.list || "/api/v1/provider-profiles"),
+        create: String(systemConfig.providerProfiles.create || "/api/v1/provider-profiles"),
+        detail: String(systemConfig.providerProfiles.detail || "/api/v1/provider-profiles/{profileId}"),
+        update: String(systemConfig.providerProfiles.update || "/api/v1/provider-profiles/{profileId}"),
+        delete: String(systemConfig.providerProfiles.delete || "/api/v1/provider-profiles/{profileId}"),
       }
       : null;
   const taskTemplateEndpoints = {
@@ -1669,7 +1669,7 @@
       ? publishNode.mode
       : payload.publishMode || extractPublishModeFromPayload(payload);
 
-    const authProfileId = (() => {
+    const providerProfileId = (() => {
       const ref =
         runtimeNode.executionProfileRef ?? runtimeNode.execution_profile_ref;
       return typeof ref === "string" ? ref.trim() : "";
@@ -1707,7 +1707,7 @@
       steps,
       appliedTemplateState,
       templateFeatureRequest: "",
-      authProfileId,
+      providerProfileId,
     };
   }
 
@@ -4561,7 +4561,7 @@
       ? sanitizedWorkerDraft.steps
       : [];
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
-    const queueDraftAuthProfile = String(sanitizedWorkerDraft.authProfileId || "").trim();
+    const queueDraftProviderProfile = String(sanitizedWorkerDraft.providerProfileId || "").trim();
     const attachmentAcceptedTypes = attachmentPolicy.allowedContentTypes.join(",");
     const attachmentSectionHtml =
       attachmentPolicy.enabled && !isEditMode
@@ -4902,7 +4902,7 @@
           .toLowerCase(),
         model: String(formData.get("model") || "").trim(),
         effort: String(formData.get("effort") || "").trim(),
-        authProfileId: String(formData.get("authProfile") || "").trim(),
+        providerProfileId: String(formData.get("providerProfile") || "").trim(),
         priority: Number.isFinite(priority) ? priority : 0,
         maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 3,
         proposeTasks: formData.get("proposeTasks") !== null,
@@ -4926,40 +4926,40 @@
     const effortInputElement = form.querySelector('input[name="effort"]');
     const modelDatalistNode = form.querySelector("#queue-model-options");
     const effortDatalistNode = form.querySelector("#queue-effort-options");
-    const authProfileWrap = form.querySelector("#queue-auth-profile-wrap");
-    const authProfileHint = form.querySelector("#queue-auth-profile-hint");
-    const authProfileSelect = form.querySelector('select[name="authProfile"]');
-    let applyQueueDraftAuthProfileOnce = true;
-    let authProfileFetchToken = 0;
+    const providerProfileWrap = form.querySelector("#queue-provider-profile-wrap");
+    const providerProfileHint = form.querySelector("#queue-auth-profile-hint");
+    const providerProfileSelect = form.querySelector('select[name="providerProfile"]');
+    let applyQueueDraftProviderProfileOnce = true;
+    let providerProfileFetchToken = 0;
 
-    const refreshAuthProfileOptions = async (runtimeMode) => {
-      if (!authProfileWrap || !authProfileSelect) {
+    const refreshProviderProfileOptions = async (runtimeMode) => {
+      if (!providerProfileWrap || !providerProfileSelect) {
         return;
       }
-      if (!authProfileEndpoints) {
-        authProfileWrap.classList.add("hidden");
+      if (!providerProfileEndpoints) {
+        providerProfileWrap.classList.add("hidden");
         return;
       }
       const mappedRuntimeId = mapTaskRuntimeToAuthProfileRuntimeId(runtimeMode);
       if (!mappedRuntimeId) {
-        authProfileWrap.classList.add("hidden");
-        authProfileSelect.innerHTML =
+        providerProfileWrap.classList.add("hidden");
+        providerProfileSelect.innerHTML =
           '<option value="">Default (system chooses)</option>';
-        if (authProfileHint) {
-          authProfileHint.textContent = "";
+        if (providerProfileHint) {
+          providerProfileHint.textContent = "";
         }
         return;
       }
-      const previousSelection = String(authProfileSelect.value || "").trim();
-      authProfileWrap.classList.remove("hidden");
-      if (authProfileHint) {
-        authProfileHint.textContent =
+      const previousSelection = String(providerProfileSelect.value || "").trim();
+      providerProfileWrap.classList.remove("hidden");
+      if (providerProfileHint) {
+        providerProfileHint.textContent =
           "Optional. Choose stored credentials for this runtime, or leave default for automatic selection.";
       }
       try {
-        authProfileFetchToken += 1;
-        const currentToken = authProfileFetchToken;
-        let listEndpoint = authProfileEndpoints.providerProfilesList || authProfileEndpoints.list || "";
+        providerProfileFetchToken += 1;
+        const currentToken = providerProfileFetchToken;
+        let listEndpoint = providerProfileEndpoints.providerProfilesList || providerProfileEndpoints.list || "";
         if (listEndpoint.includes("/auth-profiles")) {
           listEndpoint = listEndpoint.replace("/auth-profiles", "/provider-profiles");
         }
@@ -4967,7 +4967,7 @@
           mappedRuntimeId,
         )}&enabled_only=true`;
         const profiles = await fetchJson(url);
-        if (currentToken !== authProfileFetchToken) {
+        if (currentToken !== providerProfileFetchToken) {
           return;
         }
         const list = Array.isArray(profiles) ? profiles : [];
@@ -4982,27 +4982,27 @@
             `<option value="${escapeHtml(pid)}">${escapeHtml(label)}</option>`,
           );
         });
-        authProfileSelect.innerHTML = options.join("");
+        providerProfileSelect.innerHTML = options.join("");
         const desired = String(previousSelection || "").trim();
         let pickId = desired;
-        if (!pickId && applyQueueDraftAuthProfileOnce) {
-          pickId = String(queueDraftAuthProfile || "").trim();
+        if (!pickId && applyQueueDraftProviderProfileOnce) {
+          pickId = String(queueDraftProviderProfile || "").trim();
         }
-        applyQueueDraftAuthProfileOnce = false;
+        applyQueueDraftProviderProfileOnce = false;
         if (
           pickId &&
           list.some((p) => String(p.profile_id || "").trim() === pickId)
         ) {
-          authProfileSelect.value = pickId;
+          providerProfileSelect.value = pickId;
         }
       } catch (_error) {
-        console.warn("submit form: could not load auth profiles", _error);
-        authProfileWrap.classList.add("hidden");
-        authProfileSelect.innerHTML =
+        console.warn("submit form: could not load provider profiles", _error);
+        providerProfileWrap.classList.add("hidden");
+        providerProfileSelect.innerHTML =
           '<option value="">Default (system chooses)</option>';
-        if (authProfileHint) {
-          authProfileHint.textContent =
-            "Could not load auth profiles. The run will use default profile selection.";
+        if (providerProfileHint) {
+          providerProfileHint.textContent =
+            "Could not load provider profiles. The run will use default profile selection.";
         }
       }
     };
@@ -5133,11 +5133,11 @@
         activeWorkerRuntime = nextRuntime;
         applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime);
-        void refreshAuthProfileOptions(nextRuntime);
+        void refreshProviderProfileOptions(nextRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
       });
-      void refreshAuthProfileOptions(runtimeSelect.value);
+      void refreshProviderProfileOptions(runtimeSelect.value);
     }
     form.addEventListener("input", scheduleWorkerDraftPersist);
     form.addEventListener("change", scheduleWorkerDraftPersist);
@@ -6088,7 +6088,7 @@
       }
       const model = String(formData.get("model") || "").trim() || null;
       const effort = String(formData.get("effort") || "").trim() || null;
-      const authProfileRef = String(formData.get("authProfile") || "").trim();
+      const providerProfileRef = String(formData.get("providerProfile") || "").trim();
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
       const affinityKey = queueDraftAffinityKey || null;
@@ -6272,7 +6272,7 @@
             mode: runtimeMode,
             model,
             effort,
-            ...(authProfileRef ? { executionProfileRef: authProfileRef } : {}),
+            ...(providerProfileRef ? { executionProfileRef: providerProfileRef } : {}),
           },
           git: { startingBranch, newBranch },
           publish: {
@@ -9420,13 +9420,13 @@
           </form>
         </section>
       `;
-      const authProfilesMarkup = authProfileEndpoints ? `
-        <section class="card system-settings-auth-profiles">
-          <h3>Auth Profiles</h3>
+      const providerProfilesMarkup = providerProfileEndpoints ? `
+        <section class="card system-settings-provider-profiles">
+          <h3>Provider Profiles</h3>
           <p class="form-caption">
             Manage authentication profiles for managed agent runtimes.
           </p>
-          <div data-auth-profiles-table>
+          <div data-provider-profiles-table>
             <p class="loading">Loading profiles...</p>
           </div>
           <dialog id="oauth-session-modal">
@@ -9444,9 +9444,9 @@
           </dialog>
           <details class="auth-profile-create-toggle">
             <summary>Create New Profile</summary>
-            <form data-auth-profile-form="create" class="stack">
+            <form data-provider-profile-form="create" class="stack">
               <fieldset>
-                <legend>New Auth Profile</legend>
+                <legend>New Provider Profile</legend>
                 <label>
                   Profile ID
                   <input type="text" name="profile_id" maxlength="80" required
@@ -9532,7 +9532,7 @@
         <div data-system-settings-notice>${noticeHtml}</div>
         <div class="system-settings">
           ${workerPauseMarkup}
-          ${authProfilesMarkup}
+          ${providerProfilesMarkup}
         </div>
       `;
       setView(
@@ -9689,10 +9689,10 @@
 
     function buildProfileTableMarkup(profiles) {
       if (!Array.isArray(profiles) || profiles.length === 0) {
-        return "<p class='small'>No auth profiles configured.</p>";
+        return "<p class='small'>No provider profiles configured.</p>";
       }
       return `
-        <table class="auth-profiles-table">
+        <table class="provider-profiles-table">
           <thead>
             <tr>
               <th>Profile ID</th>
@@ -9733,29 +9733,29 @@
       `;
     }
 
-    async function loadAuthProfiles() {
-      if (!authProfileEndpoints) {
+    async function loadProviderProfiles() {
+      if (!providerProfileEndpoints) {
         return;
       }
-      const tableNode = document.querySelector("[data-auth-profiles-table]");
+      const tableNode = document.querySelector("[data-provider-profiles-table]");
       if (!tableNode) {
         return;
       }
       try {
-        const response = await fetch(authProfileEndpoints.list, {
+        const response = await fetch(providerProfileEndpoints.list, {
           credentials: "include",
           headers: { Accept: "application/json" },
         });
         if (!response.ok) {
-          tableNode.innerHTML = "<p class='small'>Failed to load auth profiles.</p>";
+          tableNode.innerHTML = "<p class='small'>Failed to load provider profiles.</p>";
           return;
         }
         const profiles = await response.json();
         tableNode.innerHTML = buildProfileTableMarkup(profiles);
         attachProfileHandlers();
       } catch (error) {
-        console.error("auth profiles load failed", error);
-        tableNode.innerHTML = "<p class='small'>Error loading auth profiles.</p>";
+        console.error("provider profiles load failed", error);
+        tableNode.innerHTML = "<p class='small'>Error loading provider profiles.</p>";
       }
     }
 
@@ -9860,7 +9860,7 @@
         btn.addEventListener("click", async () => {
           const profileId = btn.dataset.profileToggle;
           const isCurrentlyEnabled = btn.textContent.trim() === "Disable";
-          const endpoint = authProfileEndpoints.update.replace("{profileId}", profileId);
+          const endpoint = providerProfileEndpoints.update.replace("{profileId}", profileId);
           try {
             await fetch(endpoint, {
               method: "PATCH",
@@ -9868,7 +9868,7 @@
               headers: { "Content-Type": "application/json", Accept: "application/json" },
               body: JSON.stringify({ enabled: !isCurrentlyEnabled }),
             });
-            await loadAuthProfiles();
+            await loadProviderProfiles();
           } catch (error) {
             console.error("toggle profile failed", error);
           }
@@ -9878,23 +9878,23 @@
       document.querySelectorAll("[data-profile-delete]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const profileId = btn.dataset.profileDelete;
-          if (!window.confirm(`Delete auth profile "${profileId}"?`)) {
+          if (!window.confirm(`Delete provider profile "${profileId}"?`)) {
             return;
           }
-          const endpoint = authProfileEndpoints.delete.replace("{profileId}", profileId);
+          const endpoint = providerProfileEndpoints.delete.replace("{profileId}", profileId);
           try {
             await fetch(endpoint, {
               method: "DELETE",
               credentials: "include",
             });
-            await loadAuthProfiles();
+            await loadProviderProfiles();
           } catch (error) {
             console.error("delete profile failed", error);
           }
         });
       });
 
-      const createForm = document.querySelector('[data-auth-profile-form="create"]');
+      const createForm = document.querySelector('[data-provider-profile-form="create"]');
       createForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const formData = new FormData(createForm);
@@ -9937,7 +9937,7 @@
           return;
         }
         try {
-          const response = await fetch(authProfileEndpoints.create, {
+          const response = await fetch(providerProfileEndpoints.create, {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -9949,17 +9949,17 @@
             return;
           }
           if (!response.ok) {
-            setNotice("error", "Failed to create auth profile.");
+            setNotice("error", "Failed to create provider profile.");
             syncDynamicView();
             return;
           }
           setNotice("ok", `Profile "${payload.profile_id}" created.`);
           createForm.reset();
-          await loadAuthProfiles();
+          await loadProviderProfiles();
           syncDynamicView();
         } catch (error) {
           console.error("create profile failed", error);
-          setNotice("error", "Failed to create auth profile.");
+          setNotice("error", "Failed to create provider profile.");
           syncDynamicView();
         }
       });
@@ -9985,16 +9985,16 @@
       }
       if (silent && hasRendered) {
         syncDynamicView();
-        loadAuthProfiles();
+        loadProviderProfiles();
         return;
       }
       renderView();
-      loadAuthProfiles();
+      loadProviderProfiles();
     };
 
     setView(
       "Worker controls",
-      "Manage worker pause controls and auth profiles.",
+      "Manage worker pause controls and provider profiles.",
       "<p class='loading'>Loading worker controls...</p>",
       { showAutoRefreshControls: true },
     );

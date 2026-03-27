@@ -3794,7 +3794,7 @@ export interface components {
              * Signalname
              * @enum {string}
              */
-            signalName: "ExternalEvent";
+            signalName: "ExternalEvent" | "Pause" | "Resume" | "Approve";
             /** Payload */
             payload?: {
                 [key: string]: unknown;
