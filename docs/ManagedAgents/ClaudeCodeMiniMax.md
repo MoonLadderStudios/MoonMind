@@ -128,7 +128,7 @@ Claude Code treats `ANTHROPIC_AUTH_TOKEN` as a bearer-style credential for third
 
 ### Auth Profile Manager
 
-The `AuthProfileManager` Temporal workflow for `claude_code` automatically manages concurrency slots across both the default Claude profile and the MiniMax profile. When a task requests `claude_code`, the manager selects an available profile based on slot availability and cooldown state.
+The `ProviderProfileManager` Temporal workflow for `claude_code` automatically manages concurrency slots across both the default Claude profile and the MiniMax profile. When a task requests `claude_code`, the manager selects an available profile based on slot availability and cooldown state.
 
 ---
 
@@ -140,7 +140,7 @@ When creating a task in the dashboard:
 2. Set **Execution Profile** to `claude_minimax`.
 3. The task will use MiniMax-M2.7 through the MiniMax API endpoint.
 
-If no profile is explicitly selected, the `AuthProfileManager` picks the next available `claude_code` profile, which may be any of `claude_default` or `claude_minimax` depending on slot availability.
+If no profile is explicitly selected, the `ProviderProfileManager` picks the next available `claude_code` profile, which may be any of `claude_anthropic` or `claude_minimax` depending on slot availability.
 
 ---
 
@@ -158,6 +158,6 @@ If no profile is explicitly selected, the `AuthProfileManager` picks the next av
 
 ## 8. Related Documentation
 
-- [ManagedAgentsAuthentication](./ManagedAgentsAuthentication.md) — auth profile registry, volume system, and slot management
+- [ProviderProfiles](../Security/ProviderProfiles.md) — provider profile registry, volume system, and slot management
 - [ManagedAndExternalAgentExecutionModel](../Temporal/ManagedAndExternalAgentExecutionModel.md) — execution model for managed agent runtimes
 - [SecretStore](./SecretStore.md) — vault-based secret resolution for `api_key_ref`

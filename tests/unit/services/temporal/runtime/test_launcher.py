@@ -724,6 +724,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     # Ensure PATH is visible in os.environ so we can assert it propagates.
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/testuser")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-drop-me")
 
     store = ManagedRunStore(tmp_path)
     launcher = ManagedRuntimeLauncher(store)
@@ -734,6 +735,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
             "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
             "ANTHROPIC_MODEL": "MiniMax-M2.7",
         },
+        clear_env_keys=["OPENAI_API_KEY"],
         passthrough_env_keys=[],
     )
     request = _make_request()
@@ -776,4 +778,7 @@ async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeyp
     assert "HOME" in captured_env, "HOME was stripped from child env — env bug reintroduced"
     assert captured_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
     assert captured_env["HOME"] == "/home/testuser"
+
+    # Keys specified in clear_env_keys must be stripped
+    assert "OPENAI_API_KEY" not in captured_env, "clear_env_keys was ignored; ambient credential leaked"
 

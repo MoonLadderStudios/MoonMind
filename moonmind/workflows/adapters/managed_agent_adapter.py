@@ -279,6 +279,8 @@ class ManagedAgentAdapter:
                 env_overrides=shaped_env,
                 passthrough_env_keys=passthrough_env_keys,
                 command_template=cmd_template,
+                secret_refs=profile.get("secret_refs") or {},
+                clear_env_keys=profile.get("clear_env_keys") or [],
             )
             
             # The workspace path is usually managed by the worker, but we can pass it if known

@@ -88,6 +88,12 @@ _MANAGED_AGENT_IDS = frozenset(
 )
 
 
+def _normalize_agent_runtime_id(agent_id: str) -> str:
+    """Normalize runtime identifiers for managed/external dispatch decisions."""
+
+    return str(agent_id).strip().lower().replace("-", "_")
+
+
 @workflow.defn(name="MoonMind.Run")
 class MoonMindRunWorkflow:
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
@@ -1029,7 +1035,8 @@ class MoonMindRunWorkflow:
     @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
         """Derive ``agent_kind`` from ``agent_id``."""
-        return "managed" if agent_id.lower() in _MANAGED_AGENT_IDS else "external"
+        normalized_agent_id = _normalize_agent_runtime_id(agent_id)
+        return "managed" if normalized_agent_id in _MANAGED_AGENT_IDS else "external"
 
     async def _run_integration_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
