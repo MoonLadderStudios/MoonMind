@@ -676,17 +676,24 @@ class MoonMindRunWorkflow:
                     failure_message = self._activity_result_failure_message(
                         execution_result
                     )
-                    
-                    if failure_message == "system_error" and system_retries < 3:
+
+                    retryable = (
+                        failure_message == "system_error"
+                        or (
+                            failure_message == "execution_error"
+                            and tool_type == "agent_runtime"
+                        )
+                    )
+                    if retryable and system_retries < 3:
                         system_retries += 1
                         self._get_logger().info(
-                            f"Retrying plan node {node_id} after system_error "
+                            f"Retrying plan node {node_id} after {failure_message} "
                             f"(attempt {system_retries} of 3)"
                         )
                         if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
                             jules_session_id = None
                         continue
-                        
+
                     if failure_mode == "FAIL_FAST":
                         detail = (
                             f" with error '{failure_message}'"
