@@ -632,7 +632,7 @@ class TestAuthProfileSyncSlotLeasesActivity:
             TemporalArtifactActivities.auth_profile_sync_slot_leases
         )
         # Verify the snapshot pattern: runtime-wide delete before insert
-        assert "AuthProfileSlotLease.runtime_id == runtime_id" in source
+        assert "ProviderProfileSlotLease.runtime_id == runtime_id" in source
         # The delete should NOT filter by workflow_id (that was the old per-row pattern)
         # The delete statement for save should only filter by runtime_id
         # Verify fromisoformat is used for timestamp preservation

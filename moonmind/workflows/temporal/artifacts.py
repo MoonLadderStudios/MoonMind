@@ -2290,13 +2290,13 @@ class TemporalArtifactActivities:
 
         from sqlalchemy import delete, select
 
-        from api_service.db.models import AuthProfileSlotLease
+        from api_service.db.models import ProviderProfileSlotLease
         from api_service.db.base import get_async_session_context
 
         async with get_async_session_context() as session:
             if action == "load":
-                stmt = select(AuthProfileSlotLease).where(
-                    AuthProfileSlotLease.runtime_id == runtime_id
+                stmt = select(ProviderProfileSlotLease).where(
+                    ProviderProfileSlotLease.runtime_id == runtime_id
                 )
                 result = await session.execute(stmt)
                 rows = result.scalars().all()
@@ -2316,8 +2316,8 @@ class TemporalArtifactActivities:
                 # This prevents stale rows from accumulating when leases
                 # disappear from memory (eviction, verify, release).
                 await session.execute(
-                    delete(AuthProfileSlotLease).where(
-                        AuthProfileSlotLease.runtime_id == runtime_id,
+                    delete(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.runtime_id == runtime_id,
                     )
                 )
                 saved_count = 0
@@ -2335,7 +2335,7 @@ class TemporalArtifactActivities:
                             granted_at = datetime.now(timezone.utc)
                     else:
                         granted_at = datetime.now(timezone.utc)
-                    new_lease = AuthProfileSlotLease(
+                    new_lease = ProviderProfileSlotLease(
                         runtime_id=runtime_id,
                         workflow_id=workflow_id,
                         profile_id=profile_id,
@@ -2351,9 +2351,9 @@ class TemporalArtifactActivities:
                 if not workflow_id:
                     return {"removed": False}
                 await session.execute(
-                    delete(AuthProfileSlotLease).where(
-                        AuthProfileSlotLease.runtime_id == runtime_id,
-                        AuthProfileSlotLease.workflow_id == workflow_id,
+                    delete(ProviderProfileSlotLease).where(
+                        ProviderProfileSlotLease.runtime_id == runtime_id,
+                        ProviderProfileSlotLease.workflow_id == workflow_id,
                     )
                 )
                 await session.commit()
