@@ -4639,9 +4639,9 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div id="queue-auth-profile-wrap" class="hidden">
+        <div id="queue-provider-profile-wrap" class="hidden">
           <label>Provider Profile
-            <select name="authProfile">
+            <select name="providerProfile">
               <option value="">Default (system chooses)</option>
             </select>
           </label>
@@ -4902,7 +4902,7 @@
           .toLowerCase(),
         model: String(formData.get("model") || "").trim(),
         effort: String(formData.get("effort") || "").trim(),
-        authProfileId: String(formData.get("authProfile") || "").trim(),
+        authProfileId: String(formData.get("providerProfile") || "").trim(),
         priority: Number.isFinite(priority) ? priority : 0,
         maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 3,
         proposeTasks: formData.get("proposeTasks") !== null,
@@ -4926,9 +4926,9 @@
     const effortInputElement = form.querySelector('input[name="effort"]');
     const modelDatalistNode = form.querySelector("#queue-model-options");
     const effortDatalistNode = form.querySelector("#queue-effort-options");
-    const authProfileWrap = form.querySelector("#queue-auth-profile-wrap");
+    const authProfileWrap = form.querySelector("#queue-provider-profile-wrap");
     const authProfileHint = form.querySelector("#queue-auth-profile-hint");
-    const authProfileSelect = form.querySelector('select[name="authProfile"]');
+    const authProfileSelect = form.querySelector('select[name="providerProfile"]');
     let applyQueueDraftAuthProfileOnce = true;
     let authProfileFetchToken = 0;
 
@@ -6088,7 +6088,7 @@
       }
       const model = String(formData.get("model") || "").trim() || null;
       const effort = String(formData.get("effort") || "").trim() || null;
-      const authProfileRef = String(formData.get("authProfile") || "").trim();
+      const authProfileRef = String(formData.get("providerProfile") || "").trim();
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
       const affinityKey = queueDraftAffinityKey || null;
