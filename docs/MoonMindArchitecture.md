@@ -1,6 +1,6 @@
 # MoonMind Architecture
 
-MoonMind is a self-hostable platform that orchestrates state-of-the-art AI agents — Claude Code, Gemini CLI, Codex CLI, Cursor CLI, and more — with durable execution, secure sandboxing, and managed context built in.
+MoonMind is an open-source platform that orchestrates leading AI agents out of the box — Claude Code, Codex, Gemini CLI, and more — adding resiliency, safety, and observability.
 
 This document is the top-level architectural overview. It covers the major subsystems, how they connect, and where to find deeper documentation. It reflects the **current and intended near-term** state of the project.
 
