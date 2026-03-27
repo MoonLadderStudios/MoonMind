@@ -3088,26 +3088,22 @@ class TemporalAgentRuntimeActivities:
         if not merged:
             return result
 
+        update_payload: dict[str, Any] | None = None
         if any(marker in merged for marker in _GEMINI_QUOTA_MARKERS):
-            summary = message or "Gemini API quota exhausted"
-            return result.model_copy(
-                update={
-                    "summary": summary,
-                    "failure_class": "integration_error",
-                    "provider_error_code": "quota_exhausted",
-                }
-            )
+            update_payload = {
+                "summary": message or "Gemini API quota exhausted",
+                "failure_class": "integration_error",
+                "provider_error_code": "quota_exhausted",
+            }
+        elif any(marker in merged for marker in _GEMINI_RATE_LIMIT_MARKERS):
+            update_payload = {
+                "summary": message or "Gemini API rate limit exceeded",
+                "failure_class": "integration_error",
+                "provider_error_code": "429",
+            }
 
-        if any(marker in merged for marker in _GEMINI_RATE_LIMIT_MARKERS):
-            summary = message or "Gemini API rate limit exceeded"
-            return result.model_copy(
-                update={
-                    "summary": summary,
-                    "failure_class": "integration_error",
-                    "provider_error_code": "429",
-                }
-            )
-
+        if update_payload is not None:
+            return result.model_copy(update=update_payload)
         return result
 
     @classmethod
@@ -3116,15 +3112,20 @@ class TemporalAgentRuntimeActivities:
         record: ManagedRunRecord,
     ) -> dict[str, str] | None:
         reports_dir = _GEMINI_ERROR_REPORT_DIR
-        if not reports_dir.exists():
+        if not reports_dir.exists() or not reports_dir.is_dir():
             return None
 
         started_at = record.started_at.timestamp() - _GEMINI_ERROR_REPORT_TIME_PADDING_SECONDS
         finished_dt = record.finished_at or record.started_at
         finished_at = finished_dt.timestamp() + _GEMINI_ERROR_REPORT_TIME_PADDING_SECONDS
 
-        candidates: list[tuple[float, Path]] = []
-        for path in reports_dir.glob(_GEMINI_ERROR_REPORT_GLOB):
+        candidates: list[tuple[int, float, Path]] = []
+        try:
+            report_paths = list(reports_dir.glob(_GEMINI_ERROR_REPORT_GLOB))
+        except OSError:
+            return None
+
+        for path in report_paths:
             try:
                 stat = path.stat()
             except OSError:
@@ -3133,12 +3134,14 @@ class TemporalAgentRuntimeActivities:
             if modified_at < started_at or modified_at > finished_at:
                 continue
             distance = abs(modified_at - finished_dt.timestamp())
-            candidates.append((distance, path))
+            # Prefer reports that clearly reference this run/workspace.
+            discriminator = 0 if cls._report_matches_record(path, record) else 1
+            candidates.append((discriminator, distance, path))
 
         if not candidates:
             return None
 
-        for _, path in sorted(candidates, key=lambda item: item[0]):
+        for _, _, path in sorted(candidates, key=lambda item: (item[0], item[1])):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -3155,6 +3158,29 @@ class TemporalAgentRuntimeActivities:
             return {"message": message, "stack": stack}
 
         return None
+
+    @staticmethod
+    def _report_matches_record(path: Path, record: ManagedRunRecord) -> bool:
+        """Best-effort run discriminator for Gemini error reports."""
+        try:
+            payload_text = path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+
+        run_id = str(record.run_id or "").strip()
+        if run_id and run_id in payload_text:
+            return True
+
+        workspace_path = str(record.workspace_path or "").strip()
+        if workspace_path and workspace_path in payload_text:
+            return True
+
+        if run_id:
+            run_workspace_marker = f"/work/agent_jobs/workspaces/{run_id}/repo"
+            if run_workspace_marker in payload_text:
+                return True
+
+        return False
 
     async def _push_workspace_branch(
         self,
