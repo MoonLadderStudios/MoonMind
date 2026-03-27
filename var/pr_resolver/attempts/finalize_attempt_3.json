@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "tool": "pr_resolve_finalize",
-  "timestamp": "2026-03-27T16:09:25.342806+00:00",
+  "timestamp": "2026-03-27T16:06:07.624149+00:00",
   "pr_number": 1005,
   "pr_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1005",
   "decision": "blocked",
@@ -10,7 +10,7 @@
   "attempt": 1,
   "max_attempts": 1,
   "escalations": 0,
-  "next_step": "run_full_remediation",
-  "reason": "merge_conflicts",
-  "final_reason": "merge_conflicts"
+  "next_step": "retry_finalize_after_backoff",
+  "reason": "ci_running",
+  "final_reason": "ci_running"
 }
