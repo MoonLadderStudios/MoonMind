@@ -94,6 +94,20 @@ class TestBuildScheduleSpec:
         spec = build_schedule_spec("0 0 * * *", jitter_seconds=-5)
         assert spec.jitter == timedelta(0)
 
+    def test_timezone_preservation(self) -> None:
+        """DOC-REQ-006: timezone preservation for schedule spec."""
+        # US/Eastern
+        spec_eastern = build_schedule_spec("30 2 * * *", timezone="US/Eastern")
+        assert spec_eastern.time_zone_name == "US/Eastern"
+
+        # Europe/London
+        spec_london = build_schedule_spec("30 2 * * *", timezone="Europe/London")
+        assert spec_london.time_zone_name == "Europe/London"
+
+        # UTC
+        spec_utc = build_schedule_spec("30 2 * * *", timezone="UTC")
+        assert spec_utc.time_zone_name == "UTC"
+
 
 # ---------------------------------------------------------------------------
 # build_schedule_policy
@@ -146,25 +160,12 @@ class TestIdConventions:
         assert template.startswith("mm:a1b2c3d4-e5f6-7890-abcd-ef1234567890:")
         assert "{{.ScheduleTime}}" in template
 
-    def test_timezone_preservation(self) -> None:
-        """DOC-REQ-006: timezone preservation for schedule spec."""
-        # US/Eastern
-        spec_eastern = build_schedule_spec("30 2 * * *", timezone="US/Eastern")
-        assert spec_eastern.time_zone_name == "US/Eastern"
-
-        # Europe/London
-        spec_london = build_schedule_spec("30 2 * * *", timezone="Europe/London")
-        assert spec_london.time_zone_name == "Europe/London"
-
-        # UTC
-        spec_utc = build_schedule_spec("30 2 * * *", timezone="UTC")
-        assert spec_utc.time_zone_name == "UTC"
 
 class TestDSTBoundarySemantics:
-    """DOC-REQ-006: DST Boundary tests for schedule spec semantics."""
+    """DOC-REQ-006: DST Boundary tests for schedule spec semantics (5.1: US/Eastern, Europe/London, UTC)."""
 
-    def test_spring_forward(self) -> None:
-        """Test spring forward (e.g. 2:00 AM -> 3:00 AM in US/Eastern on Mar 9, 2025)."""
+    def test_spring_forward_eastern(self) -> None:
+        """Test spring forward (e.g. 2:00 AM -> 3:00 AM in US/Eastern on Mar 10, 2030)."""
         # A schedule that runs at 2:30 AM every day
         spec = build_schedule_spec("30 2 * * *", timezone="US/Eastern")
 
@@ -174,11 +175,42 @@ class TestDSTBoundarySemantics:
         assert spec.cron_expressions == ["30 2 * * *"]
         assert spec.time_zone_name == "US/Eastern"
 
-    def test_fall_back(self) -> None:
-        """Test fall back (e.g. 2:00 AM -> 1:00 AM in US/Eastern on Nov 2, 2025)."""
+    def test_fall_back_eastern(self) -> None:
+        """Test fall back (e.g. 2:00 AM -> 1:00 AM in US/Eastern on Nov 3, 2030)."""
         # A schedule that runs at 1:30 AM every day
         spec = build_schedule_spec("30 1 * * *", timezone="US/Eastern")
 
         # When DST ends, 1:30 AM happens twice.
         assert spec.cron_expressions == ["30 1 * * *"]
         assert spec.time_zone_name == "US/Eastern"
+
+    def test_spring_forward_london(self) -> None:
+        """Test spring forward in Europe/London (last Sunday in March: 1:00 AM -> 2:00 AM BST)."""
+        # A schedule that runs at 1:30 AM every day
+        spec = build_schedule_spec("30 1 * * *", timezone="Europe/London")
+
+        # When BST begins, 1:30 AM does not exist (clocks jump from 0:59 AM to 2:00 AM)
+        # Temporal server handles the actual skip/forward logic
+        assert spec.cron_expressions == ["30 1 * * *"]
+        assert spec.time_zone_name == "Europe/London"
+
+    def test_fall_back_london(self) -> None:
+        """Test fall back in Europe/London (last Sunday in October: 2:00 AM -> 1:00 AM GMT)."""
+        # A schedule that runs at 1:30 AM every day
+        spec = build_schedule_spec("30 1 * * *", timezone="Europe/London")
+
+        # When BST ends, 1:30 AM happens twice (once in BST, once in GMT)
+        assert spec.cron_expressions == ["30 1 * * *"]
+        assert spec.time_zone_name == "Europe/London"
+
+    def test_utc_no_dst(self) -> None:
+        """Test that UTC schedules are not affected by DST (UTC has no DST transitions)."""
+        # Schedules at various DST-sensitive times should be stable year-round for UTC
+        spec_early = build_schedule_spec("30 2 * * *", timezone="UTC")
+        spec_late = build_schedule_spec("30 1 * * *", timezone="UTC")
+
+        assert spec_early.time_zone_name == "UTC"
+        assert spec_late.time_zone_name == "UTC"
+        # UTC offsets are constant; no skip or duplication expected
+        assert spec_early.cron_expressions == ["30 2 * * *"]
+        assert spec_late.cron_expressions == ["30 1 * * *"]

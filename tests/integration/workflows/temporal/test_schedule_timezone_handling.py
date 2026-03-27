@@ -1,19 +1,23 @@
-import pytest
 import uuid
-import asyncio
-from datetime import datetime, timezone, timedelta
 
-from temporalio.client import Client, Schedule, ScheduleActionStartWorkflow, ScheduleSpec
+import pytest
+from datetime import datetime, timezone
+
+from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleSpec
 from temporalio.testing import WorkflowEnvironment
-import zoneinfo
+
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_schedule_timezone_handling_dst_boundaries():
     """Test 5.2: Add integration tests for Temporal Schedule timezone handling across DST boundaries."""
 
-    # We will use start_local, which runs a real Temporal server
+    # NOTE: This test requires start_local() (a real Temporal server) because the time-skipping
+    # environment does not support the Temporal Schedules API (create_schedule, describe_schedule, etc.).
+    # start_time_skipping() only supports workflow execution, not the schedules service.
+    #
     # The server evaluates cron strings internally and projects them into next_action_times.
-    # We can test Spring Forward and Fall Back by setting `start_at` just before the boundaries
+    # We test Spring Forward and Fall Back by setting `start_at` just before the boundaries
     # and reading the projected times.
 
     # 2030 Spring Forward in US/Eastern is March 10, 2030 (2:00 AM becomes 3:00 AM)
