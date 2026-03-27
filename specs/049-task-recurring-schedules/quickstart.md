@@ -87,7 +87,7 @@ Expected result:
 ## 4. Validate dashboard contract surfaces
 
 1. Open `/tasks/schedules` and confirm list rendering.
-2. Create a schedule from `/tasks/schedules/new` and verify it appears in list/detail.
+2. Create a schedule from `/tasks/new` and verify it appears in list/detail.
 3. From schedule detail, trigger `Run Now` and verify a new run row appears with queue job linkage when dispatch succeeds.
 
 ## 5. Run automated validation suites

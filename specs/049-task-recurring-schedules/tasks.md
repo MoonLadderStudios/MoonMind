@@ -53,7 +53,7 @@
 ### Tests for User Story 1
 
 - [X] T012 [P] [US1] Add API router tests for list/create/get/patch/run-now/history behavior and scope authorization in `tests/unit/api/routers/test_recurring_tasks.py` (DOC-REQ-003, DOC-REQ-020, DOC-REQ-022, DOC-REQ-023).
-- [X] T013 [P] [US1] Add dashboard route/source tests for `/tasks/schedules`, `/tasks/schedules/new`, and schedule detail loading in `tests/unit/api/routers/test_task_dashboard.py` and `tests/unit/api/routers/test_task_dashboard_view_model.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-021, DOC-REQ-023).
+- [X] T013 [P] [US1] Add dashboard route/source tests for `/tasks/schedules` and schedule detail loading in `tests/unit/api/routers/test_task_dashboard.py` and `tests/unit/api/routers/test_task_dashboard_view_model.py` (DOC-REQ-001, DOC-REQ-003, DOC-REQ-021, DOC-REQ-023).
 - [X] T014 [P] [US1] Add service validation tests for secret-material rejection and personal/global ownership restrictions in `tests/unit/services/test_recurring_tasks_service.py` (DOC-REQ-002, DOC-REQ-020, DOC-REQ-022, DOC-REQ-023).
 
 ### Implementation for User Story 1
