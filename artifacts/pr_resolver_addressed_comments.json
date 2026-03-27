@@ -203,5 +203,10 @@
     "id": 4019466479,
     "disposition": "not-applicable",
     "rationale": "Review summary from Copilot bot."
+  },
+  {
+    "id": 3003410160,
+    "disposition": "not-applicable",
+    "rationale": "False positive: only field names are logged, not the actual secret values."
   }
 ]
