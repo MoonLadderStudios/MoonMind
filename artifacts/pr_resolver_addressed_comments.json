@@ -1,32 +1,47 @@
 [
   {
-    "id": 4140357289,
-    "disposition": "not-applicable",
-    "rationale": "Informational codex limits message."
-  },
-  {
-    "id": 2999114981,
+    "id": 2999534543,
     "disposition": "addressed",
-    "rationale": "Refactored mapTaskRuntimeToAuthProfileRuntimeId to use an object."
+    "rationale": "Refactored mutli-source extraction into a loop over shared constants."
   },
   {
-    "id": 4019019138,
+    "id": 4019480679,
     "disposition": "not-applicable",
-    "rationale": "Informational code review summary."
+    "rationale": "General PR review summary comment."
   },
   {
-    "id": 2999128540,
+    "id": 2999534550,
     "disposition": "addressed",
-    "rationale": "Added parameter_payload fallback for executionProfileRef."
+    "rationale": "Defined shared task run keys in schemas."
   },
   {
-    "id": 2999128570,
-    "disposition": "addressed",
-    "rationale": "Added a request token to prevent race conditions during auth profile fetching."
-  },
-  {
-    "id": 4019033863,
+    "id": 4140840805,
     "disposition": "not-applicable",
-    "rationale": "Informational PR overview message."
+    "rationale": "Codex usage limit warning from bot."
+  },
+  {
+    "id": 2999548693,
+    "disposition": "addressed",
+    "rationale": "Cleared task_run_id from record.parameters during continue_as_new."
+  },
+  {
+    "id": 2999548723,
+    "disposition": "addressed",
+    "rationale": "Added parameter cleanup logic to _continue_as_new and added unit test assertions."
+  },
+  {
+    "id": 2999548746,
+    "disposition": "addressed",
+    "rationale": "Fixed import order in test_agent_runtime_activities.py."
+  },
+  {
+    "id": 2999548778,
+    "disposition": "addressed",
+    "rationale": "Added UUID validation logic in _report_task_run_binding activity."
+  },
+  {
+    "id": 4019501946,
+    "disposition": "not-applicable",
+    "rationale": "Copilot PR review summary comment."
   }
 ]

@@ -289,6 +289,7 @@ class ManagedAgentAdapter:
             record_dict = await self._run_launcher(
                 payload={
                     "run_id": run_id,
+                    "workflow_id": self._workflow_id,
                     "request": request.model_dump(mode="json", by_alias=True) if hasattr(request, "model_dump") else request,
                     "profile": profile_obj.model_dump(mode="json", by_alias=True),
                     "workspace_path": workspace_path,
