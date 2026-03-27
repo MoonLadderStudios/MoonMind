@@ -182,6 +182,8 @@ class MoonMindRunWorkflow:
         self._assigned_profile_id: Optional[str] = None
         self._assigned_child_workflow_id: Optional[str] = None
         self._assigned_runtime_id: Optional[str] = None
+        self._active_agent_child_workflow_id: Optional[str] = None
+        self._active_agent_id: Optional[str] = None
 
     def _retry_policy_for_route(self, route: TemporalActivityRoute) -> RetryPolicy:
         return RetryPolicy(
@@ -662,12 +664,18 @@ class MoonMindRunWorkflow:
                         child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
                         if system_retries > 0:
                             child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
-                        child_result = await workflow.execute_child_workflow(
-                            "MoonMind.AgentRun",
-                            request,
-                            id=child_workflow_id,
-                            task_queue=WORKFLOW_TASK_QUEUE,
-                        )
+                        self._active_agent_child_workflow_id = child_workflow_id
+                        self._active_agent_id = request.agent_id
+                        try:
+                            child_result = await workflow.execute_child_workflow(
+                                "MoonMind.AgentRun",
+                                request,
+                                id=child_workflow_id,
+                                task_queue=WORKFLOW_TASK_QUEUE,
+                            )
+                        finally:
+                            self._active_agent_child_workflow_id = None
+                            self._active_agent_id = None
                         execution_result = self._map_agent_run_result(child_result)
                     except Exception:
                         if failure_mode == "FAIL_FAST":
@@ -1942,28 +1950,30 @@ class MoonMindRunWorkflow:
             raise ValueError("Cannot pause a completed workflow.")
 
     @workflow.update(name="Resume")
-    def resume(self) -> None:
+    async def resume(self, payload: dict[str, Any] | None = None) -> None:
         self._paused = False
         self._waiting_reason = None
+        await self._forward_operator_message_to_active_child(payload)
         if self._awaiting_external:
             self._resume_requested = True
         self._update_search_attributes()
 
     @resume.validator
-    def validate_resume(self) -> None:
+    def validate_resume(self, payload: dict[str, Any] | None = None) -> None:
         if not self._paused and not self._awaiting_external:
             raise ValueError("Workflow is not paused or awaiting external completion.")
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot resume a completed workflow.")
 
     @workflow.update(name="Approve")
-    def approve(self) -> None:
+    async def approve(self, payload: dict[str, Any] | None = None) -> None:
         self._approve_requested = True
+        await self._forward_operator_message_to_active_child(payload)
         if self._awaiting_external:
             self._resume_requested = True
 
     @approve.validator
-    def validate_approve(self) -> None:
+    def validate_approve(self, payload: dict[str, Any] | None = None) -> None:
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
             raise ValueError("Cannot approve a completed workflow.")
 
@@ -2031,6 +2041,48 @@ class MoonMindRunWorkflow:
                 self._cancel_requested = True
             self._resume_requested = True
 
+    @staticmethod
+    def _extract_clarification_message(payload: Mapping[str, Any] | None) -> str | None:
+        if not isinstance(payload, Mapping):
+            return None
+        candidate = (
+            payload.get("message")
+            or payload.get("clarification_response")
+            or payload.get("clarificationResponse")
+        )
+        if candidate is None:
+            parameters_patch = payload.get("parameters_patch") or payload.get(
+                "parametersPatch"
+            )
+            if isinstance(parameters_patch, Mapping):
+                candidate = (
+                    parameters_patch.get("message")
+                    or parameters_patch.get("clarification_response")
+                    or parameters_patch.get("clarificationResponse")
+                )
+        if candidate is None:
+            return None
+        normalized = str(candidate).strip()
+        return normalized or None
+
+    async def _forward_operator_message_to_active_child(
+        self, payload: Mapping[str, Any] | None
+    ) -> bool:
+        message = self._extract_clarification_message(payload)
+        if not message:
+            return False
+        if not self._active_agent_child_workflow_id:
+            return False
+        if str(self._active_agent_id or "").strip().lower() not in {"jules", "jules_api"}:
+            return False
+        handle = workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        )
+        await handle.signal("operator_message", {"message": message})
+        self._summary = "Operator clarification sent to Jules."
+        self._update_memo()
+        return True
+
     @workflow.update
     def update_title(self, new_title: str) -> None:
         self._title = new_title
@@ -2039,6 +2091,20 @@ class MoonMindRunWorkflow:
     def update_parameters(self, new_parameters: dict[str, Any]) -> None:
         self._parameters_updated = True
         self._updated_parameters = new_parameters
+
+    @workflow.update(name="UpdateInputs")
+    async def update_inputs(
+        self, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        payload = payload or {}
+        parameters_patch = payload.get("parameters_patch") or payload.get(
+            "parametersPatch"
+        )
+        if isinstance(parameters_patch, Mapping):
+            self._parameters_updated = True
+            self._updated_parameters = dict(parameters_patch)
+        forwarded = await self._forward_operator_message_to_active_child(payload)
+        return {"accepted": True, "forwardedOperatorMessage": forwarded}
 
     @workflow.query
     def get_status(self) -> dict[str, Any]:

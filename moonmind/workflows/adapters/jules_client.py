@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping, Sequence
 import json
 import logging
 import os
@@ -28,6 +29,18 @@ from moonmind.schemas.jules_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_QUESTION_TEXT_KEYS = (
+    "agentMessage",
+    "agent_message",
+    "message",
+    "text",
+    "content",
+    "description",
+    "prompt",
+    "question",
+    "body",
+)
 
 
 class JulesClientError(RuntimeError):
@@ -142,13 +155,14 @@ class JulesClient:
         latest_question: str | None = None
         activity_id: str | None = None
         for activity in activities:
-            if (
-                activity.originator == "agent"
-                and activity.agent_messaged is not None
-            ):
-                latest_question = activity.agent_messaged.agent_message
-                activity_id = activity.id
-                break
+            if not _is_agent_originated_activity(activity):
+                continue
+            extracted_question = _extract_activity_question(activity)
+            if not extracted_question:
+                continue
+            latest_question = extracted_question
+            activity_id = activity.id or activity.name
+            break
 
         return JulesListActivitiesResult(
             sessionId=session_id,
@@ -499,6 +513,90 @@ class JulesClient:
             last_error.__class__.__name__ if last_error else "unknown error",
             request_path=path,
         ) from last_error
+
+
+def _is_agent_originated_activity(activity: JulesActivity) -> bool:
+    originator = str(activity.originator or "").strip().lower()
+    if originator in {"agent", "assistant", "jules"}:
+        return True
+    activity_name = str(activity.name or "").strip().lower()
+    return "agent" in activity_name or "assistant" in activity_name
+
+
+def _extract_activity_question(activity: JulesActivity) -> str | None:
+    direct_message = (
+        str(activity.agent_messaged.agent_message).strip()
+        if activity.agent_messaged and activity.agent_messaged.agent_message
+        else ""
+    )
+    if direct_message:
+        return direct_message
+    if activity.description:
+        normalized_description = str(activity.description).strip()
+        if normalized_description:
+            return normalized_description
+    for candidate in _iter_activity_text_candidates(activity):
+        normalized = str(candidate or "").strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _iter_activity_text_candidates(activity: JulesActivity) -> list[str]:
+    candidates: list[str] = []
+    for key in _QUESTION_TEXT_KEYS:
+        candidates.extend(
+            _extract_nested_values(getattr(activity, "model_extra", None), key)
+        )
+        if activity.agent_messaged is not None:
+            candidates.extend(
+                _extract_nested_values(
+                    getattr(activity.agent_messaged, "model_extra", None), key
+                )
+            )
+    return candidates
+
+
+def _extract_nested_values(payload: Any, target_key: str) -> list[str]:
+    values: list[str] = []
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            if str(key).strip() == target_key:
+                flattened = _stringify_candidate(value)
+                if flattened:
+                    values.append(flattened)
+            values.extend(_extract_nested_values(value, target_key))
+        return values
+    if isinstance(payload, Sequence) and not isinstance(
+        payload, (str, bytes, bytearray)
+    ):
+        for item in payload:
+            values.extend(_extract_nested_values(item, target_key))
+    return values
+
+
+def _stringify_candidate(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized or None
+    if isinstance(value, Mapping):
+        for key in _QUESTION_TEXT_KEYS:
+            nested = _stringify_candidate(value.get(key))
+            if nested:
+                return nested
+        return None
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        for item in value:
+            nested = _stringify_candidate(item)
+            if nested:
+                return nested
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 __all__ = [

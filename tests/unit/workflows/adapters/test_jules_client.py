@@ -573,6 +573,42 @@ async def test_list_activities_empty_response():
     assert result.activity_id is None
 
 
+@pytest.mark.asyncio
+async def test_list_activities_falls_back_to_description_and_extra_message_fields():
+    """T018: provider shape drift still yields an actionable clarification question."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "activities": [
+                    {
+                        "id": "act-description",
+                        "originator": "AGENT",
+                        "createTime": "2026-03-21T10:00:00Z",
+                        "description": "Please confirm the target branch.",
+                    },
+                    {
+                        "id": "act-nested",
+                        "name": "AgentMessaged",
+                        "originator": "assistant",
+                        "createTime": "2026-03-21T11:00:00Z",
+                        "details": {
+                            "message": {
+                                "text": "Should I rename the heading as well?"
+                            }
+                        },
+                    },
+                ],
+            },
+        )
+
+    client = _make_client(handler)
+    result = await client.list_activities("session-42")
+    assert result.latest_agent_question == "Should I rename the heading as well?"
+    assert result.activity_id == "act-nested"
+
+
 # --- native PR creation tests (delegation to GitHubService) ---
 
 
@@ -646,4 +682,3 @@ async def test_create_pull_request_failure():
 
     assert result.created is False
     assert "HTTP 422" in result.summary
-
