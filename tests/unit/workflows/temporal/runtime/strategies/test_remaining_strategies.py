@@ -208,6 +208,19 @@ class TestClaudeCodeBuildCommand:
         assert "MiniMax-M2.7" not in cmd
         assert cmd == ["claude", "-p", "Do something"]
 
+    def test_blank_anthropic_model_env_does_not_suppress_model_flag(self) -> None:
+        """A blank ANTHROPIC_MODEL override must NOT suppress --model."""
+        s = ClaudeCodeStrategy()
+        profile = _make_profile(
+            command_template=["claude"],
+            default_model="claude-sonnet-4-6",
+            env_overrides={"ANTHROPIC_MODEL": ""},
+        )
+        request = _make_request(instruction_ref="Go")
+        cmd = s.build_command(profile, request)
+        assert "--model" in cmd
+        assert "claude-sonnet-4-6" in cmd
+
     def test_model_flag_still_passed_without_env_override(self) -> None:
         """Without ANTHROPIC_MODEL in env_overrides, --model is passed as usual."""
         s = ClaudeCodeStrategy()
@@ -219,6 +232,7 @@ class TestClaudeCodeBuildCommand:
         cmd = s.build_command(profile, request)
         assert "--model" in cmd
         assert "claude-sonnet-4-6" in cmd
+
 
 
 # ---------------------------------------------------------------------------

@@ -406,7 +406,7 @@ async def add_request_id(request: Request, call_next):
 
 
 async def _auto_seed_auth_profiles() -> list[str]:
-    """Upsert well-known auth profiles that are missing from the DB.
+    """Seed well-known auth profiles that are missing from the DB.
 
     Each profile is checked individually by ``profile_id`` so that:
     - On a fresh install all defaults are created.
