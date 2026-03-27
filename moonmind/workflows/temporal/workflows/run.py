@@ -799,7 +799,14 @@ class MoonMindRunWorkflow:
                     or "main"
                 )
                 
-                if not self._repo or not head_branch:
+                push_status = agent_outputs.get("push_status", "")
+                if push_status == "no_commits":
+                    self._get_logger().info(
+                        "Skipping native PR creation: agent made no commits "
+                        "on branch '%s'.",
+                        agent_outputs.get("push_branch") or head_branch,
+                    )
+                elif not self._repo or not head_branch:
                     raise ValueError(
                         "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
                     )

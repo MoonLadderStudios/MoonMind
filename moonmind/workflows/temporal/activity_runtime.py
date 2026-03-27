@@ -3112,6 +3112,40 @@ class TemporalAgentRuntimeActivities:
                     "push_error": error_detail,
                 }
 
+            # Verify the branch actually has commits over origin/main.
+            # git push succeeds as a no-op when the branch is already
+            # up-to-date, which would cause repo.create_pr to fail
+            # with HTTP 422 ("No commits between main and <branch>").
+            try:
+                count_proc = await _asyncio.create_subprocess_exec(
+                    "git", "-C", workspace,
+                    "rev-list", "--count", f"origin/main..{current_branch}",
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                )
+                count_stdout, _ = await _asyncio.wait_for(
+                    count_proc.communicate(), timeout=10,
+                )
+                commit_count = int(
+                    count_stdout.decode("utf-8", errors="replace").strip() or "0"
+                )
+            except Exception:
+                # If rev-list fails, assume commits exist and let PR
+                # creation handle it.
+                commit_count = -1
+
+            if commit_count == 0:
+                logger.warning(
+                    "Post-agent git push completed for run %s but branch "
+                    "'%s' has no commits over origin/main",
+                    run_id,
+                    current_branch,
+                )
+                return {
+                    "push_status": "no_commits",
+                    "push_branch": current_branch,
+                }
+
             logger.info(
                 "Post-agent git push completed for run %s (branch=%s)",
                 run_id,
