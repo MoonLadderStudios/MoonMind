@@ -26,7 +26,7 @@ SUPPORTED_UPDATE_NAMES = (
     "Cancel",
     "Approve",
 )
-SUPPORTED_SIGNAL_NAMES = ("ExternalEvent",)
+SUPPORTED_SIGNAL_NAMES = ("ExternalEvent", "Pause", "Resume", "Approve")
 TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
 TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
 TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")

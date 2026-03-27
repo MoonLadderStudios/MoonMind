@@ -767,6 +767,64 @@ class TemporalExecutionService:
             )
         record = await self._require_source_execution(workflow_id)
 
+        if signal_name in {"Pause", "Resume", "Approve"}:
+            self._ensure_non_terminal(record)
+            update_arg = dict(payload or {})
+            try:
+                if update_arg:
+                    await self._client_adapter.update_workflow(
+                        record.workflow_id, signal_name, update_arg
+                    )
+                else:
+                    await self._client_adapter.update_workflow(
+                        record.workflow_id, signal_name
+                    )
+            except Exception as exc:
+                raise TemporalExecutionValidationError(
+                    f"Temporal signal failed: {exc}"
+                ) from exc
+
+            if signal_name == "Pause":
+                record.paused = True
+                self._set_waiting_metadata(
+                    record,
+                    waiting_reason="operator_paused",
+                    attention_required=True,
+                )
+                self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
+                self._set_wait_metadata(
+                    record,
+                    waiting_reason="operator_paused",
+                    attention_required=True,
+                )
+                self._update_summary(record, "Execution paused.")
+            elif signal_name == "Resume":
+                record.paused = False
+                self._clear_waiting_metadata(record)
+                self._set_state(record, MoonMindWorkflowState.EXECUTING)
+                if (
+                    isinstance(payload, dict)
+                    and str(
+                        payload.get("message")
+                        or payload.get("clarification_response")
+                        or payload.get("clarificationResponse")
+                        or ""
+                    ).strip()
+                ):
+                    self._update_summary(record, "Clarification reply sent to agent.")
+                else:
+                    self._update_summary(record, "Execution resumed.")
+            else:
+                record.paused = False
+                self._clear_waiting_metadata(record)
+                self._set_state(record, MoonMindWorkflowState.EXECUTING)
+                self._update_summary(record, "Approval signal received.")
+
+            await self._sync_integration_correlation_record(record)
+            await self._session.commit()
+            await self._session.refresh(record)
+            return await self._sync_projection_best_effort(record)
+
         try:
             signal_arg = {
                 "payload": payload,
