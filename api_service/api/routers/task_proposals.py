@@ -353,7 +353,6 @@ async def promote_proposal(
             instructions = str(initial_parameters.get("task", {}).get("instructions") or "").strip()
             title = instructions.splitlines()[0][:200] if instructions else "Promoted Task"
 
-        from uuid import uuid4 as _uuid4
         await execution_service.create_execution(
             workflow_type="MoonMind.Run",
             owner_id=getattr(user, "id"),
@@ -364,7 +363,7 @@ async def promote_proposal(
             manifest_artifact_ref=None,
             failure_policy=None,
             initial_parameters=initial_parameters,
-            idempotency_key=str(_uuid4()),
+            idempotency_key=f"proposal-promote-{proposal_id}",
             repository=proposal.repository,
             integration=None,
             summary=proposal.summary,

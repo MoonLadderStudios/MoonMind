@@ -678,8 +678,11 @@ class TaskProposalService:
     ) -> tuple[TaskProposal, dict[str, Any]]:
         """Validate and finalize a proposal for execution promotion.
 
-        Returns the updated TaskProposal and the finalized Temporal
-        initial_parameters (taskCreateRequest payload) ready to execute.
+        Returns the updated TaskProposal and the finalized taskCreateRequest
+        envelope (suitable for use as ``initial_parameters``) ready to execute.
+        The returned envelope may differ from the stored proposal record when
+        an override is provided; the stored ``task_create_request`` is not
+        mutated by this method.
         """
         proposal = await self._repository.get_proposal_for_update(proposal_id)
         if proposal.status is not TaskProposalStatus.OPEN:
@@ -739,7 +742,6 @@ class TaskProposalService:
                 "payload": payload,
             }
         )
-        proposal.task_create_request = final_request
         proposal.decision_note = self._scrub_text(self._clean_str(note)) or None
         await self._repository.commit()
         await self._repository.refresh(proposal)

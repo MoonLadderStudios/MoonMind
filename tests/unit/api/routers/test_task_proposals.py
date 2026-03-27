@@ -17,7 +17,7 @@ from moonmind.workflows.task_proposals.models import (
 
 
 @pytest.fixture
-def client() -> tuple[TestClient, AsyncMock]:
+def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app = FastAPI()
     service = AsyncMock()
     execution_service = AsyncMock()
@@ -41,7 +41,7 @@ def client() -> tuple[TestClient, AsyncMock]:
     app.dependency_overrides[get_current_user_optional()] = _user_override
 
     with TestClient(app) as test_client:
-        yield test_client, service
+        yield test_client, service, execution_service
 
 
 def _build_proposal() -> SimpleNamespace:
@@ -74,8 +74,8 @@ def _build_proposal() -> SimpleNamespace:
     )
 
 
-def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) -> None:
-    test_client, service = client
+def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+    test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.create_proposal.return_value = proposal
 
@@ -107,8 +107,8 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock]) ->
 
 
 
-def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock]) -> None:
-    test_client, service = client
+def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+    test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.list_proposals.return_value = ([proposal], None)
     origin_id = uuid4()
@@ -134,9 +134,9 @@ def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock]) -
 
 
 def test_promote_proposal_returns_proposal(
-    client: tuple[TestClient, AsyncMock],
+    client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
-    test_client, service = client
+    test_client, service, execution_service = client
     proposal = _build_proposal()
     final_request = {
         "payload": {
@@ -155,12 +155,16 @@ def test_promote_proposal_returns_proposal(
     body = response.json()
     assert "proposal" in body
     assert body["proposal"]["title"] == "Add tests"
+    execution_service.create_execution.assert_awaited_once()
+    call_kwargs = execution_service.create_execution.await_args.kwargs
+    assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
+    assert call_kwargs["initial_parameters"] == final_request["payload"]
 
 
 def test_promote_proposal_accepts_override_payload(
-    client: tuple[TestClient, AsyncMock],
+    client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
-    test_client, service = client
+    test_client, service, execution_service = client
     proposal = _build_proposal()
     final_request = {
         "payload": {
@@ -193,8 +197,8 @@ def test_promote_proposal_accepts_override_payload(
     )
 
 
-def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock]) -> None:
-    test_client, service = client
+def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+    test_client, service, _execution_service = client
     proposal = _build_proposal()
     proposal.status = TaskProposalStatus.DISMISSED
     service.dismiss_proposal.return_value = proposal
@@ -209,8 +213,8 @@ def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock]) 
     assert body["status"] == "dismissed"
 
 
-def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock]) -> None:
-    test_client, service = client
+def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+    test_client, service, _execution_service = client
     proposal = _build_proposal()
     similar = _build_proposal()
     service.get_proposal.return_value = proposal
@@ -224,8 +228,8 @@ def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock]) -> 
     assert body["similar"]
 
 
-def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock]) -> None:
-    test_client, service = client
+def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+    test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.update_review_priority.return_value = proposal
 
@@ -239,10 +243,10 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock]) -> None:
 
 
 def test_promote_proposal_with_runtime_mode_shortcut(
-    client: tuple[TestClient, AsyncMock],
+    client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
     """runtimeMode shortcut builds a task_create_request_override for the service."""
-    test_client, service = client
+    test_client, service, execution_service = client
     proposal = _build_proposal()
     proposal.task_create_request = {
         "type": "task",
@@ -279,3 +283,6 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     assert override is not None
     assert override["payload"]["task"]["runtime"]["mode"] == "gemini_cli"
     assert override["payload"]["repository"] == "Moon/Repo"
+    execution_service.create_execution.assert_awaited_once()
+    call_kwargs = execution_service.create_execution.await_args.kwargs
+    assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
