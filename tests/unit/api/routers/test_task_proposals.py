@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from api_service.api.routers.task_proposals import _get_service, router
+from api_service.api.routers.task_proposals import _get_service, _get_temporal_execution_service, router
 from api_service.auth_providers import get_current_user, get_current_user_optional
 from moonmind.workflows.task_proposals.models import (
     TaskProposalOriginSource,
@@ -20,12 +20,17 @@ from moonmind.workflows.task_proposals.models import (
 def client() -> tuple[TestClient, AsyncMock]:
     app = FastAPI()
     service = AsyncMock()
+    execution_service = AsyncMock()
     app.include_router(router)
 
     async def _service_override():
         return service
 
+    async def _execution_service_override():
+        return execution_service
+
     app.dependency_overrides[_get_service] = _service_override
+    app.dependency_overrides[_get_temporal_execution_service] = _execution_service_override
 
     mock_user = SimpleNamespace(id=uuid4(), email="user@example.com", is_active=True)
 
@@ -133,8 +138,13 @@ def test_promote_proposal_returns_proposal(
 ) -> None:
     test_client, service = client
     proposal = _build_proposal()
-    execution_mock = SimpleNamespace(workflow_id="wf-1")
-    service.promote_proposal.return_value = (proposal, execution_mock)
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {"instructions": "do something"}
+        }
+    }
+    service.promote_proposal.return_value = (proposal, final_request)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
@@ -152,8 +162,13 @@ def test_promote_proposal_accepts_override_payload(
 ) -> None:
     test_client, service = client
     proposal = _build_proposal()
-    execution_mock = SimpleNamespace(workflow_id="wf-2")
-    service.promote_proposal.return_value = (proposal, execution_mock)
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {"instructions": "edit"}
+        }
+    }
+    service.promote_proposal.return_value = (proposal, final_request)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
@@ -241,9 +256,17 @@ def test_promote_proposal_with_runtime_mode_shortcut(
             },
         },
     }
-    execution_mock = SimpleNamespace(workflow_id="wf-3")
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "do stuff",
+                "runtime": {"mode": "gemini_cli"}
+            }
+        }
+    }
     service.get_proposal.return_value = proposal
-    service.promote_proposal.return_value = (proposal, execution_mock)
+    service.promote_proposal.return_value = (proposal, final_request)
 
     response = test_client.post(
         f"/api/proposals/{proposal.id}/promote",
