@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Literal, overload
 
@@ -9,17 +10,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityCancellationType
 
-from moonmind.schemas.temporal_activity_models import (
-    ArtifactReadInput,
-    ArtifactReadOutput,
-    ArtifactWriteCompleteInput,
-)
+from moonmind.workflows.temporal.artifacts import ArtifactRef
 
 
 @overload
 async def execute_typed_activity(
     activity: Literal["artifact.read"],
-    arg: ArtifactReadInput,
+    arg: Mapping[str, Any],
     *,
     task_queue: str | None = None,
     start_to_close_timeout: timedelta | None = None,
@@ -27,13 +24,14 @@ async def execute_typed_activity(
     heartbeat_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
     cancellation_type: ActivityCancellationType | None = None,
-) -> ArtifactReadOutput: ...
+) -> bytes:
+    pass
 
 
 @overload
 async def execute_typed_activity(
     activity: Literal["artifact.write_complete"],
-    arg: ArtifactWriteCompleteInput,
+    arg: Mapping[str, Any],
     *,
     task_queue: str | None = None,
     start_to_close_timeout: timedelta | None = None,
@@ -41,7 +39,8 @@ async def execute_typed_activity(
     heartbeat_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
     cancellation_type: ActivityCancellationType | None = None,
-) -> Any: ...
+) -> ArtifactRef:
+    pass
 
 
 @overload
@@ -55,7 +54,8 @@ async def execute_typed_activity(
     heartbeat_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
     cancellation_type: ActivityCancellationType | None = None,
-) -> Any: ...
+) -> Any:
+    pass
 
 
 async def execute_typed_activity(
@@ -74,18 +74,14 @@ async def execute_typed_activity(
     This wraps temporalio's untyped execute_activity but provides
     specific overloads for strictly typed activity inputs and outputs.
     """
-    kwargs: dict[str, Any] = {}
-    if task_queue is not None:
-        kwargs["task_queue"] = task_queue
-    if start_to_close_timeout is not None:
-        kwargs["start_to_close_timeout"] = start_to_close_timeout
-    if schedule_to_close_timeout is not None:
-        kwargs["schedule_to_close_timeout"] = schedule_to_close_timeout
-    if heartbeat_timeout is not None:
-        kwargs["heartbeat_timeout"] = heartbeat_timeout
-    if retry_policy is not None:
-        kwargs["retry_policy"] = retry_policy
-    if cancellation_type is not None:
-        kwargs["cancellation_type"] = cancellation_type
+    kwargs = {
+        "task_queue": task_queue,
+        "start_to_close_timeout": start_to_close_timeout,
+        "schedule_to_close_timeout": schedule_to_close_timeout,
+        "heartbeat_timeout": heartbeat_timeout,
+        "retry_policy": retry_policy,
+        "cancellation_type": cancellation_type,
+    }
+    filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
-    return await workflow.execute_activity(activity, arg, **kwargs)
+    return await workflow.execute_activity(activity, arg, **filtered_kwargs)
