@@ -3035,7 +3035,9 @@
       resolveTemporalArtifactPresentation,
       resolveTemporalArtifactsRequest,
       resolveTemporalDetailModel,
+      resolveTemporalTaskRunId,
       resolveTemporalRunId,
+      temporalLogTailingAvailable,
       deriveTemporalTitle,
       temporalWaitingReason,
       toTemporalRows,
@@ -7002,6 +7004,32 @@
     };
   }
 
+  function isUuidLike(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(String(value || "").trim());
+  }
+
+  function resolveTemporalTaskRunId(execution) {
+    const explicitTaskRunId = String(
+      pick(execution, "taskRunId", "task_run_id", "agentJobId", "agent_job_id") || "",
+    ).trim();
+    if (explicitTaskRunId) {
+      return explicitTaskRunId;
+    }
+    const runId = String(pick(execution, "temporalRunId", "runId") || "").trim();
+    return isUuidLike(runId) ? runId : "";
+  }
+
+  function temporalLogTailingAvailable(sourceConfig, execution) {
+    if (!sourceConfig || typeof sourceConfig !== "object") {
+      return false;
+    }
+    const hasEndpoint =
+      Boolean(String(sourceConfig.events || "").trim()) ||
+      Boolean(String(sourceConfig.eventsStream || "").trim());
+    return hasEndpoint && Boolean(resolveTemporalTaskRunId(execution));
+  }
+
   const TEMPORAL_ACTION_LABELS = {
     approve: "Approve task",
     cancel: "Cancel task",
@@ -7570,6 +7598,7 @@
       attentionRequired,
       noticeHtml,
       debugFields,
+      liveLogsAvailable,
     } = detail;
     return `
       ${noticeHtml}
@@ -7624,7 +7653,8 @@
       <section id="temporal-live-output-section"></section>
       <section>
         <h3>Live Logs</h3>
-        <div id="temporal-live-logs-inactive">
+        ${liveLogsAvailable
+          ? `<div id="temporal-live-logs-inactive">
           <button type="button" id="temporal-start-tailing" class="secondary">▶ Start Tailing</button>
         </div>
         <div id="temporal-live-logs-active" style="display:none;">
@@ -7645,7 +7675,9 @@
             <span id="temporal-live-transport-status" class="small"></span>
           </div>
           <pre id="temporal-live-output" class="queue-live-output"></pre>
-        </div>
+        </div>`
+          : "<p class='small'>Live log tailing is not configured for Temporal tasks. Use Live Output.</p>"
+        }
       </section>
       ${debugFields}
     `;
@@ -7683,6 +7715,8 @@
       liveSession: null,
       liveSessionRouteMissing: false,
       liveOutputPanelOpen: false,
+      taskRunId: "",
+      liveLogsAvailable: false,
     };
 
     let logEventSource = null;
@@ -7938,10 +7972,17 @@
     };
 
     const loadLogLatestEvents = async () => {
+      if (!logState.liveLogsAvailable || !logState.taskRunId) {
+        return;
+      }
       const query = buildLogEventsQuery({ limit: 200, sort: "desc" });
       try {
         const payload = await fetchJson(
-          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: workflowId }) + query,
+          endpoint(temporalSourceConfig.events, {
+            id: logState.taskRunId,
+            taskRunId: logState.taskRunId,
+            workflowId,
+          }) + query,
         );
         logState.events = [];
         logState.eventIds.clear();
@@ -7963,6 +8004,9 @@
     };
 
     const loadLogNewEvents = async () => {
+      if (!logState.liveLogsAvailable || !logState.taskRunId) {
+        return;
+      }
       const query = buildLogEventsQuery({
         limit: 200,
         after: logState.after,
@@ -7970,7 +8014,11 @@
       });
       try {
         const payload = await fetchJson(
-          endpoint(queueSourceConfig.events || "/api/queue/jobs/{id}/events", { id: workflowId }) + query,
+          endpoint(temporalSourceConfig.events, {
+            id: logState.taskRunId,
+            taskRunId: logState.taskRunId,
+            workflowId,
+          }) + query,
         );
         appendLogEvents(payload?.items || []);
       } catch (error) {
@@ -7988,6 +8036,12 @@
     };
 
     const startLogEventStream = () => {
+      if (!logState.liveLogsAvailable || !logState.taskRunId) {
+        logState.eventsTransport = "idle";
+        logState.eventsTransportStatus = "unsupported";
+        renderLogTransportStatus();
+        return;
+      }
       if (!isAutoRefreshActive()) {
         logState.eventsTransport = "sse";
         logState.eventsTransportStatus = "paused";
@@ -7997,8 +8051,7 @@
       if (logEventSource) {
         return;
       }
-      const streamTemplate =
-        queueSourceConfig.eventsStream || "/api/queue/jobs/{id}/events/stream";
+      const streamTemplate = temporalSourceConfig.eventsStream;
       if (typeof window.EventSource !== "function") {
         logState.eventsTransport = "polling";
         logState.eventsTransportStatus = "unsupported";
@@ -8012,7 +8065,11 @@
         after: logState.after,
         afterEventId: logState.afterEventId,
       });
-      const streamUrl = endpoint(streamTemplate, { id: workflowId }) + query;
+      const streamUrl = endpoint(streamTemplate, {
+        id: logState.taskRunId,
+        taskRunId: logState.taskRunId,
+        workflowId,
+      }) + query;
       logState.eventsTransport = "sse";
       logState.eventsTransportStatus = "connecting";
       renderLogTransportStatus();
@@ -8081,6 +8138,10 @@
     };
 
     const startLogTailing = async () => {
+      if (!logState.liveLogsAvailable || !logState.taskRunId) {
+        renderLogTransportStatus();
+        return;
+      }
       logState.tailing = true;
       const inactiveNode = document.getElementById("temporal-live-logs-inactive");
       const activeNode = document.getElementById("temporal-live-logs-active");
@@ -8320,6 +8381,12 @@
         const detailTitle = deriveTemporalTitle(execution);
         const attentionRequired = Boolean(pick(execution, "attentionRequired"));
         const debugFields = renderTemporalDebugSection(execution, latestWorkflowId);
+        const taskRunId = resolveTemporalTaskRunId(execution);
+        logState.taskRunId = taskRunId;
+        logState.liveLogsAvailable = temporalLogTailingAvailable(
+          temporalSourceConfig,
+          execution,
+        );
         const noticeHtml = detailNotice
           ? `<div class="notice ${escapeHtml(detailNoticeLevel)}">${escapeHtml(detailNotice)}</div>`
           : "";
@@ -8336,6 +8403,7 @@
             attentionRequired,
             noticeHtml,
             debugFields,
+            liveLogsAvailable: logState.liveLogsAvailable,
           }),
           { showAutoRefreshControls: true },
         );
@@ -8345,10 +8413,13 @@
 
         // Fetch live-session data and render the Live Output panel.
         try {
+          if (!taskRunId) {
+            throw new Error("Temporal task detail is missing a live-session task run id.");
+          }
           const livePayload = await fetchJson(
             endpoint(
               temporalSourceConfig.liveSession || "/api/task-runs/{id}/live-session",
-              { id: workflowId },
+              { id: taskRunId, taskRunId, workflowId: latestWorkflowId },
             ),
           );
           logState.liveSession = pick(livePayload || {}, "session") || null;
