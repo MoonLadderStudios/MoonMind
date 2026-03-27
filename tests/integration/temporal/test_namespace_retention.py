@@ -139,7 +139,10 @@ esac
         check=False,
     )
     assert first_run.returncode == 0, first_run.stderr
-    assert "Built-in default namespace detected. Skipping namespace create/update and retention policy." in first_run.stdout
+    assert (
+        "Built-in default namespace detected. Skipping namespace create/update and retention policy."
+        in first_run.stdout
+    )
     assert "Namespace does not exist; creating" not in first_run.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
