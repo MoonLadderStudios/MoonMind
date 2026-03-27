@@ -4561,7 +4561,7 @@
       ? sanitizedWorkerDraft.steps
       : [];
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
-    const queueDraftAuthProfile = String(sanitizedWorkerDraft.providerProfileId || "").trim();
+    const queueDraftProviderProfile = String(sanitizedWorkerDraft.providerProfileId || "").trim();
     const attachmentAcceptedTypes = attachmentPolicy.allowedContentTypes.join(",");
     const attachmentSectionHtml =
       attachmentPolicy.enabled && !isEditMode
@@ -4929,10 +4929,10 @@
     const providerProfileWrap = form.querySelector("#queue-provider-profile-wrap");
     const providerProfileHint = form.querySelector("#queue-auth-profile-hint");
     const providerProfileSelect = form.querySelector('select[name="providerProfile"]');
-    let applyQueueDraftAuthProfileOnce = true;
+    let applyQueueDraftProviderProfileOnce = true;
     let providerProfileFetchToken = 0;
 
-    const refreshAuthProfileOptions = async (runtimeMode) => {
+    const refreshProviderProfileOptions = async (runtimeMode) => {
       if (!providerProfileWrap || !providerProfileSelect) {
         return;
       }
@@ -4960,8 +4960,8 @@
         providerProfileFetchToken += 1;
         const currentToken = providerProfileFetchToken;
         let listEndpoint = providerProfileEndpoints.providerProfilesList || providerProfileEndpoints.list || "";
-        if (listEndpoint.includes("/provider-profiles")) {
-          listEndpoint = listEndpoint.replace("/provider-profiles", "/provider-profiles");
+        if (listEndpoint.includes("/auth-profiles")) {
+          listEndpoint = listEndpoint.replace("/auth-profiles", "/provider-profiles");
         }
         const url = `${listEndpoint}?runtime_id=${encodeURIComponent(
           mappedRuntimeId,
@@ -4985,10 +4985,10 @@
         providerProfileSelect.innerHTML = options.join("");
         const desired = String(previousSelection || "").trim();
         let pickId = desired;
-        if (!pickId && applyQueueDraftAuthProfileOnce) {
-          pickId = String(queueDraftAuthProfile || "").trim();
+        if (!pickId && applyQueueDraftProviderProfileOnce) {
+          pickId = String(queueDraftProviderProfile || "").trim();
         }
-        applyQueueDraftAuthProfileOnce = false;
+        applyQueueDraftProviderProfileOnce = false;
         if (
           pickId &&
           list.some((p) => String(p.profile_id || "").trim() === pickId)
@@ -5133,11 +5133,11 @@
         activeWorkerRuntime = nextRuntime;
         applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime);
-        void refreshAuthProfileOptions(nextRuntime);
+        void refreshProviderProfileOptions(nextRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
       });
-      void refreshAuthProfileOptions(runtimeSelect.value);
+      void refreshProviderProfileOptions(runtimeSelect.value);
     }
     form.addEventListener("input", scheduleWorkerDraftPersist);
     form.addEventListener("change", scheduleWorkerDraftPersist);
@@ -9395,7 +9395,7 @@
           </dialog>
           <details class="auth-profile-create-toggle">
             <summary>Create New Profile</summary>
-            <form data-auth-profile-form="create" class="stack">
+            <form data-provider-profile-form="create" class="stack">
               <fieldset>
                 <legend>New Provider Profile</legend>
                 <label>
@@ -9845,7 +9845,7 @@
         });
       });
 
-      const createForm = document.querySelector('[data-auth-profile-form="create"]');
+      const createForm = document.querySelector('[data-provider-profile-form="create"]');
       createForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
         const formData = new FormData(createForm);

@@ -231,9 +231,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
             "providerProfiles": {
                 "list": "/api/v1/provider-profiles",
                 "create": "/api/v1/provider-profiles",
-                "detail": "/api/v1/auth-profiles/{profileId}",
-                "update": "/api/v1/auth-profiles/{profileId}",
-                "delete": "/api/v1/auth-profiles/{profileId}",
+                "detail": "/api/v1/provider-profiles/{profileId}",
+                "update": "/api/v1/provider-profiles/{profileId}",
+                "delete": "/api/v1/provider-profiles/{profileId}",
             },
             "attachmentPolicy": {
                 "enabled": bool(settings.workflow.agent_job_attachment_enabled),
