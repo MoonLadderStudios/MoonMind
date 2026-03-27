@@ -13,10 +13,10 @@ from alembic import op
 revision: str = '4b53a4790314'
 down_revision: Union[str, None] = '61c25ebc7201'
 
-__all__ = ('revision', 'down_revision')
-
 
 def upgrade() -> None:
+    _ = revision
+    _ = down_revision
     op.rename_table('managed_agent_auth_profiles', 'managed_agent_provider_profiles')
     op.rename_table('auth_profile_slot_leases', 'provider_profile_slot_leases')
 
