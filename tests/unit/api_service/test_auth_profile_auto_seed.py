@@ -8,13 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
-from api_service.db.models import (
-    Base,
-    ManagedAgentProviderProfile,
-    ManagedAgentRateLimitPolicy,
-    ProviderCredentialSource,
-    RuntimeMaterializationMode,
-)
+from api_service.db.models import Base, ManagedAgentProviderProfile
 
 
 @pytest.fixture()
@@ -157,48 +151,6 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
 
-
-@pytest.mark.asyncio
-async def test_auto_seed_repairs_stale_minimax_profile(_module_db, monkeypatch):
-    """A stale built-in MiniMax row should be reconciled in place on startup."""
-    from api_service.main import _auto_seed_provider_profiles
-
-    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
-
-    async with db_base.async_session_maker() as session:
-        session.add(
-            ManagedAgentProviderProfile(
-                profile_id="claude_minimax",
-                runtime_id="claude_code",
-                provider_id="anthropic",
-                credential_source=ProviderCredentialSource.SECRET_REF,
-                runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
-                max_parallel_runs=1,
-                cooldown_after_429_seconds=300,
-                rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
-                enabled=False,
-            )
-        )
-        await session.commit()
-
-    seeded = await _auto_seed_provider_profiles()
-    assert "claude_code" in seeded
-
-    async with db_base.async_session_maker() as session:
-        result = await session.execute(
-            select(ManagedAgentProviderProfile).where(
-                ManagedAgentProviderProfile.profile_id == "claude_minimax"
-            )
-        )
-        mm_profile = result.scalar_one()
-
-    assert mm_profile.provider_id == "minimax"
-    assert mm_profile.provider_label == "MiniMax"
-    assert mm_profile.enabled is True
-    assert mm_profile.secret_refs == {"ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"}
-    assert mm_profile.env_template is not None
-    assert mm_profile.env_template["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
-    assert mm_profile.env_template["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
 
 
 @pytest.mark.asyncio

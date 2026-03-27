@@ -221,7 +221,7 @@ Tracks operator-driven actions for audit.
 
 ---
 
-## 8. API Surface & Temporal Control
+## 8. API Surface & Temporal Signals
 
 ### 8.1 Session Lifecycle (REST APIs)
 
@@ -230,13 +230,11 @@ Tracks operator-driven actions for audit.
 - `POST /api/workflows/{id}/live-session/grant-write`: Returns time-limited RW endpoint or short-lived reveal token; logs audit event.
 - `POST /api/workflows/{id}/live-session/revoke`: Forces worker teardown and updates status.
 
-### 8.2 Control Actions (Temporal workflow controls)
+### 8.2 Control Actions (Temporal Signals)
 
-Pause and resume should use the canonical execution control surface rather than ad hoc signal names:
-- Update `Pause`: The workflow stops scheduling new work at the next safe checkpoint.
-- Update `Resume`: Removes the block and lets orchestration continue.
-
-If a future live-session takeover flow needs a workflow-local async event, it should use an explicitly documented signal contract rather than reusing generic pause/resume signal names.
+Pauses and takeovers use standard **Temporal Signals**:
+- Signal `pause_workflow`: The workflow blocks taking new actions at the next safe checkpoint.
+- Signal `resume_workflow`: Removes the block.
 
 ### 8.3 Operator Messages
 

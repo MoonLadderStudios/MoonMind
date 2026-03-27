@@ -210,12 +210,6 @@ The legacy DB-polling `moonmind-scheduler` has been removed. Temporal Schedules 
 
 (Details live in a separate "Scheduling" system doc.)
 
-Control-plane corollary:
-
-- acknowledged execution mutations use Updates or cancellation endpoints
-- asynchronous external events use Signals
-- mutable deferred waits use the dedicated `reschedule` signal path
-
 ---
 
 ## 11. Security foundation (self-hosted posture)

@@ -87,22 +87,9 @@ class MoonMindRunWorkflow:
         return {"status": "success"}
 ```
 
-The workflow also supports control updates and signals such as:
-
-- `UpdateInputs`
-- `SetTitle`
-- `RequestRerun`
-- `Approve`
-- `Pause`
-- `Resume`
-- `ExternalEvent`
-- `reschedule` where applicable for in-workflow scheduled waits
-
-Desired-state rule:
-
-- acknowledged execution controls use Temporal Updates,
-- asynchronous callbacks use Signals,
-- mutable deferred waits use the dedicated `reschedule` signal path.
+The workflow also has signal/update handlers for `pause`, `resume`, `cancel`,
+`approve`, and `update_parameters`, plus an integration polling loop for
+external providers like Jules.
 
 ### 2.3 Planning stage (implemented ✅)
 

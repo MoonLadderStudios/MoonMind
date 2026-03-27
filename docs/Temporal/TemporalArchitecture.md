@@ -571,16 +571,10 @@ Preferred workflow updates include:
 - `UpdateInputs`
 - `SetTitle`
 - `RequestRerun`
-- `Approve`
-- `Pause`
-- `Resume`
 
 Use Updates when the caller needs a request/response result and acceptance decision.
 
-### 14.2. Signals
-
-- `ExternalEvent`
-- `reschedule` where applicable for in-workflow scheduled waits
+### 14.2 Signals
 
 Use Signals for asynchronous events such as:
 

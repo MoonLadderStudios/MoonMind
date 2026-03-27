@@ -358,12 +358,11 @@ Task-facing operations should be translated into Temporal-native controls by com
 | Edit task inputs | Update `UpdateInputs` | `POST /api/executions/{workflowId}/update` |
 | Rename task | Update `SetTitle` | `POST /api/executions/{workflowId}/update` |
 | Rerun task | Update `RequestRerun` | `POST /api/executions/{workflowId}/update` |
-| Approve task | Update `Approve` | `POST /api/executions/{workflowId}/update` |
-| Pause task | Update `Pause` | `POST /api/executions/{workflowId}/update` |
-| Resume task | Update `Resume` | `POST /api/executions/{workflowId}/update` |
-| Deliver callback | Signal `ExternalEvent` | `POST /api/executions/{workflowId}/signal` |
+| Approve task | Signal `Approve` | `POST /api/executions/{workflowId}/signal` |
+| Pause task | Signal `Pause` | `POST /api/executions/{workflowId}/signal` |
+| Resume task | Signal `Resume` | `POST /api/executions/{workflowId}/signal` |
+| Deliver callback / webhook event | Signal `ExternalEvent` | `POST /api/executions/{workflowId}/signal` |
 | Cancel task | Cancel workflow | `POST /api/executions/{workflowId}/cancel` |
-| Reschedule deferred task | `reschedule` signal path | `POST /api/executions/{workflowId}/reschedule` |
 
 ### 10.2 Update result semantics
 

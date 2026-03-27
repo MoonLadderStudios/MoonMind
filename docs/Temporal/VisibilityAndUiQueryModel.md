@@ -594,7 +594,7 @@ The dashboard uses:
 - Route/path allowlists to support Temporal-backed detail pages,
 - Temporal status normalization,
 - Temporal list/detail fetchers,
-- Temporal action handlers for core Temporal primitives (update, signal, cancel, and rerun); higher-level dashboard actions compose from these primitives and related Temporal endpoints, with pause/resume/approve routed through Updates and callback-style external events routed through Signals,
+- Temporal action handlers for core Temporal primitives (update, signal, cancel, and rerun); higher-level dashboard actions (for example, reschedule and task controls like pause, resume, and approve) are composed from these primitives and related Temporal endpoints,
 - `workflowId` as the durable handle,
 - `runId` as run/debug metadata.
 
