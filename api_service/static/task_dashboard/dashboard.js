@@ -289,6 +289,21 @@
 
   const listSubmitRuntimes = () => Array.from(new Set([...supportedTaskRuntimes]));
 
+  /** Maps task submit runtime (dashboard) to managed_agent_auth_profiles.runtime_id. */
+  const mapTaskRuntimeToAuthProfileRuntimeId = (mode) => {
+    const m = String(mode || "").trim().toLowerCase();
+    if (m === "gemini_cli") {
+      return "gemini_cli";
+    }
+    if (m === "claude") {
+      return "claude_code";
+    }
+    if (m === "codex") {
+      return "codex_cli";
+    }
+    return "";
+  };
+
   const TASK_RUNTIME_LABELS = {
     codex: "Codex CLI",
     gemini: "Gemini CLI",
@@ -1657,6 +1672,12 @@
       ? publishNode.mode
       : payload.publishMode || extractPublishModeFromPayload(payload);
 
+    const authProfileId = (() => {
+      const ref =
+        runtimeNode.executionProfileRef ?? runtimeNode.execution_profile_ref;
+      return typeof ref === "string" ? ref.trim() : "";
+    })();
+
     return {
       editJobId: String(pick(job, "id") || "").trim(),
       expectedUpdatedAt: String(pick(job, "updatedAt") || "").trim(),
@@ -1689,6 +1710,7 @@
       steps,
       appliedTemplateState,
       templateFeatureRequest: "",
+      authProfileId,
     };
   }
 
@@ -4850,6 +4872,7 @@
       ? sanitizedWorkerDraft.steps
       : [];
     const queueDraftAffinityKey = String(sanitizedWorkerDraft.affinityKey || "").trim();
+    const queueDraftAuthProfile = String(sanitizedWorkerDraft.authProfileId || "").trim();
     const attachmentAcceptedTypes = attachmentPolicy.allowedContentTypes.join(",");
     const attachmentSectionHtml =
       attachmentPolicy.enabled && !isEditMode
@@ -4927,6 +4950,14 @@
             ${runtimeOptions}
           </select>
         </label>
+        <div id="queue-auth-profile-wrap" class="hidden">
+          <label>Auth profile
+            <select name="authProfile">
+              <option value="">Default (system chooses)</option>
+            </select>
+          </label>
+          <p class="small" id="queue-auth-profile-hint"></p>
+        </div>
         <datalist id="queue-model-options">
         </datalist>
         <datalist id="queue-effort-options">
@@ -5182,6 +5213,7 @@
           .toLowerCase(),
         model: String(formData.get("model") || "").trim(),
         effort: String(formData.get("effort") || "").trim(),
+        authProfileId: String(formData.get("authProfile") || "").trim(),
         priority: Number.isFinite(priority) ? priority : 0,
         maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 3,
         proposeTasks: formData.get("proposeTasks") !== null,
@@ -5205,6 +5237,77 @@
     const effortInputElement = form.querySelector('input[name="effort"]');
     const modelDatalistNode = form.querySelector("#queue-model-options");
     const effortDatalistNode = form.querySelector("#queue-effort-options");
+    const authProfileWrap = form.querySelector("#queue-auth-profile-wrap");
+    const authProfileHint = form.querySelector("#queue-auth-profile-hint");
+    const authProfileSelect = form.querySelector('select[name="authProfile"]');
+    let applyQueueDraftAuthProfileOnce = true;
+
+    const refreshAuthProfileOptions = async (runtimeMode) => {
+      if (!authProfileWrap || !authProfileSelect) {
+        return;
+      }
+      if (!authProfileEndpoints) {
+        authProfileWrap.classList.add("hidden");
+        return;
+      }
+      const mappedRuntimeId = mapTaskRuntimeToAuthProfileRuntimeId(runtimeMode);
+      if (!mappedRuntimeId) {
+        authProfileWrap.classList.add("hidden");
+        authProfileSelect.innerHTML =
+          '<option value="">Default (system chooses)</option>';
+        if (authProfileHint) {
+          authProfileHint.textContent = "";
+        }
+        return;
+      }
+      const previousSelection = String(authProfileSelect.value || "").trim();
+      authProfileWrap.classList.remove("hidden");
+      if (authProfileHint) {
+        authProfileHint.textContent =
+          "Optional. Choose stored credentials for this runtime, or leave default for automatic selection.";
+      }
+      try {
+        const url = `${authProfileEndpoints.list}?runtime_id=${encodeURIComponent(
+          mappedRuntimeId,
+        )}&enabled_only=true`;
+        const profiles = await fetchJson(url);
+        const list = Array.isArray(profiles) ? profiles : [];
+        const options = ['<option value="">Default (system chooses)</option>'];
+        list.forEach((profile) => {
+          const pid = String(profile.profile_id || "").trim();
+          if (!pid) {
+            return;
+          }
+          const label = String(profile.account_label || "").trim() || pid;
+          options.push(
+            `<option value="${escapeHtml(pid)}">${escapeHtml(label)}</option>`,
+          );
+        });
+        authProfileSelect.innerHTML = options.join("");
+        const desired = String(previousSelection || "").trim();
+        let pickId = desired;
+        if (!pickId && applyQueueDraftAuthProfileOnce) {
+          pickId = String(queueDraftAuthProfile || "").trim();
+        }
+        applyQueueDraftAuthProfileOnce = false;
+        if (
+          pickId &&
+          list.some((p) => String(p.profile_id || "").trim() === pickId)
+        ) {
+          authProfileSelect.value = pickId;
+        }
+      } catch (_error) {
+        console.warn("submit form: could not load auth profiles", _error);
+        authProfileWrap.classList.add("hidden");
+        authProfileSelect.innerHTML =
+          '<option value="">Default (system chooses)</option>';
+        if (authProfileHint) {
+          authProfileHint.textContent =
+            "Could not load auth profiles. The run will use default profile selection.";
+        }
+      }
+    };
+
     const stepsList = document.getElementById("queue-steps-list");
     const runtimeModelDefaults = {
       ...configuredModelDefaults,
@@ -5331,9 +5434,11 @@
         activeWorkerRuntime = nextRuntime;
         applyQueueSubmitRuntimeUiState(activeWorkerRuntime);
         loadRuntimeCapabilities(nextRuntime);
+        void refreshAuthProfileOptions(nextRuntime);
         refreshSkillDatalist();
         scheduleWorkerDraftPersist();
       });
+      void refreshAuthProfileOptions(runtimeSelect.value);
     }
     form.addEventListener("input", scheduleWorkerDraftPersist);
     form.addEventListener("change", scheduleWorkerDraftPersist);
@@ -6284,6 +6389,7 @@
       }
       const model = String(formData.get("model") || "").trim() || null;
       const effort = String(formData.get("effort") || "").trim() || null;
+      const authProfileRef = String(formData.get("authProfile") || "").trim();
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
       const affinityKey = queueDraftAffinityKey || null;
@@ -6463,7 +6569,12 @@
           },
           ...(Object.keys(skillArgs).length > 0 ? { inputs: skillArgs } : {}),
           proposeTasks,
-          runtime: { mode: runtimeMode, model, effort },
+          runtime: {
+            mode: runtimeMode,
+            model,
+            effort,
+            ...(authProfileRef ? { executionProfileRef: authProfileRef } : {}),
+          },
           git: { startingBranch, newBranch },
           publish: {
             mode: publishMode,

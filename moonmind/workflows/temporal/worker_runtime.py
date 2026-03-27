@@ -204,6 +204,12 @@ def _build_runtime_planner():
         if isinstance(effort, str) and effort.strip():
             runtime_node["effort"] = effort.strip()
 
+        exec_profile_ref = runtime_payload.get("executionProfileRef") or runtime_payload.get(
+            "execution_profile_ref"
+        )
+        if isinstance(exec_profile_ref, str) and exec_profile_ref.strip():
+            runtime_node["executionProfileRef"] = exec_profile_ref.strip()
+
         # --- Build node inputs ---
         node_inputs: dict[str, Any] = {
             "instructions": instructions,
