@@ -1,37 +1,52 @@
 [
   {
-    "id": 4140314860,
+    "id": 4140862776,
     "disposition": "not-applicable",
-    "rationale": "Codex usage limit notification from bot, not actionable feedback."
+    "rationale": "Informational greeting from bot."
   },
   {
-    "id": 2999078770,
+    "id": 4140863129,
     "disposition": "not-applicable",
-    "rationale": "CodeQL false positive: the logged values are profile_id strings (e.g. 'claude_anthropic'), not credentials."
+    "rationale": "Informational limit warning from bot."
   },
   {
-    "id": 4018984796,
-    "disposition": "not-applicable",
-    "rationale": "Gemini review summary with 'no feedback to provide'."
-  },
-  {
-    "id": 2999086104,
+    "id": 2999559753,
     "disposition": "addressed",
-    "rationale": "Changed docstring from 'Upsert' to 'Seed' to match insert-only behavior."
+    "rationale": "Fixed typo in task contract path."
   },
   {
-    "id": 2999086110,
+    "id": 2999559762,
     "disposition": "addressed",
-    "rationale": "Added non-blank value check for ANTHROPIC_MODEL env override to prevent launching Claude without model selection."
+    "rationale": "Updated validation to query database projection."
   },
   {
-    "id": 2999086122,
-    "disposition": "addressed",
-    "rationale": "Already fixed in previous commit: migration now uses convert_from/convert_to instead of ::text/::bytea casts."
-  },
-  {
-    "id": 4018990233,
+    "id": 4019514409,
     "disposition": "not-applicable",
-    "rationale": "Copilot PR overview/summary comment, not actionable feedback."
+    "rationale": "Top level review summary, no direct action required."
+  },
+  {
+    "id": 2999570557,
+    "disposition": "addressed",
+    "rationale": "Rephrased to verify existing constant instead of adding it."
+  },
+  {
+    "id": 2999570573,
+    "disposition": "addressed",
+    "rationale": "Updated frontend endpoint to /api/executions."
+  },
+  {
+    "id": 2999570589,
+    "disposition": "addressed",
+    "rationale": "Fixed typo in task contract path, duplicating earlier comment."
+  },
+  {
+    "id": 2999570604,
+    "disposition": "addressed",
+    "rationale": "Updated phase 1 tasks to reflect current baseline."
+  },
+  {
+    "id": 4019526648,
+    "disposition": "not-applicable",
+    "rationale": "Top level review summary, no direct action required."
   }
 ]
