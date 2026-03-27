@@ -2,52 +2,52 @@
   {
     "id": 4140862776,
     "disposition": "not-applicable",
-    "rationale": "Informational greeting from bot."
+    "rationale": "Informational welcome message from Jules bot."
   },
   {
     "id": 4140863129,
     "disposition": "not-applicable",
-    "rationale": "Informational limit warning from bot."
+    "rationale": "Informational limit warning from Codex connector."
   },
   {
     "id": 2999559753,
     "disposition": "addressed",
-    "rationale": "Fixed typo in task contract path."
+    "rationale": "Fixed module path for Task 1.1."
   },
   {
     "id": 2999559762,
     "disposition": "addressed",
-    "rationale": "Updated validation to query database projection."
+    "rationale": "Updated Task 2.2 to query the database projection."
   },
   {
     "id": 4019514409,
     "disposition": "not-applicable",
-    "rationale": "Top level review summary, no direct action required."
+    "rationale": "Review summary, not actionable."
   },
   {
     "id": 2999570557,
     "disposition": "addressed",
-    "rationale": "Rephrased to verify existing constant instead of adding it."
+    "rationale": "Rephrased Task 3.1 as a verification step since it's already implemented."
   },
   {
     "id": 2999570573,
     "disposition": "addressed",
-    "rationale": "Updated frontend endpoint to /api/executions."
+    "rationale": "Updated Task 4.1 to point to the current executions endpoint."
   },
   {
     "id": 2999570589,
     "disposition": "addressed",
-    "rationale": "Fixed typo in task contract path, duplicating earlier comment."
+    "rationale": "Fixed module path for Task 1.1, resolving duplicate feedback."
   },
   {
     "id": 2999570604,
     "disposition": "addressed",
-    "rationale": "Updated phase 1 tasks to reflect current baseline."
+    "rationale": "Marked Phase 1 Tasks 1.2-1.4 as already implemented."
   },
   {
     "id": 4019526648,
     "disposition": "not-applicable",
-    "rationale": "Top level review summary, no direct action required."
+    "rationale": "PR overview message, not actionable."
   },
   {
     "id": 2999534543,
