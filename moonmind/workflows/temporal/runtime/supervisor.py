@@ -79,31 +79,38 @@ class ManagedRunSupervisor:
             strategy = get_strategy(runtime_id) if runtime_id else None
             parser = strategy.create_output_parser() if strategy else None
 
-            # Heartbeat + wait for process with timeout
-            try:
-                process_exit_code = await asyncio.wait_for(
-                    self._heartbeat_and_wait(run_id, process),
-                    timeout=timeout_seconds,
+            # Run heartbeat/wait and log streaming CONCURRENTLY so that OS
+            # pipe buffers are drained in real-time.  Sequential streaming
+            # (heartbeat first, then stream) fills the kernel pipe buffer for
+            # processes with large output, causing the subprocess write-end to
+            # block indefinitely — a deadlock.  Concurrent streaming also means
+            # output is captured as it is produced, enabling true live output.
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_and_wait_with_timeout(
+                    run_id, process, timeout_seconds
                 )
-                exit_code = self._resolve_effective_exit_code(
-                    process_exit_code=process_exit_code,
-                    exit_code_path=exit_code_path,
-                )
-                timed_out = False
-            except asyncio.TimeoutError:
-                exit_code = None
-                timed_out = True
-                await self._terminate_process(process)
-
-            # Stream logs and parse output in one step
-            log_refs, stdout_content, stderr_content, parsed_output = (
-                await self._log_streamer.stream_and_parse(
+            )
+            stream_task = asyncio.create_task(
+                self._log_streamer.stream_and_parse(
                     process.stdout,
                     process.stderr,
                     run_id=run_id,
                     parser=parser,
                 )
             )
+            (
+                (process_exit_code, timed_out),
+                (log_refs, stdout_content, stderr_content, parsed_output),
+            ) = await asyncio.gather(heartbeat_task, stream_task)
+
+            if timed_out:
+                exit_code = None
+                await self._terminate_process(process)
+            else:
+                exit_code = self._resolve_effective_exit_code(
+                    process_exit_code=process_exit_code,
+                    exit_code_path=exit_code_path,
+                )
 
             duration = (datetime.now(tz=UTC) - start_time).total_seconds()
 
@@ -189,6 +196,35 @@ class ManagedRunSupervisor:
                     "running",
                     last_heartbeat_at=datetime.now(tz=UTC),
                 )
+
+    async def _heartbeat_and_wait_with_timeout(
+        self,
+        run_id: str,
+        process: asyncio.subprocess.Process,
+        timeout_seconds: int,
+    ) -> tuple[int | None, bool]:
+        """Wrap _heartbeat_and_wait with a total timeout.
+
+        Returns ``(exit_code, timed_out)`` so callers can unpack both
+        the process exit code and the timeout flag from a single awaitable,
+        making it composable with ``asyncio.gather()``.
+
+        On timeout, the process is terminated immediately so that any
+        concurrent streaming task observes EOF and exits promptly.
+        Without this, ``asyncio.gather()`` would block indefinitely on
+        the stream task waiting for EOF that never arrives.
+        """
+        try:
+            exit_code = await asyncio.wait_for(
+                self._heartbeat_and_wait(run_id, process),
+                timeout=timeout_seconds,
+            )
+            return exit_code, False
+        except asyncio.TimeoutError:
+            # Terminate the process so the concurrent streaming task sees EOF
+            # and can complete, allowing asyncio.gather() to unblock.
+            await self._terminate_process(process)
+            return None, True
 
     async def cancel(self, run_id: str) -> None:
         """Cancel a running managed process: terminate -> wait -> kill."""
