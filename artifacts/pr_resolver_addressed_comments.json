@@ -1,5 +1,35 @@
 [
   {
+    "id": 4140946136,
+    "disposition": "not-applicable",
+    "rationale": "Informational greeting from bot, no action needed."
+  },
+  {
+    "id": 4140946365,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot comment about usage limits."
+  },
+  {
+    "id": 4019593582,
+    "disposition": "not-applicable",
+    "rationale": "Bot review summary with no actionable feedback."
+  },
+  {
+    "id": 2999644167,
+    "disposition": "addressed",
+    "rationale": "Updated section 2 to correctly reference PUT /api/queue/jobs/{id} and POST /api/executions/{workflowId}/update."
+  },
+  {
+    "id": 2999644181,
+    "disposition": "addressed",
+    "rationale": "Rewrote section 3 to describe the implemented Temporal Workflow Updates approach instead of cancel and restart."
+  },
+  {
+    "id": 4019617115,
+    "disposition": "not-applicable",
+    "rationale": "Informational PR overview from bot, no action needed."
+  },
+  {
     "id": 2999534543,
     "disposition": "addressed",
     "rationale": "Refactored mutli-source extraction into a loop over shared constants."
