@@ -37,6 +37,9 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
+    TASK_RUN_ID_MEMO_KEYS,
+    TASK_RUN_ID_PARAM_KEYS,
+    TASK_RUN_ID_SEARCH_ATTR_KEYS,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.manifest_ingest import (
@@ -1487,6 +1490,18 @@ class TemporalExecutionService:
                 waiting_reason="external_completion",
                 attention_required=False,
             )
+        memo = dict(record.memo or {})
+        for key in TASK_RUN_ID_MEMO_KEYS:
+            memo.pop(key, None)
+        record.memo = memo
+        attrs = dict(record.search_attributes or {})
+        for key in TASK_RUN_ID_SEARCH_ATTR_KEYS:
+            attrs.pop(key, None)
+        record.search_attributes = attrs
+        params = dict(record.parameters or {})
+        for key in TASK_RUN_ID_PARAM_KEYS:
+            params.pop(key, None)
+        record.parameters = params
         record.closed_at = None
         record.close_status = None
         record.pending_parameters_patch = None

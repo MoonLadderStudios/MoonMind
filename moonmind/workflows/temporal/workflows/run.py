@@ -14,6 +14,11 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from moonmind.workflows.temporal.jules_bundle import (
+        build_bundle_spec,
+        eligible_for_bundle,
+        is_jules_agent_runtime_node,
+    )
     from moonmind.workflows.tasks.routing import _coerce_bool
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -86,6 +91,12 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 _MANAGED_AGENT_IDS = frozenset(
     {"gemini_cli", "gemini_cli", "claude", "claude_code", "codex", "codex_cli"}
 )
+
+
+def _normalize_agent_runtime_id(agent_id: str) -> str:
+    """Normalize runtime identifiers for managed/external dispatch decisions."""
+
+    return str(agent_id).strip().lower().replace("-", "_")
 
 
 @workflow.defn(name="MoonMind.Run")
@@ -214,6 +225,84 @@ class MoonMindRunWorkflow:
         if not isinstance(decoded, Mapping):
             raise ValueError(error_message)
         return self._json_mapping(decoded, path="activity_payload")
+
+    async def _write_json_artifact(
+        self,
+        *,
+        name: str,
+        payload: dict[str, Any],
+    ) -> str:
+        artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.create")
+        artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
+        artifact_ref, _upload_desc = await workflow.execute_activity(
+            "artifact.create",
+            {
+                "principal": self._principal(),
+                "name": name,
+                "content_type": "application/json",
+            },
+            **self._execute_kwargs_for_route(artifact_create_route),
+        )
+        artifact_id = (
+            self._get_from_result(artifact_ref, "artifact_id")
+            or self._get_from_result(artifact_ref, "artifactId")
+            or ""
+        )
+        if not artifact_id:
+            raise ValueError(f"artifact.create returned no artifact_id for {name}")
+        await workflow.execute_activity(
+            "artifact.write_complete",
+            {
+                "principal": self._principal(),
+                "artifact_id": artifact_id,
+                "payload": json.dumps(payload),
+                "content_type": "application/json",
+            },
+            **self._execute_kwargs_for_route(artifact_write_route),
+        )
+        return str(artifact_id)
+
+    async def _bundle_ordered_nodes_for_execution(
+        self,
+        ordered_nodes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        bundled_nodes: list[dict[str, Any]] = []
+        bundle_index = 0
+        idx = 0
+        while idx < len(ordered_nodes):
+            node = ordered_nodes[idx]
+            if not is_jules_agent_runtime_node(node):
+                bundled_nodes.append(node)
+                idx += 1
+                continue
+
+            group = [node]
+            cursor = idx + 1
+            while cursor < len(ordered_nodes) and eligible_for_bundle(group[-1], ordered_nodes[cursor]):
+                group.append(ordered_nodes[cursor])
+                cursor += 1
+
+            if len(group) > 1:
+                bundle_index += 1
+                bundle_spec = build_bundle_spec(
+                    group,
+                    workflow_id=workflow.info().workflow_id,
+                    workflow_run_id=workflow.info().run_id,
+                )
+                manifest_ref = await self._write_json_artifact(
+                    name=f"reports/jules_bundle_{bundle_index}.json",
+                    payload=bundle_spec.manifest,
+                )
+                representative = dict(bundle_spec.representative_node)
+                representative_inputs = dict(representative.get("inputs") or {})
+                representative_inputs["bundleManifestRef"] = manifest_ref
+                representative["inputs"] = representative_inputs
+                bundled_nodes.append(representative)
+            else:
+                bundled_nodes.extend(group)
+            idx = cursor
+
+        return bundled_nodes
 
     def _ordered_plan_node_payloads(
         self,
@@ -498,6 +587,10 @@ class MoonMindRunWorkflow:
             nodes=plan_definition.nodes,
             edges=plan_definition.edges,
         )
+        if workflow.patched("jules-bundling-v1"):
+            ordered_nodes = await self._bundle_ordered_nodes_for_execution(
+                ordered_nodes
+            )
 
         registry_snapshot_ref = plan_definition.metadata.registry_snapshot.artifact_ref
         failure_mode = plan_definition.policy.failure_mode
@@ -505,13 +598,6 @@ class MoonMindRunWorkflow:
         require_pull_request_url = publish_mode == "pr" and self._integration is None
         pull_request_url: str | None = None
         skill_definitions_by_key: dict[tuple[str, str], Any] = {}
-
-        # Track the Jules session ID across plan nodes for multi-step
-        # session reuse.  After the first Jules step completes, its
-        # session_id is extracted from the result metadata.  Subsequent
-        # Jules steps receive this ID so MoonMind.AgentRun calls
-        # sendMessage instead of creating a new session.
-        jules_session_id: str | None = None
 
         if registry_snapshot_ref:
             registry_payload = await workflow.execute_activity(
@@ -573,17 +659,6 @@ class MoonMindRunWorkflow:
                             node_id=node_id,
                             tool_name=tool_name,
                         )
-                        # --- Multi-step Jules: adjust parameters for proper PR creation ---
-                        if request.agent_id == "jules":
-                            new_params = dict(request.parameters or {})
-                            if publish_mode == "pr":
-                                new_params["publishMode"] = "branch"
-                                new_params.pop("automationMode", None)
-                            if jules_session_id:
-                                new_params["jules_session_id"] = jules_session_id
-                            
-                            if new_params != (request.parameters or {}):
-                                request = request.model_copy(update={"parameters": new_params})
                         child_workflow_id = f"{workflow.info().workflow_id}:agent:{node_id}"
                         if system_retries > 0:
                             child_workflow_id = f"{child_workflow_id}:retry{system_retries}"
@@ -597,9 +672,6 @@ class MoonMindRunWorkflow:
                     except Exception:
                         if failure_mode == "FAIL_FAST":
                             raise
-                        # Clear session on failure so later Jules steps start fresh.
-                        if "request" in dir() and getattr(request, "agent_id", None) == "jules":
-                            jules_session_id = None
                         result_status = "FAILED"
                         break
 
@@ -690,8 +762,6 @@ class MoonMindRunWorkflow:
                             f"Retrying plan node {node_id} after {failure_message} "
                             f"(attempt {system_retries} of 3)"
                         )
-                        if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
-                            jules_session_id = None
                         continue
 
                     if failure_mode == "FAIL_FAST":
@@ -703,9 +773,6 @@ class MoonMindRunWorkflow:
                         raise ValueError(
                             f"plan node execution returned status {result_status}{detail}"
                         )
-                    # Clear session on failure so later Jules steps start fresh.
-                    if tool_type == "agent_runtime" and node_inputs.get("runtime", {}).get("mode") == "jules":
-                        jules_session_id = None
                     break
 
                 break
@@ -713,20 +780,6 @@ class MoonMindRunWorkflow:
             if result_status is None or result_status != "COMPLETED":
                 continue
 
-            # --- Multi-step Jules: extract session_id only on success ---
-            if tool_type == "agent_runtime":
-                _rt = node_inputs.get("runtime") or {}
-                _node_agent_id = (
-                    _rt.get("mode")
-                    or _rt.get("agent_id")
-                    or node_inputs.get("targetRuntime")
-                    or tool_name
-                    or ""
-                ).strip().lower()
-                if _node_agent_id in {"jules", "jules_api"}:
-                    extracted_id = self._extract_jules_session_id(child_result)
-                    if extracted_id:
-                        jules_session_id = extracted_id
             if require_pull_request_url and pull_request_url is None:
                 pull_request_url = self._extract_pull_request_url(execution_result)
                 
@@ -970,6 +1023,37 @@ class MoonMindRunWorkflow:
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        raw_metadata = runtime_block.get("metadata") or node_inputs.get("metadata")
+        if isinstance(raw_metadata, Mapping):
+            parameters["metadata"] = self._json_mapping(
+                raw_metadata, path=f"node[{node_id}].metadata"
+            )
+        bundle_payload: dict[str, Any] = {}
+        for bundle_key in (
+            "bundleId",
+            "bundledNodeIds",
+            "bundleManifestRef",
+            "bundleStrategy",
+        ):
+            if node_inputs.get(bundle_key) is not None:
+                bundle_payload[bundle_key] = self._json_value(
+                    node_inputs.get(bundle_key),
+                    path=f"node[{node_id}].{bundle_key}",
+                )
+        if bundle_payload:
+            metadata_payload = (
+                parameters.get("metadata")
+                if isinstance(parameters.get("metadata"), dict)
+                else {}
+            )
+            moonmind_payload = (
+                metadata_payload.get("moonmind")
+                if isinstance(metadata_payload.get("moonmind"), dict)
+                else {}
+            )
+            moonmind_payload.update(bundle_payload)
+            metadata_payload["moonmind"] = moonmind_payload
+            parameters["metadata"] = metadata_payload
 
         return AgentExecutionRequest(
             agent_kind=agent_kind,
@@ -1018,18 +1102,10 @@ class MoonMindRunWorkflow:
         }
 
     @staticmethod
-    def _extract_jules_session_id(result: Any) -> str | None:
-        """Extract the Jules session ID from an ``AgentRunResult`` for multi-step reuse."""
-        if isinstance(result, dict):
-            metadata = result.get("metadata") or {}
-        else:
-            metadata = getattr(result, "metadata", {}) or {}
-        return metadata.get("jules_session_id")
-
-    @staticmethod
     def _agent_kind_for_id(agent_id: str) -> str:
         """Derive ``agent_kind`` from ``agent_id``."""
-        return "managed" if agent_id.lower() in _MANAGED_AGENT_IDS else "external"
+        normalized_agent_id = _normalize_agent_runtime_id(agent_id)
+        return "managed" if normalized_agent_id in _MANAGED_AGENT_IDS else "external"
 
     async def _run_integration_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
@@ -1071,22 +1147,76 @@ class MoonMindRunWorkflow:
                     f"Failed to extract step instructions for integration multi-step: {e}"
                 )
 
-        instructions_to_run = step_instructions if (step_instructions and self._integration == "jules") else [None]
-
         integration_parameters = dict(parameters)
-        
-        # --- Multi-step Jules: adjust parameters for proper PR creation ---
-        if self._integration == "jules":
-            publish_mode = self._publish_mode(integration_parameters)
-            if publish_mode == "pr":
-                integration_parameters["publishMode"] = "branch"
-                integration_parameters.pop("automationMode", None)
-                
+        instructions_to_run = [None]
+
         integration_parameters.setdefault(
             "title", self._title or "MoonMind Integration"
         )
-        if instructions_to_run[0]:
-            integration_parameters["description"] = instructions_to_run[0]
+        if (
+            self._integration == "jules"
+            and len(step_instructions) > 1
+            and workflow.patched("moonmind.run.jules_one_shot_bundle")
+        ):
+            workspace_spec = integration_parameters.get("workspaceSpec") or {}
+            repo_value = (
+                self._repo
+                or workspace_spec.get("repository")
+                or workspace_spec.get("repo")
+                or ""
+            )
+            pseudo_nodes = []
+            for index, instruction in enumerate(step_instructions, start=1):
+                pseudo_nodes.append(
+                    {
+                        "id": f"integration-step-{index}",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "jules",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "instructions": instruction,
+                            "repository": repo_value,
+                            "repo": repo_value,
+                            "startingBranch": workspace_spec.get("startingBranch")
+                            or workspace_spec.get("branch")
+                            or "main",
+                            "targetBranch": workspace_spec.get("targetBranch"),
+                            "publishMode": self._publish_mode(integration_parameters) or "none",
+                        },
+                    }
+                )
+            bundle_spec = build_bundle_spec(
+                pseudo_nodes,
+                workflow_id=workflow.info().workflow_id,
+                workflow_run_id=workflow.info().run_id,
+            )
+            manifest_ref = await self._write_json_artifact(
+                name="reports/jules_integration_bundle.json",
+                payload=bundle_spec.manifest,
+            )
+            integration_parameters["description"] = bundle_spec.compiled_brief
+            metadata = integration_parameters.setdefault("metadata", {})
+            if not isinstance(metadata, dict):
+                raise ValueError("integration metadata must be an object when provided")
+
+            moonmind_meta = metadata.setdefault("moonmind", {})
+            if not isinstance(moonmind_meta, dict):
+                moonmind_meta = {}
+                metadata["moonmind"] = moonmind_meta
+
+            moonmind_meta.update(
+                {
+                    "bundleId": bundle_spec.bundle_id,
+                    "bundledNodeIds": list(bundle_spec.bundled_node_ids),
+                    "bundleManifestRef": manifest_ref,
+                    "bundleStrategy": "one_shot_jules",
+                }
+            )
+            integration_parameters["metadata"] = metadata
+        elif step_instructions:
+            integration_parameters["description"] = step_instructions[0]
         else:
             integration_parameters.setdefault(
                 "description",
@@ -1129,28 +1259,6 @@ class MoonMindRunWorkflow:
         for step_index, instruction in enumerate(instructions_to_run):
             if self._cancel_requested:
                 break
-
-            if step_index > 0:
-                self._resume_requested = False
-                self._external_status = "running"
-                self._update_memo()
-                self._get_logger().info(f"Jules multi-step integration: sending step {step_index + 1}/{len(instructions_to_run)}")
-                try:
-                    await workflow.execute_activity(
-                        self._integration_activity_type("send_message"),
-                        {
-                            "session_id": external_id,
-                            "prompt": instruction,
-                        },
-                        start_to_close_timeout=timedelta(minutes=5),
-                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                    )
-                except Exception as exc:
-                    self._get_logger().warning(f"Failed to send follow-up step {step_index + 1} to Jules: {exc}")
-                    self._external_status = "failed"
-                    break
 
             poll_interval_seconds = 5
             max_poll_interval_seconds = 300
@@ -1321,20 +1429,17 @@ class MoonMindRunWorkflow:
                             "Jules branch-publish: PR merged: %s", merge_summary
                         )
                     else:
-                        self._get_logger().warning(
-                            "Jules branch-publish: merge failed: %s", merge_summary
+                        raise ValueError(
+                            f"Jules branch-publish: merge failed: {merge_summary}"
                         )
                 else:
-                    self._get_logger().warning(
-                        "Jules branch-publish: no PR URL found in result; "
-                        "skipping auto-merge"
+                    raise ValueError(
+                        "Jules branch-publish: no PR URL found in result"
                     )
             except Exception as exc:
-                self._get_logger().warning(
-                    "Jules branch-publish auto-merge failed (best-effort): %s",
-                    exc,
-                    exc_info=True,
-                )
+                raise ValueError(
+                    f"Jules branch-publish auto-merge failed: {exc}"
+                ) from exc
 
     async def _run_proposals_stage(
         self, *, parameters: dict[str, Any]

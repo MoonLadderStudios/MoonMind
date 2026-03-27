@@ -186,6 +186,78 @@ async def test_jules_send_message_activity_calls_adapter(_patch_build_adapter):
     )
 
 
+async def test_repo_merge_pr_activity_updates_base_before_merge():
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as mock_service_cls:
+        service = mock_service_cls.return_value
+        service.update_pull_request_base = AsyncMock(
+            return_value=(True, "Base updated to main")
+        )
+        service.merge_pull_request = AsyncMock(
+            return_value=type(
+                "MergeResult",
+                (),
+                {
+                    "model_dump": lambda self, by_alias=True: {
+                        "prUrl": "https://github.com/org/repo/pull/123",
+                        "merged": True,
+                        "mergeSha": "abc123",
+                        "summary": "Merged successfully",
+                    }
+                },
+            )()
+        )
+
+        result = await repo_merge_pr_activity(
+            {
+                "pr_url": "https://github.com/org/repo/pull/123",
+                "target_branch": "main",
+            }
+        )
+
+    service.update_pull_request_base.assert_awaited_once_with(
+        pr_url="https://github.com/org/repo/pull/123",
+        new_base="main",
+    )
+    service.merge_pull_request.assert_awaited_once_with(
+        pr_url="https://github.com/org/repo/pull/123",
+        merge_method="merge",
+    )
+    assert result["merged"] is True
+    assert result["mergeSha"] == "abc123"
+
+
+async def test_repo_merge_pr_activity_returns_non_success_when_base_update_fails():
+    from moonmind.workflows.temporal.activities.jules_activities import (
+        repo_merge_pr_activity,
+    )
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.GitHubService"
+    ) as mock_service_cls:
+        service = mock_service_cls.return_value
+        service.update_pull_request_base = AsyncMock(
+            return_value=(False, "Target branch does not exist")
+        )
+        service.merge_pull_request = AsyncMock()
+
+        result = await repo_merge_pr_activity(
+            {
+                "pr_url": "https://github.com/org/repo/pull/123",
+                "target_branch": "main",
+            }
+        )
+
+    service.merge_pull_request.assert_not_awaited()
+    assert result["merged"] is False
+    assert "Base branch update failed" in result["summary"]
+
+
 # --- T019: integration.jules.list_activities tests ---
 
 

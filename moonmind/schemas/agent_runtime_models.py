@@ -100,6 +100,19 @@ def _require_non_blank(value: str, *, field_name: str) -> str:
     return normalized
 
 
+class ProfileSelector(BaseModel):
+    """Dynamic routing criteria for ProviderProfileManager."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    provider_id: str | None = Field(None, alias="providerId")
+    tags_any: list[str] = Field(default_factory=list, alias="tagsAny")
+    tags_all: list[str] = Field(default_factory=list, alias="tagsAll")
+    runtime_materialization_mode: str | None = Field(
+        None, alias="runtimeMaterializationMode"
+    )
+
+
 class AgentExecutionRequest(BaseModel):
     """Canonical request payload for true agent runtime execution."""
 
@@ -124,6 +137,9 @@ class AgentExecutionRequest(BaseModel):
     )
     callback_policy: dict[str, Any] = Field(
         default_factory=dict, alias="callbackPolicy"
+    )
+    profile_selector: ProfileSelector = Field(
+        default_factory=ProfileSelector, alias="profileSelector"
     )
 
     @model_validator(mode="after")
@@ -290,6 +306,12 @@ class ManagedRuntimeProfile(BaseModel):
     passthrough_env_keys: list[str] = Field(
         default_factory=list, alias="passthroughEnvKeys"
     )
+    clear_env_keys: list[str] = Field(
+        default_factory=list, alias="clearEnvKeys"
+    )
+    secret_refs: dict[str, str] = Field(
+        default_factory=dict, alias="secretRefs"
+    )
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":
@@ -414,6 +436,7 @@ __all__ = [
     "ManagedAgentAuthProfile",
     "ManagedRunRecord",
     "ManagedRuntimeProfile",
+    "ProfileSelector",
     "ProviderCapabilityDescriptor",
     "TERMINAL_AGENT_RUN_STATES",
     "WorkspaceMode",

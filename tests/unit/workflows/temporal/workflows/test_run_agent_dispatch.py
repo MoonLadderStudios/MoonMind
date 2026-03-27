@@ -30,6 +30,15 @@ class TestAgentKindForId(unittest.TestCase):
         self.assertEqual(wf._agent_kind_for_id("Gemini_cli"), "managed")
         self.assertEqual(wf._agent_kind_for_id("CLAUDE_CODE"), "managed")
 
+    def test_hyphenated_managed_agent_ids(self) -> None:
+        wf = MoonMindRunWorkflow()
+        for agent_id in ("gemini-cli", "claude-code", "codex-cli"):
+            self.assertEqual(
+                wf._agent_kind_for_id(agent_id),
+                "managed",
+                f"{agent_id} should be managed",
+            )
+
 
 class TestMapAgentRunResult(unittest.TestCase):
     """Verify the _map_agent_run_result helper."""
@@ -108,3 +117,27 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {"id": "step-1", "instructions": "Do part A"},
             {"id": "step-2", "instructions": "Do part B"}
         ])
+
+    def test_build_agent_execution_request_marks_hyphenated_codex_runtime_managed(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {"mode": "codex-cli"},
+                },
+                node_id="node-codex",
+                tool_name="pr-resolver",
+            )
+
+        self.assertEqual(request.agent_id, "codex-cli")
+        self.assertEqual(request.agent_kind, "managed")
