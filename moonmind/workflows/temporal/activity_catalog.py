@@ -666,7 +666,7 @@ def build_default_activity_catalog(
             capability_class="integration:openclaw",
             task_queue=cfg.activity_integrations_task_queue,
             fleet=INTEGRATIONS_FLEET,
-            timeouts=TemporalActivityTimeouts(300, 600, heartbeat_timeout_seconds=120),
+            timeouts=TemporalActivityTimeouts(300, 700, heartbeat_timeout_seconds=120),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
@@ -722,7 +722,7 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(60, 240, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(
@@ -731,7 +731,7 @@ def build_default_activity_catalog(
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
-            timeouts=TemporalActivityTimeouts(60, 180, heartbeat_timeout_seconds=30),
+            timeouts=TemporalActivityTimeouts(60, 240, heartbeat_timeout_seconds=30),
             retries=_activity_retries(max_attempts=3, max_interval_seconds=120),
         ),
         TemporalActivityDefinition(
