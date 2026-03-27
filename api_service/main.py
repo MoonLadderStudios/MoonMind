@@ -501,56 +501,83 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "account_label": "Claude Code via MiniMax (auto-seeded)",
         })
 
-    seeded: list[str] = []
+    changed_runtime_ids: list[str] = []
     try:
         async with get_async_session_context() as session:
-            # Fetch all existing profile_ids in one query.
+            # Fetch all existing built-in rows in one query so startup can
+            # repair stale deployments as well as insert missing rows.
             existing_result = await session.execute(
-                select(ManagedAgentProviderProfile.profile_id)
-            )
-            existing_ids: set[str] = {row[0] for row in existing_result.all()}
-
-            to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
-            if not to_insert:
-                return []
-
-            logger.info(
-                "Auto-seeding %d missing provider profile(s): %s",
-                len(to_insert),
-                [p["profile_id"] for p in to_insert],
-            )
-
-            for profile_def in to_insert:
-                profile = ManagedAgentProviderProfile(
-                    profile_id=profile_def["profile_id"],
-                    runtime_id=profile_def["runtime_id"],
-                    provider_id=profile_def["provider_id"],
-                    provider_label=profile_def.get("provider_label"),
-                    credential_source=profile_def["credential_source"],
-                    runtime_materialization_mode=profile_def["runtime_materialization_mode"],
-                    volume_ref=profile_def.get("volume_ref"),
-                    volume_mount_path=profile_def.get("volume_mount_path"),
-                    account_label=profile_def.get("account_label"),
-                    secret_refs=profile_def.get("secret_refs"),
-                    clear_env_keys=profile_def.get("clear_env_keys"),
-                    env_template=profile_def.get("env_template"),
-                    max_parallel_runs=1,
-                    cooldown_after_429_seconds=300,
-                    rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
-                    enabled=True,
+                select(ManagedAgentProviderProfile).where(
+                    ManagedAgentProviderProfile.profile_id.in_(
+                        [p["profile_id"] for p in _DEFAULT_PROFILES]
+                    )
                 )
-                session.add(profile)
-                seeded.append(profile_def["runtime_id"])
+            )
+            existing_profiles = {
+                row.profile_id: row for row in existing_result.scalars().all()
+            }
+
+            for profile_def in _DEFAULT_PROFILES:
+                existing_profile = existing_profiles.get(profile_def["profile_id"])
+                managed_fields = {
+                    "runtime_id": profile_def["runtime_id"],
+                    "provider_id": profile_def["provider_id"],
+                    "provider_label": profile_def.get("provider_label"),
+                    "credential_source": profile_def["credential_source"],
+                    "runtime_materialization_mode": profile_def["runtime_materialization_mode"],
+                    "volume_ref": profile_def.get("volume_ref"),
+                    "volume_mount_path": profile_def.get("volume_mount_path"),
+                    "account_label": profile_def.get("account_label"),
+                    "secret_refs": profile_def.get("secret_refs"),
+                    "clear_env_keys": profile_def.get("clear_env_keys"),
+                    "env_template": profile_def.get("env_template"),
+                    "max_parallel_runs": 1,
+                    "cooldown_after_429_seconds": 300,
+                    "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
+                    "enabled": True,
+                }
+
+                if existing_profile is None:
+                    profile = ManagedAgentProviderProfile(
+                        profile_id=profile_def["profile_id"],
+                        **managed_fields,
+                    )
+                    session.add(profile)
+                    changed_runtime_ids.append(profile_def["runtime_id"])
+                    continue
+
+                if existing_profile.owner_user_id is not None:
+                    logger.info(
+                        "Skipping reconciliation for user-owned built-in provider profile %s.",
+                        existing_profile.profile_id,
+                    )
+                    continue
+
+                updated_fields: list[str] = []
+                for field_name, expected_value in managed_fields.items():
+                    if getattr(existing_profile, field_name) != expected_value:
+                        setattr(existing_profile, field_name, expected_value)
+                        updated_fields.append(field_name)
+                if updated_fields:
+                    logger.info(
+                        "Reconciled built-in provider profile %s fields=%s",
+                        existing_profile.profile_id,
+                        updated_fields,
+                    )
+                    changed_runtime_ids.append(profile_def["runtime_id"])
+
+            if not changed_runtime_ids:
+                return []
 
             await session.commit()
             logger.info(
-                "Committed %d auto-seeded managed-agent provider profile row(s).",
-                len(seeded),
+                "Committed %d built-in provider profile insert/update operation(s).",
+                len(changed_runtime_ids),
             )
     except Exception as e:
         logger.error("Failed to auto-seed provider profiles: %s", e, exc_info=True)
 
-    return seeded
+    return changed_runtime_ids
 
 
 async def ensure_provider_profile_managers_started():
