@@ -123,13 +123,13 @@ Code is **Temporal-primary**; remaining items are mostly **vocabulary**, **query
 
 **Objective:** Remove transitional language from architecture docs so they match the **Temporal-only execution** reality already implemented in code.
 
-- [ ] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; steady-state contract only
+- [x] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; steady-state contract only
 - [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`system` source definitions and multi-source pagination; Temporal-only (or archive if redundant)
 - [x] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source pages; retire multi-source pagination section
 - [x] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — superseded *(done)*
 - [ ] **5.5** Update `docs/MoonMindArchitecture.md` if any queue/system execution references remain
 - [ ] **5.6** Update remaining Temporal architecture docs (`TemporalArchitecture.md`, `ActivityCatalogAndWorkerTopology.md`, `WorkflowTypeCatalogAndLifecycle.md`, `RoutingPolicy.md`) to remove transitional queue/system language, purge obsolete feature flags, and use steady-state Temporal vocabulary *(may overlap dedicated trackers under `docs/tmp/remaining-work/`)* 
-- [ ] **5.7** Update Roadmap: close H.1 (system removal) and mark substrate migration items done
+- [x] **5.7** Update Roadmap: close H.1 (system removal) and mark substrate migration items done
 - [ ] **5.8** Delete or archive **this** document once Phase 5 is complete and readers are pointed at canonical `docs/Temporal/` sources
 
 **Cross-links:** When editing canonical docs, align **namespace** story with [009-DefaultNamespace.md](009-DefaultNamespace.md), **scheduling** with [014-TemporalSchedulingImprovements.md](014-TemporalSchedulingImprovements.md), and **control-plane messages** with [014-TemporalMessageContracts.md](014-TemporalMessageContracts.md).

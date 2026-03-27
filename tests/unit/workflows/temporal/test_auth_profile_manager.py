@@ -266,6 +266,67 @@ class TestAuthProfileManagerHelpers:
         )
         assert wf._find_available_profile() is None
 
+    def test_find_available_profile_filters_by_provider_id(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1", max_parallel_runs=3, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, provider_id="anthropic"
+        )
+        wf._profiles["p2"] = ProfileSlotState(
+            profile_id="p2", max_parallel_runs=3, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, provider_id="minimax"
+        )
+        
+        # Test finding minimax
+        best = wf._find_available_profile({"providerId": "minimax"})
+        assert best is not None
+        assert best.profile_id == "p2"
+        
+        # Test finding anthropic
+        best = wf._find_available_profile({"providerId": "anthropic"})
+        assert best is not None
+        assert best.profile_id == "p1"
+        
+        # Test finding unknown
+        assert wf._find_available_profile({"providerId": "openai"}) is None
+
+    def test_find_available_profile_sorts_by_priority(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1", max_parallel_runs=1, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, provider_id="anthropic", priority=50
+        )
+        # Even though p2 has more slots, p3 has higher priority
+        wf._profiles["p2"] = ProfileSlotState(
+            profile_id="p2", max_parallel_runs=5, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, provider_id="anthropic", priority=100
+        )
+        wf._profiles["p3"] = ProfileSlotState(
+            profile_id="p3", max_parallel_runs=1, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, provider_id="anthropic", priority=200
+        )
+        
+        best = wf._find_available_profile()
+        assert best is not None
+        assert best.profile_id == "p3"
+
+    def test_find_available_profile_filters_by_tags(self):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1", max_parallel_runs=3, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, tags=["fast", "cheap"]
+        )
+        wf._profiles["p2"] = ProfileSlotState(
+            profile_id="p2", max_parallel_runs=3, cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff", enabled=True, tags=["slow", "expensive"]
+        )
+        
+        best = wf._find_available_profile({"tagsAny": ["fast"]})
+        assert best is not None
+        assert best.profile_id == "p1"
+        
+        assert wf._find_available_profile({"tagsAll": ["fast", "expensive"]}) is None
+
     def test_build_continue_as_new_input(self):
         wf = self._make_workflow()
         wf._profiles["p1"] = ProfileSlotState(
@@ -359,11 +420,11 @@ def test_temporal_workflow_type_enum():
     assert TemporalWorkflowType.AUTH_PROFILE_MANAGER.value == "MoonMind.AuthProfileManager"
 
 
-def test_managed_agent_auth_mode_enum():
-    from api_service.db.models import ManagedAgentAuthMode
+def test_provider_profile_credential_source_enum():
+    from api_service.db.models import ProviderCredentialSource
 
-    assert ManagedAgentAuthMode.OAUTH.value == "oauth"
-    assert ManagedAgentAuthMode.API_KEY.value == "api_key"
+    assert ProviderCredentialSource.OAUTH_VOLUME.value == "oauth_volume"
+    assert ProviderCredentialSource.SECRET_REF.value == "secret_ref"
 
 
 def test_managed_agent_rate_limit_policy_enum():

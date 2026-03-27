@@ -2080,13 +2080,13 @@ class TemporalArtifactActivities:
         """
         from sqlalchemy import select
 
-        from api_service.db.models import ManagedAgentAuthProfile
+        from api_service.db.models import ManagedAgentProviderProfile
         from api_service.db.base import get_async_session_context
 
         async with get_async_session_context() as session:
-            stmt = select(ManagedAgentAuthProfile).where(
-                ManagedAgentAuthProfile.runtime_id == runtime_id,
-                ManagedAgentAuthProfile.enabled.is_(True),
+            stmt = select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == runtime_id,
+                ManagedAgentProviderProfile.enabled.is_(True),
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -2097,13 +2097,18 @@ class TemporalArtifactActivities:
                 {
                     "profile_id": row.profile_id,
                     "runtime_id": row.runtime_id,
-                    "auth_mode": row.auth_mode.value,
+                    "provider_id": row.provider_id,
+                    "tags": row.tags or [],
+                    "priority": row.priority,
+                    "auth_mode": "oauth" if row.credential_source.value == "oauth_volume" else "api_key",
+                    "credential_source": row.credential_source.value,
+                    "runtime_materialization_mode": row.runtime_materialization_mode.value,
                     "volume_ref": row.volume_ref,
                     "volume_mount_path": row.volume_mount_path,
                     "account_label": row.account_label,
-                    "api_key_ref": row.api_key_ref,
-                    "runtime_env_overrides": row.runtime_env_overrides or {},
-                    "api_key_env_var": row.api_key_env_var,
+                    "api_key_ref": None,
+                    "runtime_env_overrides": row.env_template or {},
+                    "api_key_env_var": None,
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
                     "rate_limit_policy": row.rate_limit_policy.value,

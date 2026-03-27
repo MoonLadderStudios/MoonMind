@@ -48,6 +48,9 @@ from moonmind.schemas.temporal_models import (
     SignalExecutionRequest,
     UpdateExecutionRequest,
     UpdateExecutionResponse,
+    TASK_RUN_ID_MEMO_KEYS,
+    TASK_RUN_ID_PARAM_KEYS,
+    TASK_RUN_ID_SEARCH_ATTR_KEYS,
 )
 from moonmind.workflows.temporal import (
     TemporalExecutionNotFoundError,
@@ -302,6 +305,19 @@ def _serialize_execution(
 
     params_raw = getattr(record, "parameters", None)
     params = dict(params_raw) if isinstance(params_raw, dict) else {}
+    task_run_id = None
+    # The sources are checked in order of preference.
+    sources_to_check = (
+        [memo.get(k) for k in TASK_RUN_ID_MEMO_KEYS]
+        + [search_attributes.get(k) for k in TASK_RUN_ID_SEARCH_ATTR_KEYS]
+        + [params.get(k) for k in TASK_RUN_ID_PARAM_KEYS]
+    )
+    for value in sources_to_check:
+        if value:
+            candidate = str(value).strip()
+            if candidate:
+                task_run_id = candidate
+                break
     target_runtime, param_model, param_effort = [
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
@@ -378,6 +394,7 @@ def _serialize_execution(
 
     return ExecutionModel(
         task_id=record.workflow_id,
+        task_run_id=task_run_id,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,

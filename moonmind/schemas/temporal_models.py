@@ -27,6 +27,9 @@ SUPPORTED_UPDATE_NAMES = (
     "Approve",
 )
 SUPPORTED_SIGNAL_NAMES = ("ExternalEvent",)
+TASK_RUN_ID_MEMO_KEYS = ("taskRunId", "task_run_id")
+TASK_RUN_ID_SEARCH_ATTR_KEYS = ("mm_task_run_id",)
+TASK_RUN_ID_PARAM_KEYS = ("taskRunId", "task_run_id")
 
 from moonmind.schemas.manifest_ingest_models import (
     ManifestExecutionPolicyModel,
@@ -309,6 +312,7 @@ class ExecutionModel(BaseModel):
 
     source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: str = Field(..., alias="taskId")
+    task_run_id: Optional[str] = Field(None, alias="taskRunId")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")

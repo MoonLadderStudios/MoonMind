@@ -675,9 +675,16 @@ class TaskProposalService:
         max_attempts_override: int | None = None,
         note: str | None = None,
         task_create_request_override: dict[str, Any] | None = None,
-    ) -> tuple[TaskProposal, Any]:
-        """Deprecated."""
-        raise NotImplementedError("Legacy queue backend is disabled")
+    ) -> tuple[TaskProposal, dict[str, Any]]:
+        """Validate and finalize a proposal for execution promotion.
+
+        Returns the updated TaskProposal and the finalized taskCreateRequest
+        envelope (suitable for use as ``initial_parameters``) ready to execute.
+        The returned envelope may differ from the stored proposal record when
+        an override is provided; the stored ``task_create_request`` is not
+        mutated by this method.
+        """
+        proposal = await self._repository.get_proposal_for_update(proposal_id)
         if proposal.status is not TaskProposalStatus.OPEN:
             raise TaskProposalStatusError(
                 f"proposal status {proposal.status.value} cannot be promoted"
@@ -722,13 +729,12 @@ class TaskProposalService:
         if max_attempts < 1:
             raise TaskProposalValidationError("maxAttempts must be >= 1")
 
-        job = None
-
         proposal.status = TaskProposalStatus.PROMOTED
         proposal.promoted_at = datetime.now(UTC)
         proposal.promoted_by_user_id = promoted_by_user_id
         proposal.decided_by_user_id = promoted_by_user_id
-        proposal.task_create_request = self._scrub_json(
+
+        final_request = self._scrub_json(
             {
                 **request,
                 "priority": priority,
@@ -740,13 +746,12 @@ class TaskProposalService:
         await self._repository.commit()
         await self._repository.refresh(proposal)
         logger.info(
-            "Promoted proposal %s to job %s (priority=%s maxAttempts=%s)",
+            "Prepared promoted proposal %s for execution (priority=%s maxAttempts=%s)",
             proposal.id,
-            job.id,
             priority,
             max_attempts,
         )
-        return proposal, job
+        return proposal, final_request
 
     async def dismiss_proposal(
         self,

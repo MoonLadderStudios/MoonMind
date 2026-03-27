@@ -80,24 +80,24 @@ Temporal Activities executing long-running steps (e.g., calling an LLM or runnin
 
 ---
 
-## 6. Auth Profile Slot Cleanup on Cancellation
+## 6. Provider Profile Slot Cleanup on Cancellation
 
-Managed agent runs (`MoonMind.AgentRun`) acquire auth profile slots from the `AuthProfileManager` singleton workflow before launching. These slots are a limited resource (typically `max_parallel_runs: 1` per profile). The system must guarantee slot recovery regardless of how a workflow terminates.
+Managed agent runs (`MoonMind.AgentRun`) acquire provider profile slots from the `ProviderProfileManager` singleton workflow before launching. These slots are a limited resource (typically `max_parallel_runs: 1` per profile). The system must guarantee slot recovery regardless of how a workflow terminates.
 
 ### 6.1 Desired Behavior
 
-* When a managed `AgentRun` workflow is cancelled (or times out, or fails), it **must** release its auth profile slot.
-* The `AuthProfileManager` must **not** rely solely on the child workflow's cleanup code to release slots. A defense-in-depth approach is required.
+* When a managed `AgentRun` workflow is cancelled (or times out, or fails), it **must** release its provider profile slot.
+* The `ProviderProfileManager` must **not** rely solely on the child workflow's cleanup code to release slots. A defense-in-depth approach is required.
 * Slot recovery must happen within a **reasonable bound** (minutes, not hours) to avoid blocking subsequent task submissions.
 
 ### 6.2 Defense-in-Depth Layers
 
 The slot lifecycle is protected by multiple layers, ordered by reliability:
 
-1. **Workflow-initiated release (primary)**: `MoonMind.AgentRun`'s `CancelledError`/`TimeoutError`/`Exception` handlers signal `release_slot` to the `AuthProfileManager`. This is the fast path.
-2. **Manager-side lease eviction (safety net)**: The `AuthProfileManager` calls `evict_expired_leases()` every 60 seconds, removing leases older than `_MAX_LEASE_DURATION_SECONDS`. This catches cases where the workflow cleanup failed entirely.
-3. **Manager-side active probing (recommended)**: The `AuthProfileManager` should verify that lease-holding workflows are still running via Temporal visibility queries. Workflows in a terminal state that did not explicitly release should have their leases reclaimed immediately.
+1. **Workflow-initiated release (primary)**: `MoonMind.AgentRun`'s `CancelledError`/`TimeoutError`/`Exception` handlers signal `release_slot` to the `ProviderProfileManager`. This is the fast path.
+2. **Manager-side lease eviction (safety net)**: The `ProviderProfileManager` calls `evict_expired_leases()` every 60 seconds, removing leases older than `_MAX_LEASE_DURATION_SECONDS`. This catches cases where the workflow cleanup failed entirely.
+3. **Manager-side active probing (recommended)**: The `ProviderProfileManager` should verify that lease-holding workflows are still running via Temporal visibility queries. Workflows in a terminal state that did not explicitly release should have their leases reclaimed immediately.
 
 ### 6.3 Invariant
 
-At steady state, every auth profile slot held by a lease must correspond to a **running** `MoonMind.AgentRun` workflow. Any slot leased to a terminal workflow represents a leak and should be reclaimed by the next manager housekeeping cycle.
+At steady state, every provider profile slot held by a lease must correspond to a **running** `MoonMind.AgentRun` workflow. Any slot leased to a terminal workflow represents a leak and should be reclaimed by the next manager housekeeping cycle.

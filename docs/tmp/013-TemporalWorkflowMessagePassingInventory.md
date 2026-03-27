@@ -11,7 +11,7 @@ This document fulfills Phase 1 of the Temporal Workflow Message Passing Improvem
 | `MoonMind.Run` | `moonmind/workflows/temporal/workflows/run.py` | Core orchestrator for task execution and agent runs | **Signals:** `cancel`, `pause`, `resume`, `approve`, `ExternalEvent`, `child_state_changed`<br>**Updates:** `update_title`, `update_parameters`<br>**Queries:** `get_status` |
 | `MoonMind.AgentRun` | `moonmind/workflows/temporal/workflows/agent_run.py` | Orchestrates a specific agent/runtime within a run | **Signals:** `completion_signal`, `slot_assigned` |
 | `MoonMind.ManifestIngest` | `moonmind/workflows/temporal/manifest_ingest.py` | Manages background ingestion of templates/manifests | **Updates:** `UpdateManifest`, `SetConcurrency`, `Pause`, `Resume`, `CancelNodes`, `RetryNodes` |
-| `MoonMind.AuthProfileManager` | `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | Syncs auth profiles to workers | **Signals:** `request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`, `shutdown`<br>**Queries:** `get_state` |
+| `MoonMind.AuthProfileManager` | `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | Syncs provider profiles to workers | **Signals:** `request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`, `shutdown`<br>**Queries:** `get_state` |
 | `MoonMind.OAuthSession` | `moonmind/workflows/temporal/workflows/oauth_session.py` | Manages OAuth device code flow and tokens | **Signals:** `cancel`, `finalize`<br>**Queries:** `get_status` |
 | `MoonMind.Task514` | `moonmind/workflows/temporal/workflows/task_5_14_workflow.py` | Testing/utility workflow | |
 
@@ -79,4 +79,4 @@ This document fulfills Phase 1 of the Temporal Workflow Message Passing Improvem
 
 ## Exit Criteria Status
 - **Inventory Checked In**: Yes (this document).
-- **Stakeholders Agree on Orchestrators**: `MoonMind.Run` and `MoonMind.AgentRun` are confirmed as primary job/task orchestrators, with others acting as supporting workflows (e.g., AuthProfileManager, ManifestIngest).
+- **Stakeholders Agree on Orchestrators**: `MoonMind.Run` and `MoonMind.AgentRun` are confirmed as primary job/task orchestrators, with others acting as supporting workflows (e.g., ProviderProfileManager, ManifestIngest).
