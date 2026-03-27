@@ -28,7 +28,7 @@ def upgrade() -> None:
         existing_type=sa.LargeBinary(),
         type_=sa.Text(),
         existing_nullable=True,
-        postgresql_using='attach_rw_encrypted::text',
+        postgresql_using="convert_from(attach_rw_encrypted, 'UTF8')",
     )
     op.alter_column(
         'task_run_live_sessions',
@@ -36,7 +36,7 @@ def upgrade() -> None:
         existing_type=sa.LargeBinary(),
         type_=sa.Text(),
         existing_nullable=True,
-        postgresql_using='web_rw_encrypted::text',
+        postgresql_using="convert_from(web_rw_encrypted, 'UTF8')",
     )
 
 
@@ -47,7 +47,7 @@ def downgrade() -> None:
         existing_type=sa.Text(),
         type_=sa.LargeBinary(),
         existing_nullable=True,
-        postgresql_using='web_rw_encrypted::bytea',
+        postgresql_using="convert_to(web_rw_encrypted, 'UTF8')",
     )
     op.alter_column(
         'task_run_live_sessions',
@@ -55,5 +55,5 @@ def downgrade() -> None:
         existing_type=sa.Text(),
         type_=sa.LargeBinary(),
         existing_nullable=True,
-        postgresql_using='attach_rw_encrypted::bytea',
+        postgresql_using="convert_to(attach_rw_encrypted, 'UTF8')",
     )

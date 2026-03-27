@@ -438,9 +438,13 @@ class ManagedRuntimeLauncher:
                 workspace_path=workspace_path,
             )
 
-        env_overrides = dict(profile.env_overrides) if profile.env_overrides else dict(
-            os.environ
-        )
+        # Always start from the ambient os.environ so PATH, HOME, and other
+        # required variables are present.  Profile-specific overrides are then
+        # layered on top so they take precedence over system defaults without
+        # discarding the base environment entirely.
+        env_overrides = dict(os.environ)
+        if profile.env_overrides:
+            env_overrides.update(profile.env_overrides)
 
         # Invoke strategy-level workspace preparation hook (e.g. RAG context
         # injection for Codex, .cursor/ config files for Cursor CLI).

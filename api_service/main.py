@@ -448,13 +448,14 @@ async def _auto_seed_auth_profiles() -> list[str]:
             "account_label": "Codex CLI (auto-seeded)",
         },
         {
-            "profile_id": "claude_default",
+            "profile_id": "claude_anthropic",
             "runtime_id": "claude_code",
             "auth_mode": ManagedAgentAuthMode.API_KEY,
             "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
             "volume_mount_path": os.environ.get("CLAUDE_VOLUME_PATH", "/home/app/.claude"),
             "account_label": "Claude Code (auto-seeded)",
         },
+
     ]
 
     # Conditionally include MiniMax profile when the API key is available.

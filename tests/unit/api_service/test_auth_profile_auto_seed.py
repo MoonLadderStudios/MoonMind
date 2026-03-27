@@ -48,14 +48,15 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     seeded = await _auto_seed_auth_profiles()
     assert set(seeded) == {"gemini_cli", "codex_cli", "claude_code"}
 
-    # Verify they exist in the DB.
+    # Verify they exist in the DB with correct profile_id values.
     async with db_base.async_session_maker() as session:
         result = await session.execute(select(ManagedAgentAuthProfile))
         profiles = result.scalars().all()
 
     assert len(profiles) == 3
-    runtime_ids = {p.runtime_id for p in profiles}
-    assert runtime_ids == {"gemini_cli", "codex_cli", "claude_code"}
+    profile_ids = {p.profile_id for p in profiles}
+    assert profile_ids == {"gemini_default", "codex_default", "claude_anthropic"}
+
 
 
 @pytest.mark.asyncio
@@ -109,7 +110,9 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
 
     assert len(profiles) == 4
     profile_ids = {p.profile_id for p in profiles}
+    assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
+
 
     # Verify MiniMax profile details.
     mm_profile = next(p for p in profiles if p.profile_id == "claude_minimax")
@@ -145,7 +148,9 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
 
     assert len(profiles) == 4
     profile_ids = {p.profile_id for p in profiles}
+    assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
+
 
 
 @pytest.mark.asyncio
@@ -164,5 +169,7 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
 
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_minimax" not in profile_ids
+    assert "claude_anthropic" in profile_ids
     assert len(profiles) == 3
+
 
