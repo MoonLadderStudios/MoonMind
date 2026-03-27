@@ -228,9 +228,9 @@ def build_runtime_config(initial_path: str) -> dict[str, Any]:
                     settings.feature_flags.task_template_catalog_enabled
                 ),
             },
-            "authProfiles": {
-                "list": "/api/v1/auth-profiles",
-                "create": "/api/v1/auth-profiles",
+            "providerProfiles": {
+                "list": "/api/v1/provider-profiles",
+                "create": "/api/v1/provider-profiles",
                 "detail": "/api/v1/auth-profiles/{profileId}",
                 "update": "/api/v1/auth-profiles/{profileId}",
                 "delete": "/api/v1/auth-profiles/{profileId}",
