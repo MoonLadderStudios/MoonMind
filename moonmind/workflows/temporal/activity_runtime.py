@@ -2700,6 +2700,50 @@ class TemporalAgentRuntimeActivities:
         self._run_launcher = run_launcher
         self._supervision_tasks: set[asyncio.Task] = set()
 
+    async def _report_live_session(self, run_id: str, endpoints: dict[str, str]) -> None:
+        """Write tmate endpoints directly to the database so the UI can connect."""
+        import uuid
+
+        try:
+            task_run_id = uuid.UUID(run_id)
+        except ValueError:
+            logger.warning("run_id %s is not a valid UUID; cannot report live session", run_id)
+            return
+
+        from api_service.db.base import get_async_session_context
+        from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession
+        from sqlalchemy import select
+
+        try:
+            async with get_async_session_context() as db:
+                result = await db.execute(
+                    select(TaskRunLiveSession).where(TaskRunLiveSession.task_run_id == task_run_id)
+                )
+                session = result.scalars().first()
+                if not session:
+                    session = TaskRunLiveSession(
+                        task_run_id=task_run_id,
+                        provider="tmate",
+                        status=AgentJobLiveSessionStatus.READY,
+                        worker_id="temporal-worker",
+                    )
+                    db.add(session)
+
+                session.status = AgentJobLiveSessionStatus.READY
+
+                if "web_ro" in endpoints:
+                    session.web_ro = endpoints["web_ro"]
+                if "web_rw" in endpoints:
+                    session.web_rw_encrypted = endpoints["web_rw"]
+                if "attach_ro" in endpoints:
+                    session.attach_ro = endpoints["attach_ro"]
+                if "attach_rw" in endpoints:
+                    session.attach_rw_encrypted = endpoints["attach_rw"]
+
+                await db.commit()
+        except Exception:
+            logger.warning("Failed to report live session for run %s", run_id, exc_info=True)
+
     async def agent_runtime_launch(
         self,
         payload: dict[str, Any],
@@ -2767,7 +2811,8 @@ class TemporalAgentRuntimeActivities:
             return record.model_dump(mode="json")
 
         if endpoints:
-            pass
+            # Report the live session so that the dashboard UI can connect
+            await self._report_live_session(run_id, endpoints)
 
         # Start background supervision — hold a strong reference so the task
         # is not garbage-collected before it completes.
