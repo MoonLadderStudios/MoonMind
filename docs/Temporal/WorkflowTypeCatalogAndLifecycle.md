@@ -6,7 +6,7 @@ MoonMind **Temporal-native** lifecycle contract for Temporal-managed executions.
 
 **Status:** Normative (Temporal application layer)
 **Owner:** MoonMind Platform
-**Last updated:** 2026-03-05
+**Last updated:** 2026-03-27
 **Audience:** backend + infra + dashboard
 
 ---
@@ -108,24 +108,30 @@ Define a **single** Search Attribute representing “MoonMind state”:
 
 Allowed values (v1):
 
+* `scheduled`
 * `initializing`
+* `waiting_on_dependencies`
 * `planning`
-* `awaiting`
+* `awaiting_slot`
 * `executing`
+* `proposals`
 * `awaiting_external`
 * `finalizing`
-* `succeeded`
+* `completed`
 * `failed`
 * `canceled`
 
 Rules:
 
 * `mm_state` MUST be set immediately at workflow start (`initializing`).
-* `awaiting` indicates the workflow has been claimed and is past initial dispatch, but is blocked waiting for a prerequisite resource (e.g. an auth-profile slot from the `AuthProfileManager`). This is distinct from `planning` (generating a plan) and `executing` (actively running agent work). The Memo `summary` field should indicate what the workflow is awaiting.
-* `mm_state` MUST transition to a terminal value on completion (`succeeded|failed|canceled`).
+* `scheduled` indicates a deferred one-time execution that has been created but is waiting for its start time.
+* `waiting_on_dependencies` indicates the workflow is blocked on prerequisite work outside its own active execution loop.
+* `awaiting_slot` indicates the workflow is waiting for a bounded runtime resource such as an auth-profile slot.
+* `proposals` indicates the workflow is generating or submitting follow-up proposals after execution and before finalization.
+* `mm_state` MUST transition to a terminal value on completion (`completed|failed|canceled`).
 * Terminal `mm_state` must be consistent with Temporal close status:
 
-  * Temporal Completed → `succeeded`
+  * Temporal Completed → `completed`
   * Temporal Failed/TimedOut/Terminated → `failed`
   * Temporal Canceled → `canceled`
 * `mm_state` is the *only* domain state field required for list filtering.
@@ -373,20 +379,34 @@ Mermaid state sketch:
 ```mermaid
 stateDiagram-v2
   [*] --> initializing
+  [*] --> scheduled : delayed start
+  scheduled --> initializing : start time reached
+  initializing --> waiting_on_dependencies : dependency gate
+  waiting_on_dependencies --> planning : dependencies ready
   initializing --> planning : needs plan
   initializing --> executing : plan provided
   planning --> executing : plan ready
+  executing --> awaiting_slot : runtime slot required
+  awaiting_slot --> executing : slot assigned
   executing --> awaiting_external : external op started
   awaiting_external --> executing : external op complete
-  executing --> finalizing : steps complete
-  finalizing --> succeeded
+  executing --> proposals : steps complete
+  proposals --> finalizing : proposal phase complete
+  finalizing --> completed
+  scheduled --> canceled
   initializing --> failed
+  waiting_on_dependencies --> failed
   planning --> failed
+  awaiting_slot --> failed
   executing --> failed
+  proposals --> failed
   awaiting_external --> failed
   initializing --> canceled
+  waiting_on_dependencies --> canceled
   planning --> canceled
+  awaiting_slot --> canceled
   executing --> canceled
+  proposals --> canceled
   awaiting_external --> canceled
 ```
 
@@ -403,7 +423,7 @@ stateDiagram-v2
   initializing --> executing : load/parse/validate/compile
   executing --> executing : orchestrate graph
   executing --> finalizing : aggregate results
-  finalizing --> succeeded
+  finalizing --> completed
   initializing --> failed
   executing --> failed
   initializing --> canceled
