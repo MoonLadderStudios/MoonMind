@@ -21,7 +21,7 @@ Goal: make activity boundaries **explicit, typed, and reviewable** so serializat
 - [x] 2. **Choose one primary modeling approach**: Default stack: **Pydantic v2** for activity inputs/outputs (validation + explicit serializers where needed). Dataclasses may be used for pure in-process helpers, but activity I/O should converge on one pattern.
 - [x] 3. **Binary / blob policy (mandatory):** Document rules for activity payloads, prefer **base64-encoded `str`**, **artifact refs**, or other explicit handles for binary textual payloads at the JSON boundary with documented max sizes; if `bytes` must appear in the model, specify **serialization** (Pydantic custom type / field serializer) so the wire shape is never an “accidental list of ints”. Do not rely on nested raw `bytes` in JSON-encoded dicts.
 - [x] 4. **Activity entry pattern:** Prefer activities that take a **single structured argument** (the model) plus optional metadata only if the SDK/worker pattern requires it. Define Pydantic models for the first high-risk artifact activities (e.g., `ArtifactWriteCompleteInput`).
-- [ ] 5. **Typed execution helper (optional but recommended):** Introduce a small façade or overloads (e.g. generic `execute_activity` wrapper keyed by activity name + input model type) so `mypy` / `pyright` can check call sites.
+- [x] 5. **Typed execution helper (optional but recommended):** Introduce a small façade or overloads (e.g. generic `execute_activity` wrapper keyed by activity name + input model type) so `mypy` / `pyright` can check call sites.
 
 ### Phase 2: Refactor activity definitions and worker wiring
 
