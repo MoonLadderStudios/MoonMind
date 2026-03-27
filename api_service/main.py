@@ -593,6 +593,14 @@ async def ensure_provider_profile_managers_started():
                 logger.debug(f"AuthProfileManager already running for runtime: {runtime_id}")
             except Exception as e:
                 logger.error(f"Failed to start AuthProfileManager for {runtime_id}: {e}", exc_info=True)
+
+            try:
+                from api_service.services.auth_profile_service import sync_provider_profile_manager
+                async with get_async_session_context() as session:
+                    await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
+                logger.debug(f"Synced AuthProfileManager for runtime: {runtime_id}")
+            except Exception as e:
+                logger.error(f"Failed to sync AuthProfileManager for {runtime_id}: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Error ensuring AuthProfileManager workflows: {e}", exc_info=True)
 
