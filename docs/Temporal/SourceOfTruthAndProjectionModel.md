@@ -1,11 +1,9 @@
 # Source of Truth and Projection Model
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-SourceOfTruthAndProjectionModel.md`](../tmp/remaining-work/Temporal-SourceOfTruthAndProjectionModel.md)
-
 **Project:** MoonMind  
 **Doc type:** System architecture / read-model and consistency contract  
-**Status:** Normative steady-state contract
-**Last updated:** 2026-03-06 (America/Los_Angeles)
+**Status:** Normative steady-state contract  
+**Last updated:** 2026-03-27 (America/Los_Angeles)
 
 ---
 
@@ -180,10 +178,10 @@ The service:
 
 - creates execution rows
 - lists and counts them with local pagination tokens
-- applies update/signal/cancel semantics against the projection
+- issues Temporal update/signal/cancel RPCs and then updates/syncs the local projection rows to mirror Temporal state
 - updates `search_attributes` and `memo`
 - mutates `run_id` on Continue-As-New style rerun behavior
-- returns Temporal Visibility counts as `countMode="estimated_or_unknown"` or exact if available
+- returns execution counts from Postgres-backed projections with `countMode="exact"`
 
 ### 7.3 `ExecutionModel`
 
@@ -534,7 +532,6 @@ This document is complete enough to guide implementation when all of the followi
 1. Do we want a dedicated per-run projection table for future run-history UI, or keep run history fully Temporal-native until demanded?
 2. Which sync mechanism becomes primary: post-write refresh only, periodic sweeper, workflow-emitted events, or a hybrid?
 3. Do compatibility surfaces need a formal freshness marker once projection fallback is allowed for degraded-mode reads?
-4. When should `/api/executions` switch from the current projection-backed exact-count posture to a Visibility-backed count posture that can honestly return `estimated_or_unknown`?
 
 ---
 
