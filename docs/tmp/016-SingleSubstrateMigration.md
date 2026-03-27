@@ -123,7 +123,7 @@ Code is **Temporal-primary**; remaining items are mostly **vocabulary**, **query
 
 **Objective:** Remove transitional language from architecture docs so they match the **Temporal-only execution** reality already implemented in code.
 
-- [ ] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; steady-state contract only
+- [x] **5.1** Update `SourceOfTruthAndProjectionModel.md`: remove "migration stance", "staging", "mixed-source" sections; steady-state contract only
 - [ ] **5.2** Update `TaskExecutionCompatibilityModel.md`: remove `queue`/`system` source definitions and multi-source pagination; Temporal-only (or archive if redundant)
 - [x] **5.3** Update `VisibilityAndUiQueryModel.md`: remove mixed-source pages; retire multi-source pagination section
 - [x] **5.4** Delete `docs/tmp/OrchestratorRemovalPlan.md` — superseded *(done)*

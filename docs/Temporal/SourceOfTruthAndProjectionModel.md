@@ -1,26 +1,24 @@
 # Source of Truth and Projection Model
 
-**Implementation tracking:** [`docs/tmp/remaining-work/Temporal-SourceOfTruthAndProjectionModel.md`](../tmp/remaining-work/Temporal-SourceOfTruthAndProjectionModel.md)
-
 **Project:** MoonMind  
 **Doc type:** System architecture / read-model and consistency contract  
-**Status:** Normative bridge contract (implementation tracking in tracker)  
-**Last updated:** 2026-03-06 (America/Los_Angeles)
+**Status:** Normative steady-state contract  
+**Last updated:** 2026-03-27 (America/Los_Angeles)
 
 ---
 
 ## 1. Purpose
 
-This document defines the **source-of-truth model** for Temporal-managed executions in MoonMind and the role of the app-local **projection layer** while compatibility surfaces coexist with Temporal.
+This document defines the **source-of-truth model** for Temporal-managed executions in MoonMind and the role of the app-local **projection layer**.
 
 It exists to answer four questions clearly:
 
 1. Which system is authoritative for execution lifecycle state?
 2. What is the role of `TemporalExecutionRecord` and similar app-local rows?
-3. How should reads and writes behave while MoonMind still exposes task-oriented compatibility surfaces?
+3. How should reads and writes behave?
 4. How do we reconcile drift between Temporal, Postgres projections, and compatibility APIs/UI?
 
-This document is intentionally a **bridge contract**. It must acknowledge the current implementation honestly while still locking the target architecture.
+This document is a **steady-state contract** defining the target architecture.
 
 ---
 
@@ -87,11 +85,11 @@ For a Temporal-managed execution, the canonical runtime truth is the combination
 
 A **projection** is an app-local read model derived from canonical runtime data.
 
-In the current repository, `TemporalExecutionRecord` is the main projection row for Temporal execution lifecycle APIs and filtering. A projection is allowed to support compatibility APIs, joins, indexing, caching, and degraded-mode reads, but it is **not** the final lifecycle authority once Temporal is truly in control.
+In the current repository, `TemporalExecutionRecord` is the main projection row for Temporal execution lifecycle APIs and filtering. A projection is allowed to support compatibility APIs, joins, indexing, caching, and degraded-mode reads, but it is **not** the final lifecycle authority since Temporal is the final authority.
 
 ### 4.3 Compatibility surface
 
-A compatibility surface is any API or UI path that continues to use MoonMind task-oriented language or legacy route shape while the underlying execution substrate is becoming Temporal.
+A compatibility surface is any API or UI path that continues to use MoonMind task-oriented language or legacy route shape while the underlying execution substrate is Temporal.
 
 Examples include:
 
@@ -130,27 +128,6 @@ For **Temporal-managed work**, MoonMind should treat systems of record as follow
 | user auth / ownership policy | MoonMind control plane |
 | task-oriented compatibility payloads | MoonMind adapters over canonical sources |
 
-### 5.2 Migration stance
-
-During migration, MoonMind may temporarily use Postgres projections as:
-
-- a local read model for APIs not yet moved to direct Temporal reads
-- a compatibility join layer across queue/system/Temporal sources
-- a degraded-mode cache
-- a staging implementation while Temporal worker wiring is still being completed
-
-But the migration must move **toward** this rule:
-
-> Projection rows mirror Temporal-managed executions; they do not independently define them.
-
-### 5.3 Current implementation carve-out
-
-The current `TemporalExecutionService` acts as a **state machine + visibility facade** over `TemporalExecutionRecord` rows. That is acceptable as a staging step, but this document treats it as a **temporary implementation posture**, not the final architecture contract.
-
-Additional staging-only realities that should not be normalized into the target contract:
-
-- the current `/api/executions` adapter returns `countMode="exact"` from the projection-backed read path
-- the current projection/service remains projection-authoritative for create/update/signal/cancel semantics even though ownership metadata and projection sync markers are now explicitly tracked
 
 ---
 
@@ -177,9 +154,9 @@ Interpretation:
 
 ---
 
-## 7. Current implementation snapshot
+## 7. Projection components
 
-The repository already contains a concrete projection-backed execution layer.
+The repository contains a concrete projection-backed execution layer.
 
 ### 7.1 `TemporalExecutionRecord`
 
@@ -197,18 +174,18 @@ The repository already contains a concrete projection-backed execution layer.
 
 ### 7.2 `TemporalExecutionService`
 
-The service currently:
+The service:
 
 - creates execution rows
 - lists and counts them with local pagination tokens
-- applies update/signal/cancel semantics against the projection
+- issues Temporal update/signal/cancel RPCs and then updates/syncs the local projection rows to mirror Temporal state
 - updates `search_attributes` and `memo`
 - mutates `run_id` on Continue-As-New style rerun behavior
-- returns projection-backed list counts as `countMode="exact"` in the current adapter path
+- returns execution counts from Postgres-backed projections with `countMode="exact"`
 
 ### 7.3 `ExecutionModel`
 
-The current `/api/executions` response model serializes directly from the projection row and exposes:
+The `/api/executions` response model exposes:
 
 - `workflowId`
 - `runId`
@@ -221,13 +198,13 @@ The current `/api/executions` response model serializes directly from the projec
 - `artifactRefs`
 - timestamps
 
-This is a valid **prototype API shape**, but in the final Temporal-backed architecture the lifecycle truth behind these fields must come from Temporal, not from a separately invented local state machine.
+The lifecycle truth behind these fields comes from Temporal, not from a local state machine.
 
 ---
 
 ## 8. Source-of-truth matrix
 
-### 8.1 Target steady-state matrix for Temporal-managed executions
+### 8.1 Steady-state matrix for Temporal-managed executions
 
 | Data / behavior | Source of truth | Projection role | Notes |
 | --- | --- | --- | --- |
@@ -245,13 +222,6 @@ This is a valid **prototype API shape**, but in the final Temporal-backed archit
 | create/update idempotency behavior | MoonMind API contract | local helper state allowed | dedupe is an API concern, not a Temporal history replacement |
 | page tokens / count semantics for Temporal list APIs | Temporal Visibility read path | local fallback only | avoid baking DB-offset assumptions into final Temporal-backed APIs |
 
-### 8.2 Migration-phase exception matrix
-
-| Phase | Write authority | Read authority | Projection role |
-| --- | --- | --- | --- |
-| prototype / staging | local service facade | projection | allows API contract development before full Temporal wiring |
-| transition | Temporal for writes; projection refreshed best-effort | mixed: projection + Temporal depending on route | compatibility and migration layer |
-| steady-state Temporal-managed flow | Temporal | Temporal Visibility + direct describe, with projection as optional cache/join | downstream read model only |
 
 ---
 
@@ -288,7 +258,7 @@ The primary projection row must **not** become:
 
 ### 9.4 Projection sync metadata
 
-The current schema now includes explicit sync metadata:
+The schema includes explicit sync metadata:
 
 - `projection_version`
 - `last_synced_at`
@@ -304,7 +274,7 @@ That metadata is still a projection concern, not a claim that the projection has
 
 ### 10.1 Start execution
 
-Final target behavior for a Temporal-managed start:
+Behavior for a Temporal-managed start:
 
 1. MoonMind API authenticates and validates the request.
 2. MoonMind starts the Temporal workflow.
@@ -320,7 +290,7 @@ Rules:
 
 ### 10.2 Update execution
 
-Final target behavior:
+Behavior:
 
 1. Validate caller authorization and request shape.
 2. Send the Update to Temporal.
@@ -334,7 +304,7 @@ Rules:
 
 ### 10.3 Signal execution
 
-Final target behavior:
+Behavior:
 
 1. Validate caller / webhook policy.
 2. Send Signal to Temporal.
@@ -347,28 +317,19 @@ Rules:
 
 ### 10.4 Cancel execution
 
-Final target behavior:
+Behavior:
 
 1. Authorize cancel request.
 2. Send cancel/terminate request to Temporal.
 3. Let Temporal terminal status become authoritative.
 4. Refresh projection from the resulting close state.
 
-### 10.5 Current staging allowance
-
-Until real Temporal workflow start/update/signal/cancel plumbing is fully wired, the current projection-backed service may continue to simulate lifecycle behavior for API development.
-
-But from this point forward:
-
-- new docs should describe it as a **staging implementation**
-- new code should avoid depending on projection-only semantics that conflict with the final Temporal contract
-- migration work should reduce, not deepen, the amount of lifecycle truth invented locally
 
 ---
 
 ## 11. Read-path contract
 
-### 11.1 Final target read posture for Temporal-managed executions
+### 11.1 Read posture for Temporal-managed executions
 
 For Temporal-managed work:
 
@@ -444,7 +405,7 @@ When repairing a row, prefer this order:
 
 ### 12.4 Consistency expectation
 
-MoonMind should treat the projection layer as **eventually consistent** with Temporal once the flow is truly Temporal-backed.
+MoonMind should treat the projection layer as **eventually consistent** with Temporal since the flow is Temporal-backed.
 
 Desired posture:
 
@@ -484,13 +445,6 @@ If the projection store is unavailable but Temporal is healthy:
 - compatibility surfaces depending on projections may degrade or return partial results
 - projection repair must backfill missed rows once the DB recovers
 
-### 13.4 Mixed-source dashboard behavior
-
-For unified task views that combine legacy and Temporal-backed rows:
-
-- source outages must be surfaced honestly
-- the system must not synthesize fake success or terminal states just to keep a dashboard row stable
-- source metadata should remain available for debugging and migration support
 
 ---
 
@@ -508,7 +462,7 @@ On Continue-As-New:
 - `run_id` changes to the latest run
 - `state`, `summary`, counters, and other mirrored fields update to the latest canonical values
 - the primary projection row is updated in place
-- in the current staging projection, `started_at` remains the logical execution start rather than becoming a per-run start timestamp
+- `started_at` remains the logical execution start rather than becoming a per-run start timestamp
 
 ### 14.3 What we do not duplicate by default
 
@@ -519,10 +473,6 @@ If the product later needs a per-run audit or run-history view, add a **separate
 ### 14.4 `rerun_count`
 
 `rerun_count` is a local convenience field and may remain useful for compatibility/UI messaging, but it must not become the only audit source for run history.
-
-Current implementation note:
-
-- `rerun_count` currently behaves as a broad Continue-As-New counter, not a guaranteed count of explicit user-requested reruns only
 
 Temporal remains the authoritative source for the run chain.
 
@@ -582,7 +532,6 @@ This document is complete enough to guide implementation when all of the followi
 1. Do we want a dedicated per-run projection table for future run-history UI, or keep run history fully Temporal-native until demanded?
 2. Which sync mechanism becomes primary: post-write refresh only, periodic sweeper, workflow-emitted events, or a hybrid?
 3. Do compatibility surfaces need a formal freshness marker once projection fallback is allowed for degraded-mode reads?
-4. When should `/api/executions` switch from the current projection-backed exact-count posture to a Visibility-backed count posture that can honestly return `estimated_or_unknown`?
 
 ---
 
