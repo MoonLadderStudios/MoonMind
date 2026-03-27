@@ -1,12 +1,23 @@
 // shared API client layer
 export async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${path.startsWith('/') ? '' : '/'}${path}`;
+  const headers: HeadersInit = {
+    ...(options.headers as HeadersInit ?? {}),
+  };
+
+  const hasContentTypeHeader =
+    Object.keys(headers as Record<string, string>).some(
+      (key) => key.toLowerCase() === 'content-type',
+    );
+
+  const body = options.body as BodyInit | null | undefined;
+  if (!hasContentTypeHeader && body && !(body instanceof FormData)) {
+    (headers as Record<string, string>)['Content-Type'] = 'application/json';
+  }
+
   const response = await fetch(url, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -19,5 +30,10 @@ export async function fetchApi<T>(path: string, options: RequestInit = {}): Prom
     return {} as T;
   }
 
-  return response.json();
+  const contentType = response.headers.get('content-type');
+  if (contentType && contentType.includes('application/json')) {
+    return response.json();
+  }
+  
+  return {} as T;
 }

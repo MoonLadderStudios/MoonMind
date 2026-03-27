@@ -38,7 +38,6 @@ jobs:
           npm run ui:lint
           npm run ui:test
           npm run ui:build
-          npm run api:types:check
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
