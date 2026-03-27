@@ -806,50 +806,57 @@ class MoonMindRunWorkflow:
                     or "main"
                 )
                 
-                if not self._repo or not head_branch:
+                push_status = agent_outputs.get("push_status", "")
+                if push_status == "no_commits":
+                    self._get_logger().info(
+                        "Skipping native PR creation: agent made no commits "
+                        "on branch '%s'.",
+                        agent_outputs.get("push_branch") or head_branch,
+                    )
+                elif not self._repo or not head_branch:
                     raise ValueError(
                         "publishMode 'pr' requested but no PR URL was returned, and missing repo/branch to create it natively"
                     )
-                
-                self._get_logger().info(
-                    f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
-                )
-                create_payload = {
-                    "repo": self._repo,
-                    "head": head_branch,
-                    "base": base_branch,
-                    "title": self._title or "Automated changes by MoonMind",
-                    "body": self._summary or "Automated changes by MoonMind.",
-                }
-                try:
-                    create_result = await workflow.execute_activity(
-                        "repo.create_pr",
-                        create_payload,
-                        start_to_close_timeout=timedelta(minutes=2),
-                        task_queue=INTEGRATIONS_TASK_QUEUE,
-                        retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
-                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                else:
+                    self._get_logger().info(
+                        f"Creating PR natively from {head_branch} into {base_branch} for repo {self._repo}"
                     )
-                    pr_url = self._get_from_result(create_result, "url")
-                    created = self._get_from_result(create_result, "created")
-                    summary = self._get_from_result(create_result, "summary") or ""
-                    if pr_url:
-                        pull_request_url = pr_url
-                        self._get_logger().info(f"Natively created PR: {pull_request_url}")
-                    else:
-                        if "422" in summary:
-                            self._get_logger().warning(
-                                f"Native PR creation failed with validation error (likely no commits): {summary}"
-                            )
+                    create_payload = {
+                        "repo": self._repo,
+                        "head": head_branch,
+                        "base": base_branch,
+                        "title": self._title or "Automated changes by MoonMind",
+                        "body": self._summary or "Automated changes by MoonMind.",
+                    }
+                    try:
+                        create_result = await workflow.execute_activity(
+                            "repo.create_pr",
+                            create_payload,
+                            start_to_close_timeout=timedelta(minutes=2),
+                            task_queue=INTEGRATIONS_TASK_QUEUE,
+                            retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                        )
+                        pr_url = self._get_from_result(create_result, "url")
+                        created = self._get_from_result(create_result, "created")
+                        summary = self._get_from_result(create_result, "summary") or ""
+                        if pr_url:
+                            pull_request_url = pr_url
+                            self._get_logger().info(f"Natively created PR: {pull_request_url}")
                         else:
-                            raise ValueError(
-                                f"PR creation activity returned no URL"
-                                f" (created={created}): {summary}"
-                            )
-                except Exception as e:
-                    raise ValueError(
-                        f"publishMode 'pr' requested; native PR creation failed: {e}"
-                    ) from e
+                            if "422" in summary:
+                                self._get_logger().warning(
+                                    f"Native PR creation failed with validation error (likely no commits): {summary}"
+                                )
+                            else:
+                                raise ValueError(
+                                    f"PR creation activity returned no URL"
+                                    f" (created={created}): {summary}"
+                                )
+                    except Exception as e:
+                        raise ValueError(
+                            f"publishMode 'pr' requested; native PR creation failed: {e}"
+                        ) from e
         self._summary = f"Executed {len(ordered_nodes)} plan step(s)."
         self._update_memo()
 

@@ -153,8 +153,11 @@ class TestPushWorkspaceBranch:
             if call_count == 1:  # rev-parse
                 proc.communicate = AsyncMock(return_value=(b"feature/delete-spec-048\n", b""))
                 proc.returncode = 0
-            else:  # push
+            elif call_count == 2:  # push
                 proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"2\n", b""))
                 proc.returncode = 0
             return proc
 
@@ -209,6 +212,150 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
         assert result["push_status"] == "failed"
         assert "git not found" in result["push_error"]
+
+    @pytest.mark.asyncio
+    async def test_push_no_commits(self):
+        """Push succeeds but branch has no commits over origin/main."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"0\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+        assert result["push_status"] == "no_commits"
+        assert result["push_branch"] == "auto-abc123"
+        assert "push_error" not in result
+
+    @pytest.mark.asyncio
+    async def test_push_with_commits(self):
+        """Push succeeds and branch has commits over origin/main."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                proc.communicate = AsyncMock(return_value=(b"3\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "auto-abc123"
+
+    @pytest.mark.asyncio
+    async def test_push_revlist_failure_falls_through(self):
+        """When rev-list --count raises, we fall through to 'pushed' (safe default)."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count — simulate failure
+                raise OSError("git rev-list failed")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "auto-abc123"
+
+    @pytest.mark.asyncio
+    async def test_push_revlist_nonzero_returncode_falls_through(self):
+        """Non-zero rev-list returncode falls through to 'pushed' instead of false no_commits."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count — non-zero exit with empty stdout
+                proc.communicate = AsyncMock(return_value=(b"", b"fatal: bad revision"))
+                proc.returncode = 128
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch("run-1")
+        # Should NOT be no_commits; should fall through to pushed
+        assert result["push_status"] == "pushed"
+        assert result["push_branch"] == "auto-abc123"
+
+    @pytest.mark.asyncio
+    async def test_push_revlist_uses_target_branch(self):
+        """Rev-list command uses target_branch instead of hardcoded origin/main."""
+        store = _make_mock_store()
+        activities = TemporalAgentRuntimeActivities(run_store=store)
+        call_count = 0
+        captured_revlist_args = None
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count, captured_revlist_args
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # rev-parse
+                proc.communicate = AsyncMock(return_value=(b"auto-abc123\n", b""))
+                proc.returncode = 0
+            elif call_count == 2:  # push
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:  # rev-list --count
+                captured_revlist_args = args
+                proc.communicate = AsyncMock(return_value=(b"5\n", b""))
+                proc.returncode = 0
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._push_workspace_branch(
+                "run-1", target_branch="develop",
+            )
+        assert result["push_status"] == "pushed"
+        # Verify the rev-list range uses origin/develop, not origin/main
+        assert captured_revlist_args is not None
+        revlist_range = [a for a in captured_revlist_args if ".." in str(a)]
+        assert len(revlist_range) == 1
+        assert "origin/develop" in revlist_range[0]
 
 
 # ---------------------------------------------------------------------------
