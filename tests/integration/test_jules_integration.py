@@ -1,4 +1,4 @@
-"""Integration test: real Jules API multi-step lifecycle via sendMessage.
+"""Integration test: real Jules API one-shot bundled lifecycle.
 
 Requires ``JULES_API_KEY`` in the environment (or ``.env``).
 Skipped automatically when the key is absent.
@@ -7,10 +7,10 @@ Run manually::
 
     python -m pytest tests/integration/test_jules_integration.py -v -s
 
-This test creates a Jules session with a trivial prompt, polls until the
-session reaches a terminal state (``completed``), then sends a second
-prompt via ``sendMessage`` and polls again.  Both steps must reach a
-terminal state for the test to pass.
+This test creates one Jules session with a checklist-shaped prompt and
+polls until the session reaches a terminal state (``completed``). It is a
+smoke test for the bundled one-shot execution path and intentionally does
+not exercise normal multi-step ``sendMessage`` progression.
 
 **WARNING**: This test creates real Jules sessions against the configured
 repository and will consume Jules task quota.  Each session may create a
@@ -70,17 +70,13 @@ def _build_adapter() -> JulesAgentAdapter:
     return JulesAgentAdapter(client_factory=lambda: client)
 
 
-def _step1_request() -> AgentExecutionRequest:
-    """Build a minimal request that should provoke the fastest Jules completion.
-
-    The prompt is intentionally trivial — we just want Jules to finish ASAP
-    so we can exercise the sendMessage → poll cycle.
-    """
-    correlation_id = f"multi-step-test-{uuid.uuid4().hex[:8]}"
+def _bundled_request() -> AgentExecutionRequest:
+    """Build one checklist-shaped request for the bundled Jules smoke test."""
+    correlation_id = f"bundle-test-{uuid.uuid4().hex[:8]}"
     return AgentExecutionRequest(
         agentKind="external",
         agentId="jules",
-        executionProfileRef="profile:jules-multistep-integ-test",
+        executionProfileRef="profile:jules-bundle-integ-test",
         correlationId=correlation_id,
         idempotencyKey=f"idem-{correlation_id}",
         workspaceSpec={
@@ -88,14 +84,18 @@ def _step1_request() -> AgentExecutionRequest:
             "branch": "main",
         },
         parameters={
-            "title": "[Integration Test] Multi-step lifecycle check",
+            "title": "[Integration Test] Bundled lifecycle check",
             "description": (
-                "Add a single-line comment '# MoonMind integration test' "
-                "to the very top of README.md. Do not change anything else. "
-                "Do not run any tests."
+                "You are implementing one cohesive bundled change.\n\n"
+                "Ordered Checklist:\n"
+                "1. Add a single-line comment '# MoonMind integration test' to the very top of README.md.\n"
+                "2. Add a second line '# Bundled integration step 2' directly below it.\n\n"
+                "Validation Checklist:\n"
+                "- Do not run tests.\n"
+                "- Do not change anything else."
             ),
             "metadata": {
-                "origin": "multi-step-integration-test",
+                "origin": "bundled-integration-test",
                 "repo": "MoonLadderStudios/MoonMind",
             },
         },
@@ -135,31 +135,16 @@ async def _poll_until_terminal(
 
 
 class TestJulesAdapterLifecycle:
-    """End-to-end multi-step lifecycle: start → poll → sendMessage → poll.
+    """End-to-end bundled lifecycle: start one task, poll, then fetch result."""
 
-    A single test covers the full adapter surface (start, status,
-    sendMessage, cancel) using one real Jules session to minimise quota
-    usage.
-    """
-
-    async def test_two_step_send_message_flow(self) -> None:
-        """Create a Jules task, wait for completion, send step 2, wait again.
-
-        This validates that:
-        1. A session can be created and polled to completion.
-        2. ``sendMessage`` can resume the session with a new prompt.
-        3. The resumed session can be polled to completion.
-        4. The session ID remains stable across both steps.
-        """
+    async def test_one_shot_bundled_flow(self) -> None:
+        """Create a bundled Jules task and wait for terminal completion."""
         adapter = _build_adapter()
-        request = _step1_request()
+        request = _bundled_request()
         created_run_id: str | None = None
 
         try:
-            # ============================================================
-            # STEP 1: Create session and poll until done
-            # ============================================================
-            logger.info("=== STEP 1: Creating Jules session ===")
+            logger.info("=== BUNDLED RUN: Creating Jules session ===")
             handle: AgentRunHandle = await adapter.start(request)
             created_run_id = handle.run_id
 
@@ -179,50 +164,20 @@ class TestJulesAdapterLifecycle:
                 "poll_hint_seconds should be auto-populated from capability descriptor"
             )
 
-            step1_result = await _poll_until_terminal(
-                adapter, handle.run_id, step_label="step-1"
+            bundled_result = await _poll_until_terminal(
+                adapter, handle.run_id, step_label="bundled-run"
             )
             logger.info(
-                "=== STEP 1 COMPLETE: status=%s ===", step1_result.status
+                "=== BUNDLED RUN COMPLETE: status=%s ===", bundled_result.status
             )
-            assert step1_result.status == "completed", (
-                f"Step 1 ended with status={step1_result.status}, expected completed"
+            assert bundled_result.status == "completed", (
+                f"Bundled run ended with status={bundled_result.status}, expected completed"
             )
-
-            # ============================================================
-            # STEP 2: Send follow-up message and poll until done
-            # ============================================================
-            logger.info("=== STEP 2: Sending follow-up via sendMessage ===")
-
-            step2_prompt = (
-                "Now add a second comment line '# Multi-step test step 2' "
-                "directly below the line you just added. "
-                "Do not change anything else. Do not run any tests."
-            )
-
-            await adapter.send_message(
-                run_id=handle.run_id, prompt=step2_prompt
-            )
-            logger.info("sendMessage accepted — polling for step 2 completion")
-
-            step2_result = await _poll_until_terminal(
-                adapter, handle.run_id, step_label="step-2"
-            )
-            logger.info(
-                "=== STEP 2 COMPLETE: status=%s ===", step2_result.status
-            )
-            assert step2_result.status == "completed", (
-                f"Step 2 ended with status={step2_result.status}, expected completed"
-            )
-
-            # ---- Verify session ID stability ----
-            assert step2_result.run_id == handle.run_id, (
-                "Session ID must remain stable across steps"
-            )
+            final_result = await adapter.fetch_result(handle.run_id)
+            assert final_result.failure_class is None
 
             logger.info(
-                "✅ Multi-step integration test PASSED — session %s "
-                "completed both steps successfully.",
+                "✅ Bundled integration test PASSED — session %s completed successfully.",
                 handle.run_id,
             )
 

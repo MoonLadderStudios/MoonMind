@@ -144,7 +144,7 @@ Suggested states:
 * `cancelled`
 * `timed_out`
 
-**`awaiting`** — the run has been picked up by a workflow and is past initial dispatch, but is blocked waiting for a prerequisite resource before execution can begin. The primary use case is waiting for an auth-profile slot from the `AuthProfileManager`. This is distinct from `queued` (not yet claimed by any workflow) and `running` (actively executing agent work). Metadata on the run should indicate what the run is awaiting (e.g. `{"awaiting_reason": "auth_profile_slot", "profile_manager": "auth-profile-manager:gemini_cli"}`).
+**`awaiting`** — the run has been picked up by a workflow and is past initial dispatch, but is blocked waiting for a prerequisite resource before execution can begin. The primary use case is waiting for a provider-profile slot from the `ProviderProfileManager`. This is distinct from `queued` (not yet claimed by any workflow) and `running` (actively executing agent work). Metadata on the run should indicate what the run is awaiting (e.g. `{"awaiting_reason": "provider_profile_slot", "profile_manager": "provider-profile-manager:gemini_cli"}`).
 
 Terminal-state semantics should be explicit and stable. `completed`, `failed`, `cancelled`, and `timed_out` should be treated as terminal.
 
@@ -230,7 +230,7 @@ The managed adapter delegates to runtime-oriented execution components such as:
 
 * `ManagedRuntimeLauncher`
 * `ManagedRuntimeProfile`
-* `ManagedAgentAuthProfile`
+* `ManagedAgentProviderProfile` (see [ProviderProfiles.md](../Security/ProviderProfiles.md))
 * managed run supervisor / run tracker
 
 This separation keeps the adapter layer agent-oriented while allowing the lower execution layer to remain runtime-oriented.
@@ -345,23 +345,25 @@ The detached managed runtime itself should not be represented as a long-lived he
 
 ---
 
-## 7. First-Class Auth Profiles
+## 7. First-Class Provider Profiles
 
-MoonMind-managed agent runtimes require formalized auth-profile handling.
+MoonMind-managed agent runtimes require formalized provider-profile handling. See [ProviderProfiles.md](../Security/ProviderProfiles.md) for the full provider-aware profile model.
 
-### `ManagedAgentAuthProfile`
+### `ManagedAgentProviderProfile`
 
-Represents a named auth and execution policy for a managed runtime.
+Represents a named provider, credential, and execution policy binding for a managed runtime.
 
-Suggested fields:
+Key fields (see [ProviderProfiles.md §5](../Security/ProviderProfiles.md) for the full contract):
 
 * `profile_id`
 * `runtime_id`
-* `auth_mode`
+* `provider_id`
+* `credential_source`
+* `runtime_materialization_mode`
 * `volume_ref`
 * `account_label`
 * `max_parallel_runs`
-* `cooldown_after_429`
+* `cooldown_after_429_seconds`
 * `rate_limit_policy`
 * `enabled`
 
@@ -483,7 +485,7 @@ Implementation should include a non-cancellable cleanup path, using the appropri
 
 **Managed runtime layer:** `ManagedRuntimeLauncher`, `ManagedRunStore`, `ManagedRunSupervisor`, and `LogStreamer` under `moonmind/workflows/temporal/runtime/`. Legacy skill-dispatch paths were removed from `worker_runtime.py`; agent execution goes through `MoonMind.AgentRun`.
 
-**Auth and fleet:** `MoonMindAuthProfileManagerWorkflow` integrates with `MoonMind.AgentRun` for profile slots and 429 handling. The `agent_runtime` fleet exposes `agent_runtime.publish_artifacts` and `agent_runtime.cancel` (`workers.py`, `activity_catalog.py`, `activity_runtime.py`).
+**Auth and fleet:** `MoonMindProviderProfileManagerWorkflow` integrates with `MoonMind.AgentRun` for profile slots and 429 handling. The `agent_runtime` fleet exposes `agent_runtime.publish_artifacts` and `agent_runtime.cancel` (`workers.py`, `activity_catalog.py`, `activity_runtime.py`).
 
 **Root workflow:** `MoonMind.Run` dispatches `tool.type == "agent_runtime"` steps to `MoonMind.AgentRun` child workflows; other steps use activities. `ManagedRunSupervisor` can signal completion via a callback wired to the workflow.
 

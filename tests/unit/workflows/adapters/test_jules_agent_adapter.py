@@ -270,11 +270,13 @@ async def test_start_defaults_automation_mode_for_branch_publish():
         parameters={"description": "foo", "publishMode": "branch"},
     )
 
-    await adapter.start(req)
+    handle = await adapter.start(req)
 
     assert len(client.created) == 1
     create_req = client.created[0]
     assert create_req.automation_mode == "AUTO_CREATE_PR"
+    assert handle.metadata["automationMode"] == "AUTO_CREATE_PR"
+    assert handle.metadata["publishMode"] == "branch"
 
 
 async def test_send_message_returns_running_status():
