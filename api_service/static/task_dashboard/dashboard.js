@@ -292,7 +292,7 @@
   /** Maps task submit runtime (dashboard) to managed_agent_auth_profiles.runtime_id. */
   const mapTaskRuntimeToAuthProfileRuntimeId = (mode) => {
     const m = String(mode || "").trim().toLowerCase();
-    if (m === "gemini_cli") {
+    if (m === "gemini") {
       return "gemini_cli";
     }
     if (m === "claude") {
@@ -5267,7 +5267,11 @@
           "Optional. Choose stored credentials for this runtime, or leave default for automatic selection.";
       }
       try {
-        const url = `${authProfileEndpoints.list}?runtime_id=${encodeURIComponent(
+        let listEndpoint = authProfileEndpoints.providerProfilesList || authProfileEndpoints.list || "";
+        if (listEndpoint.includes("/auth-profiles")) {
+          listEndpoint = listEndpoint.replace("/auth-profiles", "/provider-profiles");
+        }
+        const url = `${listEndpoint}?runtime_id=${encodeURIComponent(
           mappedRuntimeId,
         )}&enabled_only=true`;
         const profiles = await fetchJson(url);

@@ -18,7 +18,7 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
 )
-from moonmind.schemas.agent_runtime_models import _contains_sensitive_key
+from moonmind.schemas.agent_runtime_models import ProfileSelector
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +43,13 @@ class ProviderProfileCreate(BaseModel):
     volume_mount_path: Optional[str] = None
     account_label: Optional[str] = None
     
-    tags: Optional[dict[str, Any]] = None
+    tags: Optional[list[str]] = None
     priority: int = Field(default=100)
     
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
     env_template: Optional[dict[str, str]] = None
-    file_templates: Optional[dict[str, str]] = None
+    file_templates: Optional[list[dict[str, str]]] = None
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
 
@@ -81,10 +81,6 @@ class ProviderProfileCreate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
-        if self.env_template is not None and _contains_sensitive_key(self.env_template):
-            raise ValueError(
-                "env_template must not contain credential-like key names or nested secrets"
-            )
         return self
 
 
@@ -96,12 +92,12 @@ class ProviderProfileUpdate(BaseModel):
     volume_ref: Optional[str] = None
     volume_mount_path: Optional[str] = None
     account_label: Optional[str] = None
-    tags: Optional[dict[str, Any]] = None
+    tags: Optional[list[str]] = None
     priority: Optional[int] = None
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
     env_template: Optional[dict[str, str]] = None
-    file_templates: Optional[dict[str, str]] = None
+    file_templates: Optional[list[dict[str, str]]] = None
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
 
@@ -136,12 +132,7 @@ class ProviderProfileUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":
-        if self.env_template is not None and _contains_sensitive_key(self.env_template):
-            raise ValueError(
-                "env_template must not contain credential-like key names or nested secrets"
-            )
         return self
-
 
 class ProviderProfileResponse(BaseModel):
     profile_id: str
@@ -153,12 +144,12 @@ class ProviderProfileResponse(BaseModel):
     volume_ref: Optional[str]
     volume_mount_path: Optional[str]
     account_label: Optional[str]
-    tags: Optional[dict[str, Any]] = None
+    tags: Optional[list[str]] = None
     priority: int = 100
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
     env_template: Optional[dict[str, str]] = None
-    file_templates: Optional[dict[str, str]] = None
+    file_templates: Optional[list[dict[str, str]]] = None
     home_path_overrides: Optional[dict[str, str]] = None
     command_behavior: Optional[dict[str, Any]] = None
     max_parallel_runs: int
@@ -315,12 +306,12 @@ def _row_to_dict(row: ManagedAgentProviderProfile) -> dict[str, Any]:
         "volume_ref": row.volume_ref,
         "volume_mount_path": row.volume_mount_path,
         "account_label": row.account_label,
-        "tags": row.tags or {},
+        "tags": row.tags or [],
         "priority": row.priority,
         "secret_refs": row.secret_refs or {},
         "clear_env_keys": row.clear_env_keys or [],
         "env_template": row.env_template or {},
-        "file_templates": row.file_templates or {},
+        "file_templates": row.file_templates or [],
         "home_path_overrides": row.home_path_overrides or {},
         "command_behavior": row.command_behavior or {},
         "max_parallel_runs": row.max_parallel_runs,

@@ -1825,16 +1825,16 @@ class ManagedAgentProviderProfile(Base):
         Boolean, nullable=False, default=True, server_default=text("true")
     )
     
-    tags: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
 
     volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     volume_mount_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     
     secret_refs: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-    clear_env_keys: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    clear_env_keys: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     env_template: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
-    file_templates: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    file_templates: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
     home_path_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     command_behavior: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
 
