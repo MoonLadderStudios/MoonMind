@@ -17,7 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from api_service.main import app
 
 def main():
-    print(json.dumps(app.openapi(), indent=2))
+    openapi_json = json.dumps(app.openapi(), indent=2)
+    if len(sys.argv) > 1:
+        with open(sys.argv[1], "w") as f:
+            f.write(openapi_json)
+    else:
+        print(openapi_json)
 
 if __name__ == "__main__":
     main()
