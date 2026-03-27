@@ -57,6 +57,7 @@ from moonmind.workflows.temporal.workflows.auth_profile_manager import MoonMindA
 from moonmind.workflows.temporal.workflows.manifest_ingest import (
     MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
 )
+from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow as MoonMindRun
 from moonmind.workflows.temporal.worker_healthcheck import start_healthcheck_server
 from moonmind.workflows.temporal.workflows.agent_run import (
@@ -314,7 +315,7 @@ def _build_runtime_planner():
             not has_multi_steps
             and isinstance(effective_step_count, int)
             and effective_step_count > 1
-            and str(runtime_mode).strip().lower() not in {"jules", "jules_api"}
+            and str(runtime_mode).strip().lower() not in JULES_AGENT_IDS
         )
 
         nodes: list[dict[str, Any]] = []

@@ -1143,7 +1143,11 @@ class MoonMindRunWorkflow:
         integration_parameters.setdefault(
             "title", self._title or "MoonMind Integration"
         )
-        if self._integration == "jules" and len(step_instructions) > 1:
+        if (
+            self._integration == "jules"
+            and len(step_instructions) > 1
+            and workflow.patched("moonmind.run.jules_one_shot_bundle")
+        ):
             workspace_spec = integration_parameters.get("workspaceSpec") or {}
             repo_value = (
                 self._repo
@@ -1183,14 +1187,15 @@ class MoonMindRunWorkflow:
                 payload=bundle_spec.manifest,
             )
             integration_parameters["description"] = bundle_spec.compiled_brief
-            metadata = integration_parameters.get("metadata")
-            if metadata is None:
-                metadata = {}
+            metadata = integration_parameters.setdefault("metadata", {})
             if not isinstance(metadata, dict):
                 raise ValueError("integration metadata must be an object when provided")
-            moonmind_meta = metadata.get("moonmind")
+
+            moonmind_meta = metadata.setdefault("moonmind", {})
             if not isinstance(moonmind_meta, dict):
                 moonmind_meta = {}
+                metadata["moonmind"] = moonmind_meta
+
             moonmind_meta.update(
                 {
                     "bundleId": bundle_spec.bundle_id,
@@ -1199,7 +1204,6 @@ class MoonMindRunWorkflow:
                     "bundleStrategy": "one_shot_jules",
                 }
             )
-            metadata["moonmind"] = moonmind_meta
             integration_parameters["metadata"] = metadata
         elif step_instructions:
             integration_parameters["description"] = step_instructions[0]

@@ -890,10 +890,37 @@ class MoonMindAgentRun:
                         adapter = None
                         skip_poll_and_fetch = True
                     else:
-                        # Start via Temporal activity on the integrations fleet
-                        # (determinism-safe: no adapter construction in-workflow).
-                        act_name = f"integration.{validated_id}.start"
-                        handle_dict = await self._execute_activity_with_routing(
+                        jules_session_id = (request.parameters or {}).get("jules_session_id")
+                        if (
+                            not workflow.patched("moonmind.agent_run.jules_multi_step_removal")
+                            and jules_session_id
+                            and validated_id == "jules"
+                        ):
+                            prompt = (request.instruction_ref or "").strip()
+                            if not prompt:
+                                raise ApplicationError(
+                                    "Jules continuation step requires a non-empty instruction_ref (prompt)",
+                                    non_retryable=True,
+                                )
+                            await self._execute_activity_with_routing(
+                                "integration.jules.send_message",
+                                {
+                                    "session_id": jules_session_id,
+                                    "prompt": prompt,
+                                },
+                                INTEGRATIONS_TASK_QUEUE,
+                                INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+                            self.run_id = jules_session_id
+                            self.run_status = "running"
+                            poll_interval = 15
+                            adapter = None
+                        else:
+                            # Start via Temporal activity on the integrations fleet
+                            # (determinism-safe: no adapter construction in-workflow).
+                            act_name = f"integration.{validated_id}.start"
+                            handle_dict = await self._execute_activity_with_routing(
                             act_name,
                             request,
                             INTEGRATIONS_TASK_QUEUE,
@@ -1260,6 +1287,21 @@ class MoonMindAgentRun:
                     if "diagnosticsRef" in enriched_result and "diagnostics_ref" in enriched_result:
                         del enriched_result["diagnostics_ref"]
                     self.final_result = AgentRunResult(**enriched_result)
+
+                # Inject run_id into result metadata so the parent
+                # workflow (MoonMind.Run) can track it for multi-step
+                # Jules session reuse across plan nodes.
+                if (
+                    not workflow.patched("moonmind.agent_run.jules_multi_step_removal")
+                    and self.run_id
+                    and hasattr(self.final_result, "metadata")
+                ):
+                    result_meta = dict(self.final_result.metadata or {})
+                    if self._external_agent_id in {"jules", "jules_api"}:
+                        result_meta["jules_session_id"] = self.run_id
+                    self.final_result = self.final_result.model_copy(
+                        update={"metadata": result_meta}
+                    )
 
                 return self.final_result
 

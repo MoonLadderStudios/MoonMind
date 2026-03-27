@@ -502,11 +502,15 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
             return {"normalized_status": "completed"}
         return {}
 
-    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+    def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
         raise asyncio.TimeoutError()
+
+    def fake_patched(patch_id: str) -> bool:
+        return True
 
     monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
     monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
 
     await mock_run_workflow._run_integration_stage(
         parameters={"repo": "org/repo"},
