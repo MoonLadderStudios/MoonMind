@@ -58,20 +58,17 @@ Outcome:
 
 Tasks:
 
-- Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
-- Decide the baseline `db_encrypted` root key source for local deployments:
-  - Docker secret,
-  - protected local file,
-  - OS keychain,
-  - or a clearly ordered fallback strategy.
-- Confirm `oauth_volume` modeling as a credential source with shared observability, not a `SecretRef` resolver backend (per canonical doc Section 6.4).
-- Implement the `SecretRef` URI parser and validation rules per the canonical URI scheme (Section 5.2).
+- [x] Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
+- [x] Decide the baseline `db_encrypted` root key source for local deployments:
+  - We will use the existing `ENCRYPTION_MASTER_KEY` environment variable as the baseline fallback for local deployments to avoid managing two separate key hierarchies.
+- [x] Confirm `oauth_volume` modeling as a credential source with shared observability, not a `SecretRef` resolver backend (per canonical doc Section 6.4).
+- [x] Implement the `SecretRef` URI parser and validation rules per the canonical URI scheme (Section 5.2).
 
 Exit criteria:
 
-- Canonical docs agree on terms and boundaries.
-- One baseline local-first key-source approach is selected.
-- Initial resolver/backends list is frozen for v1.
+- [x] Canonical docs agree on terms and boundaries.
+- [x] One baseline local-first key-source approach is selected.
+- [x] Initial resolver/backends list is frozen for v1.
 
 ### Phase 1. Persistence and Crypto Foundation
 
