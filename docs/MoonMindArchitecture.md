@@ -301,12 +301,15 @@ The `docs/` tree is organized by topic area:
 
 | Directory | Contents |
 |---|---|
+| [Api/](Api/) | API-specific documentation |
+| [Development/](Development/) | Developer workflow and local tooling guides |
+| [ExternalAgents/](ExternalAgents/) | Jules adapter, OpenClaw adapter, external agent integration system, adding providers |
+| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, Git integration, secret store |
+| [Memory/](Memory/) | Memory architecture and research |
+| [Observability/](Observability/) | OpenTelemetry system design |
+| [Rag/](Rag/) | LlamaIndex manifest system, manifest ingest design, workflow RAG |
+| [Security/](Security/) | Provider profiles and related security guidance |
 | [Tasks/](Tasks/) | Task architecture, skill/plan contracts, proposals, presets, cancellation, runs API |
 | [Temporal/](Temporal/) | Temporal architecture, worker topology, workflow catalog, artifact system, scheduling, visibility, routing, ops runbook |
-| [UI/](UI/) | Mission Control architecture and style guide |
-| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, Git integration, secret store |
-| [ExternalAgents/](ExternalAgents/) | Jules adapter, OpenClaw adapter, external agent integration system, adding providers |
-| [Memory/](Memory/) | Memory architecture and research |
-| [Rag/](Rag/) | LlamaIndex manifest system, manifest ingest design, workflow RAG |
-| [Api/](Api/) | API-specific documentation |
 | [Troubleshooting/](Troubleshooting/) | Debugging guides |
+| [UI/](UI/) | Mission Control architecture and style guide |
