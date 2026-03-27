@@ -123,15 +123,13 @@ class TestGeminiCliBuildCommand:
         profile = _make_profile(default_effort="high")
         request = _make_request(instruction_ref="Think hard")
         cmd = s.build_command(profile, request)
-        # effort should be silently ignored since Gemini CLI doesn't support it
-        assert "--effort" not in cmd
         assert cmd == [
             "gemini",
             "--yolo", "--prompt", "Think hard",
         ]
 
-    def test_with_model_and_effort(self) -> None:
-        """Gemini CLI supports --model but not --effort."""
+    def test_with_model_and_ignored_effort(self) -> None:
+        """Gemini CLI applies --model but ignores --effort."""
         s = GeminiCliStrategy()
         profile = _make_profile(
             default_model="gemini-2.5-pro",
@@ -139,12 +137,25 @@ class TestGeminiCliBuildCommand:
         )
         request = _make_request(instruction_ref="Go")
         cmd = s.build_command(profile, request)
-        assert "--model" in cmd
-        assert "--effort" not in cmd
         assert cmd == [
             "gemini",
             "--model", "gemini-2.5-pro",
             "--yolo", "--prompt", "Go",
+        ]
+
+    def test_effort_param_is_ignored(self) -> None:
+        """Effort from request.parameters should also be ignored."""
+        s = GeminiCliStrategy()
+        profile = _make_profile()
+        request = _make_request(
+            instruction_ref="Think hard",
+            parameters={"effort": "high"},
+        )
+        cmd = s.build_command(profile, request)
+        assert "--effort" not in cmd
+        assert cmd == [
+            "gemini",
+            "--yolo", "--prompt", "Think hard",
         ]
 
     def test_no_instruction_ref(self) -> None:
