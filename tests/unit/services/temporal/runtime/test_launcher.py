@@ -709,3 +709,71 @@ def test_build_command_cursor_cli_with_sandbox():
     assert "-p" in cmd
     assert "--sandbox" in cmd
     assert "disabled" in cmd
+
+
+@pytest.mark.asyncio
+async def test_launch_env_overrides_layer_on_top_of_os_environ(tmp_path, monkeypatch):
+    """Profile env_overrides should be layered on top of os.environ, not replace it.
+
+    Regression test for the env stripping bug: when profile.env_overrides is
+    set, the child process must still inherit essential ambient vars (PATH,
+    HOME, etc.) from the parent environment, with the profile-specific values
+    taking precedence for any keys that appear in both.
+    """
+    monkeypatch.setattr(shutil, "which", lambda _cmd: None)
+    # Ensure PATH is visible in os.environ so we can assert it propagates.
+    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
+    monkeypatch.setenv("HOME", "/home/testuser")
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        command_template=["echo", "hello"],
+        # Only ANTHROPIC_BASE_URL is overridden — PATH and HOME must still pass.
+        env_overrides={
+            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            "ANTHROPIC_MODEL": "MiniMax-M2.7",
+        },
+        passthrough_env_keys=[],
+    )
+    request = _make_request()
+
+    class _FakeProcess:
+        def __init__(self, pid: int = 999) -> None:
+            self.pid = pid
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.update(env)
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    _record, process, endpoints, _tmate_manager = await launcher.launch(
+        run_id="run-env-layer-1", request=request, profile=profile
+    )
+    await process.wait()
+
+    # Profile-specific overrides must be present.
+    assert captured_env["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert captured_env["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
+
+    # Ambient environment variables must NOT have been stripped.
+    assert "PATH" in captured_env, "PATH was stripped from child env — env bug reintroduced"
+    assert "HOME" in captured_env, "HOME was stripped from child env — env bug reintroduced"
+    assert captured_env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
+    assert captured_env["HOME"] == "/home/testuser"
+

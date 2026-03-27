@@ -51,11 +51,13 @@ The simplest path: add one line to your `.env` and `docker compose up`.
    | `ANTHROPIC_DEFAULT_SONNET_MODEL` | `MiniMax-M2.7` |
    | `ANTHROPIC_DEFAULT_OPUS_MODEL` | `MiniMax-M2.7` |
    | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `MiniMax-M2.7` |
-   | `API_TIMEOUT_MS` | `600000` (10 minutes) |
+   | `API_TIMEOUT_MS` | `3000000` (50 minutes) |
    | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` |
 
 > [!NOTE]
-> Auto-seeding only runs when the `managed_agent_auth_profiles` table is empty. If profiles already exist, add the MiniMax profile manually (see §4).
+> Auto-seeding checks each profile individually.  If `MINIMAX_API_KEY` is set
+> but the `claude_minimax` profile does not yet exist, it is inserted on the
+> next startup regardless of whether other profiles are already present.
 
 ---
 
@@ -77,7 +79,7 @@ If auto-seeding has already run, create the profile through the Task Dashboard o
      {
        "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
        "ANTHROPIC_MODEL": "MiniMax-M2.7",
-       "API_TIMEOUT_MS": "600000",
+       "API_TIMEOUT_MS": "3000000",
        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
      }
      ```
@@ -100,7 +102,7 @@ curl -X POST http://localhost:8000/api/v1/auth-profiles \
       "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
       "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7",
       "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
-      "API_TIMEOUT_MS": "600000",
+      "API_TIMEOUT_MS": "3000000",
       "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
     },
     "max_parallel_runs": 1,
