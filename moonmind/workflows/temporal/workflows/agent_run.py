@@ -264,6 +264,7 @@ class MoonMindAgentRun:
         runtime_id: str,
         *,
         request_slot: bool = True,
+        profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the auth-profile-manager; auto-start it on first failure.
 
@@ -280,6 +281,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if profile_selector:
+            signal_payload["profile_selector"] = profile_selector
         if not request_slot:
             return manager_handle
         try:
@@ -317,6 +320,8 @@ class MoonMindAgentRun:
         self,
         manager_id: str,
         runtime_id: str,
+        *,
+        profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Terminate a stuck manager, start a fresh one, and re-request a slot.
 
@@ -350,6 +355,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if profile_selector:
+            signal_payload["profile_selector"] = profile_selector
         await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
 
@@ -639,6 +646,7 @@ class MoonMindAgentRun:
                         manager_id,
                         runtime_id,
                         request_slot=True,
+                        profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
                     )
                     profile_count = await self._sync_manager_profiles(
                         manager_handle=manager_handle,
@@ -693,7 +701,9 @@ class MoonMindAgentRun:
                                     )
                                 self.slot_assigned_event.clear()
                                 manager_handle = await self._reset_and_request_slot(
-                                    manager_id, runtime_id,
+                                    manager_id, 
+                                    runtime_id,
+                                    profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
                                 )
                                 await self._sync_manager_profiles(
                                     manager_handle=manager_handle,
@@ -762,10 +772,13 @@ class MoonMindAgentRun:
                         )
 
                     async def _slot_requester(**kw):
-                        await manager_handle.signal("request_slot", {
+                        payload = {
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
-                        })
+                        }
+                        if request.profile_selector:
+                            payload["profile_selector"] = request.profile_selector.model_dump(by_alias=True, exclude_none=True)
+                        await manager_handle.signal("request_slot", payload)
 
                     async def _slot_releaser(**kw):
                         await manager_handle.signal("release_slot", {

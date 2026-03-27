@@ -405,8 +405,8 @@ async def add_request_id(request: Request, call_next):
     return response
 
 
-async def _auto_seed_auth_profiles() -> list[str]:
-    """Seed well-known auth profiles that are missing from the DB.
+async def _auto_seed_provider_profiles() -> list[str]:
+    """Seed well-known provider profiles that are missing from the DB.
 
     Each profile is checked individually by ``profile_id`` so that:
     - On a fresh install all defaults are created.
@@ -420,13 +420,14 @@ async def _auto_seed_auth_profiles() -> list[str]:
     from api_service.db.base import get_async_session_context
     from sqlalchemy import select
     from api_service.db.models import (
-        ManagedAgentAuthProfile,
-        ManagedAgentAuthMode,
+        ManagedAgentProviderProfile,
+        ProviderCredentialSource,
+        RuntimeMaterializationMode,
         ManagedAgentRateLimitPolicy,
     )
 
     if os.environ.get("MOONMIND_SKIP_AUTH_PROFILE_SEED", "").lower() in ("1", "true", "yes"):
-        logger.info("Auth profile auto-seeding disabled via MOONMIND_SKIP_AUTH_PROFILE_SEED.")
+        logger.info("Provider profile auto-seeding disabled via MOONMIND_SKIP_AUTH_PROFILE_SEED.")
         return []
 
     # Well-known runtime defaults matching docker-compose.yaml conventions.
@@ -434,7 +435,10 @@ async def _auto_seed_auth_profiles() -> list[str]:
         {
             "profile_id": "gemini_default",
             "runtime_id": "gemini_cli",
-            "auth_mode": ManagedAgentAuthMode.OAUTH,
+            "provider_id": "google",
+            "provider_label": "Google",
+            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("GEMINI_VOLUME_NAME", "gemini_auth_volume"),
             "volume_mount_path": os.environ.get("GEMINI_VOLUME_PATH", "/var/lib/gemini-auth"),
             "account_label": "Gemini CLI (auto-seeded)",
@@ -442,7 +446,10 @@ async def _auto_seed_auth_profiles() -> list[str]:
         {
             "profile_id": "codex_default",
             "runtime_id": "codex_cli",
-            "auth_mode": ManagedAgentAuthMode.OAUTH,
+            "provider_id": "moonladder",
+            "provider_label": "MoonLadder",
+            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CODEX_VOLUME_NAME", "codex_auth_volume"),
             "volume_mount_path": os.environ.get("CODEX_VOLUME_PATH", "/home/app/.codex"),
             "account_label": "Codex CLI (auto-seeded)",
@@ -450,9 +457,13 @@ async def _auto_seed_auth_profiles() -> list[str]:
         {
             "profile_id": "claude_anthropic",
             "runtime_id": "claude_code",
-            "auth_mode": ManagedAgentAuthMode.API_KEY,
+            "provider_id": "anthropic",
+            "provider_label": "Anthropic",
+            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
+            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": os.environ.get("CLAUDE_VOLUME_NAME", "claude_auth_volume"),
             "volume_mount_path": os.environ.get("CLAUDE_VOLUME_PATH", "/home/app/.claude"),
+            "clear_env_keys": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
             "account_label": "Claude Code (auto-seeded)",
         },
 
@@ -463,10 +474,19 @@ async def _auto_seed_auth_profiles() -> list[str]:
         _DEFAULT_PROFILES.append({
             "profile_id": "claude_minimax",
             "runtime_id": "claude_code",
-            "auth_mode": ManagedAgentAuthMode.API_KEY,
-            "api_key_ref": "MINIMAX_API_KEY",
-            "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
-            "runtime_env_overrides": {
+            "provider_id": "minimax",
+            "provider_label": "MiniMax",
+            "credential_source": ProviderCredentialSource.SECRET_REF,
+            "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
+            "secret_refs": {
+                "anthropic_api_key": "MINIMAX_API_KEY"
+            },
+            "clear_env_keys": [
+                "ANTHROPIC_API_KEY", 
+                "OPENAI_API_KEY",
+            ],
+            "env_template": {
+                "ANTHROPIC_AUTH_TOKEN": "${anthropic_api_key}",
                 "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
                 "ANTHROPIC_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
@@ -486,7 +506,7 @@ async def _auto_seed_auth_profiles() -> list[str]:
         async with get_async_session_context() as session:
             # Fetch all existing profile_ids in one query.
             existing_result = await session.execute(
-                select(ManagedAgentAuthProfile.profile_id)
+                select(ManagedAgentProviderProfile.profile_id)
             )
             existing_ids: set[str] = {row[0] for row in existing_result.all()}
 
@@ -495,22 +515,25 @@ async def _auto_seed_auth_profiles() -> list[str]:
                 return []
 
             logger.info(
-                "Auto-seeding %d missing auth profile(s): %s",
+                "Auto-seeding %d missing provider profile(s): %s",
                 len(to_insert),
                 [p["profile_id"] for p in to_insert],
             )
 
             for profile_def in to_insert:
-                profile = ManagedAgentAuthProfile(
+                profile = ManagedAgentProviderProfile(
                     profile_id=profile_def["profile_id"],
                     runtime_id=profile_def["runtime_id"],
-                    auth_mode=profile_def["auth_mode"],
+                    provider_id=profile_def["provider_id"],
+                    provider_label=profile_def.get("provider_label"),
+                    credential_source=profile_def["credential_source"],
+                    runtime_materialization_mode=profile_def["runtime_materialization_mode"],
                     volume_ref=profile_def.get("volume_ref"),
                     volume_mount_path=profile_def.get("volume_mount_path"),
                     account_label=profile_def.get("account_label"),
-                    api_key_ref=profile_def.get("api_key_ref"),
-                    api_key_env_var=profile_def.get("api_key_env_var"),
-                    runtime_env_overrides=profile_def.get("runtime_env_overrides"),
+                    secret_refs=profile_def.get("secret_refs"),
+                    clear_env_keys=profile_def.get("clear_env_keys"),
+                    env_template=profile_def.get("env_template"),
                     max_parallel_runs=1,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
@@ -521,36 +544,36 @@ async def _auto_seed_auth_profiles() -> list[str]:
 
             await session.commit()
             logger.info(
-                "Committed %d auto-seeded managed-agent auth profile row(s).",
+                "Committed %d auto-seeded managed-agent provider profile row(s).",
                 len(seeded),
             )
     except Exception as e:
-        logger.error("Failed to auto-seed auth profiles: %s", e, exc_info=True)
+        logger.error("Failed to auto-seed provider profiles: %s", e, exc_info=True)
 
     return seeded
 
 
-async def ensure_auth_profile_managers_started():
-    """Ensure AuthProfileManager workflows are running for all distinct runtime families."""
+async def ensure_provider_profile_managers_started():
+    """Ensure ProviderProfileManager workflows are running for all distinct runtime families."""
     from api_service.db.base import get_async_session_context
     from sqlalchemy import select
-    from api_service.db.models import ManagedAgentAuthProfile
+    from api_service.db.models import ManagedAgentProviderProfile
     from moonmind.workflows.temporal.client import TemporalClientAdapter
     from moonmind.workflows.temporal.workflows.auth_profile_manager import WORKFLOW_NAME, AuthProfileManagerInput
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     # Auto-seed default profiles if table is empty.
-    await _auto_seed_auth_profiles()
+    await _auto_seed_provider_profiles()
 
     logger.info("Ensuring AuthProfileManager workflows are started...")
     try:
         async with get_async_session_context() as session:
-            stmt = select(ManagedAgentAuthProfile.runtime_id).distinct()
+            stmt = select(ManagedAgentProviderProfile.runtime_id).distinct()
             result = await session.execute(stmt)
             runtime_ids = result.scalars().all()
             
         if not runtime_ids:
-            logger.info("No managed agent auth profiles found. Skipping AuthProfileManager startup.")
+            logger.info("No managed agent provider profiles found. Skipping AuthProfileManager startup.")
             return
 
         temporal_adapter = TemporalClientAdapter()
@@ -674,7 +697,8 @@ async def startup_event():
             f"Auth provider is '{settings.oidc.AUTH_PROVIDER}'. Skipping default user creation on startup."
         )
 
-    await ensure_auth_profile_managers_started()
+    # Wait for the Temporal client to be available and initialize provider profile managers
+    await ensure_provider_profile_managers_started()
     logger.info("Application startup events completed.")
 
 

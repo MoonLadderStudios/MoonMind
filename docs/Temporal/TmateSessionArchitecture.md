@@ -15,7 +15,7 @@ This document is the single authoritative reference for tmate session management
 - `docs/Temporal/LiveTaskManagement.md` — live log tailing and terminal handoff UX
 - `docs/ManagedAgents/TmateArchitecture.md` — tmate as a tool, Mission Control integration, OAuth session UX, and provider registry
 - `docs/tmp/050-TmatePlan.md` — phased implementation status and diagnostics
-- `docs/Security/AuthProfiles.md` — auth profile management, OAuth volumes, and profile assignment
+- `docs/Security/ProviderProfiles.md` — provider profile management, OAuth volumes, and profile assignment
 - `docs/tmp/SharedManagedAgentAbstractions.md` — strategy pattern and supervisor boundary
 
 ---

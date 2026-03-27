@@ -92,7 +92,7 @@ Cursor CLI supports two authentication modes:
 
 ### Mapping to MoonMind Auth Profiles
 
-The default managed profile uses **OAuth** with `cursor_auth_volume` mounted at `/home/app/.cursor` (`CURSOR_CONFIG_DIR`). Use **API key** mode when you want `CURSOR_API_KEY` only (no OAuth volume). The mapping extends the existing `ManagedAgentAuthProfile` schema:
+The default managed profile uses **OAuth** with `cursor_auth_volume` mounted at `/home/app/.cursor` (`CURSOR_CONFIG_DIR`). Use **API key** mode when you want `CURSOR_API_KEY` only (no OAuth volume). The mapping extends the existing `ManagedAgentProviderProfile` schema (see [ProviderProfiles.md](../Security/ProviderProfiles.md)):
 
 | Field | Cursor CLI Value |
 |-------|-----------------|
@@ -536,7 +536,7 @@ Cursor CLI is a candidate fourth managed runtime: container image + auth volume 
 
 ## 15. Security Considerations
 
-- **API key handling**: `CURSOR_API_KEY` must be resolved from the secret store at execution time, never stored in workflow payloads or logs. The existing `api_key_ref` pattern in `ManagedAgentAuthProfile` applies directly.
+- **API key handling**: `CURSOR_API_KEY` must be resolved from the secret store at execution time, never stored in workflow payloads or logs. The existing `secret_refs` pattern in `ManagedAgentProviderProfile` applies directly.
 - **Permission sandboxing**: Cursor's built-in permission system provides defense-in-depth alongside MoonMind's approval policies. The `--sandbox enabled` flag should be the default for managed runs.
 - **Network access**: Cursor's `WebFetch` permission type can be used to restrict network access during execution, complementing Docker-level network isolation.
 - **Log redaction**: The structured `stream-json` output should be scanned for secret-like patterns before being persisted to artifact storage, consistent with existing log redaction rules.
