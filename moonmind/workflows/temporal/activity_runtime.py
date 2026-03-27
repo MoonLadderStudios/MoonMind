@@ -1951,6 +1951,19 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.adapters.github_service import GitHubService
 
         svc = GitHubService()
+        target_branch = payload.get("target_branch") or payload.get("targetBranch")
+        if target_branch:
+            success, summary = await svc.update_pull_request_base(
+                pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
+                new_base=target_branch,
+            )
+            if not success:
+                return {
+                    "prUrl": payload.get("pr_url") or payload.get("prUrl") or "",
+                    "merged": False,
+                    "mergeSha": None,
+                    "summary": f"Base branch update failed: {summary}",
+                }
         result = await svc.merge_pull_request(
             pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
             merge_method=payload.get("merge_method") or payload.get("mergeMethod") or "merge",
@@ -2760,6 +2773,56 @@ class TemporalAgentRuntimeActivities:
         except Exception:
             logger.warning("Failed to report live session for run %s", run_id, exc_info=True)
 
+    async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
+        """Persist the managed task-run UUID onto the execution record.
+
+        Temporal execution detail uses ``workflow_id`` as the durable task handle,
+        while live-session rows are keyed by the managed runtime run UUID. Store
+        that UUID on the execution record so the dashboard can resolve the
+        existing ``/api/task-runs/{id}/live-session`` route without guessing.
+        """
+        workflow_id = str(workflow_id or "").strip()
+        run_id = str(run_id or "").strip()
+        if not workflow_id or not run_id:
+            return
+
+        import uuid
+        try:
+            uuid.UUID(run_id)
+        except ValueError:
+            logger.warning(
+                "run_id %r is not a valid UUID; skipping task run binding for workflow %s",
+                run_id,
+                workflow_id,
+            )
+            return
+
+        from api_service.db.base import get_async_session_context
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
+        try:
+            async with get_async_session_context() as db:
+                record = await db.get(TemporalExecutionCanonicalRecord, workflow_id)
+                if record is None:
+                    logger.warning(
+                        "workflow_id %s was not found; cannot persist task run binding",
+                        workflow_id,
+                    )
+                    return
+                memo = dict(record.memo or {})
+                if memo.get("taskRunId") == run_id:
+                    return
+                memo["taskRunId"] = run_id
+                record.memo = memo
+                await db.commit()
+        except Exception:
+            logger.warning(
+                "Failed to persist task run binding for workflow %s run %s",
+                workflow_id,
+                run_id,
+                exc_info=True,
+            )
+
     async def agent_runtime_launch(
         self,
         payload: dict[str, Any],
@@ -2769,6 +2832,7 @@ class TemporalAgentRuntimeActivities:
         
         Payload must contain:
         - run_id: str
+        - workflow_id: str | None
         - request: dict (AgentExecutionRequest dump)
         - profile: dict (ManagedRuntimeProfile dump)
         - workspace_path: str | None
@@ -2777,10 +2841,14 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError("launcher and supervisor are required for agent_runtime_launch")
 
         run_id = payload.get("run_id")
+        workflow_id = str(payload.get("workflow_id") or "").strip()
         request_data = payload.get("request")
         profile_data = payload.get("profile")
         if not run_id or request_data is None or profile_data is None:
             raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
+
+        if workflow_id:
+            await self._report_task_run_binding(workflow_id, str(run_id))
 
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)
@@ -2789,28 +2857,7 @@ class TemporalAgentRuntimeActivities:
         env_overrides = dict(profile.env_overrides) if profile.env_overrides else {}
         ref = env_overrides.pop("MANAGED_API_KEY_REF", None)
         target_raw = env_overrides.pop("MANAGED_API_KEY_TARGET_ENV", None)
-        target_env = (
-            str(target_raw).strip().upper()
-            if target_raw and str(target_raw).strip()
-            else "ANTHROPIC_API_KEY"
-        )
-
-        if ref:
-            from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-                resolve_managed_api_key_reference,
-            )
-
-            try:
-                secret = await resolve_managed_api_key_reference(str(ref))
-            except ValueError as exc:
-                raise TemporalActivityRuntimeError(str(exc)) from exc
-            for key in (
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_AUTH_TOKEN",
-                "CLAUDE_API_KEY",
-            ):
-                env_overrides.pop(key, None)
-            env_overrides[target_env] = secret
+        # We no longer process MANAGED_API_KEY_REF here. It's handled by secret_refs in the launcher.
 
         profile = profile.model_copy(update={"env_overrides": env_overrides})
 

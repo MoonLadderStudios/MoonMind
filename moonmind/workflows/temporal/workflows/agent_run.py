@@ -264,6 +264,7 @@ class MoonMindAgentRun:
         runtime_id: str,
         *,
         request_slot: bool = True,
+        profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the auth-profile-manager; auto-start it on first failure.
 
@@ -280,6 +281,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if profile_selector:
+            signal_payload["profile_selector"] = profile_selector
         if not request_slot:
             return manager_handle
         try:
@@ -317,6 +320,8 @@ class MoonMindAgentRun:
         self,
         manager_id: str,
         runtime_id: str,
+        *,
+        profile_selector: dict | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Terminate a stuck manager, start a fresh one, and re-request a slot.
 
@@ -350,6 +355,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if profile_selector:
+            signal_payload["profile_selector"] = profile_selector
         await manager_handle.signal("request_slot", signal_payload)
         return manager_handle
 
@@ -639,6 +646,7 @@ class MoonMindAgentRun:
                         manager_id,
                         runtime_id,
                         request_slot=True,
+                        profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
                     )
                     profile_count = await self._sync_manager_profiles(
                         manager_handle=manager_handle,
@@ -693,7 +701,9 @@ class MoonMindAgentRun:
                                     )
                                 self.slot_assigned_event.clear()
                                 manager_handle = await self._reset_and_request_slot(
-                                    manager_id, runtime_id,
+                                    manager_id, 
+                                    runtime_id,
+                                    profile_selector=request.profile_selector.model_dump(by_alias=True, exclude_none=True),
                                 )
                                 await self._sync_manager_profiles(
                                     manager_handle=manager_handle,
@@ -762,10 +772,13 @@ class MoonMindAgentRun:
                         )
 
                     async def _slot_requester(**kw):
-                        await manager_handle.signal("request_slot", {
+                        payload = {
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
-                        })
+                        }
+                        if request.profile_selector:
+                            payload["profile_selector"] = request.profile_selector.model_dump(by_alias=True, exclude_none=True)
+                        await manager_handle.signal("request_slot", payload)
 
                     async def _slot_releaser(**kw):
                         await manager_handle.signal("release_slot", {
@@ -890,12 +903,12 @@ class MoonMindAgentRun:
                         adapter = None
                         skip_poll_and_fetch = True
                     else:
-                        # --- Multi-step Jules support ---
-                        # If a jules_session_id is provided in request.parameters,
-                        # this is a continuation step: send a follow-up message
-                        # to the existing session instead of creating a new one.
                         jules_session_id = (request.parameters or {}).get("jules_session_id")
-                        if jules_session_id and validated_id == "jules":
+                        if (
+                            not workflow.patched("moonmind.agent_run.jules_multi_step_removal")
+                            and jules_session_id
+                            and validated_id == "jules"
+                        ):
                             prompt = (request.instruction_ref or "").strip()
                             if not prompt:
                                 raise ApplicationError(
@@ -911,55 +924,55 @@ class MoonMindAgentRun:
                                 INTEGRATIONS_TASK_QUEUE,
                                 INTEGRATIONS_ACTIVITY_TIMEOUT,
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
-
                             )
                             self.run_id = jules_session_id
                             self.run_status = "running"
                             poll_interval = 15
+                            adapter = None
                         else:
                             # Start via Temporal activity on the integrations fleet
                             # (determinism-safe: no adapter construction in-workflow).
                             act_name = f"integration.{validated_id}.start"
                             handle_dict = await self._execute_activity_with_routing(
-                                act_name,
-                                request,
-                                INTEGRATIONS_TASK_QUEUE,
-                                INTEGRATIONS_ACTIVITY_TIMEOUT,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            act_name,
+                            request,
+                            INTEGRATIONS_TASK_QUEUE,
+                            INTEGRATIONS_ACTIVITY_TIMEOUT,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
-                            )
+                        )
 
-                            if isinstance(handle_dict, dict) and "external_id" in handle_dict:
-                                try:
-                                    status, normalized_for_metadata = self._coerce_external_start_status(
-                                        handle_dict
-                                    )
-                                except ValueError as exc:
-                                    self._get_logger().warning(str(exc))
-                                    raise ApplicationError(
-                                        str(exc),
-                                        type="UnsupportedStatus",
-                                        non_retryable=True,
-                                    ) from exc
-                                handle = AgentRunHandle(
-                                    runId=handle_dict["external_id"],
-                                    agentKind="external",
-                                    agentId=validated_id,
-                                    status=status,
-                                    startedAt=workflow.now(),
-                                    metadata={
-                                        "providerStatus": handle_dict.get("provider_status", handle_dict.get("status", "unknown")),
-                                        "normalizedStatus": normalized_for_metadata,
-                                        "externalUrl": handle_dict.get("url"),
-                                        "callbackSupported": handle_dict.get("callback_supported", False),
-                                    }
+                        if isinstance(handle_dict, dict) and "external_id" in handle_dict:
+                            try:
+                                status, normalized_for_metadata = self._coerce_external_start_status(
+                                    handle_dict
                                 )
-                            else:
-                                handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
+                            except ValueError as exc:
+                                self._get_logger().warning(str(exc))
+                                raise ApplicationError(
+                                    str(exc),
+                                    type="UnsupportedStatus",
+                                    non_retryable=True,
+                                ) from exc
+                            handle = AgentRunHandle(
+                                runId=handle_dict["external_id"],
+                                agentKind="external",
+                                agentId=validated_id,
+                                status=status,
+                                startedAt=workflow.now(),
+                                metadata={
+                                    "providerStatus": handle_dict.get("provider_status", handle_dict.get("status", "unknown")),
+                                    "normalizedStatus": normalized_for_metadata,
+                                    "externalUrl": handle_dict.get("url"),
+                                    "callbackSupported": handle_dict.get("callback_supported", False),
+                                }
+                            )
+                        else:
+                            handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict
 
-                            self.run_id = handle.run_id
-                            self.run_status = handle.status
-                            poll_interval = handle.poll_hint_seconds or 10
+                        self.run_id = handle.run_id
+                        self.run_status = handle.status
+                        poll_interval = handle.poll_hint_seconds or 10
                         adapter = None  # External ops route through activities, not adapter
                 else:
                     raise ValueError(f"Unknown agent kind: {request.agent_kind}")
@@ -1170,6 +1183,96 @@ class MoonMindAgentRun:
                             # Managed agent legacy path.
                             self.final_result = await adapter.fetch_result(self.run_id)
 
+                if (
+                    request.agent_kind == "external"
+                    and self._external_agent_id in {"jules", "jules_api"}
+                    and self.final_result is not None
+                    and self.final_result.failure_class is None
+                ):
+                    publish_mode = str(
+                        (request.parameters or {}).get("publishMode") or "none"
+                    ).strip().lower()
+                    if publish_mode == "branch":
+                        result_meta = dict(self.final_result.metadata or {})
+                        pr_url = str(
+                            result_meta.get("pullRequestUrl")
+                            or result_meta.get("externalUrl")
+                            or ""
+                        ).strip()
+                        if not pr_url:
+                            self.final_result = self.final_result.model_copy(
+                                update={
+                                    "summary": "Jules branch publication failed: no pull request URL was available for merge.",
+                                    "failure_class": "execution_error",
+                                    "provider_error_code": "branch_publish_failed",
+                                    "metadata": {
+                                        **result_meta,
+                                        "publishOutcome": "publish_failed",
+                                    },
+                                }
+                            )
+                        else:
+                            workspace_spec = request.workspace_spec or {}
+                            starting_branch = str(
+                                workspace_spec.get("startingBranch")
+                                or workspace_spec.get("branch")
+                                or "main"
+                            ).strip() or "main"
+                            target_branch = str(
+                                (request.parameters or {}).get("targetBranch")
+                                or workspace_spec.get("targetBranch")
+                                or ""
+                            ).strip()
+                            merge_payload: dict[str, Any] = {"pr_url": pr_url}
+                            if target_branch and target_branch != starting_branch:
+                                merge_payload["target_branch"] = target_branch
+                            merge_result = await self._execute_activity_with_routing(
+                                "repo.merge_pr",
+                                merge_payload,
+                                INTEGRATIONS_TASK_QUEUE,
+                                INTEGRATIONS_ACTIVITY_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+                            merged = bool(
+                                merge_result.get("merged")
+                                if isinstance(merge_result, dict)
+                                else False
+                            )
+                            merge_summary = (
+                                merge_result.get("summary")
+                                if isinstance(merge_result, dict)
+                                else ""
+                            ) or ""
+                            if merged:
+                                self.final_result = self.final_result.model_copy(
+                                    update={
+                                        "metadata": {
+                                            **result_meta,
+                                            "publishOutcome": "branch_merged",
+                                            "pullRequestUrl": pr_url,
+                                            "mergeSha": (
+                                                merge_result.get("mergeSha")
+                                                if isinstance(merge_result, dict)
+                                                else None
+                                            ),
+                                        }
+                                    }
+                                )
+                            else:
+                                self.final_result = self.final_result.model_copy(
+                                    update={
+                                        "summary": merge_summary
+                                        or "Jules branch publication failed during merge.",
+                                        "failure_class": "execution_error",
+                                        "provider_error_code": "branch_publish_failed",
+                                        "metadata": {
+                                            **result_meta,
+                                            "publishOutcome": "publish_failed",
+                                            "pullRequestUrl": pr_url,
+                                        },
+                                    }
+                                )
+
                 # Check for 429
                 if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
                     await manager_handle.signal("report_cooldown", {"profile_id": request.execution_profile_ref, "cooldown_seconds": 300})
@@ -1201,7 +1304,11 @@ class MoonMindAgentRun:
                 # Inject run_id into result metadata so the parent
                 # workflow (MoonMind.Run) can track it for multi-step
                 # Jules session reuse across plan nodes.
-                if self.run_id and hasattr(self.final_result, "metadata"):
+                if (
+                    not workflow.patched("moonmind.agent_run.jules_multi_step_removal")
+                    and self.run_id
+                    and hasattr(self.final_result, "metadata")
+                ):
                     result_meta = dict(self.final_result.metadata or {})
                     if self._external_agent_id in {"jules", "jules_api"}:
                         result_meta["jules_session_id"] = self.run_id

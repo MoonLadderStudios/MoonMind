@@ -23,6 +23,7 @@ from moonmind.schemas.task_proposal_models import (
     TaskProposalTaskPreview,
 )
 from moonmind.workflows import get_task_proposal_service
+from moonmind.workflows.temporal import TemporalExecutionService
 from moonmind.workflows.task_proposals.models import (
     TaskProposal,
     TaskProposalOriginSource,
@@ -270,6 +271,28 @@ async def get_proposal(
     return _serialize_proposal(proposal, similar=similar_rows)
 
 
+def _get_temporal_execution_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> TemporalExecutionService:
+    from moonmind.config.settings import settings
+    return TemporalExecutionService(
+        session,
+        namespace=settings.temporal.namespace,
+        integration_task_queue=settings.temporal.activity_integrations_task_queue,
+        integration_poll_initial_seconds=(
+            settings.temporal.integration_poll_initial_seconds
+        ),
+        integration_poll_max_seconds=settings.temporal.integration_poll_max_seconds,
+        integration_poll_jitter_ratio=settings.temporal.integration_poll_jitter_ratio,
+        run_continue_as_new_step_threshold=(
+            settings.temporal.run_continue_as_new_step_threshold
+        ),
+        run_continue_as_new_wait_cycle_threshold=(
+            settings.temporal.run_continue_as_new_wait_cycle_threshold
+        ),
+    )
+
+
 @router.post("/{proposal_id}/promote", response_model=TaskProposalPromoteResponse)
 async def promote_proposal(
     *,
@@ -278,6 +301,7 @@ async def promote_proposal(
         default_factory=TaskProposalPromoteRequest
     ),
     service: TaskProposalService = Depends(_get_service),
+    execution_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: User = Depends(get_current_user()),
 ) -> TaskProposalPromoteResponse:
     try:
@@ -314,7 +338,7 @@ async def promote_proposal(
         else:
             override_payload = None
 
-        proposal, execution = await service.promote_proposal(
+        proposal, final_request = await service.promote_proposal(
             proposal_id=proposal_id,
             promoted_by_user_id=getattr(user, "id"),
             priority_override=payload.priority,
@@ -322,6 +346,31 @@ async def promote_proposal(
             note=payload.note,
             task_create_request_override=override_payload,
         )
+
+        initial_parameters = dict(final_request.get("payload") or {})
+        title = str(proposal.title or "").strip()[:200]
+        if not title:
+            instructions = str(initial_parameters.get("task", {}).get("instructions") or "").strip()
+            title = instructions.splitlines()[0][:200] if instructions else "Promoted Task"
+
+        await execution_service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=getattr(user, "id"),
+            owner_type="user",
+            title=title,
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=initial_parameters,
+            idempotency_key=f"proposal-promote-{proposal_id}",
+            repository=proposal.repository,
+            integration=None,
+            summary=proposal.summary,
+            start_delay=None,
+            scheduled_for=None,
+        )
+
     except TaskProposalStatusError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

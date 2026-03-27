@@ -7,7 +7,7 @@ Status: **Design Draft**
 Owners: MoonMind Engineering
 
 > [!NOTE]
-> Auth profile management, OAuth volume details, and profile assignment logic are covered in [AuthProfiles.md](../Security/AuthProfiles.md). The shared `TmateSessionManager` abstraction and low-level session lifecycle are defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md).
+> Provider profile management, OAuth volume details, and profile assignment logic are covered in [ProviderProfiles.md](../Security/ProviderProfiles.md). The shared `TmateSessionManager` abstraction and low-level session lifecycle are defined in [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md).
 
 ---
 
@@ -85,7 +85,7 @@ After creation, the modal shows:
 
 ### 4.1 Core Idea
 
-A first-class **OAuth Session** layer sits between Mission Control and the auth profile registry (see [AuthProfiles.md](../Security/AuthProfiles.md)):
+A first-class **OAuth Session** layer sits between Mission Control and the provider profile registry (see [ProviderProfiles.md](../Security/ProviderProfiles.md)):
 
 ```text
 Mission Control UI
@@ -119,7 +119,7 @@ Responsible for:
 * waiting for tmate readiness
 * monitoring session status
 * verifying auth files
-* registering/updating the auth profile (via [AuthProfiles.md](../Security/AuthProfiles.md))
+* registering/updating the provider profile (via [ProviderProfiles.md](../Security/ProviderProfiles.md))
 * tearing down the session
 
 For MoonMind, this should be a **Temporal workflow** even in MVP.
@@ -148,7 +148,7 @@ A small provider-specific contract that defines:
 
 #### E. Profile Registrar
 
-Calls the existing auth-profile registration path (see [AuthProfiles.md](../Security/AuthProfiles.md)) after successful verification.
+Calls the existing provider profile registration path (see [ProviderProfiles.md](../Security/ProviderProfiles.md)) after successful verification.
 
 #### F. TmateSessionManager (shared abstraction)
 
@@ -334,7 +334,7 @@ Verification step:
 1. inspect the mounted volume
 2. run provider-specific success check
 3. if successful, mark `verifying`
-4. create or update the auth profile (see [AuthProfiles.md](../Security/AuthProfiles.md))
+4. create or update the provider profile (see [ProviderProfiles.md](../Security/ProviderProfiles.md))
 5. mark `registering_profile`
 6. mark `succeeded`
 7. tear down tmate/container

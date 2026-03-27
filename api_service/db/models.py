@@ -1758,11 +1758,18 @@ class WorkflowTaskState(Base):
     )
 
 
-class ManagedAgentAuthMode(str, enum.Enum):
-    """Authentication mode for a managed agent auth profile."""
+class ProviderCredentialSource(str, enum.Enum):
+    OAUTH_VOLUME = "oauth_volume"
+    SECRET_REF = "secret_ref"
+    NONE = "none"
 
-    OAUTH = "oauth"
-    API_KEY = "api_key"
+
+class RuntimeMaterializationMode(str, enum.Enum):
+    OAUTH_HOME = "oauth_home"
+    API_KEY_ENV = "api_key_env"
+    ENV_BUNDLE = "env_bundle"
+    CONFIG_BUNDLE = "config_bundle"
+    COMPOSITE = "composite"
 
 
 class ManagedAgentRateLimitPolicy(str, enum.Enum):
@@ -1773,37 +1780,64 @@ class ManagedAgentRateLimitPolicy(str, enum.Enum):
     FAIL_FAST = "fail_fast"
 
 
-class ManagedAgentAuthProfile(Base):
-    """Named auth and execution policy for a managed agent runtime."""
+class ManagedAgentProviderProfile(Base):
+    """Named provider configuration and execution policy for a managed agent runtime."""
 
-    __tablename__ = "managed_agent_auth_profiles"
+    __tablename__ = "managed_agent_provider_profiles"
     __table_args__ = (
-        Index("ix_auth_profiles_runtime", "runtime_id"),
-        Index("ix_auth_profiles_enabled", "enabled"),
+        Index("ix_provider_profiles_runtime", "runtime_id"),
+        Index("ix_provider_profiles_provider", "provider_id"),
+        Index("ix_provider_profiles_enabled", "enabled"),
     )
 
     profile_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    auth_mode: Mapped[ManagedAgentAuthMode] = mapped_column(
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown", server_default=text("'unknown'"))
+    provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    
+    credential_source: Mapped[ProviderCredentialSource] = mapped_column(
         Enum(
-            ManagedAgentAuthMode,
-            name="managedagentauthmode",
+            ProviderCredentialSource,
+            name="providercredentialsource",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
+        default=ProviderCredentialSource.NONE,
+        server_default=ProviderCredentialSource.NONE.value,
     )
-    volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    volume_mount_path: Mapped[Optional[str]] = mapped_column(
-        String(512), nullable=True
+    runtime_materialization_mode: Mapped[RuntimeMaterializationMode] = mapped_column(
+        Enum(
+            RuntimeMaterializationMode,
+            name="runtimematerializationmode",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=RuntimeMaterializationMode.COMPOSITE,
+        server_default=RuntimeMaterializationMode.COMPOSITE.value,
     )
+
     account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    api_key_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    runtime_env_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(
-        JSON, nullable=True
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
-    api_key_env_var: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    
+    tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
+
+    volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    volume_mount_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    
+    secret_refs: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    clear_env_keys: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+    env_template: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    file_templates: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, nullable=True)
+    home_path_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+    command_behavior: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
     max_parallel_runs: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )
@@ -1821,9 +1855,6 @@ class ManagedAgentAuthProfile(Base):
         nullable=False,
         default=ManagedAgentRateLimitPolicy.BACKOFF,
         server_default=ManagedAgentRateLimitPolicy.BACKOFF.value,
-    )
-    enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default=text("true")
     )
     max_lease_duration_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=7200, server_default=text("7200")
@@ -1869,17 +1900,17 @@ class ManagedAgentOAuthSession(Base):
     session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     runtime_id: Mapped[str] = mapped_column(String(64), nullable=False)
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    auth_mode: Mapped[ManagedAgentAuthMode] = mapped_column(
+    auth_mode: Mapped[ProviderCredentialSource] = mapped_column(
         Enum(
-            ManagedAgentAuthMode,
-            name="managedagentauthmode",
+            ProviderCredentialSource,
+            name="providercredentialsource",
             native_enum=True,
             validate_strings=True,
             values_callable=_enum_values,
         ),
         nullable=False,
-        default=ManagedAgentAuthMode.OAUTH,
-        server_default=ManagedAgentAuthMode.OAUTH.value,
+        default=ProviderCredentialSource.OAUTH_VOLUME,
+        server_default=ProviderCredentialSource.OAUTH_VOLUME.value,
     )
     session_transport: Mapped[str] = mapped_column(
         String(64), nullable=False, default="tmate", server_default=text("'tmate'")
@@ -1986,19 +2017,19 @@ class TaskRunLiveSession(Base):
     )
 
 
-class AuthProfileSlotLease(Base):
-    """Persisted slot lease state for AuthProfileManager crash recovery.
+class ProviderProfileSlotLease(Base):
+    """Persisted slot lease state for ProviderProfileManager crash recovery.
 
     This table stores the active slot leases in the DB so they survive
-    manager restarts. When the AuthProfileManager starts, it loads leases
+    manager restarts. When the ProviderProfileManager starts, it loads leases
     from this table and sends slot_assigned to any running workflows.
     """
 
-    __tablename__ = "auth_profile_slot_leases"
+    __tablename__ = "provider_profile_slot_leases"
     __table_args__ = (
-        Index("ix_slot_leases_runtime", "runtime_id"),
-        Index("ix_slot_leases_workflow", "workflow_id"),
-        UniqueConstraint("runtime_id", "workflow_id", name="uq_slot_lease_runtime_workflow"),
+        Index("ix_provider_slot_leases_runtime", "runtime_id"),
+        Index("ix_provider_slot_leases_workflow", "workflow_id"),
+        UniqueConstraint("runtime_id", "workflow_id", name="uq_provider_slot_lease_runtime_workflow"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

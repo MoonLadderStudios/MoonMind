@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
-from api_service.db.models import Base, ManagedAgentAuthProfile, ManagedAgentAuthMode, ManagedAgentRateLimitPolicy
+from api_service.db.models import Base, ManagedAgentProviderProfile, ProviderCredentialSource, ManagedAgentRateLimitPolicy
 from api_service.main import app
 
 
@@ -44,18 +44,18 @@ def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
 
-async def get_or_create_sample_profile() -> ManagedAgentAuthProfile:
+async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
     """Helper to create a baseline profile in the test DB."""
     profile_id = "test_gemini_profile"
     async with db_base.async_session_maker() as session:
-        existing = await session.get(ManagedAgentAuthProfile, profile_id)
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
         if existing:
             return existing
             
-        profile = ManagedAgentAuthProfile(
+        profile = ManagedAgentProviderProfile(
             profile_id=profile_id,
             runtime_id="gemini_pro_runtime",
-            auth_mode=ManagedAgentAuthMode.OAUTH,
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
             volume_ref="gemini_auth_volume",
             account_label="test_account",
             max_parallel_runs=2,
@@ -75,8 +75,9 @@ async def test_create_auth_profile(client_app: AsyncClient, _module_db):
     payload = {
         "profile_id": "new_profile",
         "runtime_id": "claude_v1",
-        "auth_mode": "api_key",
-        "api_key_ref": "secret_v1",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "secret_v1"},
         "max_parallel_runs": 5,
         "cooldown_after_429_seconds": 60,
         "rate_limit_policy": "queue",
@@ -84,12 +85,12 @@ async def test_create_auth_profile(client_app: AsyncClient, _module_db):
     }
     
     async with client_app as client:
-        response = await client.post("/api/v1/auth-profiles", json=payload)
+        response = await client.post("/api/v1/provider-profiles", json=payload)
     
     assert response.status_code == 201
     data = response.json()
     assert data["profile_id"] == "new_profile"
-    assert data["auth_mode"] == "api_key"
+    assert data["credential_source"] == "secret_ref"
     assert data["rate_limit_policy"] == "queue"
 
 
@@ -100,10 +101,11 @@ async def test_create_duplicate_profile(client_app: AsyncClient, _module_db):
     payload = {
         "profile_id": sample_profile.profile_id,
         "runtime_id": "duplicate_runtime",
-        "auth_mode": "oauth",
+        "credential_source": "oauth_volume",
+        "runtime_materialization_mode": "oauth_home",
     }
     async with client_app as client:
-        response = await client.post("/api/v1/auth-profiles", json=payload)
+        response = await client.post("/api/v1/provider-profiles", json=payload)
     assert response.status_code == 409
 
 
@@ -112,7 +114,7 @@ async def test_list_profiles(client_app: AsyncClient, _module_db):
     """Test retrieving lists of profiles."""
     sample_profile = await get_or_create_sample_profile()
     async with client_app as client:
-        response = await client.get("/api/v1/auth-profiles")
+        response = await client.get("/api/v1/provider-profiles")
     assert response.status_code == 200
     data = response.json()
     assert len(data) >= 1
@@ -124,7 +126,7 @@ async def test_get_single_profile(client_app: AsyncClient, _module_db):
     """Test retrieving a single profile by ID."""
     sample_profile = await get_or_create_sample_profile()
     async with client_app as client:
-        response = await client.get(f"/api/v1/auth-profiles/{sample_profile.profile_id}")
+        response = await client.get(f"/api/v1/provider-profiles/{sample_profile.profile_id}")
     assert response.status_code == 200
     assert response.json()["runtime_id"] == "gemini_pro_runtime"
 
@@ -133,7 +135,7 @@ async def test_get_single_profile(client_app: AsyncClient, _module_db):
 async def test_get_unknown_profile(client_app: AsyncClient, _module_db):
     """Test 404 on missing profile."""
     async with client_app as client:
-        response = await client.get("/api/v1/auth-profiles/does_not_exist_xyz")
+        response = await client.get("/api/v1/provider-profiles/does_not_exist_xyz")
     assert response.status_code == 404
 
 
@@ -146,7 +148,7 @@ async def test_update_profile(client_app: AsyncClient, _module_db):
         "enabled": False
     }
     async with client_app as client:
-        response = await client.patch(f"/api/v1/auth-profiles/{sample_profile.profile_id}", json=payload)
+        response = await client.patch(f"/api/v1/provider-profiles/{sample_profile.profile_id}", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert data["max_parallel_runs"] == 10
@@ -158,11 +160,11 @@ async def test_delete_profile(client_app: AsyncClient, _module_db):
     """Test deleting a profile."""
     sample_profile = await get_or_create_sample_profile()
     async with client_app as client:
-        response = await client.delete(f"/api/v1/auth-profiles/{sample_profile.profile_id}")
+        response = await client.delete(f"/api/v1/provider-profiles/{sample_profile.profile_id}")
         assert response.status_code == 204
         
         # Verify it is gone
-        check = await client.get(f"/api/v1/auth-profiles/{sample_profile.profile_id}")
+        check = await client.get(f"/api/v1/provider-profiles/{sample_profile.profile_id}")
         assert check.status_code == 404
 
 
@@ -202,7 +204,7 @@ async def test_update_profile_syncs_auth_profile_manager(
     }
     async with client_app as client:
         response = await client.patch(
-            f"/api/v1/auth-profiles/{sample_profile.profile_id}",
+            f"/api/v1/provider-profiles/{sample_profile.profile_id}",
             json=payload,
         )
     assert response.status_code == 200

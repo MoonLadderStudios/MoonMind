@@ -152,6 +152,13 @@ class JulesAgentAdapter(BaseExternalAgentAdapter):
             metadata = dict(handle.metadata)
             metadata["pullRequestUrl"] = response.pull_request_url
             handle = handle.model_copy(update={"metadata": metadata})
+        if automation_mode or request.parameters.get("publishMode"):
+            handle_metadata = dict(handle.metadata)
+            if automation_mode:
+                handle_metadata["automationMode"] = automation_mode
+            if request.parameters.get("publishMode"):
+                handle_metadata["publishMode"] = request.parameters["publishMode"]
+            handle = handle.model_copy(update={"metadata": handle_metadata})
         return handle
 
     async def send_message(self, *, run_id: str, prompt: str) -> AgentRunStatus:

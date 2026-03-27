@@ -734,6 +734,37 @@ def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key
     assert dumped["targetRuntime"] == "gemini_cli"
 
 
+def test_serialize_execution_surfaces_task_run_id_from_memo() -> None:
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={"title": "Task run", "summary": "OK", "taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.Run"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="mm:task-run-1",
+        namespace="moonmind",
+        run_id="temporal-run-1",
+        artifact_refs=[],
+        created_at="2026-03-19T00:00:00Z",
+        started_at="2026-03-19T00:00:00Z",
+        updated_at="2026-03-19T00:00:00Z",
+        closed_at=None,
+        integration_state=None,
+        parameters={},
+        paused=False,
+        waiting_reason=None,
+        attention_required=False,
+    )
+
+    payload = _serialize_execution(record)
+
+    assert payload.task_run_id == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    dumped = payload.model_dump(by_alias=True)
+    assert dumped["taskRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+
+
 def test_describe_execution_exposes_task_and_temporal_run_identity() -> None:
     for test_client, service in _client_with_service():
         service.describe_execution.return_value = _build_execution_record()
@@ -1021,4 +1052,3 @@ def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     assert payload.status == "canceled"
     assert payload.dashboard_status == "canceled"
     assert payload.temporal_status == "canceled"
-
