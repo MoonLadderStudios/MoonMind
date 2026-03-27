@@ -1023,6 +1023,12 @@ class MoonMindRunWorkflow:
             param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        profile_selector = self._build_profile_selector(
+            agent_id=agent_id,
+            runtime_block=runtime_block,
+            node_inputs=node_inputs,
+            parameters=parameters,
+        )
         raw_metadata = runtime_block.get("metadata") or node_inputs.get("metadata")
         if isinstance(raw_metadata, Mapping):
             parameters["metadata"] = self._json_mapping(
@@ -1069,7 +1075,35 @@ class MoonMindRunWorkflow:
             retry_policy=node_inputs.get("retryPolicy") or {},
             approval_policy=node_inputs.get("approvalPolicy") or {},
             callback_policy=node_inputs.get("callbackPolicy") or {},
+            profile_selector=profile_selector,
         )
+
+    def _build_profile_selector(
+        self,
+        *,
+        agent_id: str,
+        runtime_block: Mapping[str, Any],
+        node_inputs: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        selector_source = (
+            runtime_block.get("profileSelector")
+            or node_inputs.get("profileSelector")
+            or {}
+        )
+        selector = dict(selector_source) if isinstance(selector_source, Mapping) else {}
+        provider_id = str(selector.get("providerId") or "").strip().lower()
+        if provider_id:
+            return selector
+
+        normalized_agent_id = _normalize_agent_runtime_id(agent_id)
+        requested_model = str(parameters.get("model") or "").strip().lower()
+        if normalized_agent_id in {"claude", "claude_code"} and requested_model.startswith(
+            "minimax"
+        ):
+            selector["providerId"] = "minimax"
+
+        return selector
 
     def _map_agent_run_result(self, result: Any) -> dict[str, Any]:
         """Convert ``AgentRunResult`` to the dict format the execution loop expects."""

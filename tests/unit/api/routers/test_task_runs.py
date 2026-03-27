@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
 from api_service.api.routers.task_runs import router
 from api_service.db.base import get_async_session
@@ -171,6 +172,22 @@ def test_report_live_session_rejects_missing_provider_on_create(
     )
 
     assert response.status_code == 400
+
+
+def test_task_run_live_session_enums_bind_postgres_values() -> None:
+    provider_type = TaskRunLiveSession.__table__.c.provider.type
+    status_type = TaskRunLiveSession.__table__.c.status.type
+    dialect = postgresql.dialect()
+
+    provider_processor = provider_type.bind_processor(dialect)
+    status_processor = status_type.bind_processor(dialect)
+
+    assert provider_processor is not None
+    assert status_processor is not None
+    assert provider_processor(AgentJobLiveSessionProvider.TMATE) == "tmate"
+    assert provider_processor("tmate") == "tmate"
+    assert status_processor(AgentJobLiveSessionStatus.READY) == "ready"
+    assert status_processor("ready") == "ready"
 
 
 def test_heartbeat_returns_200(
