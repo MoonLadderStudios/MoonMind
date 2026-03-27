@@ -309,6 +309,7 @@ class ExecutionModel(BaseModel):
 
     source: Literal["temporal"] = Field("temporal", alias="source")
     task_id: str = Field(..., alias="taskId")
+    task_run_id: Optional[str] = Field(None, alias="taskRunId")
     namespace: str = Field(..., alias="namespace")
     workflow_id: str = Field(..., alias="workflowId")
     run_id: str = Field(..., alias="runId")

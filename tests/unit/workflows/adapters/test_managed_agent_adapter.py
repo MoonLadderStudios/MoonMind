@@ -257,6 +257,8 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     )
     await adapter.start(request)
 
+    assert captured_payload["workflow_id"] == "wf-gh-token"
+
     profile_payload = (
         captured_payload.get("profile")
         if isinstance(captured_payload.get("profile"), dict)

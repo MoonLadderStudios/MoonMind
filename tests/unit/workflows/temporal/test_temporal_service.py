@@ -439,9 +439,11 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters={"taskRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"},
             idempotency_key=None,
         )
+        created.memo["taskRunId"] = "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+        await session.commit()
 
         original_run_id = created.run_id
         # After creation, started_at is None until a running-state transition.
@@ -472,6 +474,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         assert refreshed.rerun_count == 1
         assert refreshed.memo["continue_as_new_cause"] == "manual_rerun"
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
+        assert "taskRunId" not in refreshed.memo
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
 
 

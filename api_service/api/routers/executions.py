@@ -302,6 +302,17 @@ def _serialize_execution(
 
     params_raw = getattr(record, "parameters", None)
     params = dict(params_raw) if isinstance(params_raw, dict) else {}
+    task_run_id = (
+        str(
+            memo.get("taskRunId")
+            or memo.get("task_run_id")
+            or search_attributes.get("mm_task_run_id")
+            or params.get("taskRunId")
+            or params.get("task_run_id")
+            or ""
+        ).strip()
+        or None
+    )
     target_runtime, param_model, param_effort = [
         str(params.get(key) or "").strip() or None
         for key in ["targetRuntime", "model", "effort"]
@@ -378,6 +389,7 @@ def _serialize_execution(
 
     return ExecutionModel(
         task_id=record.workflow_id,
+        task_run_id=task_run_id,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,

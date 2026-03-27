@@ -2760,6 +2760,45 @@ class TemporalAgentRuntimeActivities:
         except Exception:
             logger.warning("Failed to report live session for run %s", run_id, exc_info=True)
 
+    async def _report_task_run_binding(self, workflow_id: str, run_id: str) -> None:
+        """Persist the managed task-run UUID onto the execution record.
+
+        Temporal execution detail uses ``workflow_id`` as the durable task handle,
+        while live-session rows are keyed by the managed runtime run UUID. Store
+        that UUID on the execution record so the dashboard can resolve the
+        existing ``/api/task-runs/{id}/live-session`` route without guessing.
+        """
+        workflow_id = str(workflow_id or "").strip()
+        run_id = str(run_id or "").strip()
+        if not workflow_id or not run_id:
+            return
+
+        from api_service.db.base import get_async_session_context
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
+        try:
+            async with get_async_session_context() as db:
+                record = await db.get(TemporalExecutionCanonicalRecord, workflow_id)
+                if record is None:
+                    logger.warning(
+                        "workflow_id %s was not found; cannot persist task run binding",
+                        workflow_id,
+                    )
+                    return
+                memo = dict(record.memo or {})
+                if memo.get("taskRunId") == run_id:
+                    return
+                memo["taskRunId"] = run_id
+                record.memo = memo
+                await db.commit()
+        except Exception:
+            logger.warning(
+                "Failed to persist task run binding for workflow %s run %s",
+                workflow_id,
+                run_id,
+                exc_info=True,
+            )
+
     async def agent_runtime_launch(
         self,
         payload: dict[str, Any],
@@ -2769,6 +2808,7 @@ class TemporalAgentRuntimeActivities:
         
         Payload must contain:
         - run_id: str
+        - workflow_id: str | None
         - request: dict (AgentExecutionRequest dump)
         - profile: dict (ManagedRuntimeProfile dump)
         - workspace_path: str | None
@@ -2777,10 +2817,14 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError("launcher and supervisor are required for agent_runtime_launch")
 
         run_id = payload.get("run_id")
+        workflow_id = str(payload.get("workflow_id") or "").strip()
         request_data = payload.get("request")
         profile_data = payload.get("profile")
         if not run_id or request_data is None or profile_data is None:
             raise TemporalActivityRuntimeError("Payload must contain 'run_id', 'request', and 'profile'")
+
+        if workflow_id:
+            await self._report_task_run_binding(workflow_id, str(run_id))
 
         request = AgentExecutionRequest(**request_data)
         profile = ManagedRuntimeProfile(**profile_data)

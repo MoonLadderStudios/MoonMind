@@ -1487,6 +1487,13 @@ class TemporalExecutionService:
                 waiting_reason="external_completion",
                 attention_required=False,
             )
+        memo = dict(record.memo or {})
+        memo.pop("taskRunId", None)
+        memo.pop("task_run_id", None)
+        record.memo = memo
+        attrs = dict(record.search_attributes or {})
+        attrs.pop("mm_task_run_id", None)
+        record.search_attributes = attrs
         record.closed_at = None
         record.close_status = None
         record.pending_parameters_patch = None
