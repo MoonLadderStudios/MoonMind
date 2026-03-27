@@ -291,17 +291,13 @@
 
   /** Maps task submit runtime (dashboard) to managed_agent_auth_profiles.runtime_id. */
   const mapTaskRuntimeToAuthProfileRuntimeId = (mode) => {
+    const runtimeMap = {
+      gemini_cli: "gemini_cli",
+      claude: "claude_code",
+      codex: "codex_cli",
+    };
     const m = String(mode || "").trim().toLowerCase();
-    if (m === "gemini_cli") {
-      return "gemini_cli";
-    }
-    if (m === "claude") {
-      return "claude_code";
-    }
-    if (m === "codex") {
-      return "codex_cli";
-    }
-    return "";
+    return runtimeMap[m] || "";
   };
 
   const TASK_RUNTIME_LABELS = {
@@ -5267,10 +5263,15 @@
           "Optional. Choose stored credentials for this runtime, or leave default for automatic selection.";
       }
       try {
+        authProfileFetchToken += 1;
+        const currentToken = authProfileFetchToken;
         const url = `${authProfileEndpoints.list}?runtime_id=${encodeURIComponent(
           mappedRuntimeId,
         )}&enabled_only=true`;
         const profiles = await fetchJson(url);
+        if (currentToken !== authProfileFetchToken) {
+          return;
+        }
         const list = Array.isArray(profiles) ? profiles : [];
         const options = ['<option value="">Default (system chooses)</option>'];
         list.forEach((profile) => {
