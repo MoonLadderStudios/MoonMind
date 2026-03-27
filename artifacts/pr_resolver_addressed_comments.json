@@ -1,42 +1,57 @@
 [
   {
-    "id": 4145013865,
+    "id": 4145692089,
     "disposition": "not-applicable",
-    "rationale": "Jules informational onboarding comment; no requested code change."
+    "rationale": "Intro comment from bot, no action needed."
   },
   {
-    "id": 4145014416,
+    "id": 4145692353,
     "disposition": "not-applicable",
-    "rationale": "Codex usage-limit notice; no code or review action requested."
+    "rationale": "Codex usage limits information, no action needed."
   },
   {
-    "id": 3003014318,
+    "id": 3003517802,
     "disposition": "addressed",
-    "rationale": "Title derivation now selects the first non-empty instruction line after trimming."
+    "rationale": "Updated compatibility rules in docs/Temporal/TemporalSignalsSystem.md to enforce versioned cutover instead of translation layers."
   },
   {
-    "id": 4023453992,
+    "id": 3003517804,
+    "disposition": "addressed",
+    "rationale": "Fixed payload types and added missing handlers in the table in docs/Temporal/TemporalSignalsResearch.md."
+  },
+  {
+    "id": 3003517805,
+    "disposition": "addressed",
+    "rationale": "Replaced '[DONE]' with '- [x]' for checkboxes in docs/tmp/020-TemporalSignalsPlan.md."
+  },
+  {
+    "id": 3003517812,
+    "disposition": "addressed",
+    "rationale": "Removed the accidental artifact file var/worker-relative/ac74a9da-9060-4127-8ddb-8bb7d599ffee/artifacts/changes.patch and added var/worker-relative/ to .gitignore."
+  },
+  {
+    "id": 4023993139,
     "disposition": "not-applicable",
-    "rationale": "High-level review summary with no additional actionable request beyond line comments."
+    "rationale": "Code review summary, no action needed."
   },
   {
-    "id": 3003019253,
+    "id": 3003525799,
     "disposition": "addressed",
-    "rationale": "Instruction line extraction now strips whitespace before truncation."
+    "rationale": "Fixed reschedule payload type in the table in docs/Temporal/TemporalSignalsResearch.md."
   },
   {
-    "id": 3003019281,
+    "id": 3003525825,
     "disposition": "addressed",
-    "rationale": "Long conditional replaced with wrapped multi-line logic compliant with formatter limits."
+    "rationale": "Updated 'Key gaps and anti-patterns' section in docs/Temporal/TemporalSignalsResearch.md to clarify that Run workflow has update handlers but higher layers send signals."
   },
   {
-    "id": 3003019304,
+    "id": 3003525839,
     "disposition": "addressed",
-    "rationale": "Added unit test covering multi-line instructions and trailing-space trimming behavior."
+    "rationale": "Removed the translation rule entirely in favor of an explicit versioned cutover plan, resolving the mismatch."
   },
   {
-    "id": 4023458720,
+    "id": 4024000284,
     "disposition": "not-applicable",
-    "rationale": "Copilot review overview comment; actionable items were handled in individual line comments."
+    "rationale": "Code review summary, no action needed."
   }
 ]

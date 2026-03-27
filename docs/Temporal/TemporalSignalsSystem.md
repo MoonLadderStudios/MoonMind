@@ -555,19 +555,10 @@ When signal contracts change, MoonMind must protect in-flight executions by eith
 
 ### 10.1 Explicit Compatibility Notes (Phase 0)
 
-To protect in-flight workflow histories during the transition to this desired-state contract:
+To protect in-flight workflow histories during the transition to this desired-state contract without violating the strict "no internal compatibility wrappers" policy:
 
-1. **`MoonMind.Run` Control Aliases**:
-   - `Pause`, `Resume`, `Approve`, and `Cancel` exist as **Updates** in code today, but legacy API clients and scripts might still attempt to send them as **Signals** (or as lowercase `pause` / `resume`).
-   - *Compatibility rule*: `MoonMind.Run` must temporarily support a dynamic signal handler to gracefully catch and translate legacy `Pause`/`Resume` signals into the equivalent update-state mutations without breaking history.
-
-2. **Parent/Child Positional Arguments**:
-   - `child_state_changed` currently accepts positional arguments (`new_state: str, reason: str`).
-   - *Compatibility rule*: When migrating to a single structured payload (Phase 3), the workflow must use `workflow.patched(...)` to accept the old positional signature for already-running executions.
-
-3. **Raw Dict Payloads**:
-   - Workflows like `AuthProfileManager` and `AgentRun` currently accept raw `dict[str, Any]` for signals like `request_slot` or `completion_signal`.
-   - *Compatibility rule*: As these move to strict Pydantic contract models (Phase 1), the handler signatures must remain backward-compatible (e.g., using `dict | PydanticModel` and `workflow.patched(...)`) until all legacy callers have flushed from the system.
+1. **Explicit Versioned Cutover**: Rather than introducing temporary translation layers, dynamic signal handlers, or `workflow.patched(...)` multi-type wrappers, changes to Temporal-facing contracts (such as `MoonMind.Run` control aliases, `child_state_changed` positional arguments, or raw dict payloads in `AuthProfileManager`) MUST be deployed via an explicit versioned cutover plan (e.g., bumping the Temporal Task Queue or renaming the workflow).
+2. **Old Executions**: Existing in-flight executions will continue to run to completion on older workers tied to the legacy task queue, ensuring safety without polluting the new codebase with backward-compatibility logic.
 
 ---
 

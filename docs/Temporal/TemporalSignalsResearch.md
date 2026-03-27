@@ -42,7 +42,10 @@ The table below inventories **explicit signal handlers** (decorated methods). If
 | `moonmind/workflows/temporal/workflows/oauth_session.py` | OAuthSession workflow | `finalize` | no payload | Yes citeturn35view0 | No citeturn35view1 | No |
 | `moonmind/workflows/temporal/workflows/oauth_session.py` | OAuthSession workflow | `cancel` | no payload | Yes citeturn35view0 | No citeturn35view1 | No |
 | `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `Pause`, `Resume`, `Approve`, `Cancel` | — | **No** | **Yes** (`@workflow.update`) | No |
-| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `ExternalEvent`, `reschedule` | `dict[str, Any]` | **Yes** (`@workflow.signal`) | No | No |
+| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `ExternalEvent` | `dict[str, Any]` | **Yes** (`@workflow.signal`) | No | No |
+| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `reschedule` | `str` (`new_scheduled_for`) | **Yes** (`@workflow.signal`) | No | No |
+| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `child_state_changed` | `str, str` | **Yes** (`@workflow.signal`) | No | No |
+| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `profile_assigned` | `dict` | **Yes** (`@workflow.signal`) | No | No |
 
 ### Signals sent from workflows and services
 
@@ -89,8 +92,8 @@ Finally, the workflows actively use **versioning markers** (`workflow.patched(..
 
 The remaining issues are mostly about **contract consistency** and **end-to-end completeness**, not about the existence of signals per se.
 
-Run workflow is missing signal and update handlers despite being controlled by signals elsewhere  
-The most serious gap: `TemporalExecutionService.signal_execution` sends `"Pause"`, `"Resume"`, `"Approve"`, and `"ExternalEvent"` signals to a workflow by ID, wrapped in a `{payload, payload_artifact_ref}` envelope. citeturn41view0turn42view3turn42view1 The `TemporalClientAdapter` also sends `"reschedule"` and batch `"pause"/"resume"` signals. citeturn39view0turn39view3 Yet `run.py` defines **no** signal handlers and no update handlers. citeturn61view3turn61view1 This creates a strong likelihood that these signals are either (a) rejected as “unknown signal” by the workflow, or (b) accepted by Temporal but never acted upon because no handler exists—either way the control-plane intention is not realized.
+Run workflow exposes handlers but higher layers still use mismatched control patterns  
+The most serious gap: `TemporalExecutionService.signal_execution` sends `"Pause"`, `"Resume"`, `"Approve"`, and `"ExternalEvent"` signals to a workflow by ID, wrapped in a `{payload, payload_artifact_ref}` envelope. citeturn41view0turn42view3turn42view1 The `TemporalClientAdapter` also sends `"reschedule"` and batch `"pause"/"resume"` signals. citeturn39view0turn39view3 Yet `run.py` defines `Pause`, `Resume`, `Approve`, and `Cancel` as **update** handlers, not signals. This creates a strong likelihood that legacy signals sent by higher layers will be rejected as “unknown signal” by the workflow because the control-plane intention (update vs. signal) is not aligned.
 
 Signal naming is inconsistent across layers (case and semantic mismatch)  
 MoonMind’s service-level signals use **TitleCase** names (`"Pause"`, `"Resume"`, `"Approve"`, `"ExternalEvent"`). citeturn42view1turn42view3 The client adapter’s batch signaling uses lowercase `"pause"`/`"resume"`, and rescheduling uses `"reschedule"`. citeturn39view0turn39view3 In Temporal, signal names are author-defined strings (there is no automatic normalization), so case mismatches are effectively different signals. citeturn55search5
