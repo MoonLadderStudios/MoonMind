@@ -117,18 +117,21 @@ class TestGeminiCliBuildCommand:
             "--yolo", "--prompt", "Help",
         ]
 
-    def test_with_effort(self) -> None:
+    def test_effort_is_ignored(self) -> None:
+        """Gemini CLI does not support --effort; it should not be added."""
         s = GeminiCliStrategy()
         profile = _make_profile(default_effort="high")
         request = _make_request(instruction_ref="Think hard")
         cmd = s.build_command(profile, request)
+        # effort should be silently ignored since Gemini CLI doesn't support it
+        assert "--effort" not in cmd
         assert cmd == [
             "gemini",
-            "--effort", "high",
             "--yolo", "--prompt", "Think hard",
         ]
 
     def test_with_model_and_effort(self) -> None:
+        """Gemini CLI supports --model but not --effort."""
         s = GeminiCliStrategy()
         profile = _make_profile(
             default_model="gemini-2.5-pro",
@@ -136,10 +139,11 @@ class TestGeminiCliBuildCommand:
         )
         request = _make_request(instruction_ref="Go")
         cmd = s.build_command(profile, request)
+        assert "--model" in cmd
+        assert "--effort" not in cmd
         assert cmd == [
             "gemini",
             "--model", "gemini-2.5-pro",
-            "--effort", "medium",
             "--yolo", "--prompt", "Go",
         ]
 
