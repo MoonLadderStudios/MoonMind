@@ -1,0 +1,42 @@
+[
+  {
+    "id": 4140813236,
+    "disposition": "not-applicable",
+    "rationale": "Informational comment from Jules bot."
+  },
+  {
+    "id": 4140813664,
+    "disposition": "not-applicable",
+    "rationale": "Informational comment from Codex bot."
+  },
+  {
+    "id": 2999518289,
+    "disposition": "addressed",
+    "rationale": "Removed check_compatibility=False and upgraded Qdrant server version to 1.17.1 in docker-compose.yaml to fix the version mismatch."
+  },
+  {
+    "id": 2999518294,
+    "disposition": "addressed",
+    "rationale": "Removed check_compatibility=False."
+  },
+  {
+    "id": 4019463291,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from Gemini bot."
+  },
+  {
+    "id": 2999521446,
+    "disposition": "not-applicable",
+    "rationale": "We reverted the addition of check_compatibility=False, so the formatting returns to the original Black-compliant shape."
+  },
+  {
+    "id": 2999521460,
+    "disposition": "not-applicable",
+    "rationale": "We reverted the addition of check_compatibility=False, so testing it is no longer relevant."
+  },
+  {
+    "id": 4019466479,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from Copilot bot."
+  }
+]
