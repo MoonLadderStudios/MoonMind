@@ -2,14 +2,15 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-13  
+Last Updated: 2026-03-27  
 Related: `docs/Tasks/TaskArchitecture.md`, `docs/Tasks/TaskProposalQueue.md`
 
 ---
 
 ## 1. Summary
 
-MoonMind requires a clear "what happened?" summary at the end of every Temporal Workflow execution (`MoonMind.Run`) so Mission Control dashboard operators can quickly distinguish:
+MoonMind requires a clear "what happened?" summary at the end of every
+`MoonMind.Run` execution so Mission Control operators can quickly distinguish:
 
 * **Published output** (PR/branch updated successfully) vs
 * **No changes** (publish skipped because the repository was already correct) vs
@@ -17,7 +18,9 @@ MoonMind requires a clear "what happened?" summary at the end of every Temporal 
 * **Failure** (and at which Temporal Activity boundary) vs
 * **Cancelled**
 
-This document describes the **Finisher System** that is executed as the final step of a Temporal Workflow. The system produces a structured, non-secret finish summary and syncs it to Postgres for rapid UI indexing.
+This document describes the finish-summary system executed during the workflow's
+finalization path. The system produces a structured, non-secret summary artifact
+and syncable result payload for rapid UI indexing.
 
 ---
 
@@ -77,7 +80,7 @@ Finish summaries MUST NOT contain tokens, API keys, credential strings, or full 
 
 ## 3. Worker Implementation (Temporal Workflow)
 
-Inside the Python Temporal Workflow logic (`MoonMind.Run`):
+Inside the Python Temporal workflow logic (`MoonMind.Run`):
 
 1. The Workflow coordinates stage timings across all child Activities.
 2. Even in failure or `CancelledError` paths, a `finally:` or `except:` block captures the execution state.
@@ -86,4 +89,15 @@ Inside the Python Temporal Workflow logic (`MoonMind.Run`):
 
 ## 4. Proposals Integration
 
-If the Temporal Workflow opts to run health audits or generate follow-up proposals (e.g., "Refactor this module", "Fix flaky tests encountered during run"), it issues the proposals to the Proposal Queue API just before exiting. The count of successfully submitted proposals is tallied into the Finish Summary and surfaced in the Mission Control Detail View as a link to the generated proposals.
+The finish summary includes a first-class `proposals` block for the proposal
+phase that runs after execution and before finalization.
+
+When proposal generation is enabled for the run:
+
+1. the workflow enters the `proposals` stage
+2. candidate proposals are generated and submitted on a best-effort basis
+3. generated and submitted counts are recorded in the finish summary
+4. redacted proposal-stage errors are recorded alongside those counts
+
+This wiring already exists in the Temporal run workflow and is part of the
+canonical finish-summary surface presented in Mission Control.

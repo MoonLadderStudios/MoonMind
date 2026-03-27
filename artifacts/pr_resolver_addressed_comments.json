@@ -1,5 +1,45 @@
 [
   {
+    "id": 4140955156,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot comment."
+  },
+  {
+    "id": 2999643522,
+    "disposition": "addressed",
+    "rationale": "Replaced all occurrences of 'agent_runtime' with 'skill' in moonmind/workflows/temporal/workflows/run.py."
+  },
+  {
+    "id": 4019616450,
+    "disposition": "not-applicable",
+    "rationale": "PR review summary."
+  },
+  {
+    "id": 2999652254,
+    "disposition": "addressed",
+    "rationale": "Fixed indentation on line 93 of docs/Temporal/WorkflowSchedulingGuide.md."
+  },
+  {
+    "id": 2999652291,
+    "disposition": "addressed",
+    "rationale": "Added scheduled and proposals to _STATUS_MAPS['temporal'] in api_service/api/routers/task_dashboard_view_model.py."
+  },
+  {
+    "id": 2999652305,
+    "disposition": "addressed",
+    "rationale": "Added PROPOSALS to MoonMindWorkflowState enum in api_service/db/models.py."
+  },
+  {
+    "id": 2999652317,
+    "disposition": "addressed",
+    "rationale": "Added PROPOSALS to MoonMindWorkflowState enum in api_service/db/models.py."
+  },
+  {
+    "id": 4019626055,
+    "disposition": "not-applicable",
+    "rationale": "PR review summary."
+  },
+  {
     "id": 4140946136,
     "disposition": "not-applicable",
     "rationale": "Informational greeting from bot, no action needed."

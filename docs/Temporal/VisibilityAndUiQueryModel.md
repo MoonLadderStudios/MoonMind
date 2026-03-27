@@ -4,7 +4,7 @@
 
 **Status:** Draft  
 **Owner:** MoonMind Platform  
-**Last updated:** 2026-03-06  
+**Last updated:** 2026-03-27  
 **Audience:** backend, dashboard, API, workflow authors
 
 ---
@@ -228,12 +228,16 @@ If any deferred field becomes necessary for filtering, it should be introduced b
 
 Allowed values for v1:
 
+- `scheduled`
 - `initializing`
+- `waiting_on_dependencies`
 - `planning`
+- `awaiting_slot`
 - `executing`
+- `proposals`
 - `awaiting_external`
 - `finalizing`
-- `succeeded`
+- `completed`
 - `failed`
 - `canceled`
 
@@ -242,7 +246,7 @@ Rules:
 - `mm_state` must be set immediately on workflow start.
 - `mm_state` must transition to a terminal value on close.
 - terminal mapping must remain consistent with close status:
-  - completed -> `succeeded`
+  - completed -> `completed`
   - failed / terminated / timed out -> `failed`
   - canceled -> `canceled`
 
@@ -413,9 +417,9 @@ The current dashboard uses broad normalized task statuses such as:
 - `queued`
 - `running`
 - `awaiting_action`
-- `succeeded`
+- `completed`
 - `failed`
-- `cancelled`
+- `canceled`
 
 Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provide a compatibility grouping for current task-oriented pages.
 
@@ -428,14 +432,18 @@ Temporal-backed rows should preserve exact Temporal/MoonMind state **and** provi
 
 | Exact Temporal-backed state | Compatibility dashboard status | Notes |
 | --- | --- | --- |
+| `scheduled` | `queued` | Deferred one-time execution waiting for its start time. |
 | `initializing` | `queued` | Not yet materially executing user work. |
-| `planning` | `queued` | Still pre-execution from a Mission Control perspective. |
+| `waiting_on_dependencies` | `waiting` | Blocked on prerequisite executions. |
+| `planning` | `running` | Active pre-execution work. |
+| `awaiting_slot` | `queued` | Waiting for a bounded runtime slot. |
 | `executing` | `running` | Active execution. |
+| `proposals` | `running` | Proposal generation and submission phase. |
 | `awaiting_external` | `awaiting_action` | Compatibility grouping only; detail must still show exact `awaiting_external`. |
 | `finalizing` | `running` | Still in-flight, not terminal. |
-| `succeeded` | `succeeded` | Terminal success. |
+| `completed` | `completed` | Terminal success. |
 | `failed` | `failed` | Terminal failure. |
-| `canceled` | `cancelled` | Compatibility spelling bridge for current dashboard vocabulary. |
+| `canceled` | `canceled` | Terminal cancellation. |
 
 ### 10.3 Important note on `awaiting_external`
 

@@ -774,6 +774,7 @@ class MoonMindWorkflowState(str, enum.Enum):
     PLANNING = "planning"
     AWAITING_SLOT = "awaiting_slot"
     EXECUTING = "executing"
+    PROPOSALS = "proposals"
     AWAITING_EXTERNAL = "awaiting_external"
     FINALIZING = "finalizing"
     COMPLETED = "completed"
