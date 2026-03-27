@@ -108,7 +108,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert "defaultTaskModelByRuntime" in config["system"]
     assert "defaultTaskEffortByRuntime" in config["system"]
     assert config["system"]["workerRuntimeEnv"] == "MOONMIND_WORKER_RUNTIME"
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
     assert "claude" in config["system"]["supportedWorkerRuntimes"]
     assert "taskTemplateCatalog" in config["system"]
     assert "enabled" in config["system"]["taskTemplateCatalog"]
@@ -170,7 +170,7 @@ def test_build_runtime_config_uses_claude_from_runtime_env(monkeypatch) -> None:
 
     config = build_runtime_config("/tasks")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
     assert config["system"]["defaultTaskRuntime"] == "claude"
 
 
@@ -206,7 +206,7 @@ def test_build_runtime_config_includes_claude_without_api_key(monkeypatch) -> No
 
     config = build_runtime_config("/tasks")
 
-    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude"]
+    assert config["system"]["supportedTaskRuntimes"] == ["codex", "gemini_cli", "claude", "codex_cloud"]
 
 
 def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> None:
@@ -259,6 +259,7 @@ def test_build_runtime_config_includes_jules_when_enabled(monkeypatch) -> None:
         "codex",
         "gemini_cli",
         "claude",
+        "codex_cloud",
         "jules",
     ]
 
