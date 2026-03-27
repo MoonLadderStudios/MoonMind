@@ -347,8 +347,14 @@ async def promote_proposal(
         )
 
         initial_parameters = dict(final_request.get("payload") or {})
-        instructions = str(initial_parameters.get("task", {}).get("instructions") or "").strip()
-        title = instructions.splitlines()[0][:200] if instructions else str(proposal.title or "").strip()[:200]
+        instructions = str(
+            initial_parameters.get("task", {}).get("instructions") or ""
+        )
+        title_lines = [line.strip() for line in instructions.splitlines() if line.strip()]
+        if title_lines:
+            title = title_lines[0][:200]
+        else:
+            title = str(proposal.title or "").strip()[:200]
         if not title:
             title = "Promoted Task"
 
