@@ -83,19 +83,19 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 2a. **Execution payloads should use `tool` as the canonical executable field.**  
    During migration, `skill` may remain as a compatibility alias where needed.
 
-3. **Identifiers are opaque.**
+3. **Identifiers are opaque.**  
    Clients must not parse source, entry type, or lifecycle meaning from the textual shape of an ID.
 
-4. **Compatibility adapters should translate task actions into Temporal controls.**
+4. **Compatibility adapters should translate task actions into Temporal controls.**  
    The UI should think in terms like edit, approve, rerun, pause, resume, and cancel, not raw Signal and Update names.
 
-5. **Temporal state should not be flattened so aggressively that operators lose meaning.**
+5. **Temporal state should not be flattened so aggressively that operators lose meaning.**  
    The dashboard can show normalized task statuses, but raw execution state and Temporal status must remain available.
 
-6. **Temporal-managed list/detail truth moves toward Temporal visibility and workflow state.**
+6. **Temporal-managed list/detail truth moves toward Temporal visibility and workflow state.**  
    Transitional projections are allowed, but they must mirror the documented execution contract instead of inventing a parallel model.
 
-7. **Skill is a tool subtype, not a competing top-level noun.**
+7. **Skill is a tool subtype, not a competing top-level noun.**  
    Task/step payload contracts should standardize on `task.tool` and `step.tool` with `tool.type="skill"` for current implementations.
 
 ---
@@ -161,7 +161,7 @@ For unified task detail routing, MoonMind should use a **persisted source mappin
 
 Rules:
 
-- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing Temporal backends heuristically
+- `/tasks/{taskId}` resolution must consult a canonical server-side source mapping rather than probing backends or guessing from ID shape
 - Temporal-backed rows must resolve through the durable `workflowId` because `taskId == workflowId`
 - legacy source-specific routes may redirect into `/tasks/{taskId}`, but the server must preserve canonical source resolution metadata
 - ID text shape must not be the contract for backend selection
@@ -299,6 +299,7 @@ The current dashboard status family remains:
 
 | `mm_state` value | Normalized task status | Notes |
 | --- | --- | --- |
+| `initializing` | `running` | Workflow exists but has not reached meaningful work yet |
 | `planning` | `running` | Active execution work |
 | `executing` | `running` | Active execution |
 | `awaiting_external` | `awaiting_action` | Compatibility collapse for approval/pause/external wait |
