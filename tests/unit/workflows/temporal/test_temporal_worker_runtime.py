@@ -21,6 +21,59 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 from moonmind.workflows.temporal.workers import AGENT_RUNTIME_FLEET, SANDBOX_FLEET, WORKFLOW_FLEET
 
 
+def test_runtime_planner_preserves_execution_profile_ref():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Use the minimax profile for this Claude run.",
+                "runtime": {
+                    "mode": "claude",
+                    "executionProfileRef": "claude-minimax-oauth",
+                },
+            }
+        },
+        parameters={"targetRuntime": "claude"},
+        snapshot=snapshot,
+    )
+
+    runtime_node = plan["nodes"][0]["inputs"]["runtime"]
+    assert runtime_node["mode"] == "claude"
+    assert runtime_node["executionProfileRef"] == "claude-minimax-oauth"
+
+
+def test_runtime_planner_preserves_execution_profile_ref_snake_case():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Anthropic API key profile.",
+                "runtime": {
+                    "mode": "claude",
+                    "execution_profile_ref": "anthropic-work",
+                },
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    assert (
+        plan["nodes"][0]["inputs"]["runtime"]["executionProfileRef"]
+        == "anthropic-work"
+    )
+
+
 def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
