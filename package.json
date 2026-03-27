@@ -19,7 +19,7 @@
     "ui:lint": "eslint -c frontend/eslint.config.mjs frontend/src",
     "ui:test": "vitest run --config frontend/vite.config.ts",
     "ui:test:watch": "vitest --config frontend/vite.config.ts",
-    "api:types": "python tools/export_openapi.py > openapi.json && npx openapi-typescript openapi.json -o frontend/src/generated/openapi.ts",
+    "api:types": "python tools/export_openapi.py | npx openapi-typescript - -o frontend/src/generated/openapi.ts",
     "ci:test": "npm run ui:typecheck && npm run ui:lint && npm run ui:test && npm run ui:build && npm run api:types:check",
     "api:types:check": "npm run api:types && git diff --exit-code -- frontend/src/generated/openapi.ts"
   },
