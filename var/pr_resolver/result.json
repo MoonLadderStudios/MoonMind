@@ -12,15 +12,15 @@
   "fix_max_iterations": 3,
   "escalations": 1,
   "attempt_count": 2,
-  "started_at": "2026-03-27T08:18:19.255455+00:00",
-  "finished_at": "2026-03-27T08:18:47.675552+00:00",
+  "started_at": "2026-03-27T08:20:39.424231+00:00",
+  "finished_at": "2026-03-27T08:21:08.311709+00:00",
   "attempt_history": [
     {
       "attempt": 1,
       "stage": "finalize",
       "status": "blocked",
       "reason": "actionable_comments",
-      "timestamp": "2026-03-27T08:18:29.533370+00:00"
+      "timestamp": "2026-03-27T08:20:49.109189+00:00"
     },
     {
       "attempt": 1,
@@ -29,14 +29,14 @@
       "reason": "actionable_comments",
       "escalation": 1,
       "max_iterations": 3,
-      "timestamp": "2026-03-27T08:18:38.784524+00:00"
+      "timestamp": "2026-03-27T08:20:58.149726+00:00"
     },
     {
       "attempt": 2,
       "stage": "finalize",
       "status": "blocked",
       "reason": "actionable_comments",
-      "timestamp": "2026-03-27T08:18:47.675526+00:00"
+      "timestamp": "2026-03-27T08:21:08.311682+00:00"
     }
   ],
   "decisions": [

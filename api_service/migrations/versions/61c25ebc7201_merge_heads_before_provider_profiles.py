@@ -15,7 +15,6 @@ down_revision: Union[str, None] = ('b1c2d3e4f5a6', 'd5e6f7a8b9c0')
 def upgrade() -> None:
     _ = revision
     _ = down_revision
-    pass
 
 
 def downgrade() -> None:

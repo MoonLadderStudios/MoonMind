@@ -2,7 +2,7 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "105-provider-profiles",
-    "headRefOid": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+    "headRefOid": "d76fd207c96636ded162d2f52ba79685f61e56cd",
     "isDraft": false,
     "mergeStateStatus": "UNSTABLE",
     "mergeable": "MERGEABLE",
@@ -14,9 +14,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637406087/job/68849593678",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637480547/job/68849842946",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-27T08:18:17Z",
+        "startedAt": "2026-03-27T08:20:36Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -24,9 +24,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637406017/job/68849593684",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637480546/job/68849842910",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-27T08:18:17Z",
+        "startedAt": "2026-03-27T08:20:37Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -34,9 +34,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637407104/job/68849595427",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637482196/job/68849846025",
         "name": "test",
-        "startedAt": "2026-03-27T08:18:18Z",
+        "startedAt": "2026-03-27T08:20:38Z",
         "status": "IN_PROGRESS",
         "workflowName": "Run Pytest Unit Tests"
       },
@@ -44,9 +44,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637406087/job/68849593657",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637480547/job/68849842961",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-27T08:18:18Z",
+        "startedAt": "2026-03-27T08:20:36Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -54,9 +54,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637406017/job/68849593716",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637480546/job/68849842907",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-27T08:18:17Z",
+        "startedAt": "2026-03-27T08:20:36Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -64,9 +64,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637406017/job/68849593703",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637480546/job/68849842922",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-27T08:18:17Z",
+        "startedAt": "2026-03-27T08:20:36Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       }
@@ -94,9 +94,9 @@
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+    "headShaVerified": "d76fd207c96636ded162d2f52ba79685f61e56cd",
     "headShaNonSecurityCheckCount": 1,
-    "previousCommitSha": "0c655cc89cf660fb841eadbd7eb75bf02a3fc8ed",
+    "previousCommitSha": "7ca2cb374272b797cbcc64cdb46722084404eb77",
     "previousCommitNonSecurityCheckCount": 1
   },
   "commentsFetch": {
@@ -196,7 +196,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495814",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 16,
       "side": "RIGHT",
@@ -212,7 +212,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495815",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 17,
       "side": "RIGHT",
@@ -260,7 +260,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495830",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 13,
       "side": "RIGHT",
@@ -276,7 +276,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495838",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 14,
       "side": "RIGHT",
@@ -416,10 +416,10 @@
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
       "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
-      "line": 8,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -430,7 +430,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578346",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 8,
       "side": "RIGHT",
@@ -446,7 +446,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578354",
       "path": "api_service/api/routers/auth_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 21,
       "side": "RIGHT",
@@ -462,7 +462,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578361",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 13,
       "side": "RIGHT",
@@ -478,7 +478,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578367",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 14,
       "side": "RIGHT",
@@ -494,7 +494,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578369",
       "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 11,
       "side": "RIGHT",
@@ -510,7 +510,7 @@
       "updated_at": "2026-03-27T08:11:34Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578374",
       "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
-      "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
+      "commit_id": "d76fd207c96636ded162d2f52ba79685f61e56cd",
       "in_reply_to_id": null,
       "line": 12,
       "side": "RIGHT",
@@ -544,10 +544,10 @@
       "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
       "commit_id": "7ca2cb374272b797cbcc64cdb46722084404eb77",
       "in_reply_to_id": null,
-      "line": 8,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     }
   ],
   "commentsSummary": {
@@ -556,7 +556,7 @@
     "reviewCommentCount": 26,
     "issueCommentCount": 1,
     "reviewBodyCount": 2,
-    "actionableCommentCount": 6,
+    "actionableCommentCount": 4,
     "includeBotReviewComments": true,
     "humanCommentCount": 6,
     "botCommentCount": 23,
@@ -564,14 +564,12 @@
     "actionableCommentIds": [
       2999495814,
       2999495815,
-      2999578342,
       2999578346,
-      2999578354,
-      2999603060
+      2999578354
     ],
     "nonActionableReasonCounts": {
       "bot_comment_excluded": 3,
-      "thread_outdated": 7,
+      "thread_outdated": 9,
       "thread_resolved": 13
     },
     "classifiedComments": [
@@ -781,9 +779,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578342",
         "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-        "line": 8,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "thread_outdated"
       },
       {
         "id": 2999578346,
@@ -861,9 +859,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999603060",
         "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
-        "line": 8,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "thread_outdated"
       }
     ]
   }

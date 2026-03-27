@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "tool": "pr_resolve_full",
-  "timestamp": "2026-03-27T08:18:38.776244+00:00",
+  "timestamp": "2026-03-27T08:20:58.141261+00:00",
   "status": "needs_remediation",
   "merge_outcome": "blocked",
   "decision": "remediation required",
@@ -16,7 +16,7 @@
       "status": "needs_remediation",
       "reason": "actionable_comments",
       "decision": "remediation required",
-      "timestamp": "2026-03-27T08:18:38.776471+00:00"
+      "timestamp": "2026-03-27T08:20:58.141501+00:00"
     }
   ],
   "reason": "actionable_comments",
