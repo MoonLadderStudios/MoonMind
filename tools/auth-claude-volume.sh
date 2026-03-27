@@ -161,7 +161,7 @@ cmd_check() {
 # ---------------------------------------------------------------------------
 cmd_register() {
   local API_URL="${MOONMIND_API_URL:-http://localhost:5000}"
-  local PROFILE_ID="${CLAUDE_PROFILE_ID:-claude_default}"
+  local PROFILE_ID="${CLAUDE_PROFILE_ID:-claude_anthropic}"
 
   echo "Registering auth profile '${PROFILE_ID}' via ${API_URL}..."
 

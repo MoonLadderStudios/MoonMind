@@ -1,10 +1,15 @@
-"""Ensure the Codex config enforces a non-interactive approval policy.
+"""Ensure the Codex config enforces managed runtime defaults.
 
 This script merges the baked template at ``/etc/codex/config.toml`` into the
 desired Codex configuration target while preserving additional settings.
-Only the ``approval_policy`` key is enforced. The merge is idempotent and
-exits with a non-zero status if the template or resulting config is invalid so
-container start-up fails fast.
+Managed defaults are enforced for:
+
+- ``approval_policy``
+- ``sandbox_mode``
+- ``sandbox_workspace_write.network_access``
+
+The merge is idempotent and exits with a non-zero status if the template or
+resulting config is invalid so container start-up fails fast.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from __future__ import annotations
 import os
 import stat
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -24,11 +30,52 @@ TARGET_PATH_ENV_VAR = "CODEX_CONFIG_PATH"
 DEFAULT_TEMPLATE_PATH = Path("/etc/codex/config.toml")
 CONFIG_SUBDIR = ".codex"
 CONFIG_FILENAME = "config.toml"
-REQUIRED_KEY = "approval_policy"
+REQUIRED_TEMPLATE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("approval_policy",),
+    ("sandbox_mode",),
+    ("sandbox_workspace_write", "network_access"),
+)
 
 
 class CodexConfigError(RuntimeError):
     """Raised when the Codex configuration cannot be enforced."""
+
+
+def _format_path(path: tuple[str, ...]) -> str:
+    return ".".join(path)
+
+
+def _read_required_path(
+    config: dict[str, Any],
+    *,
+    template_path: Path,
+    key_path: tuple[str, ...],
+) -> Any:
+    cursor: Any = config
+    for key in key_path:
+        if not isinstance(cursor, dict) or key not in cursor:
+            raise CodexConfigError(
+                f"Codex template at {template_path} must define "
+                f"{_format_path(key_path)!r}"
+            )
+        cursor = cursor[key]
+    return deepcopy(cursor)
+
+
+def _set_nested_path(
+    config: dict[str, Any],
+    *,
+    key_path: tuple[str, ...],
+    value: Any,
+) -> None:
+    cursor: dict[str, Any] = config
+    for key in key_path[:-1]:
+        current = cursor.get(key)
+        if not isinstance(current, dict):
+            current = {}
+            cursor[key] = current
+        cursor = current
+    cursor[key_path[-1]] = value
 
 
 def _load_toml(path: Path) -> Dict[str, Any]:
@@ -91,10 +138,14 @@ def ensure_codex_config(
         raise CodexConfigError(f"Codex template missing at {template_path}")
 
     template_config = _load_toml(template_path)
-    if REQUIRED_KEY not in template_config:
-        raise CodexConfigError(
-            f"Codex template at {template_path} must define {REQUIRED_KEY!r}"
+    required_values: dict[tuple[str, ...], Any] = {
+        key_path: _read_required_path(
+            template_config,
+            template_path=template_path,
+            key_path=key_path,
         )
+        for key_path in REQUIRED_TEMPLATE_PATHS
+    }
 
     env_target_path = os.environ.get(TARGET_PATH_ENV_VAR)
     if env_target_path and target_path is None:
@@ -114,7 +165,12 @@ def ensure_codex_config(
 
     existing_config = _load_toml(target_path)
     merged_config: Dict[str, Any] = dict(existing_config)
-    merged_config[REQUIRED_KEY] = template_config[REQUIRED_KEY]
+    for key_path, value in required_values.items():
+        _set_nested_path(
+            merged_config,
+            key_path=key_path,
+            value=deepcopy(value),
+        )
 
     rendered = _ensure_trailing_newline(toml.dumps(merged_config))
 
@@ -140,7 +196,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"[codex-config] approval policy enforced at {result.path}")
+    print(f"[codex-config] required settings enforced at {result.path}")
     return 0
 
 

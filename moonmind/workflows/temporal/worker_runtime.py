@@ -46,6 +46,8 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.workers import (
+    AGENT_RUNTIME_FLEET,
+    SANDBOX_FLEET,
     WORKFLOW_FLEET,
     build_worker_activity_bindings,
     describe_configured_worker,
@@ -74,6 +76,7 @@ from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_AGENT_RUNTIMES = frozenset({"codex", "gemini_cli", "claude", "jules"})
+_CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # Agent runtimes where PR creation is driven by the provider API (e.g. Jules
 # ``automationMode`` / ``AUTO_CREATE_PR``), not by appending ``gh pr create``
 # to plan instructions.
@@ -540,9 +543,37 @@ def _worker_concurrency_kwargs(topology) -> dict[str, int]:
     return {"max_concurrent_activities": topology.concurrency_limit}
 
 
+def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
+    """Apply Codex managed-runtime defaults for fleets that launch CLI tasks."""
+
+    normalized = str(fleet or "").strip().lower()
+    if normalized not in _CODEX_CONFIG_FLEETS:
+        return
+
+    from api_service.scripts.ensure_codex_config import (
+        CodexConfigError,
+        ensure_codex_config,
+    )
+
+    try:
+        result = ensure_codex_config()
+    except CodexConfigError as exc:
+        raise RuntimeError(
+            "Codex configuration enforcement failed for worker fleet "
+            f"{normalized}: {exc}"
+        ) from exc
+
+    logger.info(
+        "Codex managed defaults enforced for fleet %s at %s",
+        normalized,
+        result.path,
+    )
+
+
 async def main_async() -> None:
     """Run the Temporal worker."""
     topology = describe_configured_worker()
+    _enforce_codex_config_for_managed_fleet(topology.fleet)
 
     logger.info(
         f"Starting {topology.service_name} [{topology.fleet}] "
