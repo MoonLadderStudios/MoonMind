@@ -8341,6 +8341,38 @@
     startPolling(load, pollIntervals.list);
   }
 
+  async function renderScheduleDetailPage(scheduleId) {
+    const normalizedId = normalizeDashboardDetailSegment(scheduleId || "");
+
+    if (!normalizedId) {
+      setView(
+        "Schedule not found",
+        "Recurring schedule details.",
+        "<p class='error'>No schedule ID was provided, or the schedule ID is invalid.</p>",
+        { showAutoRefreshControls: false },
+      );
+      return;
+    }
+
+    const contentHtml = [
+      "<div class='schedule-detail'>",
+      "<h2>Schedule Detail</h2>",
+      "<dl>",
+      "<dt>Schedule ID</dt>",
+      `<dd><code>${normalizedId}</code></dd>`,
+      "</dl>",
+      "<p>Detailed schedule inspection is not available in this build, but the schedule route is active.</p>",
+      "</div>",
+    ].join("");
+
+    setView(
+      "Schedule Detail",
+      "Recurring schedule details.",
+      contentHtml,
+      { showAutoRefreshControls: false },
+    );
+  }
+
   async function renderProposalDetailPage(proposalId) {
     setView(
       "Proposal Detail",

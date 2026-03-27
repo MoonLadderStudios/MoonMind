@@ -132,6 +132,13 @@ def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "dashboard_route_not_found"
 
 
+def test_removed_new_schedule_route_returns_404(client: TestClient) -> None:
+    response = client.get("/tasks/schedules/new")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "dashboard_route_not_found"
+
+
 def test_invalid_multi_segment_routes_return_404(client: TestClient) -> None:
     for path in (
         "/tasks/unknown/extra/segment",
