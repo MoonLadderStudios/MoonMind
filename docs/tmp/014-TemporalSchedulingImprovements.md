@@ -195,15 +195,15 @@ The Temporal Schedule CRUD layer in `client.py` (`schedule_mapping.py`, `schedul
 
 **Goal:** Ensure cron/timezone handling is correct at DST boundaries for **Temporal Schedules** (and shared expression validation used by the API/UI), with no separate app-layer scheduler to duplicate or contradict.
 
-- [ ] **5.1** Add DST boundary tests for schedule spec semantics
+- [x] **5.1** Add DST boundary tests for schedule spec semantics
   - Test the same cron/calendar inputs MoonMind stores and passes to Temporal across spring-forward and fall-back transitions (aligned with what `ScheduleSpec` uses)
   - Cover UTC, US/Eastern, Europe/London at minimum
 
-- [ ] **5.2** Add integration tests for Temporal Schedule timezone handling
+- [x] **5.2** Add integration tests for Temporal Schedule timezone handling
   - Verify Temporal Schedules fire at expected instants across DST transitions in the deployed Temporal version
   - Document any Temporal server–level timezone caveats
 
-- [ ] **5.3** Document canonical scheduling semantics
+- [x] **5.3** Document canonical scheduling semantics
   - Unify the three scheduling concepts (start delay, in-workflow timers, Temporal Schedules) in one reference doc
   - Clarify which mechanism to use for which use case
 
