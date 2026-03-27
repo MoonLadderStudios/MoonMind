@@ -5,11 +5,9 @@ import sys
 import warnings
 import os
 
-# Optionally disable logging and warnings to reduce noise during schema export.
-# Set EXPORT_OPENAPI_QUIET=1 (or "true"/"yes") to enable suppression.
-if os.getenv("EXPORT_OPENAPI_QUIET", "").lower() in ("1", "true", "yes"):
-    logging.disable(logging.CRITICAL)
-    warnings.filterwarnings("ignore")
+# Disable logging and warnings
+logging.disable(logging.CRITICAL)
+warnings.filterwarnings("ignore")
 
 # add root dir
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -12,9 +12,7 @@ Last Updated: **2026-03-14**
 
 MoonMind needs a **single, operator-driven “pause all workflows” switch** so upgrades (image rebuilds, schema migrations, credential rotations, etc.) can be performed **without tasks entering weird intermediate states**, and with the **queue remaining intact** (workflows should stay queued or paused; no surprise retries or dead-lettering).
 
-With the migration to Temporal, REST-level claim blocking is obsolete. We now
-rely on Temporal's execution guarantees and native signals to achieve
-maintenance states.
+With the migration to Temporal, the legacy concept of REST API claim blocking (`POST /api/queue/jobs/claim`) is obsolete. We now rely on Temporal's robust execution guarantees and native signals to achieve maintenance states.
 
 ---
 

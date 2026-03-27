@@ -15,6 +15,6 @@ export const queryKeys = {
   },
   settings: {
     profile: ['settings', 'profile'] as const,
-    workerPauseSnapshot: ['settings', 'workerPause', 'snapshot'] as const,
+    workerPauseSnapshot: ['workerPause', 'snapshot'] as const,
   }
 };
