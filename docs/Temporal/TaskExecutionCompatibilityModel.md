@@ -74,13 +74,13 @@ We do **not** want ad hoc field translation where one screen treats a Temporal e
 
 ## 5. Compatibility principles
 
-1. **`task` remains the user-facing noun during migration.**  
+1. **`task` remains the user-facing noun during migration.**
    The product contract remains task-oriented even when the execution substrate is Temporal.
 
-2. **`workflow execution` remains the runtime noun.**  
+2. **`workflow execution` remains the runtime noun.**
    Temporal implementation docs, worker code, and execution APIs should use Temporal language precisely.
 
-2a. **Execution payloads should use `tool` as the canonical executable field.**  
+2a. **Execution payloads should use `tool` as the canonical executable field.**
    During migration, `skill` may remain as a compatibility alias where needed.
 
 3. **Identifiers are opaque.**  
