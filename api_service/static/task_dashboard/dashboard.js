@@ -2729,7 +2729,7 @@
       {
         method: "POST",
         body: JSON.stringify({
-          namespace: (String(pick(execution, "namespace") || "").trim() || "default"),
+          namespace: String(pick(execution, "namespace") || "default").trim() || "default",
           workflow_id: workflowId,
           run_id: runId,
           link_type: "input.instructions",
@@ -7527,7 +7527,7 @@
         endpoint(
           temporalSourceConfig.artifacts || "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
           {
-            namespace: String(pick(execution, "namespace") || "").trim() || "default",
+            namespace: pick(execution, "namespace") || "default",
             workflowId: latestWorkflowId,
             temporalRunId: latestRunId,
             id: latestWorkflowId,

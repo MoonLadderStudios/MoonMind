@@ -110,6 +110,8 @@ async def test_run_workflow_rescheduled_past(mock_run_environment):
             )
             
             # Reschedule to the past to trigger immediate execution
+            # Wait a tiny bit of virtual time so the workflow can enter the wait_condition
+            await env.sleep(1)
             past_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
             await handle.signal("reschedule", past_time)
             
