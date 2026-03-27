@@ -31,12 +31,14 @@ def _make_profile(
     default_model: str | None = None,
     default_effort: str | None = None,
     runtime_id: str = "test",
+    env_overrides: dict | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         command_template=command_template or ["test-cmd"],
         default_model=default_model,
         default_effort=default_effort,
         runtime_id=runtime_id,
+        env_overrides=env_overrides or {},
     )
 
 
@@ -188,6 +190,35 @@ class TestClaudeCodeBuildCommand:
         request = _make_request()
         cmd = s.build_command(profile, request)
         assert cmd == ["claude", "-p"]
+
+    def test_anthropic_model_env_suppresses_model_flag(self) -> None:
+        """When ANTHROPIC_MODEL is in env_overrides (MiniMax profile), --model must be omitted."""
+        s = ClaudeCodeStrategy()
+        profile = _make_profile(
+            command_template=["claude"],
+            default_model="MiniMax-M2.7",
+            env_overrides={"ANTHROPIC_MODEL": "MiniMax-M2.7"},
+        )
+        request = _make_request(
+            instruction_ref="Do something",
+            parameters={"model": "MiniMax-M2.7"},
+        )
+        cmd = s.build_command(profile, request)
+        assert "--model" not in cmd
+        assert "MiniMax-M2.7" not in cmd
+        assert cmd == ["claude", "-p", "Do something"]
+
+    def test_model_flag_still_passed_without_env_override(self) -> None:
+        """Without ANTHROPIC_MODEL in env_overrides, --model is passed as usual."""
+        s = ClaudeCodeStrategy()
+        profile = _make_profile(
+            command_template=["claude"],
+            default_model="claude-sonnet-4-6",
+        )
+        request = _make_request(instruction_ref="Go")
+        cmd = s.build_command(profile, request)
+        assert "--model" in cmd
+        assert "claude-sonnet-4-6" in cmd
 
 
 # ---------------------------------------------------------------------------

@@ -406,13 +406,19 @@ async def add_request_id(request: Request, call_next):
 
 
 async def _auto_seed_auth_profiles() -> list[str]:
-    """Auto-seed default auth profiles when the table is empty.
+    """Upsert well-known auth profiles that are missing from the DB.
 
-    Returns the list of runtime_ids that were seeded, or an empty list if
-    seeding was skipped or the table already has data.
+    Each profile is checked individually by ``profile_id`` so that:
+    - On a fresh install all defaults are created.
+    - When ``MINIMAX_API_KEY`` is added to the environment after the initial
+      seed, the ``claude_minimax`` profile is inserted without touching any
+      existing profiles.
+
+    Returns the list of ``runtime_id`` values for profiles that were actually
+    inserted, or an empty list when nothing was seeded.
     """
     from api_service.db.base import get_async_session_context
-    from sqlalchemy import select, func
+    from sqlalchemy import select
     from api_service.db.models import (
         ManagedAgentAuthProfile,
         ManagedAgentAuthMode,
@@ -451,7 +457,7 @@ async def _auto_seed_auth_profiles() -> list[str]:
         },
     ]
 
-    # Conditionally add MiniMax profile when the API key is available.
+    # Conditionally include MiniMax profile when the API key is available.
     if os.environ.get("MINIMAX_API_KEY"):
         _DEFAULT_PROFILES.append({
             "profile_id": "claude_minimax",
@@ -466,7 +472,7 @@ async def _auto_seed_auth_profiles() -> list[str]:
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2.7",
-                "API_TIMEOUT_MS": "600000",
+                "API_TIMEOUT_MS": "3000000",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             },
             "volume_ref": None,
@@ -477,20 +483,23 @@ async def _auto_seed_auth_profiles() -> list[str]:
     seeded: list[str] = []
     try:
         async with get_async_session_context() as session:
-            count_result = await session.execute(
-                select(func.count()).select_from(ManagedAgentAuthProfile)
+            # Fetch all existing profile_ids in one query.
+            existing_result = await session.execute(
+                select(ManagedAgentAuthProfile.profile_id)
             )
-            profile_count = count_result.scalar() or 0
+            existing_ids: set[str] = {row[0] for row in existing_result.all()}
 
-            if profile_count > 0:
+            to_insert = [p for p in _DEFAULT_PROFILES if p["profile_id"] not in existing_ids]
+            if not to_insert:
                 return []
 
             logger.info(
-                "No auth profiles found in DB. Auto-seeding %d default profile(s)...",
-                len(_DEFAULT_PROFILES),
+                "Auto-seeding %d missing auth profile(s): %s",
+                len(to_insert),
+                [p["profile_id"] for p in to_insert],
             )
 
-            for profile_def in _DEFAULT_PROFILES:
+            for profile_def in to_insert:
                 profile = ManagedAgentAuthProfile(
                     profile_id=profile_def["profile_id"],
                     runtime_id=profile_def["runtime_id"],

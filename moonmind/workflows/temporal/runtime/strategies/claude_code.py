@@ -33,9 +33,14 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         """
         cmd = list(profile.command_template)
 
-        model = self.get_model(profile, request)
-        if model:
-            cmd.extend(["--model", model])
+        # Skip --model when the profile already sets ANTHROPIC_MODEL via env overrides
+        # (e.g. MiniMax profile).  Passing --model with a non-Anthropic model name causes
+        # the Claude CLI to reject the run immediately.
+        env_overrides: dict = getattr(profile, "env_overrides", {}) or {}
+        if "ANTHROPIC_MODEL" not in env_overrides:
+            model = self.get_model(profile, request)
+            if model:
+                cmd.extend(["--model", model])
 
         effort = self.get_effort(profile, request)
         if effort:

@@ -119,9 +119,33 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.runtime_env_overrides is not None
     assert mm_profile.runtime_env_overrides["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert mm_profile.runtime_env_overrides["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
-    assert mm_profile.runtime_env_overrides["API_TIMEOUT_MS"] == "600000"
+    assert mm_profile.runtime_env_overrides["API_TIMEOUT_MS"] == "3000000"
     assert mm_profile.volume_ref is None
     assert mm_profile.volume_mount_path is None
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch):
+    """MINIMAX_API_KEY added after initial seed → claude_minimax is inserted on next call."""
+    from api_service.main import _auto_seed_auth_profiles
+
+    # First seed without MiniMax key.
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    first = await _auto_seed_auth_profiles()
+    assert len(first) == 3
+
+    # Now the key becomes available.
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    second = await _auto_seed_auth_profiles()
+    assert "claude_code" in second  # minimax profile was added
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentAuthProfile))
+        profiles = result.scalars().all()
+
+    assert len(profiles) == 4
+    profile_ids = {p.profile_id for p in profiles}
+    assert "claude_minimax" in profile_ids
 
 
 @pytest.mark.asyncio
