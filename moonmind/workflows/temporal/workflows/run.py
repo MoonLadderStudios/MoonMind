@@ -731,7 +731,7 @@ class MoonMindRunWorkflow:
                 pull_request_url = self._extract_pull_request_url(execution_result)
                 
                 # If still not found, check the diagnostics artifact if present
-                if pull_request_url is None and tool_type == "agent_runtime":
+                if pull_request_url is None and tool_type == "skill":
                     outputs = self._get_from_result(execution_result, "outputs") or {}
                     diag_ref = outputs.get("diagnostics_ref")
                     if diag_ref:
