@@ -84,7 +84,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["mode"] == "codex"
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
-    assert task["runtime"]["providerProfile"] == "azure"
+    assert task["runtime"]["executionProfileRef"] == "azure"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
@@ -99,7 +99,12 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
         "MoonLadderStudios/MoonMind",
         pr_number=77,
         branch="feature/enqueue-check",
-        runtime=runtime_selection(mode="codex", model=None, effort=None, provider_profile=None),
+        runtime=runtime_selection(
+            mode="codex",
+            model=None,
+            effort=None,
+            provider_profile=None,
+        ),
         merge_method="squash",
         max_iterations=3,
         priority=1,
@@ -171,7 +176,7 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
         (
             "{"
             '"runtime":"codex",'
-            '"runtimeConfig":{"mode":"gemini","model":"gemini-2.5-pro","effort":"medium","providerProfile":"gcp"}'
+            '"runtimeConfig":{"mode":"gemini","model":"gemini-2.5-pro","effort":"medium","executionProfileRef":"gcp"}'
             "}"
         ),
         encoding="utf-8",
@@ -193,7 +198,7 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     task_context.write_text(
         (
             "{"
-            '"runtimeConfig":{"mode":"claude","model":"claude-3.7-sonnet","effort":"low","providerProfile":"bedrock"}'
+            '"runtimeConfig":{"mode":"claude","model":"claude-3.7-sonnet","effort":"low","executionProfileRef":"bedrock"}'
             "}"
         ),
         encoding="utf-8",
@@ -223,7 +228,7 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 
     task_context = tmp_path / "task_context.json"
     task_context.write_text(
-        ('{"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low","providerProfile":"azure"}}'),
+        ('{"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low","executionProfileRef":"azure"}}'),
         encoding="utf-8",
     )
     args = type(
@@ -309,7 +314,12 @@ def _make_submission(module: dict[str, Any]) -> Any:
         "MoonLadderStudios/MoonMind",
         pr_number=42,
         branch="feature/test",
-        runtime=_RuntimeSelection(mode="codex", model=None, effort=None, provider_profile=None),
+        runtime=_RuntimeSelection(
+            mode="codex",
+            model=None,
+            effort=None,
+            provider_profile=None,
+        ),
         merge_method="squash",
         max_iterations=3,
         priority=0,
@@ -458,7 +468,12 @@ def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     _RuntimeSelection = module["RuntimeSelection"]
     build = module["_build_queue_request"]
     kwargs: dict[str, Any] = dict(
-        runtime=_RuntimeSelection(mode="codex", model=None, effort=None, provider_profile=None),
+        runtime=_RuntimeSelection(
+            mode="codex",
+            model=None,
+            effort=None,
+            provider_profile=None,
+        ),
         merge_method="squash",
         max_iterations=3,
         priority=0,

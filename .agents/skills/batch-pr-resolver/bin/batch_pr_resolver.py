@@ -281,9 +281,14 @@ def _load_parent_runtime_selection(
             runtime_config.get("effort") or runtime_node.get("effort")
         )
         provider_profile = _runtime_text(
-            runtime_config.get("providerProfile") or runtime_node.get("providerProfile")
+            runtime_config.get("executionProfileRef") or runtime_node.get("executionProfileRef")
         )
-        return RuntimeSelection(mode=mode, model=model, effort=effort, provider_profile=provider_profile)
+        return RuntimeSelection(
+            mode=mode,
+            model=model,
+            effort=effort,
+            provider_profile=provider_profile,
+        )
     return None
 
 
@@ -297,7 +302,9 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
-    runtime_provider_profile = _runtime_text(getattr(args, "runtime_provider_profile", None))
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
     if runtime_model is None and inherited is not None:
         runtime_model = inherited.model
     if runtime_effort is None and inherited is not None:
@@ -334,7 +341,7 @@ def _build_queue_request(
     if runtime.effort:
         runtime_payload["effort"] = runtime.effort
     if runtime.provider_profile:
-        runtime_payload["providerProfile"] = runtime.provider_profile
+        runtime_payload["executionProfileRef"] = runtime.provider_profile
 
     payload_dict: dict[str, Any] = {
         "repository": repo,
@@ -650,7 +657,7 @@ async def main() -> int:
             "mode": runtime.mode,
             "model": runtime.model,
             "effort": runtime.effort,
-            "providerProfile": runtime.provider_profile,
+            "executionProfileRef": runtime.provider_profile,
         },
         "requested": len(open_prs),
         "created": len(created),
