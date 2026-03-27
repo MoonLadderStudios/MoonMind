@@ -18,8 +18,6 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
 )
-from moonmind.schemas.agent_runtime_models import ProfileSelector
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
