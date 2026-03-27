@@ -10,7 +10,7 @@ Implement live task handoff for queue task runs using tmate-backed worker sessio
 ## Technical Context
 
 **Language/Version**: Python 3.11, JavaScript (dashboard)  
-**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic schemas, existing agent queue service/repository stack, Codex worker runtime  
+**Primary Dependencies**: FastAPI, SQLAlchemy async ORM, Pydantic schemas, existing agent queue service/repository stack, managed agent queue worker (`moonmind/agents/codex_worker`; all managed CLI runtimes, not Codex-only)  
 **Storage**: PostgreSQL tables `task_run_live_sessions` + `task_run_control_events` linked to `agent_jobs`  
 **Testing**: `./tools/test_unit.sh` with focused API/service/worker/dashboard/config coverage  
 **Target Platform**: Linux containers in Docker Compose (`api`, `codex-worker`, `api-db`)  

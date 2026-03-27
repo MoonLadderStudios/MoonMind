@@ -21,7 +21,7 @@
 **Key files confirmed**:
 - `moonmind/schemas/agent_queue_models.py` — `web_ro` field on response models
 - `moonmind/workflows/agent_queue/models.py` — `web_ro` DB column
-- `moonmind/agents/codex_worker/worker.py` — captures `#{tmate_web_ro}` during bootstrap
+- `moonmind/agents/codex_worker/worker.py` — managed agent queue worker (all runtimes); captures `#{tmate_web_ro}` during bootstrap
 - `api_service/api/routers/agent_queue.py` — live session endpoints
 - `api_service/api/routers/task_runs.py` — live session endpoints (Temporal path)
 

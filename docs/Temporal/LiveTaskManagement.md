@@ -62,12 +62,12 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 ### 4.2 Session bootstrap (managed runtime and workers)
 
 > [!NOTE]
-> **`ManagedRuntimeLauncher.launch()`** delegates tmate wrapping to **`TmateSessionManager`** (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) section 4). The **codex worker** also runs an inline tmate bootstrap in `_ensure_live_session_started` for HTTP live-session reporting; consolidating with the manager is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
+> **`ManagedRuntimeLauncher.launch()`** delegates tmate wrapping to **`TmateSessionManager`** (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) section 4). The **managed agent queue worker** (`moonmind/agents/codex_worker`, historical package name) also runs an inline tmate bootstrap in `_ensure_live_session_started` for HTTP live-session reporting for **every runtime** that worker executes; consolidating with the manager is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
 
 1. **Launcher wrapping (agent-runtime worker):** When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. On tmate failure it falls back to a plain subprocess so the agent still runs.
 2. **Endpoint persistence:** Rows live in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report via **`POST /api/task-runs/{id}/live-session/report`** and **`POST /api/task-runs/{id}/live-session/heartbeat`** (HTTP). Operators read **`GET /api/task-runs/{id}/live-session`** for the Live Output panel.
 3. **UI embedding:** Mission Control embeds the `web_ro` URL from the task-run live-session payload.
-4. **Teardown:** The supervisor calls `TmateSessionManager.teardown()` when the managed-runtime path completes; the codex worker reports session end (or error) through the same HTTP report API.
+4. **Teardown:** The supervisor calls `TmateSessionManager.teardown()` when the managed-runtime path completes; the managed agent queue worker reports session end (or error) through the same HTTP report API.
 
 ```bash
 # Conceptual wrapper executed by ManagedRuntimeLauncher

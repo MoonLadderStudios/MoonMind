@@ -38,7 +38,7 @@ Both share identical lifecycle concerns (session creation, readiness detection, 
 
 ### 3.1 Live Log Tailing
 
-When a managed agent run starts, the worker exposes a tmate read-only web endpoint (`web_ro`). Session metadata is persisted in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report lifecycle updates via **`POST /api/task-runs/{id}/live-session/report`** (and **`.../heartbeat`**); operators use **`GET /api/task-runs/{id}/live-session`** for the Live Output panel. The codex worker owns a parallel tmate bootstrap for that HTTP path, while the Temporal agent-runtime worker uses **`ManagedRuntimeLauncher`** + **`TmateSessionManager`** for subprocess wrapping (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5).
+When a managed agent run starts, the worker exposes a tmate read-only web endpoint (`web_ro`). Session metadata is persisted in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report lifecycle updates via **`POST /api/task-runs/{id}/live-session/report`** (and **`.../heartbeat`**); operators use **`GET /api/task-runs/{id}/live-session`** for the Live Output panel. The **managed agent queue worker** (`moonmind/agents/codex_worker`, historical package name) owns a parallel tmate bootstrap for that HTTP path for **all** runtimes it executes; the Temporal agent-runtime worker uses **`ManagedRuntimeLauncher`** + **`TmateSessionManager`** for subprocess wrapping (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5).
 
 See [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md) section 5 for the persistence model and API shape.
 
@@ -610,4 +610,4 @@ That migration becomes small if the rest of the system already thinks in terms o
 
 ## 16. Delivery Milestones
 
-**MVP:** OAuth session store + API + Mission Control modal + tmate-backed runner (Gemini first), then Codex/Claude via the same transport with profile registration, then cleanup/audit/hardening/reconnect flows, then optional provider-specific driver splits. Task-level tracking: [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) and [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).
+**MVP:** OAuth session store + API + Mission Control modal + tmate-backed runner (Gemini first), then additional managed providers on the **same tmate transport** (e.g. Codex CLI, Claude) with profile registration, then cleanup/audit/hardening/reconnect flows, then optional provider-specific driver splits. Task-level tracking: [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md) and [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).

@@ -212,7 +212,7 @@ The **`task_run_live_sessions`** table (SQLAlchemy model **`TaskRunLiveSession`*
 
 ### 5.2 Worker reporting (implemented)
 
-Live sessions are **not** updated via a dedicated Temporal activity in the current stack. The **codex worker** HTTP client calls the API service:
+Live sessions are **not** updated via a dedicated Temporal activity in the current stack. The **managed agent queue worker** HTTP client (`moonmind/agents/codex_worker`; all managed CLI runtimes) calls the API service:
 
 | HTTP | Purpose |
 |---|---|
@@ -269,4 +269,4 @@ The worker Docker image must include:
 
 ## 9. Implementation phases
 
-Authoritative phased status, open items (OAuth integration test, OAuth/codex consolidation, Phase 5 RW handoff), and production diagnostics live in [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md). Short index: [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).
+Authoritative phased status, open items (OAuth integration test, OAuth + managed queue worker tmate consolidation, Phase 5 RW handoff), and production diagnostics live in [`docs/tmp/050-TmatePlan.md`](../tmp/050-TmatePlan.md). Short index: [`docs/tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md`](../tmp/remaining-work/ManagedAgents-UniversalTmateOAuth.md).

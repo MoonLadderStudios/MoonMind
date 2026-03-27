@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Docker Compose stack running (`docker compose up -d`)
-- A managed agent task that provisions a tmate session (e.g., a Codex or Gemini CLI run)
+- A managed agent task that provisions a tmate session (any supported managed CLI runtime, e.g. Gemini, Claude, Cursor, or Codex)
 
 ## Steps
 

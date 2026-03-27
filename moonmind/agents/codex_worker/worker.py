@@ -7610,7 +7610,11 @@ class CodexWorker:
         log_path: Path,
         cwd: Path,
     ) -> None:
-        """Best-effort live-session bootstrap for the active task run."""
+        """Best-effort tmate live-session bootstrap for the active task run.
+
+        Applies to any managed CLI runtime handled by this queue worker (the
+        ``codex_worker`` package name is historical).
+        """
 
         async with self._live_session_start_lock:
             if self._active_live_session is not None:
