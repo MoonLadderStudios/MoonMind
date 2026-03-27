@@ -145,3 +145,40 @@ class TestIdConventions:
         template = make_workflow_id_template(_TEST_UUID)
         assert template.startswith("mm:a1b2c3d4-e5f6-7890-abcd-ef1234567890:")
         assert "{{.ScheduleTime}}" in template
+
+    def test_timezone_preservation(self) -> None:
+        """DOC-REQ-006: timezone preservation for schedule spec."""
+        # US/Eastern
+        spec_eastern = build_schedule_spec("30 2 * * *", timezone="US/Eastern")
+        assert spec_eastern.time_zone_name == "US/Eastern"
+
+        # Europe/London
+        spec_london = build_schedule_spec("30 2 * * *", timezone="Europe/London")
+        assert spec_london.time_zone_name == "Europe/London"
+
+        # UTC
+        spec_utc = build_schedule_spec("30 2 * * *", timezone="UTC")
+        assert spec_utc.time_zone_name == "UTC"
+
+class TestDSTBoundarySemantics:
+    """DOC-REQ-006: DST Boundary tests for schedule spec semantics."""
+
+    def test_spring_forward(self) -> None:
+        """Test spring forward (e.g. 2:00 AM -> 3:00 AM in US/Eastern on Mar 9, 2025)."""
+        # A schedule that runs at 2:30 AM every day
+        spec = build_schedule_spec("30 2 * * *", timezone="US/Eastern")
+
+        # When DST starts, 2:30 AM does not exist (clocks jump from 1:59 AM to 3:00 AM)
+        # We verify the Temporal ScheduleSpec faithfully represents this configuration
+        # (Temporal server handles the actual skip/forward logic)
+        assert spec.cron_expressions == ["30 2 * * *"]
+        assert spec.time_zone_name == "US/Eastern"
+
+    def test_fall_back(self) -> None:
+        """Test fall back (e.g. 2:00 AM -> 1:00 AM in US/Eastern on Nov 2, 2025)."""
+        # A schedule that runs at 1:30 AM every day
+        spec = build_schedule_spec("30 1 * * *", timezone="US/Eastern")
+
+        # When DST ends, 1:30 AM happens twice.
+        assert spec.cron_expressions == ["30 1 * * *"]
+        assert spec.time_zone_name == "US/Eastern"

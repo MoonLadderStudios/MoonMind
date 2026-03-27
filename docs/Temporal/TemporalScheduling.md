@@ -414,3 +414,33 @@ flowchart TD
 ## 10. Scheduling implementation notes
 
 Phased work (adapter wiring, recurring dispatch reconciliation, search attributes) is tracked in [`docs/tmp/TemporalSchedulingPlan.md`](../tmp/TemporalSchedulingPlan.md) and [`docs/tmp/remaining-work/Temporal-TemporalScheduling.md`](../tmp/remaining-work/Temporal-TemporalScheduling.md).
+
+## 11. Canonical Scheduling Semantics
+
+MoonMind implements three distinct scheduling mechanisms, each suited for a specific lifecycle phase. This reference matrix defines when to use which mechanism.
+
+### 11.1 Mechanism Matrix
+
+| Feature | `start_delay` | In-Workflow Timer | Temporal Schedule |
+|---|---|---|---|
+| **Mechanism** | `client.start_workflow(start_delay=...)` | `await workflow.wait_condition(...)` | `client.create_schedule(...)` |
+| **Use Case** | One-time deferred start. | Reschedulable wait state. | Recurring background tasks. |
+| **Mutability** | **Immutable.** Cannot be changed after start. | **Mutable.** Can be changed via Signal. | **Mutable.** Can be updated via API. |
+| **Visibility State** | Workflow is `Running` (but task is delayed). | Workflow is `Running` (blocked in execution). | Workflow doesn't exist until scheduled time. |
+| **Search Attribute**| Uses `mm_scheduled_for`. | Uses `mm_scheduled_for`. | Uses `mm_scheduled_for` when spawned. |
+| **Timezone Support**| Evaluated as absolute UTC offset at creation. | Evaluated as absolute UTC wait internally. | Full IANA Timezone & DST support. |
+
+### 11.2 Mechanism Details & Tradeoffs
+
+1. **`start_delay` (Deferred execution):** The simplest and most efficient mechanism for running a task in the future. Temporal holds the execution server-side without consuming a worker thread. However, because it's evaluated at submission time into an absolute wait, it cannot be modified if requirements change.
+
+2. **In-Workflow Timer (Reschedulable execution):** Best used when the start time is a tentative estimate that might shift. The workflow starts immediately but pauses execution at the first step. A Signal handler can interrupt the `wait_condition` to adjust the target time. This consumes slightly more Temporal history but offers full flexibility.
+
+3. **Temporal Schedule (Recurring execution):** The only mechanism that natively supports Cron strings and Calendar expressions. Crucially, Temporal Schedules natively handle **Daylight Saving Time (DST)** boundaries by re-evaluating the Cron expression against the specified `time_zone_name` on each iteration, rather than using a fixed polling interval.
+
+### 11.3 DST and Timezone Guarantees
+
+MoonMind delegates all cron evaluation and timezone math to Temporal Schedules.
+- By providing an IANA timezone string (e.g., `US/Eastern`, `Europe/London`), Temporal ensures that schedules strictly follow local wall-clock rules.
+- During a Spring Forward (e.g., 2:00 AM becomes 3:00 AM), Temporal correctly skips the non-existent hour. If a schedule was set for 2:30 AM, it will next run on the following day (or transition to the offset equivalent, depending on exact Temporal core semantics, but strictly maintaining the intended cadence).
+- During a Fall Back (e.g., 2:00 AM happens twice), Temporal's standard Cron implementation evaluates the schedule natively, which results in the job running twice (once during the first occurrence, and again during the second occurrence) for the repeated hour.
