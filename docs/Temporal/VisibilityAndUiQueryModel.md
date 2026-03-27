@@ -520,7 +520,7 @@ Target rule:
 
 ### 11.5 Freshness and degraded-read behavior
 
-During migration, MoonMind should assume list surfaces can be temporarily less fresh than the detail/action response that just mutated one execution.
+In an eventually consistent system, MoonMind should assume list surfaces can be temporarily less fresh than the detail/action response that just mutated one execution.
 
 Rules:
 
@@ -579,14 +579,14 @@ List views should not require artifact hydration to render basic rows.
 
 ## 13. UI integration requirements
 
-The dashboard runtime config and route shell expose a first-class `temporal` source. The `temporal` source is the primary execution source.
+The dashboard runtime config and route shell expose a first-class `temporal` source, which is the primary execution source. Tasks from this source are resolved under the unified `/tasks/{taskId}` path, not a source-specific `/tasks/temporal` route.
 
 The dashboard uses:
 - `temporal` endpoints in the runtime config,
 - Route/path allowlists to support Temporal-backed detail pages,
 - Temporal status normalization,
 - Temporal list/detail fetchers,
-- Temporal action handlers for update, signal, cancel, and rerun,
+- Temporal action handlers for core Temporal primitives (update, signal, cancel, and rerun); higher-level dashboard actions (for example, reschedule and task controls like pause, resume, and approve) are composed from these primitives and related Temporal endpoints,
 - `workflowId` as the durable handle,
 - `runId` as run/debug metadata.
 
