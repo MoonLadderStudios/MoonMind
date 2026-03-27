@@ -2,7 +2,7 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "105-provider-profiles",
-    "headRefOid": "a869a1ad300b339ceade73121795d3def0684398",
+    "headRefOid": "d33b300ece28851b9061fc1e0de10d2948473fd6",
     "isDraft": false,
     "mergeStateStatus": "UNSTABLE",
     "mergeable": "MERGEABLE",
@@ -14,9 +14,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637093433/job/68848612590",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637197290/job/68848931709",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-27T08:08:37Z",
+        "startedAt": "2026-03-27T08:11:49Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -24,9 +24,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637093420/job/68848612156",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637197294/job/68848931618",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-27T08:08:38Z",
+        "startedAt": "2026-03-27T08:11:49Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -34,9 +34,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637094600/job/68848614315",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637198612/job/68848933797",
         "name": "test",
-        "startedAt": "2026-03-27T08:08:38Z",
+        "startedAt": "2026-03-27T08:11:52Z",
         "status": "IN_PROGRESS",
         "workflowName": "Run Pytest Unit Tests"
       },
@@ -44,9 +44,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637093433/job/68848612588",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637197290/job/68848931681",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-27T08:08:37Z",
+        "startedAt": "2026-03-27T08:11:51Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -54,9 +54,9 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637093420/job/68848612140",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637197294/job/68848931605",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-27T08:08:36Z",
+        "startedAt": "2026-03-27T08:11:49Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
       },
@@ -64,21 +64,11 @@
         "__typename": "CheckRun",
         "completedAt": "0001-01-01T00:00:00Z",
         "conclusion": "",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637093420/job/68848612155",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23637197294/job/68848931616",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-27T08:08:37Z",
+        "startedAt": "2026-03-27T08:11:49Z",
         "status": "IN_PROGRESS",
         "workflowName": "CodeQL"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-27T08:09:12Z",
-        "conclusion": "NEUTRAL",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/68848669182",
-        "name": "CodeQL",
-        "startedAt": "2026-03-27T08:09:10Z",
-        "status": "COMPLETED",
-        "workflowName": ""
       }
     ],
     "title": "Provider Profiles Schema Migration and Architecture Fixes",
@@ -88,8 +78,8 @@
     "isRunning": true,
     "hasFailures": false,
     "failedChecks": [],
-    "totalCheckCount": 7,
-    "securityCheckCount": 6,
+    "totalCheckCount": 6,
+    "securityCheckCount": 5,
     "nonSecurityCheckCount": 1,
     "checkNames": [
       "Analyze (javascript-typescript)",
@@ -97,18 +87,17 @@
       "test",
       "Analyze (python)",
       "Analyze (javascript-typescript)",
-      "Analyze (python)",
-      "CodeQL"
+      "Analyze (python)"
     ],
     "signalQuality": "ok",
     "degradedReasons": [],
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "a869a1ad300b339ceade73121795d3def0684398",
+    "headShaVerified": "d33b300ece28851b9061fc1e0de10d2948473fd6",
     "headShaNonSecurityCheckCount": 1,
-    "previousCommitSha": "7ecc10199dc3ed859f39b9e3f4ca0a94a6f2a46d",
-    "previousCommitNonSecurityCheckCount": 5
+    "previousCommitSha": "a869a1ad300b339ceade73121795d3def0684398",
+    "previousCommitNonSecurityCheckCount": 1
   },
   "commentsFetch": {
     "succeeded": true,
@@ -163,7 +152,7 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
     },
     {
@@ -179,7 +168,7 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
     },
     {
@@ -195,7 +184,7 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
     },
     {
@@ -207,7 +196,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495814",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "a869a1ad300b339ceade73121795d3def0684398",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
       "in_reply_to_id": null,
       "line": 16,
       "side": "RIGHT",
@@ -223,7 +212,7 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495815",
       "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
-      "commit_id": "a869a1ad300b339ceade73121795d3def0684398",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
       "in_reply_to_id": null,
       "line": 17,
       "side": "RIGHT",
@@ -243,7 +232,7 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
     },
     {
@@ -259,7 +248,7 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
     },
     {
@@ -271,11 +260,11 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495830",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "a869a1ad300b339ceade73121795d3def0684398",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
       "in_reply_to_id": null,
       "line": 13,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -287,11 +276,11 @@
       "updated_at": "2026-03-27T07:47:41Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495838",
       "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
-      "commit_id": "a869a1ad300b339ceade73121795d3def0684398",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
       "in_reply_to_id": null,
       "line": 14,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -307,7 +296,7 @@
       "in_reply_to_id": null,
       "line": null,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": true
     },
     {
@@ -415,28 +404,163 @@
       "created_at": "2026-03-27T07:50:38Z",
       "updated_at": "2026-03-27T07:50:38Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#pullrequestreview-4019451088"
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578342,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'Sequence' is not used.\n\n---\n\nTo fix the problem, remove the unused <code>Sequence</code> import while preserving the used <code>Union</code> import. This keeps the file functionally identical while satisfying the linter.</p>\n<p>Concretely, in <code>api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py</code>, adjust the import on line 8 from <code>from typing import Sequence, Union</code> to <code>from typing import Union</code>. No other code changes are required, and no new imports or definitions are needed.",
+      "created_at": "2026-03-27T08:11:33Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578342",
+      "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 8,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578346,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'Sequence' is not used.\n\n---\n\nTo fix the problem, remove the unused <code>Sequence</code> from the <code>typing</code> import while keeping <code>Union</code>, which is used for the <code>down_revision</code> type annotation. This preserves existing type behavior and functionality.</p>\n<p>Concretely, in <code>api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py</code>, edit the import on line 8 so that it imports only <code>Union</code>. No other changes are needed, and no additional methods or definitions are required.",
+      "created_at": "2026-03-27T08:11:33Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578346",
+      "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 8,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578354,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'ProfileSelector' is not used.\n\n---\n\nTo fix the problem, remove the unused import so that the module no longer brings in <code>ProfileSelector</code>. This eliminates the dead code, resolves the CodeQL warning, and does not affect existing functionality since <code>ProfileSelector</code> is never referenced.</p>\n<p>Concretely, in <code>api_service/api/routers/auth_profiles.py</code>, delete the line:</p>\n<pre><code>from moonmind.schemas.agent_runtime_models import ProfileSelector\n</code></pre>\n<p>No additional methods, imports, or definitions are needed; we only remove this single unused import line.",
+      "created_at": "2026-03-27T08:11:33Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578354",
+      "path": "api_service/api/routers/auth_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 21,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578361,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused global variable\n\n<p>The global variable 'revision' is not used.</p>",
+      "created_at": "2026-03-27T08:11:33Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578361",
+      "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 13,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578367,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused global variable\n\n<p>The global variable 'down_revision' is not used.</p>",
+      "created_at": "2026-03-27T08:11:33Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578367",
+      "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 14,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578369,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused global variable\n\n<p>The global variable 'revision' is not used.</p>",
+      "created_at": "2026-03-27T08:11:33Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578369",
+      "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 11,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578374,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused global variable\n\n<p>The global variable 'down_revision' is not used.</p>",
+      "created_at": "2026-03-27T08:11:34Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578374",
+      "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 12,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
+    },
+    {
+      "type": "review_comment",
+      "id": 2999578380,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused global variable\n\nThe global variable 'branch_labels' is not used.\n\n---\n\n<p>In general, the way to fix an \"unused global variable\" in a migration script is to either remove the variable if it is not needed or, if it must exist for framework/tooling reasons, ensure it is actually used in a meaningful way. For Alembic migrations, only the identifiers that Alembic inspects (<code>revision</code>, <code>down_revision</code>, and sometimes <code>depends_on</code> / <code>branch_labels</code> when relevant) need to be present; optional ones can be omitted when unused.</p>\n<p>For this specific file, the best fix that preserves existing functionality is to delete the <code>branch_labels</code> global, since it is set to <code>None</code> and not used anywhere. Alembic will still correctly identify the migration using <code>revision</code> and <code>down_revision</code>, and <code>depends_on</code> remains available if needed in the future. No imports or additional definitions are necessary; we simply remove line 13.</p>\n<p>Concretely:</p>\n<ul>\n<li>Edit <code>api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py</code>.</li>\n<li>Remove the line defining <code>branch_labels</code>.</li>\n<li>Leave the rest of the file unchanged.</li>\n</ul>",
+      "created_at": "2026-03-27T08:11:34Z",
+      "updated_at": "2026-03-27T08:11:34Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578380",
+      "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+      "commit_id": "d33b300ece28851b9061fc1e0de10d2948473fd6",
+      "in_reply_to_id": null,
+      "line": 13,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
     }
   ],
   "commentsSummary": {
     "classificationVersion": 2,
-    "total": 20,
-    "reviewCommentCount": 17,
+    "total": 28,
+    "reviewCommentCount": 25,
     "issueCommentCount": 1,
     "reviewBodyCount": 2,
-    "actionableCommentCount": 4,
+    "actionableCommentCount": 10,
     "includeBotReviewComments": true,
     "humanCommentCount": 6,
-    "botCommentCount": 14,
+    "botCommentCount": 22,
     "hasActionableComments": true,
     "actionableCommentIds": [
       2999495814,
       2999495815,
-      2999495830,
-      2999495838
+      2999578342,
+      2999578346,
+      2999578354,
+      2999578361,
+      2999578367,
+      2999578369,
+      2999578374,
+      2999578380
     ],
     "nonActionableReasonCounts": {
       "bot_comment_excluded": 3,
-      "thread_outdated": 13
+      "thread_outdated": 7,
+      "thread_resolved": 8
     },
     "classifiedComments": [
       {
@@ -477,7 +601,7 @@
         "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
         "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495805,
@@ -487,7 +611,7 @@
         "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
         "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495809,
@@ -497,7 +621,7 @@
         "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
         "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495814,
@@ -527,7 +651,7 @@
         "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
         "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495824,
@@ -537,7 +661,7 @@
         "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
         "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495830,
@@ -546,8 +670,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495830",
         "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
         "line": 13,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495838,
@@ -556,8 +680,8 @@
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999495838",
         "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
         "line": 14,
-        "actionable": true,
-        "reason": "actionable"
+        "actionable": false,
+        "reason": "thread_resolved"
       },
       {
         "id": 2999495843,
@@ -567,7 +691,7 @@
         "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
         "line": null,
         "actionable": false,
-        "reason": "thread_outdated"
+        "reason": "thread_resolved"
       },
       {
         "id": 2999506433,
@@ -638,6 +762,86 @@
         "line": null,
         "actionable": false,
         "reason": "bot_comment_excluded"
+      },
+      {
+        "id": 2999578342,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578342",
+        "path": "api_service/migrations/versions/053758f254f3_update_provider_profiles_schema.py",
+        "line": 8,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578346,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578346",
+        "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
+        "line": 8,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578354,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578354",
+        "path": "api_service/api/routers/auth_profiles.py",
+        "line": 21,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578361,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578361",
+        "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
+        "line": 13,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578367,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578367",
+        "path": "api_service/migrations/versions/4b53a4790314_rename_tables_to_provider_profiles.py",
+        "line": 14,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578369,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578369",
+        "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+        "line": 11,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578374,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578374",
+        "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+        "line": 12,
+        "actionable": true,
+        "reason": "actionable"
+      },
+      {
+        "id": 2999578380,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003#discussion_r2999578380",
+        "path": "api_service/migrations/versions/61c25ebc7201_merge_heads_before_provider_profiles.py",
+        "line": 13,
+        "actionable": true,
+        "reason": "actionable"
       }
     ]
   }
