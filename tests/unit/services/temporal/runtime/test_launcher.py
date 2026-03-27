@@ -123,7 +123,8 @@ def test_build_command_gemini_cli():
     assert "--model" in cmd
     assert "--yolo" in cmd
     assert "--prompt" in cmd
-    assert "--effort" in cmd
+    # Gemini CLI does not support --effort
+    assert "--effort" not in cmd
     assert "Fix the bug" in cmd
 
 

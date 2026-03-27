@@ -48,10 +48,6 @@ class GeminiCliStrategy(ManagedRuntimeStrategy):
         if model:
             cmd.extend(["--model", model])
 
-        effort = self.get_effort(profile, request)
-        if effort:
-            cmd.extend(["--effort", effort])
-
         if request.instruction_ref:
             cmd.extend(["--yolo", "--prompt", request.instruction_ref])
 
