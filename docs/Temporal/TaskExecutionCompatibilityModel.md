@@ -213,12 +213,12 @@ Adapters must preserve:
 | Edit inputs | Update `UpdateInputs` | `POST /api/executions/{workflowId}/update` |
 | Rename task | Update `SetTitle` | `POST /api/executions/{workflowId}/update` |
 | Rerun task | Update `RequestRerun` | `POST /api/executions/{workflowId}/update` |
-| Approve task | Signal `Approve` | `POST /api/executions/{workflowId}/signal` |
-| Pause task | Signal `Pause` | `POST /api/executions/{workflowId}/signal` |
-| Resume task | Signal `Resume` | `POST /api/executions/{workflowId}/signal` |
+| Approve task | Update `Approve` | `POST /api/executions/{workflowId}/update` |
+| Pause task | Update `Pause` | `POST /api/executions/{workflowId}/update` |
+| Resume task | Update `Resume` | `POST /api/executions/{workflowId}/update` |
 | Deliver callback | Signal `ExternalEvent` | `POST /api/executions/{workflowId}/signal` |
 | Cancel task | Cancel workflow | `POST /api/executions/{workflowId}/cancel` |
-| Reschedule deferred task | Reschedule signal/update path | `POST /api/executions/{workflowId}/reschedule` |
+| Reschedule deferred task | `reschedule` signal path | `POST /api/executions/{workflowId}/reschedule` |
 
 Rules:
 

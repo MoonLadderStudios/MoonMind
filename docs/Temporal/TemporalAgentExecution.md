@@ -48,7 +48,7 @@ class MoonMindRunWorkflow:
         self._set_state("completed")
 ```
 
-The workflow also supports updates and signals such as:
+The workflow also supports control updates and signals such as:
 
 - `UpdateInputs`
 - `SetTitle`
@@ -57,6 +57,13 @@ The workflow also supports updates and signals such as:
 - `Pause`
 - `Resume`
 - `ExternalEvent`
+- `reschedule` where applicable for in-workflow scheduled waits
+
+Desired-state rule:
+
+- acknowledged execution controls use Temporal Updates,
+- asynchronous callbacks use Signals,
+- mutable deferred waits use the dedicated `reschedule` signal path.
 
 ### 2.3 Planning stage
 

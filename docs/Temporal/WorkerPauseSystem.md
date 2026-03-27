@@ -40,9 +40,10 @@ maintenance states.
 
 ### 3.2 Workflow Pause (System-Wide Suspend)
 
-* **Mechanism**: A broadcast Temporal Signal sent to all running Workflows, telling the orchestration logic to suspend.
+* **Mechanism**: A future workflow-level quiesce contract sent to running workflows, telling the orchestration logic to suspend at safe boundaries.
 * This operates at the **workflow** level. Workers may still be online, but the workflows intentionally do not schedule new Activities.
-* Workflows check this state between Activities using a signal handler. If paused, the Workflow blocks on a `workflow.wait_condition()` until resumed.
+* The workflow-level contract must align with the canonical execution control model: acknowledged execution pause/resume remains update-based, while any future system-wide quiesce broadcast must use an explicitly documented workflow-local async contract instead of ad hoc generic signal names.
+* Workflows check this state between Activities and block on `workflow.wait_condition(...)` until resumed.
 * Long-running agent runtimes are detached and their state is preserved via the `ManagedRunStore`, rather than requiring Temporal Activity heartbeats.
 
 ---
@@ -94,9 +95,9 @@ maintenance states.
 
 ### 6.1 Running Activity behavior (Quiesce mode)
 
-In Workflow Pause mode, the system uses Temporal's Batch Operations API to Signal thousands of running workflows efficiently. The workflow implementation should:
+In Workflow Pause mode, any future broad quiesce mechanism must use a dedicated, documented workflow-local async contract. The workflow implementation should:
 
-* Register a pause signal handler: `def pause_signal_handler(self, paused: bool)`.
+* register the dedicated quiesce contract explicitly rather than assuming public `Pause` / `Resume` update names can be broadcast generically,
 * Maintain an internal `self.is_paused` flag.
 * Before transitioning to the next Activity/Agent Step, the workflow calls `await workflow.wait_condition(lambda: not self.is_paused)`.
 * For long-running managed agent runtimes, `MoonMind.AgentRun` and adapters use `status(...)` polling against the `ManagedRunStore`. Suspending the workflow simply pauses the polling loop, leaving the detached runtime unaffected.
@@ -108,7 +109,7 @@ Resumed workflows seamlessly handoff or continue on newly upgraded workers holdi
 
 ### 6.2 External Agents
 
-For external agents (e.g., Jules), the pause mechanism behaves differently. External agent processes are not interrupted or canceled by a system pause. "Pause" (as currently implemented) primarily blocks new workflow submissions and relies on worker drain to stop further orchestration. Because the current code does not gate each individual step on the pause flag, in-flight workflows may still dispatch additional steps to external agents until the worker finishes draining.
+For external agents (e.g., Jules), the pause mechanism behaves differently. External agent processes are not interrupted or canceled by a system pause. In steady state today, pause primarily blocks new workflow submissions and relies on worker drain to stop further orchestration. Any future workflow-level quiesce must document how external-agent waits and detached runtimes respond so operator expectations remain accurate.
 
 ---
 
@@ -138,4 +139,4 @@ For external agents (e.g., Jules), the pause mechanism behaves differently. Exte
 
 ## 9. Follow-on enhancements
 
-**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper “quiesce” mode using `workflow.wait_condition()` plus batch signals — are tracked in [`docs/tmp/remaining-work/Temporal-WorkerPauseSystem.md`](../tmp/remaining-work/Temporal-WorkerPauseSystem.md).
+**Steady-state today:** API-driven pause, worker drain, and Temporal-aligned operator messaging (see sections above). **Optional next steps** — banner wired purely to Temporal visibility (where not already), runbooks standardized on `worker.shutdown()` for drain, and a deeper workflow-level quiesce contract using `workflow.wait_condition()` plus an explicitly documented async broadcast path — are tracked in [`docs/tmp/remaining-work/Temporal-WorkerPauseSystem.md`](../tmp/remaining-work/Temporal-WorkerPauseSystem.md).

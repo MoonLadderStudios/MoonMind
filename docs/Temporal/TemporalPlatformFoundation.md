@@ -165,6 +165,12 @@ MoonMind standardizes on Temporal-native time controls:
 No platform contract should imply a separate scheduler daemon or queue-based
 dispatch path for live execution.
 
+Control-plane corollary:
+
+- acknowledged execution mutations use Updates or cancellation endpoints
+- asynchronous external events use Signals
+- mutable deferred waits use the dedicated `reschedule` signal path
+
 ---
 
 ## 11. Security foundation

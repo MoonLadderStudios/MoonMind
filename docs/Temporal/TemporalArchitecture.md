@@ -210,14 +210,14 @@ Preferred workflow controls:
 - `UpdateInputs`
 - `SetTitle`
 - `RequestRerun`
-
-**Signals**
-
 - `Approve`
 - `Pause`
 - `Resume`
+
+**Signals**
+
 - `ExternalEvent`
-- reschedule signal where applicable
+- `reschedule` where applicable for in-workflow scheduled waits
 
 Approval policy remains a MoonMind concern; Temporal provides the durable
 transport and execution semantics.
