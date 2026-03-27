@@ -2773,6 +2773,17 @@ class TemporalAgentRuntimeActivities:
         if not workflow_id or not run_id:
             return
 
+        import uuid
+        try:
+            uuid.UUID(run_id)
+        except ValueError:
+            logger.warning(
+                "run_id %r is not a valid UUID; skipping task run binding for workflow %s",
+                run_id,
+                workflow_id,
+            )
+            return
+
         from api_service.db.base import get_async_session_context
         from api_service.db.models import TemporalExecutionCanonicalRecord
 

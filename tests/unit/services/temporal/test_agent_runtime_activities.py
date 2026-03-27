@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,

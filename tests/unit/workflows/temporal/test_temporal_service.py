@@ -475,6 +475,7 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
         assert refreshed.memo["continue_as_new_cause"] == "manual_rerun"
         assert refreshed.memo["latest_temporal_run_id"] == refreshed.run_id
         assert "taskRunId" not in refreshed.memo
+        assert "taskRunId" not in refreshed.parameters
         assert refreshed.search_attributes["mm_continue_as_new_cause"] == "manual_rerun"
 
 
