@@ -20,6 +20,8 @@ MoonMind is the first open-source platform to orchestrate leading AI agents out 
 5. configure your .env with `nano .env`, `notepad .env`, or your favorite text editor
 6. run `docker compose up -d` to start the service
 
+*Note: The local Temporal deployment defaults to the built-in `default` namespace. You can override this by setting `TEMPORAL_NAMESPACE` in your `.env` file.*
+
 Go to [http://localhost:5000/tasks](http://localhost:5000/tasks) to access Mission Control.
 
 ### Authenticate a runtime with OAuth

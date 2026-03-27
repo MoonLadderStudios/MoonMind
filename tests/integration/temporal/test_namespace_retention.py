@@ -86,3 +86,63 @@ exit 0
     assert "--retention 96h" in calls
     assert "namespace create" in calls
     assert "namespace update" in calls
+
+
+def test_namespace_bootstrap_skips_create_for_default_namespace(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    temporal_stub = """#!/usr/bin/env sh
+set -eu
+state_dir="${FAKE_TEMPORAL_STATE_DIR:?}"
+cmd="$*"
+printf '%s\\n' "$cmd" >> "${state_dir}/calls.log"
+case "$cmd" in
+  *"cluster health"*)
+    echo "health"
+    ;;
+  *"namespace describe"*)
+    echo "describe"
+    ;;
+  *"namespace create"*)
+    echo "create"
+    ;;
+  *"namespace update"*)
+    echo "update"
+    ;;
+  *"search-attribute list"*)
+    echo "search list"
+    ;;
+  *"search-attribute create"*)
+    touch "${state_dir}/search.exists"
+    echo "search create"
+    ;;
+esac
+"""
+    _write_executable(fake_bin / "temporal", temporal_stub)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
+    env["TEMPORAL_ADDRESS"] = "temporal:7233"
+    env["TEMPORAL_NAMESPACE"] = "default"
+    env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
+
+    first_run = subprocess.run(
+        ["sh", str(BOOTSTRAP_SCRIPT)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert first_run.returncode == 0, first_run.stderr
+    assert "Built-in default namespace detected. Skipping namespace create/update and retention policy." in first_run.stdout
+    assert "Namespace does not exist; creating" not in first_run.stdout
+
+    calls = (state_dir / "calls.log").read_text(encoding="utf-8")
+    assert "namespace create" not in calls
+    assert "namespace update" not in calls
+    assert "search-attribute create" in calls
