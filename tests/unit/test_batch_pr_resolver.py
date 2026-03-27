@@ -69,7 +69,12 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
         "MoonLadderStudios/MoonMind",
         pr_number=42,
         branch="feature/example",
-        runtime=runtime_selection(mode="codex", model="gpt-5-codex", effort="high", provider_profile="azure"),
+        runtime=runtime_selection(
+            mode="codex",
+            model="gpt-5-codex",
+            effort="high",
+            provider_profile="azure",
+        ),
         merge_method="squash",
         max_iterations=3,
         priority=0,
