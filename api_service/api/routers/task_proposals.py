@@ -347,10 +347,10 @@ async def promote_proposal(
         )
 
         initial_parameters = dict(final_request.get("payload") or {})
-        title = str(proposal.title or "").strip()[:200]
+        instructions = str(initial_parameters.get("task", {}).get("instructions") or "").strip()
+        title = instructions.splitlines()[0][:200] if instructions else str(proposal.title or "").strip()[:200]
         if not title:
-            instructions = str(initial_parameters.get("task", {}).get("instructions") or "").strip()
-            title = instructions.splitlines()[0][:200] if instructions else "Promoted Task"
+            title = "Promoted Task"
 
         await execution_service.create_execution(
             workflow_type="MoonMind.Run",
