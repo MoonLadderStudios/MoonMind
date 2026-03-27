@@ -1,37 +1,32 @@
 [
   {
-    "id": 4140314860,
+    "id": 4140946136,
     "disposition": "not-applicable",
-    "rationale": "Codex usage limit notification from bot, not actionable feedback."
+    "rationale": "Informational greeting from bot, no action needed."
   },
   {
-    "id": 2999078770,
+    "id": 4140946365,
     "disposition": "not-applicable",
-    "rationale": "CodeQL false positive: the logged values are profile_id strings (e.g. 'claude_anthropic'), not credentials."
+    "rationale": "Informational bot comment about usage limits."
   },
   {
-    "id": 4018984796,
+    "id": 4019593582,
     "disposition": "not-applicable",
-    "rationale": "Gemini review summary with 'no feedback to provide'."
+    "rationale": "Bot review summary with no actionable feedback."
   },
   {
-    "id": 2999086104,
+    "id": 2999644167,
     "disposition": "addressed",
-    "rationale": "Changed docstring from 'Upsert' to 'Seed' to match insert-only behavior."
+    "rationale": "Updated section 2 to correctly reference PUT /api/queue/jobs/{id} and POST /api/executions/{workflowId}/update."
   },
   {
-    "id": 2999086110,
+    "id": 2999644181,
     "disposition": "addressed",
-    "rationale": "Added non-blank value check for ANTHROPIC_MODEL env override to prevent launching Claude without model selection."
+    "rationale": "Rewrote section 3 to describe the implemented Temporal Workflow Updates approach instead of cancel and restart."
   },
   {
-    "id": 2999086122,
-    "disposition": "addressed",
-    "rationale": "Already fixed in previous commit: migration now uses convert_from/convert_to instead of ::text/::bytea casts."
-  },
-  {
-    "id": 4018990233,
+    "id": 4019617115,
     "disposition": "not-applicable",
-    "rationale": "Copilot PR overview/summary comment, not actionable feedback."
+    "rationale": "Informational PR overview from bot, no action needed."
   }
 ]
