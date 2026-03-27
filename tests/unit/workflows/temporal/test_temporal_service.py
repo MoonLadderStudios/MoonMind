@@ -732,6 +732,41 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_signal_resume_forwards_payload_via_workflow_update(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = AsyncMock()
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.Run",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="Resume",
+            payload={"message": "Use the Provider Profiles label."},
+            payload_artifact_ref=None,
+        )
+
+        service._client_adapter.update_workflow.assert_awaited_once_with(
+            created.workflow_id,
+            "Resume",
+            {"message": "Use the Provider Profiles label."},
+        )
+        resumed = await service.describe_execution(created.workflow_id)
+        assert resumed.state is MoonMindWorkflowState.EXECUTING
+        assert resumed.memo.get("waiting_reason") is None
+
+
+@pytest.mark.asyncio
 async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

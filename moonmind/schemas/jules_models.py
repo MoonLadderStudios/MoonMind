@@ -302,7 +302,7 @@ class JulesAgentMessage(BaseModel):
     See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions.activities#AgentMessaged
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_message: str = Field(..., alias="agentMessage")
 
@@ -313,7 +313,7 @@ class JulesActivity(BaseModel):
     See: https://developers.google.com/jules/api/reference/rest/v1alpha/sessions.activities#Activity
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     name: Optional[str] = Field(None, alias="name")
     id: Optional[str] = Field(None, alias="id")
@@ -352,4 +352,3 @@ __all__ = [
     "SourceContext",
     "normalize_jules_status",
 ]
-

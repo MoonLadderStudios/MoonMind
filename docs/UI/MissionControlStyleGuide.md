@@ -659,7 +659,7 @@ Wrap tables in a scroll container:
 The components parse execution records into normalized properties: Source, Queue, Runtime, Status, Created, Started, Finished.
 The Table maps these into standard UI grids, while the Mobile Card iterates these definitions to format `<dt>/<dd>` lists inside vertical blocks.
 
-- The backend exposes these rows consistently over `GET /api/executions`.
+- The backend exposes these rows consistently over `GET /api/queue/jobs`.
 - UI CSS governs the CSS media queries hiding the Table at `max-width: 767px` and showing Cards instead.
 
 ## 11. Production baseline vs upcoming polish

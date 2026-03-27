@@ -1,4 +1,6 @@
 import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
 
 from temporalio.testing import WorkflowEnvironment
@@ -155,3 +157,41 @@ async def test_run_workflow_cancel_signal(mock_run_environment):
             result = await handle.result()
             assert result["status"] == "canceled"
 
+
+@pytest.mark.asyncio
+async def test_resume_forwards_operator_message_to_active_jules_child(monkeypatch):
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    await workflow_instance.resume({"message": "Please rename it to Provider Profiles."})
+
+    mock_handle.signal.assert_awaited_once_with(
+        "operator_message",
+        {"message": "Please rename it to Provider Profiles."},
+    )
+    assert workflow_instance._resume_requested is True
+
+
+def test_update_inputs_extracts_clarification_message_from_parameters_patch():
+    workflow_instance = MoonMindRunWorkflow()
+
+    message = workflow_instance._extract_clarification_message(
+        {
+            "parametersPatch": {
+                "clarificationResponse": "Use the Workers page copy for now.",
+            }
+        }
+    )
+
+    assert message == "Use the Workers page copy for now."

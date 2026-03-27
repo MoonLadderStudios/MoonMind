@@ -4639,9 +4639,9 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div id="queue-provider-profile-wrap" class="hidden">
-          <label>Provider Profile
-            <select name="providerProfile">
+        <div id="queue-auth-profile-wrap" class="hidden">
+          <label>Auth profile
+            <select name="authProfile">
               <option value="">Default (system chooses)</option>
             </select>
           </label>
@@ -4902,7 +4902,7 @@
           .toLowerCase(),
         model: String(formData.get("model") || "").trim(),
         effort: String(formData.get("effort") || "").trim(),
-        authProfileId: String(formData.get("providerProfile") || "").trim(),
+        authProfileId: String(formData.get("authProfile") || "").trim(),
         priority: Number.isFinite(priority) ? priority : 0,
         maxAttempts: Number.isFinite(maxAttempts) ? maxAttempts : 3,
         proposeTasks: formData.get("proposeTasks") !== null,
@@ -4926,9 +4926,9 @@
     const effortInputElement = form.querySelector('input[name="effort"]');
     const modelDatalistNode = form.querySelector("#queue-model-options");
     const effortDatalistNode = form.querySelector("#queue-effort-options");
-    const authProfileWrap = form.querySelector("#queue-provider-profile-wrap");
+    const authProfileWrap = form.querySelector("#queue-auth-profile-wrap");
     const authProfileHint = form.querySelector("#queue-auth-profile-hint");
-    const authProfileSelect = form.querySelector('select[name="providerProfile"]');
+    const authProfileSelect = form.querySelector('select[name="authProfile"]');
     let applyQueueDraftAuthProfileOnce = true;
     let authProfileFetchToken = 0;
 
@@ -6088,7 +6088,7 @@
       }
       const model = String(formData.get("model") || "").trim() || null;
       const effort = String(formData.get("effort") || "").trim() || null;
-      const authProfileRef = String(formData.get("providerProfile") || "").trim();
+      const authProfileRef = String(formData.get("authProfile") || "").trim();
       const startingBranch = String(formData.get("startingBranch") || "").trim() || null;
       const newBranch = String(formData.get("newBranch") || "").trim() || null;
       const affinityKey = queueDraftAffinityKey || null;
@@ -8112,6 +8112,30 @@
         return;
       }
       if (normalizedAction === "pause" || normalizedAction === "resume") {
+        let payload = {};
+        const awaitingAction =
+          String(pick(execution, "rawState", "state") || "")
+            .trim()
+            .toLowerCase() === "awaiting_external";
+        const integrationName = String(
+          pick(execution, "searchAttributes", "mm_integration") ||
+            pick(execution, "targetRuntime") ||
+            "",
+        )
+          .trim()
+          .toLowerCase();
+        if (normalizedAction === "resume" && awaitingAction && integrationName === "jules") {
+          const clarificationReply = window.prompt(
+            "Optional clarification reply for Jules",
+            "",
+          );
+          if (clarificationReply === null) {
+            return;
+          }
+          if (clarificationReply.trim()) {
+            payload = { message: clarificationReply.trim() };
+          }
+        }
         await fetchJson(
           endpoint(
             temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
@@ -8121,6 +8145,7 @@
             method: "POST",
             body: JSON.stringify({
               signalName: normalizedAction === "pause" ? "Pause" : "Resume",
+              payload,
             }),
           },
         );
@@ -8133,6 +8158,30 @@
         if (approvalType === null) {
           return;
         }
+        let payload = { approval_type: approvalType || "operator" };
+        const integrationName = String(
+          pick(execution, "searchAttributes", "mm_integration") ||
+            pick(execution, "targetRuntime") ||
+            "",
+        )
+          .trim()
+          .toLowerCase();
+        const awaitingAction =
+          String(pick(execution, "rawState", "state") || "")
+            .trim()
+            .toLowerCase() === "awaiting_external";
+        if (awaitingAction && integrationName === "jules") {
+          const clarificationReply = window.prompt(
+            "Optional clarification reply for Jules",
+            "",
+          );
+          if (clarificationReply === null) {
+            return;
+          }
+          if (clarificationReply.trim()) {
+            payload.message = clarificationReply.trim();
+          }
+        }
         await fetchJson(
           endpoint(
             temporalSourceConfig.signal || "/api/executions/{workflowId}/signal",
@@ -8142,7 +8191,7 @@
             method: "POST",
             body: JSON.stringify({
               signalName: "Approve",
-              payload: { approval_type: approvalType || "operator" },
+              payload,
             }),
           },
         );
