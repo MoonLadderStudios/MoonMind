@@ -26,6 +26,13 @@ _VALIDATION_COLUMN_NAMES = (
 _EMPTY_VALIDATION_VALUES = {"", "-", "tbd", "todo", "n/a", "na", "none"}
 
 
+def _doc_req_ids_from_text(spec_path: Path) -> set[str]:
+    spec_text = spec_path.read_text(encoding="utf-8")
+    return {
+        f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
+    }
+
+
 def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
     features: list[tuple[str, Path, Path]] = []
     for path in sorted(Path("specs").iterdir()):
@@ -35,6 +42,10 @@ def _discover_contract_backed_features() -> list[tuple[str, Path, Path]]:
             continue
         feature_spec = path / "spec.md"
         feature_traceability = path / "contracts" / "requirements-traceability.md"
+        if not (feature_spec.exists() and feature_traceability.exists()):
+            continue
+        if not _doc_req_ids_from_text(feature_spec):
+            continue
         if feature_spec.exists() and feature_traceability.exists():
             features.append((path.name, feature_spec, feature_traceability))
     return features
@@ -54,8 +65,6 @@ def test_doc_req_traceability_contract(
     feature_traceability: Path,
 ) -> None:
     doc_req_ids = _doc_req_ids_from_text(feature_spec)
-    if not doc_req_ids:
-        pytest.skip(f"No DOC-REQ entries found in {feature_name} spec.md")
     traceability_rows = _parse_traceability_rows(feature_traceability)
     traceability_ids = set(traceability_rows)
 
@@ -70,13 +79,6 @@ def test_doc_req_traceability_contract(
         "Unexpected DOC-REQ traceability rows in "
         f"{feature_traceability}: {', '.join(extra_ids)}"
     )
-
-
-def _doc_req_ids_from_text(spec_path: Path) -> set[str]:
-    spec_text = spec_path.read_text(encoding="utf-8")
-    return {
-        f"DOC-REQ-{match.group(1)}" for match in _DOC_REQ_PATTERN.finditer(spec_text)
-    }
 
 
 def _parse_traceability_rows(traceability_path: Path) -> dict[str, str]:
