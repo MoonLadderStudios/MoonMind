@@ -366,6 +366,7 @@ services:
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
+      - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
       - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}
@@ -441,6 +442,7 @@ services:
       - CODEX_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_HOME=${CODEX_VOLUME_PATH:-/home/app/.codex}
       - CODEX_CONFIG_PATH=${CODEX_VOLUME_PATH:-/home/app/.codex}/config.toml
+      - CODEX_TEMPLATE_PATH=/app/api_service/config.template.toml
       - CLAUDE_HOME=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - CLAUDE_VOLUME_PATH=${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - MOONMIND_CLAUDE_CLI_AUTH_MODE=${MOONMIND_CLAUDE_CLI_AUTH_MODE:-api_key}

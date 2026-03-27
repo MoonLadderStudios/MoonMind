@@ -1,5 +1,9 @@
 # Managed by MoonMind automation
 approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
 
 [workflow]
 codex_queue = "codex"
