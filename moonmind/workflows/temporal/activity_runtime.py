@@ -1951,6 +1951,19 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.adapters.github_service import GitHubService
 
         svc = GitHubService()
+        target_branch = payload.get("target_branch") or payload.get("targetBranch")
+        if target_branch:
+            success, summary = await svc.update_pull_request_base(
+                pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
+                new_base=target_branch,
+            )
+            if not success:
+                return {
+                    "prUrl": payload.get("pr_url") or payload.get("prUrl") or "",
+                    "merged": False,
+                    "mergeSha": None,
+                    "summary": f"Base branch update failed: {summary}",
+                }
         result = await svc.merge_pull_request(
             pr_url=payload.get("pr_url") or payload.get("prUrl") or "",
             merge_method=payload.get("merge_method") or payload.get("mergeMethod") or "merge",

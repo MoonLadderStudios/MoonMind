@@ -305,13 +305,16 @@ def _build_runtime_planner():
         )
 
         # If no explicit steps but stepCount > 1, synthesise N identical
-        # nodes so the Run workflow iterates them and chains jules_session_id
-        # across steps (multi-step session reuse).
+        # nodes for runtimes that still execute sequentially step-by-step.
+        # Jules is excluded because the workflow now bundles standard
+        # multi-step work into one one-shot execution brief instead of
+        # chaining provider follow-up messages.
         effective_step_count = node_inputs.get("stepCount")
         expand_step_count = (
             not has_multi_steps
             and isinstance(effective_step_count, int)
             and effective_step_count > 1
+            and str(runtime_mode).strip().lower() not in {"jules", "jules_api"}
         )
 
         nodes: list[dict[str, Any]] = []
@@ -356,8 +359,7 @@ def _build_runtime_planner():
                 prev_step_id = step_id
         elif expand_step_count:
             # Expand stepCount into N sequential nodes with the same
-            # instructions.  The Run workflow chains jules_session_id
-            # across nodes so each step continues the previous session.
+            # instructions for runtimes that still execute step-by-step.
             prev_step_id = None
             for idx in range(effective_step_count):
                 step_id = f"node-{idx + 1}"
