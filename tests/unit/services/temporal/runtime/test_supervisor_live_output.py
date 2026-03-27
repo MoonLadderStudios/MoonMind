@@ -122,6 +122,7 @@ async def test_heartbeat_and_wait_with_timeout_timed_out(tmp_path: Path):
             process.kill()
             await process.wait()
         except ProcessLookupError:
+            # Process already terminated; nothing to clean up.
             pass
 
 
