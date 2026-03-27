@@ -23,8 +23,9 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
-    ManagedAgentAuthMode,
-    ManagedAgentAuthProfile,
+    ManagedAgentProviderProfile,
+    ProviderCredentialSource,
+    RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
 from moonmind.auth.env_shaping import (
@@ -220,7 +221,7 @@ async def test_start_uses_passthrough_keys_for_github_tokens(
     profiles = [
         {
             "profile_id": "oauth-prof",
-            "auth_mode": "oauth",
+            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "volume_mount_path": "/mnt/auth",
             "command_template": ["gemini"],
         }
@@ -511,10 +512,11 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
         async with session_factory() as session:
             session.add(
-                ManagedAgentAuthProfile(
+                ManagedAgentProviderProfile(
                     profile_id="gprofile-1",
                     runtime_id="gemini_cli",
-                    auth_mode=ManagedAgentAuthMode.OAUTH,
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
                     volume_ref=None,
                     volume_mount_path="/mnt/auth",
                     account_label="primary",
@@ -525,10 +527,11 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
                 )
             )
             session.add(
-                ManagedAgentAuthProfile(
+                ManagedAgentProviderProfile(
                     profile_id="gprofile-disabled",
                     runtime_id="gemini_cli",
-                    auth_mode=ManagedAgentAuthMode.API_KEY,
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
                     max_parallel_runs=1,
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
@@ -556,7 +559,7 @@ async def test_auth_profile_list_returns_enabled_profiles(tmp_path: Path):
         profiles = result["profiles"]
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "gprofile-1"
-        assert profiles[0]["auth_mode"] == "oauth"
+        assert profiles[0]["credential_source"] == "oauth_volume"
         assert profiles[0]["enabled"] is True
         assert profiles[0]["max_parallel_runs"] == 2
 
@@ -586,10 +589,11 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
         async with session_factory() as session:
             for runtime, pid in [("gemini_cli", "g1"), ("claude_code", "c1")]:
                 session.add(
-                    ManagedAgentAuthProfile(
+                    ManagedAgentProviderProfile(
                         profile_id=pid,
                         runtime_id=runtime,
-                        auth_mode=ManagedAgentAuthMode.API_KEY,
+                        credential_source=ProviderCredentialSource.SECRET_REF,
+                        runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=300,
                         rate_limit_policy=ManagedAgentRateLimitPolicy.QUEUE,

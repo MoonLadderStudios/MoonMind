@@ -1,0 +1,16 @@
+{
+  "schema_version": 2,
+  "tool": "pr_resolve_finalize",
+  "timestamp": "2026-03-27T08:20:49.100609+00:00",
+  "pr_number": 1003,
+  "pr_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1003",
+  "decision": "blocked",
+  "merge_outcome": "blocked",
+  "status": "blocked",
+  "attempt": 1,
+  "max_attempts": 1,
+  "escalations": 0,
+  "next_step": "run_full_remediation",
+  "reason": "actionable_comments",
+  "final_reason": "actionable_comments"
+}

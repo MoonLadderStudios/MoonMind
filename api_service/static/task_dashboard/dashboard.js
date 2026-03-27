@@ -292,6 +292,7 @@
   /** Maps task submit runtime (dashboard) to managed_agent_auth_profiles.runtime_id. */
   const mapTaskRuntimeToAuthProfileRuntimeId = (mode) => {
     const runtimeMap = {
+      gemini: "gemini_cli",
       gemini_cli: "gemini_cli",
       claude: "claude_code",
       codex: "codex_cli",
@@ -5239,6 +5240,7 @@
     const authProfileHint = form.querySelector("#queue-auth-profile-hint");
     const authProfileSelect = form.querySelector('select[name="authProfile"]');
     let applyQueueDraftAuthProfileOnce = true;
+    let authProfileFetchToken = 0;
 
     const refreshAuthProfileOptions = async (runtimeMode) => {
       if (!authProfileWrap || !authProfileSelect) {
@@ -5267,7 +5269,11 @@
       try {
         authProfileFetchToken += 1;
         const currentToken = authProfileFetchToken;
-        const url = `${authProfileEndpoints.list}?runtime_id=${encodeURIComponent(
+        let listEndpoint = authProfileEndpoints.providerProfilesList || authProfileEndpoints.list || "";
+        if (listEndpoint.includes("/auth-profiles")) {
+          listEndpoint = listEndpoint.replace("/auth-profiles", "/provider-profiles");
+        }
+        const url = `${listEndpoint}?runtime_id=${encodeURIComponent(
           mappedRuntimeId,
         )}&enabled_only=true`;
         const profiles = await fetchJson(url);

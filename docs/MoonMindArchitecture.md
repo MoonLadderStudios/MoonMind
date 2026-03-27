@@ -95,7 +95,7 @@ MoonMind keeps a small workflow type catalog:
 | `MoonMind.Run` | Root workflow for all task execution — direct commands, plan-driven execution, and external integrations. |
 | `MoonMind.AgentRun` | Child workflow for true agent-runtime execution (managed and external agents). Started per-step by `MoonMind.Run`. |
 | `MoonMind.ManifestIngest` | Manifest-driven ingestion with graph compilation, fan-out/fan-in, and aggregation. |
-| `MoonMindAuthProfileManagerWorkflow` | Manages auth-profile slot acquisition and release for managed runtimes. |
+| `MoonMindProviderProfileManagerWorkflow` | Manages provider-profile slot acquisition and release for managed runtimes. |
 
 See: [Workflow Type Catalog](Temporal/WorkflowTypeCatalogAndLifecycle.md)
 
@@ -155,9 +155,9 @@ Managed agent runs use:
 
 * `ManagedAgentAdapter` → `ManagedRuntimeLauncher` → `ManagedRunSupervisor` for async launch and supervision.
 * Persistent auth volumes per runtime for credential reuse across restarts.
-* `AuthProfileManager` workflow for concurrency enforcement and 429 cooldown per auth profile.
+* `ProviderProfileManager` workflow for concurrency enforcement and 429 cooldown per provider profile.
 
-See: [Managed and External Agent Execution Model](Temporal/ManagedAndExternalAgentExecutionModel.md) · [Managed Agents Authentication](ManagedAgents/ManagedAgentsAuthentication.md) · [Docker-out-of-Docker](ManagedAgents/DockerOutOfDocker.md)
+See: [Managed and External Agent Execution Model](Temporal/ManagedAndExternalAgentExecutionModel.md) · [Provider Profiles](Security/ProviderProfiles.md) · [Docker-out-of-Docker](ManagedAgents/DockerOutOfDocker.md)
 
 ### External Agents
 
@@ -290,7 +290,7 @@ MoonMind deploys as a set of decoupled containers from a single `docker-compose.
 * **Fleet isolation** — Workers are segmented by capability. Sandbox workers never hold provider API keys. Integration workers never run arbitrary shell commands.
 * **Docker socket proxy** — Workers that need Docker API access use `tecnativa/docker-socket-proxy` with strict endpoint allowlisting. Direct host socket exposure is avoided.
 * **Secret hygiene** — Secrets never appear in artifacts, logs, workflow history, or PR text. Raw credentials are passed via environment variables and secret stores only.
-* **Auth profiles** — Managed agent credentials are stored in persistent Docker volumes and referenced indirectly. Runtime-specific environment shaping prevents credential mode conflicts.
+* **Provider profiles** — Managed agent credentials are stored in persistent Docker volumes and referenced indirectly. Runtime-specific environment shaping prevents credential mode conflicts. See [ProviderProfiles.md](Security/ProviderProfiles.md).
 * **OIDC** — Optional Keycloak profile provides full OIDC login/identity management.
 
 ---
