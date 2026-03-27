@@ -73,5 +73,45 @@
     "id": 4023410604,
     "disposition": "not-applicable",
     "rationale": "Code review summary."
+  },
+  {
+    "id": 4145013865,
+    "disposition": "not-applicable",
+    "rationale": "Jules informational onboarding comment; no requested code change."
+  },
+  {
+    "id": 4145014416,
+    "disposition": "not-applicable",
+    "rationale": "Codex usage-limit notice; no code or review action requested."
+  },
+  {
+    "id": 3003014318,
+    "disposition": "addressed",
+    "rationale": "Title derivation now selects the first non-empty instruction line after trimming."
+  },
+  {
+    "id": 4023453992,
+    "disposition": "not-applicable",
+    "rationale": "High-level review summary with no additional actionable request beyond line comments."
+  },
+  {
+    "id": 3003019253,
+    "disposition": "addressed",
+    "rationale": "Instruction line extraction now strips whitespace before truncation."
+  },
+  {
+    "id": 3003019281,
+    "disposition": "addressed",
+    "rationale": "Long conditional replaced with wrapped multi-line logic compliant with formatter limits."
+  },
+  {
+    "id": 3003019304,
+    "disposition": "addressed",
+    "rationale": "Added unit test covering multi-line instructions and trailing-space trimming behavior."
+  },
+  {
+    "id": 4023458720,
+    "disposition": "not-applicable",
+    "rationale": "Copilot review overview comment; actionable items were handled in individual line comments."
   }
 ]

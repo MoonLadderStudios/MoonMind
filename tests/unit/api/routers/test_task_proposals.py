@@ -158,6 +158,32 @@ def test_promote_proposal_returns_proposal(
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
     assert call_kwargs["initial_parameters"] == final_request["payload"]
+    assert call_kwargs["title"] == "do something"
+
+
+def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "task": {
+                "instructions": "\n\n  First line with spaces   \nSecond line\nThird line"
+            },
+        }
+    }
+    service.promote_proposal.return_value = (proposal, final_request)
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/promote",
+        json={"priority": 5},
+    )
+
+    assert response.status_code == 200
+    call_kwargs = execution_service.create_execution.await_args.kwargs
+    assert call_kwargs["title"] == "First line with spaces"
 
 
 def test_promote_proposal_accepts_override_payload(
@@ -194,6 +220,8 @@ def test_promote_proposal_accepts_override_payload(
         kwargs["task_create_request_override"]["payload"]["task"]["instructions"]
         == "edit"
     )
+    call_kwargs = execution_service.create_execution.await_args.kwargs
+    assert call_kwargs["title"] == "edit"
 
 
 def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
@@ -285,3 +313,4 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
+    assert call_kwargs["title"] == "do stuff"

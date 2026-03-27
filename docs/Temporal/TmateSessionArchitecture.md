@@ -212,7 +212,10 @@ The **`task_run_live_sessions`** table (SQLAlchemy model **`TaskRunLiveSession`*
 
 ### 5.2 Worker reporting (implemented)
 
-Live sessions are **not** updated via a dedicated Temporal activity in the current stack. The **managed agent queue worker** HTTP client (`moonmind/agents/codex_worker`; all managed CLI runtimes) calls the API service:
+Live sessions are **not** updated via a dedicated Temporal activity in the
+current stack. The managed CLI worker HTTP client
+(`moonmind/agents/codex_worker`; all managed CLI runtimes) calls the API
+service:
 
 | HTTP | Purpose |
 |---|---|

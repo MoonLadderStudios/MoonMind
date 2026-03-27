@@ -109,7 +109,10 @@ Field names match the Pydantic models in [`moonmind/mcp/tool_registry.py`](../mo
 **What is registered today**
 
 - **Jules** — When `JULES_ENABLED` is true and both `JULES_API_URL` and `JULES_API_KEY` are set, the server registers **`jules.create_task`**, **`jules.resolve_task`**, and **`jules.get_task`** (see [`moonmind/mcp/jules_tool_registry.py`](../moonmind/mcp/jules_tool_registry.py)).
-- **Legacy queue tools** — The queue-backed MCP tools were removed as part of the **single-substrate (Temporal)** migration. [`QueueToolRegistry`](../moonmind/mcp/tool_registry.py) remains as a compatibility stub and does not register queue tools in production. Do not rely on `queue.*` tool names from older docs or specs.
+- **Removed tool names** — Older `queue.*` MCP tool names are not part of the
+  current runtime. [`QueueToolRegistry`](../moonmind/mcp/tool_registry.py)
+  remains only as a compatibility stub and does not register those tools in
+  production.
 
 ### Invocation: `POST /mcp/tools/call`
 

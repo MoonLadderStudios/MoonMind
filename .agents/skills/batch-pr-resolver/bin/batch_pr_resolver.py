@@ -36,6 +36,7 @@ class RuntimeSelection:
     mode: str | None = None
     model: str | None = None
     effort: str | None = None
+    provider_profile: str | None = None
 
 
 def _run_command(cmd: list[str]) -> str:
@@ -279,7 +280,15 @@ def _load_parent_runtime_selection(
         effort = _runtime_text(
             runtime_config.get("effort") or runtime_node.get("effort")
         )
-        return RuntimeSelection(mode=mode, model=model, effort=effort)
+        provider_profile = _runtime_text(
+            runtime_config.get("executionProfileRef") or runtime_node.get("executionProfileRef")
+        )
+        return RuntimeSelection(
+            mode=mode,
+            model=model,
+            effort=effort,
+            provider_profile=provider_profile,
+        )
     return None
 
 
@@ -293,15 +302,21 @@ def _resolve_runtime_selection(args: argparse.Namespace) -> RuntimeSelection:
     )
     runtime_model = _runtime_text(args.runtime_model)
     runtime_effort = _runtime_text(args.runtime_effort)
+    runtime_provider_profile = _runtime_text(
+        getattr(args, "runtime_provider_profile", None)
+    )
     if runtime_model is None and inherited is not None:
         runtime_model = inherited.model
     if runtime_effort is None and inherited is not None:
         runtime_effort = inherited.effort
+    if runtime_provider_profile is None and inherited is not None:
+        runtime_provider_profile = inherited.provider_profile
 
     return RuntimeSelection(
         mode=runtime_mode,
         model=runtime_model,
         effort=runtime_effort,
+        provider_profile=runtime_provider_profile,
     )
 
 
@@ -325,6 +340,8 @@ def _build_queue_request(
         runtime_payload["model"] = runtime.model
     if runtime.effort:
         runtime_payload["effort"] = runtime.effort
+    if runtime.provider_profile:
+        runtime_payload["executionProfileRef"] = runtime.provider_profile
 
     payload_dict: dict[str, Any] = {
         "repository": repo,
@@ -415,6 +432,11 @@ def _parse_args() -> argparse.Namespace:
         "--runtime-effort",
         default=None,
         help="Explicit runtime effort for queued pr-resolver tasks.",
+    )
+    parser.add_argument(
+        "--runtime-provider-profile",
+        default=None,
+        help="Explicit runtime provider profile for queued pr-resolver tasks.",
     )
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=3)
@@ -635,6 +657,7 @@ async def main() -> int:
             "mode": runtime.mode,
             "model": runtime.model,
             "effort": runtime.effort,
+            "executionProfileRef": runtime.provider_profile,
         },
         "requested": len(open_prs),
         "created": len(created),

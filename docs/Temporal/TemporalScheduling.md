@@ -216,8 +216,8 @@ Temporal Schedules start workflows. The workflow input payload carries the targe
 
 1. Schedule fires → starts `MoonMind.Run` or `MoonMind.ManifestIngest` with the target payload in the workflow input.
 2. The workflow's initialization phase resolves the target:
-   - `queue_task` → use payload directly
-   - `queue_task_template` → expand the template via an Activity
+   - `queue_task` → use the task payload directly
+   - `queue_task_template` → expand the saved task template via an Activity
    - `manifest_run` → resolve the manifest via an Activity
 
 This avoids needing the Temporal Schedule to know about MoonMind's template or manifest systems.

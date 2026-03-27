@@ -66,7 +66,8 @@ This document does **not** define:
 - worker fleet topology
 - direct UI component design
 - detailed auth policy beyond ownership invariants
-- legacy queue/system persistence internals except where they intersect with compatibility surfaces
+- retired pre-Temporal persistence internals except where they intersect with
+  compatibility surfaces
 
 ---
 
@@ -254,7 +255,8 @@ The primary projection row must **not** become:
 - a second lifecycle engine
 - a substitute for workflow history
 - the audit source for per-run replay or debugging
-- a place to reintroduce legacy queue semantics for Temporal task queues
+- a place to reintroduce removed pre-Temporal execution semantics into Temporal
+  task queues
 
 ### 9.4 Projection sync metadata
 

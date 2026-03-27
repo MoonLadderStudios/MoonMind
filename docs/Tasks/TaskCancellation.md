@@ -2,102 +2,111 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-24  
+Last Updated: 2026-03-27
 
 ## 1. Purpose
 
-This document outlines **Task Cancellation** in MoonMind so that:
+This document defines task cancellation in MoonMind so that:
 
-* Tasks can be cancelled while **queued** (pending execution).
-* Tasks can be cancelled while **running natively as Temporal Workflows** (via Temporal Cancellation Requests).
-* Cancellation is exposed through:
-  * **Mission Control UI** (thin dashboard over REST)
-  * **REST API endpoint(s)** (under `/api/queue`)
-  * **MCP tool call** (under `/mcp/tools/call`)
+- tasks can be cancelled while **scheduled**
+- tasks can be cancelled while **running as Temporal workflows**
+- cancellation is exposed consistently through:
+  - Mission Control UI
+  - REST APIs
+  - MCP/tooling layers when applicable
 
 ---
 
-## 2. Goals and Non-Goals
+## 2. Goals
 
-### Goals
-
-1. **Queued cancellation**: user cancels a job → job transitions to `cancelled`.
-2. **Running cancellation**: user requests cancellation for a running workflow → API sends a Temporal Cancellation Request, workflow detects request, stops execution gracefully, and job transitions to `cancelled`.
-3. **Unified surfaces**: UI + REST + MCP all map to the **same API service methods**.
-4. **Auditability**: cancellation actions are visible in workflow history and UI events.
-5. **Resource lease cleanup**: cancellation must release shared resources (auth profile slots, tmate sessions) so they are not orphaned.
-
-### Non-Goals
-
-* "Hard kill" guarantees for external CLIs that do not respect SIGINT/SIGTERM. We will do best-effort termination of subprocess Sandbox activities.
+1. A user can request cancellation from the normal task UI.
+2. The API translates that request into a Temporal cancellation request.
+3. The workflow exits gracefully and releases shared resources.
+4. Cancellation is visible in execution history, projections, and UI summaries.
+5. Cleanup covers auth profile slots, live sessions, and other leased resources.
 
 ---
 
 ## 3. Architecture
 
-MoonMind task runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.Run`). The cancellation flow mirrors standard Temporal patterns.
+MoonMind task runs are durably orchestrated by Temporal workflows such as
+`MoonMind.Run`.
 
-* Mission Control UI issues a cancel command to the Control Plane API (`POST /api/queue/jobs/{job_id}/cancel`).
-* If the task is purely queued in the database and hasn't started a workflow, the API marks it `cancelled` in Postgres directly.
-* If a Temporal Workflow Execution `MoonMind.Run` is currently active for this run, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
+Cancellation flow:
 
-### 3.1 Temporal Workflow Graceful Cancellation
+1. Mission Control calls `POST /api/executions/{workflowId}/cancel`.
+2. The API authorizes the caller and submits a Temporal cancellation request.
+3. The workflow observes cancellation, runs cleanup/finalization logic, and
+   exits.
+4. The API/UI observe the resulting `canceled` terminal state via Temporal and
+   the execution projection.
 
-* The `MoonMind.Run` workflow receives the Cancellation Request.
-* The workflow must catch the resulting `CancelledError` (in the Python Temporal SDK).
-* The workflow runs compensating actions (uploading incomplete staged artifacts, emitting a final `task.step.failed` event, cleaning up resources, **releasing auth profile slots**).
-* The workflow exits.
-* The API/UI observes the `CANCELED` status via the Temporal Visibility index or Webhooks and mirrors the `cancelled` state to the user.
+### 3.1 Workflow behavior
+
+- the workflow should honor cancellation cooperatively
+- finalization should still emit finish summaries and cleanup side effects when
+  safe
+- cancellation must release provider profile slots and end live-session state
 
 ---
 
 ## 4. REST API Surface
 
-### Request cancellation (user action)
+### User-facing cancellation
 
-`POST /api/queue/jobs/{job_id}/cancel`
+`POST /api/executions/{workflowId}/cancel`
 
-* Auth: `get_current_user()`
-* Body: `{ "reason"?: string }`
-* Behavior:
-  * If the job is in Postgres `queued`: transition to `cancelled` immediately.
-  * If a Temporal Workflow is running: Signal/Cancel the Temporal execution.
-  * If the job is already terminal: idempotent no-op or 409 state conflict.
+Auth:
 
-Response: updated `JobModel` with `status: cancelled` or `status: cancelling` (if waiting for Temporal tear-down).
+- standard authenticated user flow via the control plane
+
+Body:
+
+```json
+{
+  "reason": "optional operator note",
+  "graceful": true
+}
+```
+
+Behavior:
+
+- if the execution is active, send Temporal cancellation
+- if the execution is already terminal, return an idempotent no-op or
+  state-appropriate rejection
+- default to graceful cancellation in product flows
+
+Response:
+
+- updated execution payload with `state: "canceled"` when already resolved, or
+- transitional execution state while cancellation is still being observed
 
 ---
 
-## 5. Worker Runtime Cancellation (Cooperative)
+## 5. Activity Cancellation
 
-Temporal Activities executing long-running steps (e.g., calling an LLM or running a CLI via Sandbox) must heartbeat to the Temporal Server if they wish to receive cancellation mid-flight.
+Long-running Activities should be cancellation-aware.
 
-1. **LLM Activities**: The activity periodically heartbeats. If the workflow was cancelled, the heartbeat raises `ActivityCancelledError`. The activity catches this, cleans up, and terminates.
-2. **Sandbox CLI Activities**: Long-running CLI calls executed via `asyncio.create_subprocess_exec` must pass a cancellation token or trap the `ActivityCancelledError`. On cancellation:
-   * Send `SIGINT` (graceful).
-   * After a short grace period, send `SIGKILL`.
-   * Ensure the child process group is terminated cleanly to prevent orphaned Docker/OS processes.
+1. **LLM activities** should heartbeat so cancellation is observed promptly.
+2. **Sandbox/CLI activities** should terminate subprocesses cooperatively first,
+   then force-stop if needed.
+3. **Integration activities** should stop polling loops and persist a useful
+   final summary.
 
 ---
 
-## 6. Provider Profile Slot Cleanup on Cancellation
+## 6. Provider Profile Slot Cleanup
 
-Managed agent runs (`MoonMind.AgentRun`) acquire provider profile slots from the `ProviderProfileManager` singleton workflow before launching. These slots are a limited resource (typically `max_parallel_runs: 1` per profile). The system must guarantee slot recovery regardless of how a workflow terminates.
+Managed agent runs acquire provider profile slots before launch. Cancellation
+must not leak those slots.
 
-### 6.1 Desired Behavior
+Defense-in-depth layers:
 
-* When a managed `AgentRun` workflow is cancelled (or times out, or fails), it **must** release its provider profile slot.
-* The `ProviderProfileManager` must **not** rely solely on the child workflow's cleanup code to release slots. A defense-in-depth approach is required.
-* Slot recovery must happen within a **reasonable bound** (minutes, not hours) to avoid blocking subsequent task submissions.
+1. **Workflow-initiated release** on normal cancellation/failure paths
+2. **Manager-side lease eviction** for expired or abandoned leases
+3. **Manager-side active probing** so terminal workflows do not retain slots
 
-### 6.2 Defense-in-Depth Layers
+Invariant:
 
-The slot lifecycle is protected by multiple layers, ordered by reliability:
-
-1. **Workflow-initiated release (primary)**: `MoonMind.AgentRun`'s `CancelledError`/`TimeoutError`/`Exception` handlers signal `release_slot` to the `ProviderProfileManager`. This is the fast path.
-2. **Manager-side lease eviction (safety net)**: The `ProviderProfileManager` calls `evict_expired_leases()` every 60 seconds, removing leases older than `_MAX_LEASE_DURATION_SECONDS`. This catches cases where the workflow cleanup failed entirely.
-3. **Manager-side active probing (recommended)**: The `ProviderProfileManager` should verify that lease-holding workflows are still running via Temporal visibility queries. Workflows in a terminal state that did not explicitly release should have their leases reclaimed immediately.
-
-### 6.3 Invariant
-
-At steady state, every provider profile slot held by a lease must correspond to a **running** `MoonMind.AgentRun` workflow. Any slot leased to a terminal workflow represents a leak and should be reclaimed by the next manager housekeeping cycle.
+At steady state, every leased provider profile slot must correspond to a running
+managed execution.

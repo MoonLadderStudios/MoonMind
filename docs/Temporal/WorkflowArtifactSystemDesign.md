@@ -202,7 +202,8 @@ Artifacts are immutable after completion:
 
 ## 8. Metadata model (Artifact Index)
 
-> Stored in Postgres (or equivalent metadata store). This is not a legacy queue; it is a metadata index for blobs.
+> Stored in Postgres (or equivalent metadata store). This is a metadata index
+> for blobs, not an execution engine.
 
 ### 8.1 Tables (logical schema)
 

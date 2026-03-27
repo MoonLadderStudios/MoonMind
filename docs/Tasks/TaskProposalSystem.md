@@ -41,7 +41,7 @@ These rules are fixed:
 1. `taskCreateRequest` is the canonical promote-to-task payload.
 2. Proposal creation is not execution; promotion is the only action that starts
    new work.
-3. Promotion creates a new `MoonMind.Run` execution, not a legacy queue job.
+3. Promotion creates a new `MoonMind.Run` execution.
 4. `taskCreateRequest.payload.repository` is the canonical repository target for
    deduplication and future execution.
 5. Human review is required before any proposal becomes durable running work.
