@@ -10,7 +10,7 @@ As of February 2026, “memory” for LLM-based agents is best understood as a *
 
 From inspecting the MoonMind codebase and deployment manifests (via direct repository file inspection), MoonMind already has several foundational building blocks that align well with best-practice memory stacks:
 - A “knowledge base” style semantic memory path built around a vector store (via entity["company","Qdrant","vector database"]) and entity["organization","LlamaIndex","llm data framework"]-based ingestion/retrieval.
-- Durable operational state and audit artifacts via a relational DB plus stored workflow artifacts (patches/logs) for Celery-driven orchestrations.
+- Durable operational state and audit artifacts via a relational DB plus stored workflow artifacts (patches/logs) for Temporal-backed workflow orchestration.
 - A growing agent/tool integration story via Model Context Protocol (MCP), which is increasingly positioned as a standard way for agent runtimes to access tools and data sources. citeturn24search0turn24search1
 
 Given MoonMind’s apparent goals (agentic workflows for software production tasks and multi-service automation) and the stated business setting (building a video game), the best “memory” investments are the ones that improve: **cross-session continuity, multi-agent coordination, retrieval quality over heterogeneous project corpora (code + design docs + tickets + asset metadata), and governance (auditability + safety)**.
@@ -197,7 +197,7 @@ Key takeaways for a studio building a game:
 
 ## Recommended memory strategies for MoonMind
 
-This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + Celery workflows + Qdrant + Postgres) and the needs of a game studio. Engineering effort is expressed as rough ranges for a small team already familiar with the codebase; actual effort depends on *unspecified* repo parameters (scale, latency SLOs, team size, on-prem vs cloud constraints).
+This shortlist is prioritized for MoonMind’s apparent architecture (FastAPI + Temporal workflows + Qdrant + Postgres) and the needs of a game studio. Engineering effort is expressed as rough ranges for a small team already familiar with the codebase; actual effort depends on *unspecified* repo parameters (scale, latency SLOs, team size, on-prem vs cloud constraints).
 
 ### Priority recommendations
 

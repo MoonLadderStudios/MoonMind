@@ -2,7 +2,7 @@
 
 MoonMind is a self-hostable platform that orchestrates state-of-the-art AI agents — Claude Code, Gemini CLI, Codex CLI, Cursor CLI, and more — with durable execution, secure sandboxing, and managed context built in.
 
-This document is the top-level architectural overview. It covers the major subsystems, how they connect, and where to find deeper documentation. It reflects the **current and intended near-term** state of the project.
+This document is the top-level architectural overview. It covers the major subsystems, how they connect, and where to find deeper documentation. It reflects the **current steady-state architecture** of the project.
 
 ---
 
@@ -48,8 +48,8 @@ Key layers:
 
 The FastAPI-based [API service](../api_service/) is MoonMind's central control plane:
 
-* **Workflow management** — starts Temporal workflows, sends signals/updates/cancellations, queries execution state.
-* **Task compatibility APIs** — exposes `/tasks/*` endpoints that map the user-facing "task" concept onto Temporal workflow executions.
+* **Execution APIs** — `/api/executions` is the primary REST surface for starting workflows, listing executions, reading details, and sending update/signal/cancel/reschedule commands.
+* **Task compatibility APIs** — `/tasks/*` and task-oriented payloads remain control-plane adapters over the same Temporal executions, not a second execution substrate.
 * **Artifact APIs** — manages artifact metadata, presigned upload/download grants, and artifact-to-execution linkage.
 * **RAG retrieval** — indexes and retrieves vectors via Qdrant for chat and the `/context` MCP endpoint.
 * **Task Proposals** — stores and surfaces agent-generated task proposals for human review before promotion to executing workflows.
@@ -59,10 +59,10 @@ The FastAPI-based [API service](../api_service/) is MoonMind's central control p
 
 Mission Control is MoonMind's purpose-built operator dashboard — a thin, server-hosted web app served directly by the API service.
 
-* **Task list** — unified view of workflow executions, with filtering, sorting, and pagination via Temporal Visibility.
-* **Task detail** — execution state, artifact browsing, timeline, and operator actions (pause, resume, cancel, approve, rerun).
-* **Task submission** — form wizard for creating new tasks with runtime/model selection, scheduling, and artifact upload.
-* **Proposals** — triage queue for reviewing, promoting, or dismissing agent-generated task proposals.
+* **Task list** — unified view of Temporal workflow executions, with Temporal Visibility as the runtime truth and Postgres projections supplying local enrichment and repair.
+* **Task detail** — execution state, finish summaries, artifact browsing, timeline, and operator actions (pause, resume, cancel, approve, rerun).
+* **Task submission** — form wizard for creating new tasks with runtime/model selection, one-time deferred scheduling, recurring schedules, and artifact upload.
+* **Proposals** — triage queue for reviewing, promoting, or dismissing agent-generated task proposals before they become new Temporal executions.
 
 > **Vocabulary rule:** The UI uses **task** as the primary term. "Workflow execution" is reserved for implementation docs and debug views. Temporal Task Queues are never presented as a user-facing queue product.
 
@@ -74,17 +74,29 @@ See: [Mission Control Architecture](UI/MissionControlArchitecture.md) · [Missio
 
 ### Temporal Foundation
 
-[Temporal](https://temporal.io/) is MoonMind's primary durable execution engine. It provides:
+[Temporal](https://temporal.io/) is MoonMind's durable execution engine for all
+live task execution. Temporal provides:
 
 * **Workflow Executions** as the durable orchestration primitive for all managed automation.
 * **Activities** for all side-effecting work (LLM calls, sandbox commands, artifact I/O, integrations).
 * **Visibility** as the list/query/count source of truth for the dashboard.
-* **Schedules** for recurring and deferred task starts.
+* **Schedules and timers** for recurring tasks, deferred starts, and reschedulable waits.
 * **Timers, retries, signals, updates** for resilient fire-and-forget execution.
 
-The Temporal server runs self-hosted in Docker Compose with PostgreSQL persistence and visibility. It is private-network only — no ports are exposed to the host by default.
+The Temporal server runs self-hosted in Docker Compose with PostgreSQL persistence and visibility. It is private-network only — no ports are exposed to the host by default. Local Docker deployments default to the `default` namespace unless the operator overrides `TEMPORAL_NAMESPACE`.
 
 See: [Temporal Architecture](Temporal/TemporalArchitecture.md) · [Temporal Platform Foundation](Temporal/TemporalPlatformFoundation.md)
+
+### Execution Read Model
+
+Temporal is the source of truth for execution identity, lifecycle state, visibility, and run chains. MoonMind mirrors that truth into app-local Postgres read models such as `TemporalExecutionRecord` so the API and Mission Control can support:
+
+* ownership-aware filtering and task-shaped payloads,
+* local enrichment (artifacts, summaries, task vocabulary),
+* exact counts and pagination where the route contract explicitly allows it, and
+* repair/degraded-mode reads without turning Postgres into a second workflow engine.
+
+See: [Source of Truth and Projection Model](Temporal/SourceOfTruthAndProjectionModel.md)
 
 ### Workflow Types
 
@@ -112,6 +124,12 @@ MoonMind's execution model is built on three domain concepts that Temporal does 
 Plans are data, not code. They are validated, stored as artifacts, and interpreted deterministically by the plan executor inside `MoonMind.Run`. Planning itself is "just a tool" — an LLM activity that produces a plan artifact.
 
 See: [Tool and Plan Contracts](Tasks/SkillAndPlanContracts.md) · [Skill and Plan Evolution](Tasks/SkillAndPlanEvolution.md)
+
+### Finish Summaries
+
+Every `MoonMind.Run` ends with a structured finish summary that explains what happened in operator-facing terms such as published PR, published branch, no changes, publish disabled, failed, or canceled. The workflow writes this as `reports/run_summary.json` and syncs the outcome into the execution read model so Mission Control can show concise end-state results without replaying raw workflow history.
+
+See: [Task Finish Summary System](Tasks/TaskFinishSummarySystem.md)
 
 ---
 
@@ -180,6 +198,7 @@ MoonMind uses an artifact-first model: large inputs and outputs are stored outsi
 * **Retention classes:** `ephemeral` (7d), `standard` (30d), `long` (180d), `pinned` (no auto-delete). Derived from artifact link type.
 * **Redaction levels:** `none`, `preview_only` (16 KB truncated preview), `restricted` (owner/service-principal only).
 * **Execution linkage:** Artifacts are linked to workflow executions via `ExecutionRef`. Link types include `input.instructions`, `output.primary`, `output.patch`, `output.logs`, `debug.trace`, etc.
+* **Operational summaries:** workflows also emit compact JSON reports such as `reports/run_summary.json` so UI and operators can inspect outcomes without reading raw logs.
 
 See: [Workflow Artifact System Design](Temporal/WorkflowArtifactSystemDesign.md) · [Artifact Presentation Contract](Temporal/ArtifactPresentationContract.md)
 
@@ -226,7 +245,16 @@ A single Postgres 17 instance hosts all durable state through logical database s
 | `temporal_visibility` | Temporal visibility store (search attributes, list/count) |
 | `keycloak` | Keycloak IdP state (when `keycloak` profile is active) |
 
-Databases are provisioned by `init_db_scripts/` on first start. Network aliases (`moonmind-api-db`, `temporal-db`) maintain backward compatibility.
+Within the `moonmind` application database, Postgres stores the control-plane domain model: Temporal execution projections/canonical mirrors, recurring task definitions, proposals, templates, artifact metadata/linkage, auth metadata, and other API-owned records. Databases are provisioned by `init_db_scripts/` on first start. Network aliases (`moonmind-api-db`, `temporal-db`) maintain backward compatibility.
+
+### Scheduling Domain
+
+MoonMind uses two layers for time-based work:
+
+* **Temporal primitives** own execution-time truth: `start_delay`, workflow timers, and Temporal Schedules.
+* **MoonMind product records** such as `RecurringTaskDefinition` own user-facing schedule metadata, authorization, and target configuration, then reconcile that desired state into Temporal.
+
+See: [Temporal Scheduling](Temporal/TemporalScheduling.md)
 
 ### Qdrant
 
@@ -301,8 +329,8 @@ The `docs/` tree is organized by topic area:
 
 | Directory | Contents |
 |---|---|
-| [Tasks/](Tasks/) | Task architecture, skill/plan contracts, proposals, presets, cancellation, runs API |
-| [Temporal/](Temporal/) | Temporal architecture, worker topology, workflow catalog, artifact system, scheduling, visibility, routing, ops runbook |
+| [Tasks/](Tasks/) | Task architecture, finish summaries, skill/plan contracts, proposals, presets, cancellation, runs API |
+| [Temporal/](Temporal/) | Temporal architecture, worker topology, workflow catalog, source-of-truth/projection model, artifact system, scheduling, visibility, routing, ops runbook |
 | [UI/](UI/) | Mission Control architecture and style guide |
 | [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, Git integration, secret store |
 | [ExternalAgents/](ExternalAgents/) | Jules adapter, OpenClaw adapter, external agent integration system, adding providers |

@@ -1,133 +1,116 @@
-# Task Image Input System (Temporal Execution)
+# Task Image Input System
 
 **Implementation tracking:** [`docs/tmp/remaining-work/Tasks-ImageSystem.md`](../tmp/remaining-work/Tasks-ImageSystem.md)
 
 ## Summary
 
-This design defines how **image attachments** are processed within MoonMind tasks using the new Temporal-based execution and Artifact storage architecture.
+This design defines how image attachments are processed for MoonMind tasks using
+the Temporal execution model and the artifact system.
 
-The goals of this subsystem:
-1. Allow users to **upload images** from the Mission Control UI.
-2. Store the uploaded bytes securely in the **Artifact Store** (MinIO).
-3. Pass lightweight, secure `ArtifactRef` pointers into the **Temporal Workflow** (`MoonMind.Run`).
-4. Execute a deterministic **Vision Processing Activity** to extract useful text context (captions, OCR) for downstream LLM prompts.
-5. Provide a deterministic path for sandbox activities to access raw image bytes when needed.
+Goals:
+
+1. allow users to upload images from Mission Control
+2. store uploaded bytes in the artifact store
+3. pass lightweight `ArtifactRef` values into `MoonMind.Run`
+4. run deterministic vision-processing activities when needed
+5. let sandbox activities materialize raw image bytes only when required
 
 ---
 
 ## Architecture Overview
 
-In an artifact-centric, Temporal-orchestrated model, we never embed large binaries or multi-part uploads directly into job creation JSON or Temporal execution histories.
+In an artifact-centric, Temporal-orchestrated model, large binaries are never
+embedded directly in execution payloads or workflow history.
 
 ### High-Level Flow
 
-```
+```text
 Dashboard UI
   │
-  ├─ 1) POST /artifacts (multipart or direct)
+  ├─ 1) POST /artifacts
   │     └─ returns ArtifactRef(s)
   │
-  ├─ 2) Upload bytes directly to Artifact Store (MinIO via presigned URL)
+  ├─ 2) Upload bytes to the artifact store
   │
-  └─ 3) POST /api/queue/jobs (Payload includes initialParameters.inputArtifactRefs)
+  └─ 3) POST /api/executions
         │
         ▼
-MoonMind.Run Workflow (Temporal)
+MoonMind.Run Workflow
   │
-  ├─ 1) Initializes state with input ArtifactRefs.
-  │
-  ├─ 2) Schedules `vision.generate_context` Activity (mm.activity.llm queue):
-  │     - Activity fetches image bytes from Artifact Store.
-  │     - Activity calls Vision LLM (e.g., Gemini 1.5 Pro/Flash).
-  │     - Activity writes `image_context.md` text back to Artifact Store.
-  │     - Activity returns new ArtifactRef to the Workflow.
-  │
-  ├─ 3) Schedules `plan.generate` (if applicable) or `mm.skill.execute`:
-  │     - The generated `image_context.md` Ref is passed to the LLM for reasoning.
-  │
-  └─ 4) Evaluates Sandboxed Activity (e.g., `sandbox.run_command`):
-        - If the sandbox script needs the raw images, an `artifact.download_to_workspace`
-          activity is scheduled to materialize the bytes into `repo/.moonmind/inputs/`.
+  ├─ initialize with input ArtifactRefs
+  ├─ run vision-processing activity when needed
+  ├─ pass generated text/image context into planning or execution
+  └─ optionally materialize raw bytes into the sandbox workspace
 ```
 
 ---
 
-## Data Model & Artifact Index
+## Data Model
 
-Instead of implicitly storing images as `AgentJobArtifact` records prefixed with `inputs/`, images are formalized through the unified **Artifact Index**.
+Images are represented through the unified artifact index.
 
-* **Content-Type**: Must be `image/png`, `image/jpeg`, or `image/webp`.
-* **Linkage**: The `artifact_links` table connects the image to the workflow execution.
-  - `link_type`: `input.image`
-  - `label`: Original filename (e.g., `screenshot.png`)
-* **Retention Class**: Inherits the `standard` policy (e.g., 30 days) alongside other job inputs/outputs.
-* **Integrity**: Enforced via `sha256` checksums validated upon completion of the upload to the Artifact Store.
+- **Content-Type**: `image/png`, `image/jpeg`, or `image/webp`
+- **Linkage**: linked to the owning execution via artifact link records
+- **Retention**: follows normal artifact retention policy
+- **Integrity**: enforced via checksums at upload completion
 
 ---
 
-## Authorization & Security
+## Authorization and Security
 
-Security applies evenly across the Artifact API as established by the `WorkflowArtifactSystemDesign.md`.
-
-* **End-User Access**: 
-  - Regulated entirely by the Workflow Execution viewing permissions.
-  - Generates short-lived (e.g., 15 minute) presigned URLs for UI preview and download.
-  - No permanent direct access to the object store.
-* **Worker Access**:
-  - Activities operate using service credentials and least-privilege roles to fetch blobs from the Artifact Store.
-  - They do not rely on passing active worker-claim tokens like the legacy architecture.
-* **Content Safety**:
-  - `image/svg+xml` files remain strictly forbidden to prevent script injection.
-  - Minimum and maximum byte boundaries for chunks and total size are enforced by the Artifact API bounds.
+- end users access images through authorized artifact endpoints
+- workers fetch blobs with service credentials, not transient claim tokens
+- `image/svg+xml` remains forbidden
+- size and chunk limits are enforced by the artifact API
 
 ---
 
-## Workload Specific Behavior
+## Behavior by workload
 
-### 1. Planning and Coding Skills (Text Only)
+### Text-centric planning and coding
 
-For capabilities acting as standard LLM prompts (such as `pr-resolver` or simple `codex exec` interactions):
-* The raw bytes never enter the `sandbox` container logic.
-* The Workflow invokes `vision.generate_context` in the `mm.activity.llm` fleet.
-* The result is a text artifact (e.g., `image_context.md`) summarising the image content.
-* `plan.generate` and text-centric tools append this image context strictly inside the system prompt:
+- raw image bytes do not need to enter the sandbox by default
+- the workflow can invoke a vision activity to produce text context
+- the resulting text artifact is injected into later prompts or planning
 
-```text
-INPUT ATTACHMENTS:
-[Provided text summary generated from the provided artifacts...]
-```
+### Multimodal runtimes
 
-### 2. Multi-modal Run-times
+- the workflow passes `ArtifactRef` values into the multimodal activity path
+- provider-specific payload construction happens inside activities, not in
+  workflow state
 
-If MoonMind introduces a model execution path (like a direct `gemini` multimodal chat capability inside the sandbox or as a dedicated skill activity):
-* The Temporal workflow passes the `ArtifactRef` into the multimodal context array.
-* The specific activity fetching the Artifact blobs constructs a valid multimodal Provider Payload (base64 or signed platform URL) seamlessly without intermediary caching disk writes.
+### Sandbox materialization
 
-### 3. Sandbox Materialisation (Optional)
+If a task explicitly requires raw image manipulation:
 
-If a user specifically instructs: *"Crop this image using ImageMagick"*
-* The skill must dictate a requirement for raw visual assets over text captions.
-* The Temporal execution schedules the `artifact.download_to_workspace` activity to physically map the image `ArtifactRef`s into `.moonmind/inputs/<artifact_id>-<label>` inside the active Sandbox workspace before the shell command executes.
-* Standard `.git/info/exclude` rules prevent accidental commits of these ephemeral visual assets.
+- schedule an artifact-download activity
+- materialize files into a workspace input directory
+- keep those files out of version control
 
 ---
 
 ## API Contract Summary
 
-Legacy routes using `POST /api/queue/jobs/with-attachments` and trailing `/worker` suffixes are deprecated.
+Standard flow:
 
-Instead, the client integrates directly with the standard REST endpoints:
 1. `POST /artifacts`
-2. upload bytes using pre-signed URL.
+2. upload bytes using a presigned URL
 3. `POST /artifacts/{artifact_id}/complete`
-4. Use standard `POST /api/queue/jobs`
+4. `POST /api/executions`
 
 UI rendering consumes:
-* `GET /executions/{namespace}/{workflow_id}/{run_id}/artifacts?link_type=input.image`
-* Followed by `POST /artifacts/{artifact_id}/presign-download` for UI thumbnails.
+
+- `GET /api/executions/{namespace}/{workflow_id}/{run_id}/artifacts?link_type=input.image`
+- `POST /api/artifacts/{artifact_id}/presign-download` or the equivalent
+  artifact download flow used by the control plane
 
 ---
 
-## Vision pipeline (target)
+## Vision Pipeline
 
-Images ingest through **`POST /artifacts`** with valid image MIME types and Temporal **`ArtifactRef`s** in workflow variables. **`vision.generate_context`** (or equivalent) produces text artifacts wired into **`mm.skill.execute`** preparation. Legacy **`with-attachments`** queue ingest is retired once Temporal paths cover all cases. Progress: [`docs/tmp/remaining-work/Tasks-ImageSystem.md`](../tmp/remaining-work/Tasks-ImageSystem.md).
+Images ingest through the artifact APIs and enter workflows as `ArtifactRef`
+values.
+
+Vision-processing activities such as `vision.generate_context` can produce text
+artifacts that feed later planning or execution stages. Older attachment-specific
+create routes are retired in favor of the standard artifact + execution flow.
