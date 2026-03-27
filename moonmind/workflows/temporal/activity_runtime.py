@@ -110,9 +110,11 @@ _GEMINI_ERROR_REPORT_GLOB = "gemini-client-error-*.json"
 _GEMINI_ERROR_REPORT_TIME_PADDING_SECONDS = 45
 _GEMINI_QUOTA_MARKERS: tuple[str, ...] = (
     "terminalquotaerror",
+    "retryablequotaerror",
     "quota_exhausted",
     "exhausted your capacity",
     "quota will reset after",
+    "no capacity available",
 )
 _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "rate limit",

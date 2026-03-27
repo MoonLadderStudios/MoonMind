@@ -1945,10 +1945,10 @@ class TaskRunLiveSession(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     task_run_id: Mapped[UUID] = mapped_column(Uuid, unique=True, index=True)
     provider: Mapped[AgentJobLiveSessionProvider] = mapped_column(
-        Enum(AgentJobLiveSessionProvider, name="agentjoblivesessionprovider")
+        Enum(AgentJobLiveSessionProvider, name="agentjoblivesessionprovider", values_callable=lambda obj: [e.value for e in obj])
     )
     status: Mapped[AgentJobLiveSessionStatus] = mapped_column(
-        Enum(AgentJobLiveSessionStatus, name="agentjoblivesessionstatus")
+        Enum(AgentJobLiveSessionStatus, name="agentjoblivesessionstatus", values_callable=lambda obj: [e.value for e in obj])
     )
     ready_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
