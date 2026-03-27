@@ -37,7 +37,7 @@ This document defines the **Temporal-side contract**. Public MoonMind APIs and U
    All nondeterminism lives in Activities (LLMs, network I/O, filesystem, time).
 
 4. **Edits are modeled as Temporal Updates.**
-   Signals are used for asynchronous events and mutable wait-state nudges, not acknowledged edit commands.
+   Signals are used for asynchronous events (webhooks, approvals, external notifications).
 
 5. **Large payloads live outside workflow history.**
    Workflows reference Artifacts by ID/URI; avoid bloating history.
@@ -240,7 +240,7 @@ Semantics:
 
 ### 6.2 Signals (async events; no response)
 
-Signals carry asynchronous events and scheduling wait-state changes into a running workflow.
+Signals carry external events and human actions into a running workflow.
 
 #### Signal: `ExternalEvent`
 
@@ -261,30 +261,16 @@ Rules:
 
 * Workflow must validate event authenticity via an Activity call if needed (don’t do crypto/network verification in workflow code).
 
-#### Signal: `reschedule`
-
-Purpose:
-
-* adjust the target start time for an execution that is already running but still waiting in an in-workflow scheduled state
+#### Signal: `Approve`
 
 Payload:
 
-* `scheduled_for: datetime`
+* `approval_type: string`
+* `note?`
 
-Rules:
+#### Signal: `Pause` / `Resume`
 
-* only valid for workflows using the reschedulable wait pattern
-* updates `mm_scheduled_for`
-* is not a replacement for recurring schedule editing
-
-### 6.3 Acknowledged control updates
-
-The following execution controls remain Update-style mutations rather than Signals:
-
-* `Approve`
-* `Pause`
-* `Resume`
-* `Cancel`
+Only if product needs interactive control of long runs.
 
 ---
 
@@ -484,7 +470,7 @@ This document is “done” when:
 1. **Do we expose Workflow Type names directly in the UI**, or map them to user-friendly labels?
 2. Do we want a single “detail page” per Workflow ID that always points to the latest run, or show run history?
 3. For `RequestRerun`, do we always Continue-As-New, or sometimes start a fresh Workflow ID?
-4. If system-wide quiesce is added, should it use a dedicated workflow-local pause contract or remain purely a drain-oriented control path?
+4. Do we need a `Pause/Resume` capability in v1?
 5. Should `mm_updated_at` be driven by:
 
    * “any state transition,” or

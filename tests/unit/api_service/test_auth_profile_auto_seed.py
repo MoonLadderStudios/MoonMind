@@ -118,7 +118,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     mm_profile = next(p for p in profiles if p.profile_id == "claude_minimax")
     assert mm_profile.runtime_id == "claude_code"
     assert mm_profile.secret_refs is not None
-    assert mm_profile.secret_refs.get("ANTHROPIC_AUTH_TOKEN") == "MINIMAX_API_KEY"
+    assert mm_profile.secret_refs.get("anthropic_api_key") == "MINIMAX_API_KEY"
     assert mm_profile.env_template is not None
     assert mm_profile.env_template["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert mm_profile.env_template["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
@@ -171,5 +171,3 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     assert "claude_minimax" not in profile_ids
     assert "claude_anthropic" in profile_ids
     assert len(profiles) == 3
-
-

@@ -69,12 +69,7 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
         "MoonLadderStudios/MoonMind",
         pr_number=42,
         branch="feature/example",
-        runtime=runtime_selection(
-            mode="codex",
-            model="gpt-5-codex",
-            effort="high",
-            provider_profile="azure",
-        ),
+        runtime=runtime_selection(mode="codex", model="gpt-5-codex", effort="high"),
         merge_method="squash",
         max_iterations=3,
         priority=0,
@@ -89,7 +84,6 @@ def test_build_queue_request_sets_none_publish_with_matching_branches():
     assert task["runtime"]["mode"] == "codex"
     assert task["runtime"]["model"] == "gpt-5-codex"
     assert task["runtime"]["effort"] == "high"
-    assert task["runtime"]["executionProfileRef"] == "azure"
     assert task["publish"]["mode"] == "none"
     assert git["startingBranch"] == "feature/example"
     assert git["targetBranch"] == "feature/example"
@@ -104,12 +98,7 @@ def test_build_queue_request_enqueues_without_manual_publish_patch() -> None:
         "MoonLadderStudios/MoonMind",
         pr_number=77,
         branch="feature/enqueue-check",
-        runtime=runtime_selection(
-            mode="codex",
-            model=None,
-            effort=None,
-            provider_profile=None,
-        ),
+        runtime=runtime_selection(mode="codex", model=None, effort=None),
         merge_method="squash",
         max_iterations=3,
         priority=1,
@@ -181,7 +170,7 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
         (
             "{"
             '"runtime":"codex",'
-            '"runtimeConfig":{"mode":"gemini","model":"gemini-2.5-pro","effort":"medium","executionProfileRef":"gcp"}'
+            '"runtimeConfig":{"mode":"gemini","model":"gemini-2.5-pro","effort":"medium"}'
             "}"
         ),
         encoding="utf-8",
@@ -192,7 +181,6 @@ def test_load_parent_runtime_selection_prefers_runtime_config(tmp_path: Path):
     assert runtime.mode == "gemini"
     assert runtime.model == "gemini-2.5-pro"
     assert runtime.effort == "medium"
-    assert runtime.provider_profile == "gcp"
 
 
 def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
@@ -203,7 +191,7 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     task_context.write_text(
         (
             "{"
-            '"runtimeConfig":{"mode":"claude","model":"claude-3.7-sonnet","effort":"low","executionProfileRef":"bedrock"}'
+            '"runtimeConfig":{"mode":"claude","model":"claude-3.7-sonnet","effort":"low"}'
             "}"
         ),
         encoding="utf-8",
@@ -216,7 +204,6 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
             "runtime_mode": None,
             "runtime_model": None,
             "runtime_effort": None,
-            "runtime_provider_profile": None,
         },
     )()
 
@@ -224,7 +211,6 @@ def test_resolve_runtime_selection_uses_inherited_values(tmp_path: Path):
     assert runtime.mode == "claude"
     assert runtime.model == "claude-3.7-sonnet"
     assert runtime.effort == "low"
-    assert runtime.provider_profile == "bedrock"
 
 
 def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Path):
@@ -233,7 +219,7 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
 
     task_context = tmp_path / "task_context.json"
     task_context.write_text(
-        ('{"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low","executionProfileRef":"azure"}}'),
+        ('{"runtimeConfig":{"mode":"codex","model":"gpt-5-codex","effort":"low"}}'),
         encoding="utf-8",
     )
     args = type(
@@ -244,7 +230,6 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
             "runtime_mode": "gemini",
             "runtime_model": "gemini-2.5-pro",
             "runtime_effort": "high",
-            "runtime_provider_profile": "openai",
         },
     )()
 
@@ -252,7 +237,6 @@ def test_resolve_runtime_selection_prefers_explicit_over_inherited(tmp_path: Pat
     assert runtime.mode == "gemini"
     assert runtime.model == "gemini-2.5-pro"
     assert runtime.effort == "high"
-    assert runtime.provider_profile == "openai"
 
 
 def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypatch: Any):
@@ -269,7 +253,6 @@ def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypa
             "runtime_mode": None,
             "runtime_model": None,
             "runtime_effort": None,
-            "runtime_provider_profile": None,
         },
     )()
 
@@ -277,7 +260,6 @@ def test_resolve_runtime_selection_defaults_to_none_without_inheritance(monkeypa
     assert runtime.mode is None
     assert runtime.model is None
     assert runtime.effort is None
-    assert runtime.provider_profile is None
 
 
 def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
@@ -294,7 +276,6 @@ def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
             "runtime_mode": None,
             "runtime_model": None,
             "runtime_effort": None,
-            "runtime_provider_profile": None,
         },
     )()
 
@@ -302,7 +283,6 @@ def test_resolve_runtime_selection_uses_default_runtime_env(monkeypatch: Any):
     assert runtime.mode == "claude"
     assert runtime.model is None
     assert runtime.effort is None
-    assert runtime.provider_profile is None
 
 
 # ---------------------------------------------------------------------------
@@ -319,12 +299,7 @@ def _make_submission(module: dict[str, Any]) -> Any:
         "MoonLadderStudios/MoonMind",
         pr_number=42,
         branch="feature/test",
-        runtime=_RuntimeSelection(
-            mode="codex",
-            model=None,
-            effort=None,
-            provider_profile=None,
-        ),
+        runtime=_RuntimeSelection(mode="codex", model=None, effort=None),
         merge_method="squash",
         max_iterations=3,
         priority=0,
@@ -473,12 +448,7 @@ def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     _RuntimeSelection = module["RuntimeSelection"]
     build = module["_build_queue_request"]
     kwargs: dict[str, Any] = dict(
-        runtime=_RuntimeSelection(
-            mode="codex",
-            model=None,
-            effort=None,
-            provider_profile=None,
-        ),
+        runtime=_RuntimeSelection(mode="codex", model=None, effort=None),
         merge_method="squash",
         max_iterations=3,
         priority=0,

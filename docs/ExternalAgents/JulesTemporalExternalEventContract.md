@@ -540,9 +540,7 @@ Jules artifacts should link back to the owning workflow execution using the same
 For Temporal-backed Jules flows, artifact storage should follow the Temporal artifact system design:
 
 - default backend is the Temporal artifact store contract, which is MinIO / S3-compatible by default for MoonMind local and Compose deployments
-- filesystem artifact roots such as `var/artifacts/...` may still exist for
-  historical data or local exports, but they are not the canonical backend for
-  this contract
+- legacy filesystem artifact roots such as `var/artifacts/...` remain relevant for non-Temporal Celery/system paths, but they are not the canonical backend for this contract
 
 ### 13.5 History discipline
 

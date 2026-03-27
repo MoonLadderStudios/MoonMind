@@ -28,8 +28,7 @@ This design uses Temporal concepts directly:
 * Search Attributes + Memo ([Temporal Docs][1])
 * System limits that drive architecture decisions (payload/event-history/concurrency/update limits) ([Temporal Docs][2])
 
-This document describes the **Temporal-managed manifest path** specifically and
-should be read as the canonical execution design for manifest ingest.
+This document describes the **Temporal-managed manifest path** specifically. During migration, MoonMind may still also have queue-backed manifest flows elsewhere in the product. Those should not be relabeled as Temporal-backed until the execution substrate has actually moved.
 
 ---
 
@@ -49,12 +48,10 @@ Temporal is the primary workflow manager and scheduler, so manifest ingest shoul
 
 ## 3. Non-goals
 
-* Preserving superseded execution naming or semantics inside the
-  Temporal-native implementation.
+* Preserving old Celery/“Agent Queue” naming or semantics inside the Temporal-native implementation.
 * Maintaining legacy naming like “worker task / system task / manifest job” inside the new system.
 * Implementing a custom queue semantics layer on top of Temporal Task Queues (Temporal Task Queues are FIFO polling queues used for dispatch/routing). ([Temporal Docs][1])
-* Claiming that every manifest entry point must immediately collapse into one
-  handler if the product still exposes multiple user-facing submission flows.
+* Claiming that every current manifest submission path in MoonMind already runs through `MoonMind.ManifestIngest` or that queue-backed manifest flows disappear immediately on adoption of this design.
 
 ---
 
