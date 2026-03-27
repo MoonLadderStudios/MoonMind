@@ -8,7 +8,7 @@ On **Temporal Signals specifically**, MoonMind shows a **mixed level of maturity
 
 A substantial, working signal pattern exists around **auth-profile slot allocation**, where `AgentRun` signals an `AuthProfileManager` workflow (`request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`), and the manager signals back (`slot_assigned`). citeturn50view0turn33view0turn49view0 The **OAuth session** workflow also uses simple `finalize`/`cancel` signals in an idiomatic “set flag + `wait_condition`” pattern. citeturn35view0turn35view2
 
-However, the central **Run** workflow (which appears to be the main “execution orchestration” workflow) contains multiple state/control flags (`_paused`, `_reschedule_requested`, `_cancel_requested`, `_approve_requested`, etc.) and waits on those flags via `workflow.wait_condition(...)`, but it **defines no signal handlers** (no `@workflow.signal`, no dynamic signal handler), and no update handlers either. citeturn36view1turn51view3turn61view3turn61view1 Meanwhile, higher layers **send** signals like `"Pause"`, `"Resume"`, `"Approve"`, `"ExternalEvent"`, and the client adapter also sends `"reschedule"` plus batch `"pause"`/`"resume"`. citeturn41view0turn42view1turn39view3turn39view0 This is the strongest evidence that “migration toward idiomatic signal patterns” is **not complete**: parts are solid, but a core pathway is inconsistent/missing end-to-end wiring.
+However, the central **Run** workflow (which appears to be the main “execution orchestration” workflow) uses a mix of update and signal handlers for execution control. It defines **update handlers** for `Pause`, `Resume`, `Approve`, and `Cancel`, and **signal handlers** for asynchronous ingress via `ExternalEvent` and `reschedule`. Meanwhile, some higher layers still attempt to send signals like `"Pause"`, `"Resume"`, `"Approve"`, and `"ExternalEvent"` via `signal_execution`, and the client adapter uses batch `"pause"`/`"resume"`. This highlights a naming and pattern mismatch: the workflow defines acknowledged updates, but external clients sometimes try to trigger them as signals.
 
 There is also a high-impact interaction with `start_delay`: MoonMind’s client adapter can start workflows with `start_delay`, citeturn39view3 but Temporal’s **Start Delay** semantics explicitly state that **non–Signal-With-Start signals are ignored during the delay**, while Signal-With-Start bypasses the remaining delay. citeturn55search2 MoonMind does not appear to use Signal-With-Start in the adapter (no `signal_with_start`), citeturn39view2turn39view3 so “early control signals” (pause/reschedule/etc.) for delayed starts are at risk of being dropped even if handlers existed.
 
@@ -41,7 +41,8 @@ The table below inventories **explicit signal handlers** (decorated methods). If
 | `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | `shutdown` | no payload | Yes citeturn33view0 | No citeturn33view1 | Indirectly (loop termination) citeturn33view3 |
 | `moonmind/workflows/temporal/workflows/oauth_session.py` | OAuthSession workflow | `finalize` | no payload | Yes citeturn35view0 | No citeturn35view1 | No |
 | `moonmind/workflows/temporal/workflows/oauth_session.py` | OAuthSession workflow | `cancel` | no payload | Yes citeturn35view0 | No citeturn35view1 | No |
-| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | *(none defined)* | — | **No** citeturn61view3turn36view0 | **No** citeturn61view1turn36view3 | No |
+| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `Pause`, `Resume`, `Approve`, `Cancel` | — | **No** | **Yes** (`@workflow.update`) | No |
+| `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `ExternalEvent`, `reschedule` | `dict[str, Any]` | **Yes** (`@workflow.signal`) | No | No |
 
 ### Signals sent from workflows and services
 
@@ -70,7 +71,7 @@ MoonMind frequently uses the canonical **“signal flips state; workflow waits o
 - `AgentRun`: waits for `slot_assigned_event` and `completion_event`. citeturn32view2turn32view0  
 - `AuthProfileManager`: waits for `_has_new_events` or shutdown with a periodic wake-up. citeturn33view3  
 - `OAuthSession`: waits for `_finalize_requested` or `_cancel_requested` with a TTL timeout. citeturn35view2  
-- `Run`: waits on `_reschedule_requested/_cancel_requested`, and later on `not self._paused`, but has **no signal/update handlers** to flip those flags. citeturn36view1turn51view3turn61view3  
+- `Run`: waits on `_reschedule_requested/_cancel_requested`, and later on `not self._paused`, relying on explicit `@workflow.update` and `@workflow.signal` handlers to flip those flags.
 
 ## Assessment against idiomatic Temporal signal patterns
 
@@ -369,10 +370,10 @@ flowchart LR
     FLAGS --> WAIT[workflow.wait_condition gates progress]
   end
 
-  Note1{{Current gap:\nRun has wait_condition gates\nbut no signal handlers}} --- WF
+  Note1{{Note:\nRun uses wait_condition gates\nalongside signal/update handlers}} --- WF
 ```
 
-This diagram reflects the current architecture (service → adapter → workflow) while highlighting the observed missing handler issue. citeturn41view0turn39view0turn36view1turn61view3
+This diagram reflects the current architecture (service → adapter → workflow). citeturn41view0turn39view0turn36view1turn61view3
 
 #### Auth profile slot coordination signals
 
