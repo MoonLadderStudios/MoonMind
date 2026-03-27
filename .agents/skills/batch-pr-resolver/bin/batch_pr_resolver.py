@@ -472,7 +472,7 @@ async def _submit_jobs_via_http(
                 response = await client.post(API_EXECUTIONS_ENDPOINT, json=body)
                 response.raise_for_status()
                 data = response.json()
-                job_id = str(data.get("id", "")) or "(unknown)"
+                job_id = str(data.get("taskId", "")) or "(unknown)"
                 created.append(
                     {
                         "pr": submission.pr_number,

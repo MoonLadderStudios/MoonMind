@@ -318,7 +318,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     fake_response = MagicMock()
     fake_response.raise_for_status = MagicMock()
-    fake_response.json = MagicMock(return_value={"id": "uuid-1234", "status": "queued"})
+    fake_response.json = MagicMock(return_value={"taskId": "mm:uuid-1234", "status": "queued"})
 
     mock_post = AsyncMock(return_value=fake_response)
 
@@ -349,7 +349,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     assert errors == []
     assert len(created) == 1
-    assert created[0]["jobId"] == "uuid-1234"
+    assert created[0]["jobId"] == "mm:uuid-1234"
     assert created[0]["pr"] == 42
     mock_post.assert_awaited_once()
     call_path = mock_post.await_args[0][0]
