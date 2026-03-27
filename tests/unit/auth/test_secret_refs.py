@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 from moonmind.auth.secret_refs import (
-    ParsedSecretRef,
     SecretBackend,
     SecretReferenceError,
     VaultSecretResolver,
@@ -68,6 +67,18 @@ def test_parse_secret_ref_invalid_db() -> None:
     """Parser should reject invalid db locators."""
     with pytest.raises(SecretReferenceError, match="invalid db locator format"):
         parse_secret_ref("db://My_Key_With_Uppercase")
+
+
+def test_parse_secret_ref_invalid_exec() -> None:
+    """Parser should reject invalid exec locators."""
+    with pytest.raises(SecretReferenceError, match="invalid exec locator format"):
+        parse_secret_ref("exec://?vault=foo")
+
+
+def test_parse_secret_ref_invalid_vault() -> None:
+    """Parser should reject invalid vault locators via parse_vault_reference."""
+    with pytest.raises(SecretReferenceError, match="vault path traversal is not allowed"):
+        parse_secret_ref("vault://kv/../secret#field")
 
 
 async def test_parse_vault_reference_accepts_valid_ref() -> None:

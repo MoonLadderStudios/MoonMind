@@ -13,5 +13,35 @@
     "id": 4024057390,
     "disposition": "not-applicable",
     "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 3003578250,
+    "disposition": "addressed",
+    "rationale": "Validation for exec and vault was added."
+  },
+  {
+    "id": 3003578266,
+    "disposition": "addressed",
+    "rationale": "Tightened db locator validation."
+  },
+  {
+    "id": 3003578278,
+    "disposition": "addressed",
+    "rationale": "Removed unused ParsedSecretRef import."
+  },
+  {
+    "id": 3003578284,
+    "disposition": "addressed",
+    "rationale": "Added negative test cases for exec and vault."
+  },
+  {
+    "id": 3003578290,
+    "disposition": "addressed",
+    "rationale": "Updated specs/105-provider-profiles/data-model.md to use db://."
+  },
+  {
+    "id": 4024065559,
+    "disposition": "not-applicable",
+    "rationale": "Review summary from Copilot, no action needed."
   }
 ]
