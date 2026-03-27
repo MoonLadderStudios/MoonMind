@@ -149,7 +149,7 @@ Each phase lists tasks with checkboxes (`[x]` done, `[ ]` open). Last updated 20
 
 ### Phase P1 — Timeouts, retries, and capacity
 
-- [ ] **Right-size timeouts and retries** — Tune **`start_to_close`** and **`schedule_to_close`** with heartbeat-aware bounds so “stuck” is detected without always waiting for the full timeout.
+- [x] **Right-size timeouts and retries** — Tune **`start_to_close`** and **`schedule_to_close`** with heartbeat-aware bounds so “stuck” is detected without always waiting for the full timeout.
 
 - [ ] **Operational: agent-runtime worker scaling** — If **`agent_runtime.cancel`** queues behind other work, increase worker throughput on **`mm.activity.agent_runtime`** or reduce exclusive long-running work occupying slots.
 
