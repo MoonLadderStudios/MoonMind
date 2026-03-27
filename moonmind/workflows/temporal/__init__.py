@@ -90,6 +90,7 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionService,
     TemporalExecutionValidationError,
 )
+from moonmind.workflows.temporal.typed_execution import execute_typed_activity
 from moonmind.workflows.temporal.workers import (
     ALLOWED_TEMPORAL_WORKER_FLEETS,
     TemporalWorkerBootstrapError,
@@ -102,6 +103,7 @@ from moonmind.workflows.temporal.workers import (
 )
 
 __all__ = [
+    "execute_typed_activity",
     "AGENT_RUNTIME_FLEET",
     "AGENT_RUNTIME_TASK_QUEUE",
     "ARTIFACTS_FLEET",
