@@ -58,13 +58,13 @@ Use this to avoid re-planning work that already exists:
 
 ### Task list
 
-1. [ ] **CI: add `npm run ui:build`** to the same job that runs typecheck/lint/test (or a dedicated frontend job on PRs), so broken Rollup/Vite config cannot reach `main`.
-2. [ ] **OpenAPI → types path:** add a documented, repeatable command (e.g. npm script calling `openapi-typescript`) that writes `frontend/src/generated/openapi.ts` (or agreed path); gate drift with CI or a scheduled check. — `openapi-typescript` installed; no script or generated output yet.
-3. [ ] **Shared API client layer:** introduce `frontend/src/lib/api/` (fetch wrapper, error normalization, credentials/same-origin policy) consistent with [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md) §10–12.
-4. [ ] **Query key + hook conventions:** add `frontend/src/lib/query/` with documented query-key shapes (see canonical §12.2) and a minimal example hook (even if only used by the Phase 1 slice).
+1. [x] **CI: add `npm run ui:build`** to the same job that runs typecheck/lint/test (or a dedicated frontend job on PRs), so broken Rollup/Vite config cannot reach `main`.
+2. [x] **OpenAPI → types path:** add a documented, repeatable command (e.g. npm script calling `openapi-typescript`) that writes `frontend/src/generated/openapi.ts` (or agreed path); gate drift with CI or a scheduled check. — `openapi-typescript` installed; no script or generated output yet.
+3. [x] **Shared API client layer:** introduce `frontend/src/lib/api/` (fetch wrapper, error normalization, credentials/same-origin policy) consistent with [`docs/UI/TypeScriptSystem.md`](../../UI/TypeScriptSystem.md) §10–12.
+4. [x] **Query key + hook conventions:** add `frontend/src/lib/query/` with documented query-key shapes (see canonical §12.2) and a minimal example hook (even if only used by the Phase 1 slice).
 5. [x] **Boot payload helper (backend):** centralized in `api_service/ui_boot.py` (`generate_boot_payload`), used by both `tasks-home` and `settings` routes, with tests in `test_ui_route.py`.
-6. [ ] **Contributor docs (minimal):** in `README.md` or existing UI dev section, add 5–10 lines: install deps, `ui:dev` vs `ui:build`, where dist goes, and "do not edit `dist/`" (canonical §17.4).
-7. [ ] **Optional — Vite dev proxy:** if full "UI dev mode" (canonical §8.3 B) is desired, specify and implement proxy to FastAPI for API calls; otherwise explicitly defer and keep "transitional mode" only.
+6. [x] **Contributor docs (minimal):** in `README.md` or existing UI dev section, add 5–10 lines: install deps, `ui:dev` vs `ui:build`, where dist goes, and "do not edit `dist/`" (canonical §17.4).
+7. [x] **Optional — Vite dev proxy:** (Deferred: keep transitional mode for now) if full "UI dev mode" (canonical §8.3 B) is desired, specify and implement proxy to FastAPI for API calls; otherwise explicitly defer and keep "transitional mode" only.
 
 **Exit criteria for Phase 0:** Items above are either done or explicitly deferred with a one-line rationale in this file; CI runs `ui:build`; first real page migration (Phase 1) does not require new tooling decisions.
 

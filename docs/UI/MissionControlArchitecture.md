@@ -8,22 +8,19 @@ Last Updated: 2026-03-27
 
 ## 1. Purpose
 
-Define the concrete architecture for the MoonMind Mission Control UI:
-component tree, routing schema, runtime config, execution integration, action
-mapping, and artifact flows.
+Define the concrete architecture for the MoonMind Mission Control UI: component tree, routing schema, source model, runtime config, Temporal integration, action mapping, and artifact flows.
 
-Mission Control is a **task-oriented operator UI** over a **Temporal-backed
-execution plane**.
+The dashboard integrates over the Control Plane API and interprets execution status from configured sources (including Temporal and, where enabled, queue and system sources).
 
 ## 2. Related Docs
 
-- `docs/MoonMindArchitecture.md`
-- `docs/Tasks/TaskArchitecture.md`
 - `docs/Temporal/TemporalArchitecture.md`
 - `docs/Temporal/TemporalPlatformFoundation.md`
+- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
+- `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/Temporal/TaskExecutionCompatibilityModel.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
-- `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/TaskArchitecture.md`
 - `docs/UI/MissionControlStyleGuide.md`
 
 ## 3. Implementation Snapshot
@@ -55,76 +52,113 @@ tools/
 └── build-dashboard-css.sh   # optional helper
 ```
 
+### 3.2 Build Commands
+
+#### `package.json` scripts (current)
+
+```json
+{
+  "devDependencies": {
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0"
+  },
+  "scripts": {
+    "dashboard:css": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css",
+    "dashboard:css:min": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --minify",
+    "dashboard:css:watch": "tailwindcss -i api_service/static/task_dashboard/dashboard.tailwind.css -o api_service/static/task_dashboard/dashboard.css --watch"
+  }
+}
+```
+
+#### Developer workflow
+
+1. `npm install`
+2. During CSS work: `npm run dashboard:css:watch`
+3. Before commit: `npm run dashboard:css:min`
+
+#### CI consistency check
+
+1. `npm ci`
+2. `npm run dashboard:css:min`
+3. `git diff --exit-code -- api_service/static/task_dashboard/dashboard.css`
+
 ## 4. Route Map
 
 | Route | Purpose |
 | --- | --- |
-| `/tasks/list` | Primary task list for workflow executions |
-| `/tasks/new` | Task submission form |
+| `/tasks/list` | Unified task list viewing workflow executions (Temporal Visibility) |
+| `/tasks/new` | Unified submit page / Workflow form wizard |
 | `/tasks/queue/new` | Alias to `/tasks/new`; prefill mode uses `?editJobId=<jobId>` |
-| `/tasks/{taskId}` | Canonical task detail route |
-| `/tasks/proposals` | Proposal review queue |
-| `/tasks/proposals/{proposalId}` | Proposal detail and actions |
-| `/tasks/schedules` | Recurring schedule list |
-| `/tasks/schedules/{scheduleId}` | Recurring schedule detail |
+| `/tasks/:taskId` | Unified task detail shell resolving workflow history |
+| `/tasks/proposals` | Proposal queue list and triage actions |
+| `/tasks/proposals/:proposalId` | Proposal detail, promote/dismiss/priority/snooze actions |
 
 ### 4.1 Query Parameters
 
-Supported execution query parameters:
+Supported query parameters for Temporal integration:
 
 | Query parameter | Meaning |
 | --- | --- |
-| `source=temporal` | Explicit Temporal execution routing hint |
-| `workflowType=` | Filter execution list by workflow type |
-| `state=` | Filter by `mm_state` |
-| `entry=` | Filter by `mm_entry` (`run`, `manifest`) |
+| `source=temporal` | Force Temporal source resolution for list/detail |
+| `workflowType=` | Filter Temporal list by workflow type when source is Temporal |
+| `state=` | Filter Temporal list by `mm_state` |
+| `entry=` | Filter Temporal list by `mm_entry` (`run`, `manifest`) |
 | `ownerType=` | Operator/admin-only owner class filter |
-| `ownerId=` | Admin-only owner filter |
-| `nextPageToken=` | Temporal pagination token |
-| `repo=` | Optional repo filter |
-| `integration=` | Optional integration filter |
+| `ownerId=` | Admin-only filter passthrough when allowed by API policy |
+| `nextPageToken=` | Temporal-only pagination token |
+| `repo=` | Optional repo-scoped filter when exposed by API policy |
+| `integration=` | Optional integration filter when exposed by API policy |
 
 Ownership rules:
 
-- standard users are implicitly scoped to their own executions
-- `ownerType` and `ownerId` are operator/admin controls
+- Standard user task pages should be implicitly scoped to the authenticated principal.
+- The default end-user UI should not expose an arbitrary owner picker.
+- `ownerType` / `ownerId` filters are operator/admin controls.
 
 ## 5. Source Model
 
-### 5.1 Execution source
+The dashboard presents work from multiple backend sources through a unified UI.
 
-Mission Control has one live execution source:
+### 5.1 Dashboard Sources
 
-- `temporal`
+Runtime config (`build_runtime_config()`) currently exposes:
 
-### 5.2 Adjacent modules
-
-The runtime config may also expose:
-
+- `queue`
+- `system`
 - `proposals`
-- `schedules`
 - `manifests`
+- `schedules`
+- `temporal` *(being integrated)*
 
-These are **not** alternate execution substrates. They are adjacent product
-modules that either create Temporal executions or inspect related control-plane
-data.
+### 5.2 Temporal as a Dashboard Source
 
-### 5.3 Temporal is not a runtime choice
-
-Temporal is the orchestration substrate, not a replacement for runtime choices
-such as `codex`, `gemini_cli`, `claude_code`, or `jules`.
+Temporal-backed work is integrated as a **first-class source** alongside queue and system, not as a separate UI or a worker runtime.
 
 Rules:
 
-- do **not** add `temporal` to the runtime picker
-- do **not** overload the runtime picker to mean "execution engine"
-- keep execution-engine routing invisible to normal product flows
+- Add a new source key: `temporal`.
+- Keep the `/tasks*` shell as the primary navigation surface.
+- Do not make the browser talk directly to Temporal Server or Temporal Web UI.
+- Go through MoonMind REST APIs only.
 
-### 5.4 Product vocabulary
+### 5.3 Temporal Is Not a Worker Runtime
 
-- use **task** in primary UX
-- use **workflow execution** in advanced/debug metadata
-- never present Temporal Task Queues as a user-facing queue product
+Temporal is an orchestration substrate, not a replacement for `codex`, `gemini_cli`, `claude`, or `jules` runtime choices.
+
+Rules:
+
+- Do **not** add `temporal` as a worker runtime option.
+- Do **not** overload the existing runtime picker to mean "execution engine."
+- Prefer invisible backend routing: the user submits a task-shaped request, and the backend decides whether the execution is queue-backed, system-backed, or Temporal-backed.
+
+### 5.4 Task-Oriented Product Surface
+
+The dashboard presents work primarily as **tasks**.
+
+- Use **task** in the main dashboard UX.
+- Use **workflow execution** in advanced/debug metadata and implementation-facing text.
+- Do not expose Temporal Task Queues as a user-facing queue product.
 
 ## 6. Runtime Config Contract
 
@@ -140,7 +174,6 @@ Rules:
       "update": "/api/executions/{workflowId}/update",
       "signal": "/api/executions/{workflowId}/signal",
       "cancel": "/api/executions/{workflowId}/cancel",
-      "reschedule": "/api/executions/{workflowId}/reschedule",
       "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
       "artifactCreate": "/api/artifacts",
       "artifactMetadata": "/api/artifacts/{artifactId}",
@@ -151,16 +184,16 @@ Rules:
 }
 ```
 
-### 6.2 Status mapping
+### 6.2 Transitional `statusMaps.temporal`
 
 Preferred UI contract for Temporal-backed rows/details:
 
-- `dashboardStatus` for broad badges and filters
-- `rawState` for exact MoonMind workflow state
-- `temporalStatus` and `closeStatus` for advanced/detail views
-- `waitingReason` and `attentionRequired` for blocked executions
+- `dashboardStatus` is the compatibility status used for list badges and broad filters.
+- `rawState` preserves the exact MoonMind workflow state.
+- `temporalStatus` and `closeStatus` remain available for advanced/detail views.
+- `waitingReason` and `attentionRequired` remain available whenever `rawState=awaiting_external`.
 
-Example client fallback mapping:
+Client-side fallback mapping (mirrors canonical mapping from `docs/Temporal/VisibilityAndUiQueryModel.md`):
 
 ```json
 {
@@ -181,96 +214,184 @@ Example client fallback mapping:
 }
 ```
 
+Notes:
+
+- Prefer server-supplied normalized fields over recreating dashboard semantics in `dashboard.js`.
+- The dashboard must preserve `rawState`, `temporalStatus`, and `closeStatus` even when it renders a broader `dashboardStatus`.
+- `awaiting_external` does not automatically mean the current user must act; pair the compatibility status with `waitingReason` and `attentionRequired` so the UI does not mislead operators.
+
+### 6.3 Feature Flags
+
+```json
+{
+  "features": {
+    "temporalDashboard": {
+      "enabled": true,
+      "listEnabled": true,
+      "detailEnabled": true,
+      "actionsEnabled": false,
+      "submitEnabled": false,
+      "debugFieldsEnabled": false
+    }
+  }
+}
+```
+
+Suggested **enablement order** for `temporalDashboard` flags: list/detail read-only, then actions, then submit flows, then optional debug metadata (see tracker for feature-flag work).
+
 ## 7. Detail View Lifecycle
 
-When viewing `/tasks/{taskId}`, the dashboard reads the execution through the
-control-plane APIs backed by Temporal and the execution projection layer.
+When viewing `/tasks/:taskId`, the dashboard polls the API (which maps to Temporal's Execution history or Postgres index).
 
-Canonical fetch sequence:
+- Queue-backed fetches query standard `GET /api/queue/jobs/{jobId}` which derives status from the execution index.
+- Operator actions (Approve, Resume, Pause) interact with task limits by submitting to standard API routes, which issue Signals to the `MoonMind.Run` handler.
+- Terminal outputs manifest in a UI Finish Summary block, mapping standard events into human-readable outcome strings (like `NO_CHANGES` or `PUBLISHED_PR`).
+
+### 7.1 Temporal Detail Routing
+
+The current dashboard route shell assumes queue/system-era identifier patterns in places.
+
+Required change:
+
+- Route `/tasks/:taskId` through canonical server-side source resolution metadata rather than ID-shape probing.
+- Accept safe Temporal-compatible task IDs in the route shell so canonical routes remain reachable.
+- Keep any source-specific alias route optional and clearly secondary.
+
+Recommendation:
+
+- Keep `/tasks/:taskId` as the canonical product route.
+- Use a persisted source mapping / global task index to resolve `taskId` to `queue`, `system`, or `temporal`.
+- Widen the route allowlist to accept safe Temporal-compatible identifiers as an implementation detail.
+- Optionally add `/tasks/executions/:workflowId` as an internal/debug alias that redirects to `/tasks/:taskId?source=temporal`.
+
+### 7.2 Source Resolution Order
+
+1. If `?source=temporal`, resolve against Temporal only.
+2. Otherwise resolve via canonical server-side source mapping for `taskId`.
+3. Keep source-probing heuristics, if any remain temporarily, as an implementation fallback.
+4. When a row originated from the Temporal list, generated links may include `?source=temporal` until source mapping is fully in place.
+
+### 7.3 Temporal Detail Fetch Sequence
+
+Minimum fetch sequence for Temporal-backed detail:
 
 1. `GET /api/executions/{workflowId}`
 2. `GET /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts`
-3. optional artifact metadata/download calls as the user expands outputs
+3. Optional per-artifact metadata/download calls when the user expands or downloads an artifact.
 
-Rules:
+Important rule:
 
-- the route remains anchored to `taskId == workflowId`
-- artifact fetch must use the latest `temporalRunId` returned by the detail API
-- the detail page should surface finish outcomes such as `PUBLISHED_PR`,
-  `NO_CHANGES`, or `FAILED` when available
+- Artifact list fetch must use the **latest `temporalRunId` from the execution detail response**, not a stale run ID cached from an earlier list row.
+- The detail route stays anchored to `taskId == workflowId` even when `temporalRunId` changes across rerun or Continue-As-New behavior.
 
-### 7.1 Detail header fields
+### 7.4 Detail Header Model
 
 Temporal-backed detail should render:
 
 - title
 - normalized status badge
 - summary
-- workflow type
-- runtime, model, and effort when present
+- workflow type label
+- runtime, model, and effort (when applicable to the execution)
 - latest run metadata
+- source label (`Temporal`)
 - started/updated/closed timestamps
 
-Advanced/debug views may also show:
+Advanced/debug fields may optionally show:
 
 - `workflowId`
-- `temporalRunId`
+- latest `temporalRunId`
 - `namespace`
-- `temporalStatus`
-- `rawState`
-- `closeStatus`
+- raw `temporalStatus`
+- raw `rawState`
+- raw `closeStatus`
 - `waitingReason`
 - `attentionRequired`
 
-### 7.2 Timeline posture
+### 7.5 Timeline / Event Model
 
-V1 detail behavior:
+V1 detail behavior for Temporal-backed work:
 
-- show a synthesized summary/timeline panel
-- treat artifacts as the primary durable evidence surface
-- show update/signal/cancel actions when enabled
-- defer raw Temporal event history browsing to dedicated backend contracts
+- Show a summary/timeline panel synthesized from execution fields and known state transitions.
+- Surface `waitingReason` and `attentionRequired` when the execution is blocked externally.
+- Show artifacts as the main durable evidence surface.
+- Show update/signal/cancel actions when enabled.
+- Defer raw Temporal event history browsing until a dedicated backend contract exists.
 
 ## 8. List Page Integration
 
-`/tasks/list` is the primary execution list surface.
+### 8.1 Mixed-Source List Behavior
+
+`/tasks/list` remains the main list surface.
+
+When `source` is not pinned, the client may merge rows from:
+
+- queue
+- system
+- temporal
+
+Rules:
+
+- Mixed-source list mode is a **product convenience view**, not an authoritative globally paginated dataset.
+- The dashboard may fetch bounded slices per source and merge-sort client-side.
+- Mixed-source totals are informational only and should not claim exact global counts.
+- Exact Temporal pagination and counts should only be surfaced when the user filters to `source=temporal`.
+
+### 8.2 Temporal-Only List Behavior
+
+When `source=temporal`, the dashboard treats Temporal as the authoritative source.
 
 Behavior:
 
-- call `GET /api/executions`
-- pass `workflowType`, `state`, `entry`, `ownerType`, `ownerId`, `pageSize`,
-  `nextPageToken`, `repo`, and `integration` when applicable
-- use returned `nextPageToken`, `count`, and `countMode` as-is
-- sort primarily by `mm_updated_at` or `updatedAt`
+- Call `GET /api/executions`.
+- Pass `workflowType`, `state`, `entry`, `ownerType`, `ownerId`, `pageSize`, and `nextPageToken` where applicable.
+- Use the returned `nextPageToken`, `count`, and `countMode` as-is.
+- Avoid pretending that queue/system records are part of the same exact paginated result set.
 
-### 8.1 Row model
+### 8.3 Row Model for Temporal-Backed Items
 
 | Dashboard field | Temporal source |
 | --- | --- |
 | `id` / `taskId` | `workflowId` |
 | `source` | `temporal` |
 | `sourceLabel` | `Temporal` |
-| `title` | `memo.title` or fallback |
+| `title` | `memo.title` or fallback from workflow type |
 | `summary` | `memo.summary` |
 | `workflowType` | `workflowType` |
-| `entry` | `searchAttributes.mm_entry` |
+| `entry` | `searchAttributes.mm_entry` if present |
 | `status` | `dashboardStatus` |
 | `rawState` | exact `state` |
 | `temporalStatus` | `temporalStatus` |
-| `closeStatus` | `closeStatus` |
+| `closeStatus` | `closeStatus` when present |
 | `ownerType` | `searchAttributes.mm_owner_type` |
 | `ownerId` | `searchAttributes.mm_owner_id` |
-| `repository` | `searchAttributes.mm_repo` |
-| `integration` | `searchAttributes.mm_integration` |
-| `waitingReason` | wait detail when blocked |
-| `attentionRequired` | whether the UI should surface action-needed state |
+| `repository` | `searchAttributes.mm_repo` when present |
+| `integration` | `searchAttributes.mm_integration` when present |
+| `waitingReason` | bounded wait reason when `rawState=awaiting_external` |
+| `attentionRequired` | whether current product surface expects operator/user action |
 | `startedAt` | `startedAt` |
-| `updatedAt` | `updatedAt` / `mm_updated_at` |
+| `updatedAt` | `updatedAt` or `searchAttributes.mm_updated_at` |
 | `closedAt` | `closedAt` |
 | `workflowId` | `workflowId` |
-| `temporalRunId` | latest run instance |
+| `temporalRunId` | latest Temporal run instance ID |
+
+### 8.4 Sorting
+
+For Temporal-backed rows:
+
+- Primary sort: `mm_updated_at` when available.
+- Fallback sort: `updatedAt`.
+- Deterministic tie-breaker: `workflowId DESC`.
+- Fallback of last resort: `startedAt`.
+
+For mixed-source views:
+
+- Sort on a normalized timestamp field shared across sources.
+- Do not imply Temporal queue-order semantics.
 
 ## 9. Action Mapping
+
+### 9.1 Supported Temporal Actions
 
 | Dashboard action | Temporal API | Contract |
 | --- | --- | --- |
@@ -282,83 +403,242 @@ Behavior:
 | Pause | `POST /api/executions/{workflowId}/signal` | `signalName="Pause"` |
 | Resume | `POST /api/executions/{workflowId}/signal` | `signalName="Resume"` |
 | Cancel | `POST /api/executions/{workflowId}/cancel` | graceful by default |
-| Reschedule | `POST /api/executions/{workflowId}/reschedule` | deferred execution only |
 
-`ExternalEvent` remains part of the execution contract but is usually a
-system/integration path rather than a direct human button.
+`ExternalEvent` is part of the execution contract but is normally a system/integration action rather than a direct human dashboard button.
+
+### 9.2 Initial UI Action Matrix
+
+| Temporal state | Allowed actions |
+| --- | --- |
+| `scheduled` / `initializing` / `waiting_on_dependencies` / `awaiting_slot` / `planning` | cancel, set title |
+| `executing` / `proposals` | cancel, pause, set title |
+| `awaiting_external` | cancel, pause, resume, approve when applicable |
+| `finalizing` | cancel only if policy allows |
+| terminal (`completed`, `failed`, `canceled`) | rerun, view/download artifacts |
+
+### 9.3 Copy Guidance
+
+- Prefer **Rerun** instead of "Continue-As-New".
+- Prefer **Task title** instead of "workflow memo title".
+- Prefer **Pause task** / **Resume task** instead of Temporal-internal terminology.
+- Advanced/debug views may disclose the underlying Temporal terms.
 
 ## 10. Submit Integration
 
-The submit form at `/tasks/new` creates Temporal executions directly through the
-control-plane API.
+### 10.1 Default Posture
 
-Rules:
+Initial Temporal dashboard integration should be **read-first**.
 
-- do not add a visible "Temporal runtime" option
-- keep submit flows organized around task product shapes
-- let the backend decide workflow type and execution details
+Phased order:
 
-### 10.1 Redirect rules
+1. list/detail visibility
+2. task actions on existing Temporal-backed executions
+3. direct submit from `/tasks/new`
 
-- **Immediate execution:** `/tasks/{taskId}?source=temporal`
-- **Deferred one-time:** `/tasks/{taskId}?source=temporal`
-- **Recurring schedule:** `/tasks/schedules/{definitionId}`
+### 10.2 Submit UX Rule
 
-### 10.2 Inline scheduling
+- Do not add a visible "Temporal runtime" option to the standard runtime picker.
+- Keep submit flows organized around current task product shapes.
+- Let the backend decide whether the request starts a Temporal execution.
 
-The submit form supports:
+### 10.3 Backend Mapping for Temporal-Backed Submit
 
-- **Run immediately**
-- **Schedule for later**
-- **Set up recurring schedule**
+The dashboard submits task-shaped requests and artifact references. The backend compatibility layer maps those onto Temporal workflow starts.
 
-The dashboard always posts to `POST /api/executions`; recurring mode may be
-implemented by delegating server-side to the recurring-tasks service while
-preserving the same product form.
+Initial expected mappings:
+
+- Run-shaped submit flows may start `MoonMind.Run`.
+- Manifest-oriented submit flows may start `MoonMind.ManifestIngest`.
+- Submit payloads should use `task.tool` / `step.tool` as canonical execution shape; `task.skill` / `step.skill` may be accepted only as compatibility aliases.
+- Skills are a tool subtype (`tool.type = "skill"`), not a sibling to tools.
+- `workflowType`, `idempotencyKey`, `failurePolicy`, and `initialParameters` are backend/API contract details, not primary user-facing dashboard concepts.
+
+### 10.4 Redirect After Create
+
+- **Immediate execution:** redirect to `/tasks/{taskId}?source=temporal`.
+- **Deferred one-time (`schedule.mode=once`):** redirect to `/tasks/{taskId}?source=temporal`, detail page shows scheduled banner.
+- **Recurring (`schedule.mode=recurring`):** redirect to `/tasks/schedules/{definitionId}`, the schedule detail page.
+- For Temporal-backed records, `taskId` should equal `workflowId`.
+- Internal state may additionally retain `temporalRunId`, but the canonical route should remain task-oriented and stable across reruns.
+
+### 10.5 Inline Scheduling on Submit
+
+The submit form at `/tasks/new` includes a **"When to run"** schedule panel that allows the user to choose between immediate, deferred one-time, and recurring execution — all from the same form.
+
+#### Feature Flag
+
+```json
+{
+  "featureFlags": {
+    "temporalDashboard": {
+      "submitScheduleEnabled": false
+    }
+  }
+}
+```
+
+When `submitScheduleEnabled` is `false`, the schedule panel is hidden and all submissions are immediate (current behavior).
+
+#### Schedule Panel Wireframe
+
+The panel appears below the task fields (instructions, runtime, model, repo) and above the submit button:
+
+```
+┌─────────────────────────────────────────┐
+│  When to run                            │
+│                                         │
+│  ( • ) Run immediately                  │
+│  (   ) Schedule for later               │
+│  (   ) Set up recurring schedule        │
+│                                         │
+│  ─── Shown when "Schedule for later" ── │
+│  Date: [____-__-__]                     │
+│  Time: [__:__]  Timezone: [_________▾]  │
+│                                         │
+│  ── Shown when "Recurring schedule" ──  │
+│  Schedule name: [____________________]  │
+│  Cron: [_______]  Timezone: [________▾] │
+│  Preview: "Every weekday at 9:00 AM"    │
+│                                         │
+└─────────────────────────────────────────┘
+│ [ Submit ]  or  [ Schedule ]            │
+```
+
+#### Mode Behaviors
+
+| Selection | Submit button | API `schedule` field | Redirect |
+| --- | --- | --- | --- |
+| **Run immediately** | "Submit" | Absent | `/tasks/{taskId}?source=temporal` |
+| **Schedule for later** | "Schedule" | `{ mode: "once", scheduledFor: "..." }` | `/tasks/{taskId}?source=temporal` |
+| **Set up recurring schedule** | "Create Schedule" | `{ mode: "recurring", cron: "...", ... }` | `/tasks/schedules/{definitionId}` |
+
+#### Deferred One-Time Fields
+
+- **Date picker** — calendar date selector
+- **Time picker** — hour/minute selector
+- **Timezone** — dropdown, defaults to browser timezone via `Intl.DateTimeFormat().resolvedOptions().timeZone`
+- Combined values produce an ISO 8601 `scheduledFor` timestamp
+
+#### Recurring Schedule Fields
+
+- **Schedule name** — text input, auto-populated from the task title, editable
+- **Cron expression** — text input with inline validation against 5-field POSIX cron
+- **Cron preview** — human-readable label derived from the cron expression (e.g., "Every weekday at 9:00 AM Pacific")
+- **Timezone** — dropdown, defaults to `UTC`
+- **Enabled** — toggle, defaults to on
+- Advanced policy options (overlap, catchup, jitter) are omitted from the submit form to keep it simple. Users can configure these from the schedule detail page after creation.
+
+#### UX Considerations
+
+- The schedule panel defaults to "Run immediately" — the existing behavior.
+- Validation prevents scheduling in the past for deferred one-time mode.
+- For recurring mode, the cron preview should update live as the user types.
+- Error states from the backend (e.g., invalid cron) should render inline under the field.
+- The submit button label changes dynamically based on the selected mode.
+
+#### Backend API Contract
+
+The same `POST /api/executions` or `POST /api/queue/jobs` endpoint is used. The dashboard adds the optional `schedule` object to the existing create payload:
+
+```json
+{
+  "type": "task",
+  "payload": {
+    "task": { "instructions": "...", "runtime": { ... } },
+    "repository": "..."
+  },
+  "schedule": {
+    "mode": "once",
+    "scheduledFor": "2026-03-19T02:00:00Z"
+  }
+}
+```
+
+See [WorkflowSchedulingGuide.md § 4.4](../Temporal/WorkflowSchedulingGuide.md) for the full `schedule` object schema and backend behavior.
+
+#### Scheduled Execution Detail Banner
+
+When a deferred one-time execution (`schedule.mode=once`) is viewed on the detail page before its start time:
+
+- Show a **"Scheduled"** status badge (mapped from `mm_state=scheduled`).
+- Show a banner: "This task is scheduled to run at {scheduledFor} ({timezone}). [Cancel]".
+- The Cancel action cancels the Temporal workflow (which also cancels the deferred start).
+- Once the start time passes, the execution transitions to `initializing` and the detail page renders normally.
 
 ## 11. Artifact Integration
 
-Temporal-managed flows remain artifact-first for large inputs and outputs.
+### 11.1 General Posture
 
-Required UI behaviors:
+Temporal-managed flows should remain artifact-first for large inputs and outputs.
 
-- create artifact placeholders
-- upload content directly or via presigned endpoints
-- complete uploads
-- fetch artifact metadata
-- fetch execution-scoped artifact lists
-- download via authorized artifact endpoints
+Dashboard implications:
 
-Rules:
+- Large user inputs should upload as artifacts before create or update operations when needed.
+- Task detail should show execution-linked artifacts as the main durable output surface.
+- Downloads should go through MoonMind artifact authorization and grant flows.
 
-- treat artifacts as immutable references
-- prefer previews when available
-- respect access-control metadata
-- default to latest-run artifact views unless a prior-run browser is explicitly
-  added later
+### 11.2 Required Artifact Behaviors
+
+The dashboard should support:
+
+- Create artifact placeholder
+- Upload content directly or through presigned part upload
+- Complete upload
+- Fetch artifact metadata
+- Fetch execution-scoped artifact lists
+- Download through presigned or direct endpoints
+
+### 11.3 Presentation Rules
+
+- Render artifact metadata and labels from execution linkage when available.
+- Prefer preview flows when `preview_artifact_ref` exists.
+- Respect `raw_access_allowed` and `default_read_ref`.
+- Do not assume all artifacts are safe for inline display.
+- Treat artifacts as immutable references; editing an input means producing a new artifact and updating references.
+
+### 11.4 Run Scoping
+
+Execution-scoped artifact listing is keyed by `namespace`, `workflowId`, and `temporalRunId`.
+
+Default to showing artifacts for the **latest run**. If prior-run artifact browsing is needed later, it should become an explicit detail feature rather than an implicit mixed-run view.
 
 ## 12. Compatibility Rules
 
-### 12.1 Identifier policy
+### 12.1 Vocabulary
 
-For Temporal-backed task views:
+- User-facing primary term: **task**
+- Advanced/debug term: **workflow execution**
+- Never present Temporal Task Queues as the UI meaning of "queue"
 
-- `taskId == workflowId`
-- `workflowId` is the durable execution identifier
-- `temporalRunId` is detail/debug metadata
-- route resolution should use canonical server-side metadata, not ID-shape
-  guessing
+### 12.2 Identifier Policy
 
-### 12.2 Product-language rule
+During migration, a Temporal-backed record may carry:
 
-Mission Control stays task-oriented in the main UX while preserving Temporal
-terms for operator/debug views.
+- `taskId`
+- `workflowId`
+- latest `temporalRunId`
+
+Rules:
+
+- For `source=temporal`, `taskId` should equal `workflowId`.
+- `taskId` remains the main dashboard route handle during migration.
+- `workflowId` is the durable Temporal identity.
+- `temporalRunId` is detail/debug metadata, not the main user-facing identifier.
+- `runId` remains reserved for legacy system compatibility and should not be reused for Temporal-backed task payloads.
+
+### 12.3 Mixed-Source List Caveat
+
+A mixed-source `/tasks/list` page is a product convenience view, not a universal durable source of truth.
+
+- Queue-backed rows remain sourced from queue APIs.
+- system-backed rows remain sourced from system APIs.
+- Temporal-backed rows remain sourced from Temporal lifecycle APIs.
+- No shared global pagination promise across all three systems.
 
 ## 13. Open Questions
 
-1. Should Mission Control eventually expose explicit run-history browsing for a
-   single `workflowId`, or keep latest-run detail as the default?
-2. Does `awaiting_action` need a more granular operator-visible `waitKind`
-   distinction?
-3. How much debug metadata should be shown by default versus behind an operator
-   panel?
+1. Should `/tasks/:taskId` remain the only canonical Temporal detail route, or should `/tasks/executions/:workflowId` exist as a first-class compatibility alias?
+2. Is the current `awaiting_action` compatibility grouping sufficient once `waitingReason` and `attentionRequired` are exposed, or do we eventually want a sharper dashboard distinction for approval versus external wait states?
+3. Should direct Temporal-backed create be hidden entirely behind backend routing, or exposed as a feature-flagged advanced submit path during rollout?
+4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common?
+5. When a queue- or system-backed flow migrates to Temporal, should the dashboard preserve the previous source label for user continuity, or show `Temporal` directly?

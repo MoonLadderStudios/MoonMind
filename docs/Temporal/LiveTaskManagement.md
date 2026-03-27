@@ -62,20 +62,12 @@ DISABLED → STARTING → READY → (REVOKED | ENDED | ERROR)
 ### 4.2 Session bootstrap (managed runtime and workers)
 
 > [!NOTE]
-> **`ManagedRuntimeLauncher.launch()`** delegates tmate wrapping to
-> **`TmateSessionManager`** (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md)
-> section 4). The legacy managed CLI worker path
-> (`moonmind/agents/codex_worker`, historical package name) also runs an inline
-> tmate bootstrap in `_ensure_live_session_started` for HTTP live-session
-> reporting for **every runtime** that worker executes; consolidating with the
-> manager is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
+> **`ManagedRuntimeLauncher.launch()`** delegates tmate wrapping to **`TmateSessionManager`** (see [TmateSessionArchitecture.md](TmateSessionArchitecture.md) section 4). The **managed agent queue worker** (`moonmind/agents/codex_worker`, historical package name) also runs an inline tmate bootstrap in `_ensure_live_session_started` for HTTP live-session reporting for **every runtime** that worker executes; consolidating with the manager is tracked in [`050-TmatePlan.md`](../tmp/050-TmatePlan.md) Phase 2.
 
 1. **Launcher wrapping (agent-runtime worker):** When `TmateSessionManager.is_available()` returns true, the launcher creates a `TmateSessionManager` instance and calls `start()` with the agent command. On tmate failure it falls back to a plain subprocess so the agent still runs.
 2. **Endpoint persistence:** Rows live in **`task_run_live_sessions`** (`TaskRunLiveSession`). Workers report via **`POST /api/task-runs/{id}/live-session/report`** and **`POST /api/task-runs/{id}/live-session/heartbeat`** (HTTP). Operators read **`GET /api/task-runs/{id}/live-session`** for the Live Output panel.
 3. **UI embedding:** Mission Control embeds the `web_ro` URL from the task-run live-session payload.
-4. **Teardown:** The supervisor calls `TmateSessionManager.teardown()` when the
-   managed-runtime path completes; the legacy managed CLI worker path reports
-   session end (or error) through the same HTTP report API.
+4. **Teardown:** The supervisor calls `TmateSessionManager.teardown()` when the managed-runtime path completes; the managed agent queue worker reports session end (or error) through the same HTTP report API.
 
 ```bash
 # Conceptual wrapper executed by ManagedRuntimeLauncher
@@ -229,7 +221,7 @@ Tracks operator-driven actions for audit.
 
 ---
 
-## 8. API Surface & Temporal Control
+## 8. API Surface & Temporal Signals
 
 ### 8.1 Session Lifecycle (REST APIs)
 
@@ -238,13 +230,11 @@ Tracks operator-driven actions for audit.
 - `POST /api/workflows/{id}/live-session/grant-write`: Returns time-limited RW endpoint or short-lived reveal token; logs audit event.
 - `POST /api/workflows/{id}/live-session/revoke`: Forces worker teardown and updates status.
 
-### 8.2 Control Actions (Temporal workflow controls)
+### 8.2 Control Actions (Temporal Signals)
 
-Pause and resume should use the canonical execution control surface rather than ad hoc signal names:
-- Update `Pause`: The workflow stops scheduling new work at the next safe checkpoint.
-- Update `Resume`: Removes the block and lets orchestration continue.
-
-If a future live-session takeover flow needs a workflow-local async event, it should use an explicitly documented signal contract rather than reusing generic pause/resume signal names.
+Pauses and takeovers use standard **Temporal Signals**:
+- Signal `pause_workflow`: The workflow blocks taking new actions at the next safe checkpoint.
+- Signal `resume_workflow`: Removes the block.
 
 ### 8.3 Operator Messages
 
