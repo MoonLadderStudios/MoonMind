@@ -34,7 +34,7 @@ This document builds on and must stay consistent with:
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
 - `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
-- `docs/ExternalAgents/JulesClientAdapter.md`
+- `docs/ExternalAgents/JulesAdapter.md`
 
 If this document conflicts with the provider-neutral Temporal docs or the unified execution model, the shared docs win unless this file explicitly narrows behavior for Jules.
 

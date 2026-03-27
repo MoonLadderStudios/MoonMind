@@ -18,7 +18,7 @@ For the full execution model covering both managed and external agents, see [`Ma
 The old docs drifted because they described different slices of the stack:
 
 - this document compressed external execution into a "3-layer" model
-- [`JulesClientAdapter.md`](./JulesClientAdapter.md) described Jules transport and MCP tooling as a "4-layer" model
+- [`JulesAdapter.md`](./JulesAdapter.md) described Jules transport and MCP tooling as a "4-layer" model
 
 Those are not actually competing architectures. They are different views of the same system. The standard model should be:
 

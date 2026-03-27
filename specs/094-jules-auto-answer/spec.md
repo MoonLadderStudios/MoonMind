@@ -3,24 +3,24 @@
 **Feature Branch**: `094-jules-auto-answer`
 **Created**: 2026-03-21
 **Status**: Draft
-**Input**: User description: "Implement question auto-answer as specified in docs/ExternalAgents/JulesClientAdapter.md"
+**Input**: User description: "Implement question auto-answer as specified in docs/ExternalAgents/JulesAdapter.md"
 
 ## Source Document Requirements
 
 | ID | Source Citation | Requirement Summary |
 |---|---|---|
-| DOC-REQ-001 | JulesClientAdapter.md §9.3 | Status normalizer must map `awaiting_user_feedback` to a distinct `awaiting_feedback` status instead of `running` |
-| DOC-REQ-002 | JulesClientAdapter.md §9.4 | System must call the Jules Sessions Activities API (`GET /sessions/{id}/activities`) to extract the latest `AgentMessaged.agentMessage` text when Jules is in `AWAITING_USER_FEEDBACK` state |
-| DOC-REQ-003 | JulesClientAdapter.md §9.5 | System must dispatch the extracted question to a managed agent runtime (one-shot LLM by default) to generate a clarification answer |
-| DOC-REQ-004 | JulesClientAdapter.md §9.6 | System must send the generated answer back to Jules via `sendMessage` (`POST /sessions/{id}:sendMessage`) |
-| DOC-REQ-005 | JulesClientAdapter.md §10.1 | The auto-answer flow must run inline in `MoonMind.AgentRun` external polling loop exclusively; `MoonMind.Run` delegates to `AgentRun` and does not duplicate this logic |
-| DOC-REQ-006 | JulesClientAdapter.md §9.8 | System must enforce a configurable max auto-answer cycle limit (default 3), after which status maps to `intervention_requested` |
-| DOC-REQ-007 | JulesClientAdapter.md §9.8 | System must deduplicate answered questions using activity IDs to prevent re-answering the same question |
-| DOC-REQ-008 | JulesClientAdapter.md §9.8 | System must support an opt-out configuration (`JULES_AUTO_ANSWER_ENABLED`) that maps `AWAITING_USER_FEEDBACK` directly to `intervention_requested` when disabled |
-| DOC-REQ-009 | JulesClientAdapter.md §9.9 | System must expose four configuration variables: `JULES_AUTO_ANSWER_ENABLED`, `JULES_MAX_AUTO_ANSWERS`, `JULES_AUTO_ANSWER_RUNTIME`, `JULES_AUTO_ANSWER_TIMEOUT_SECONDS` |
-| DOC-REQ-010 | JulesClientAdapter.md §9.10 | System must add Pydantic schema models for Jules activities API: `JulesActivity`, `JulesAgentMessage`, `JulesListActivitiesResult` |
-| DOC-REQ-011 | JulesClientAdapter.md §9.4 | System must register a new Temporal activity `integration.jules.list_activities` on the integrations task queue |
-| DOC-REQ-012 | JulesClientAdapter.md §9.5 | System must register a new Temporal activity `integration.jules.answer_question` on the integrations task queue |
+| DOC-REQ-001 | JulesAdapter.md §9.3 | Status normalizer must map `awaiting_user_feedback` to a distinct `awaiting_feedback` status instead of `running` |
+| DOC-REQ-002 | JulesAdapter.md §9.4 | System must call the Jules Sessions Activities API (`GET /sessions/{id}/activities`) to extract the latest `AgentMessaged.agentMessage` text when Jules is in `AWAITING_USER_FEEDBACK` state |
+| DOC-REQ-003 | JulesAdapter.md §9.5 | System must dispatch the extracted question to a managed agent runtime (one-shot LLM by default) to generate a clarification answer |
+| DOC-REQ-004 | JulesAdapter.md §9.6 | System must send the generated answer back to Jules via `sendMessage` (`POST /sessions/{id}:sendMessage`) |
+| DOC-REQ-005 | JulesAdapter.md §10.1 | The auto-answer flow must run inline in `MoonMind.AgentRun` external polling loop exclusively; `MoonMind.Run` delegates to `AgentRun` and does not duplicate this logic |
+| DOC-REQ-006 | JulesAdapter.md §9.8 | System must enforce a configurable max auto-answer cycle limit (default 3), after which status maps to `intervention_requested` |
+| DOC-REQ-007 | JulesAdapter.md §9.8 | System must deduplicate answered questions using activity IDs to prevent re-answering the same question |
+| DOC-REQ-008 | JulesAdapter.md §9.8 | System must support an opt-out configuration (`JULES_AUTO_ANSWER_ENABLED`) that maps `AWAITING_USER_FEEDBACK` directly to `intervention_requested` when disabled |
+| DOC-REQ-009 | JulesAdapter.md §9.9 | System must expose four configuration variables: `JULES_AUTO_ANSWER_ENABLED`, `JULES_MAX_AUTO_ANSWERS`, `JULES_AUTO_ANSWER_RUNTIME`, `JULES_AUTO_ANSWER_TIMEOUT_SECONDS` |
+| DOC-REQ-010 | JulesAdapter.md §9.10 | System must add Pydantic schema models for Jules activities API: `JulesActivity`, `JulesAgentMessage`, `JulesListActivitiesResult` |
+| DOC-REQ-011 | JulesAdapter.md §9.4 | System must register a new Temporal activity `integration.jules.list_activities` on the integrations task queue |
+| DOC-REQ-012 | JulesAdapter.md §9.5 | System must register a new Temporal activity `integration.jules.answer_question` on the integrations task queue |
 
 ## User Scenarios & Testing
 

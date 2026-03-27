@@ -93,7 +93,7 @@ Scope: product/architecture migrations, implementation sequencing, rollout phase
 | [`docs/ExternalAgents/JulesTemporalExternalEventContract.md`](../ExternalAgents/JulesTemporalExternalEventContract.md) | References Phase C migration items (e.g. adapter wiring). |
 | [`docs/ExternalAgents/OpenClawAgentAdapter.md`](../ExternalAgents/OpenClawAgentAdapter.md) | Merge-ready sequence and implementation checklist. |
 | [`docs/ExternalAgents/AddingExternalProvider.md`](../ExternalAgents/AddingExternalProvider.md) | Step-by-step integration procedure for a new provider (implementation guide). |
-| [`docs/ExternalAgents/JulesClientAdapter.md`](../ExternalAgents/JulesClientAdapter.md) | Relationship to the universal external adapter plan (context for rollout standardization). |
+| [`docs/ExternalAgents/JulesAdapter.md`](../ExternalAgents/JulesAdapter.md) | Relationship to the universal external adapter plan (context for rollout standardization). |
 
 ---
 

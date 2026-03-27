@@ -167,7 +167,7 @@ MoonMind delegates work to external agent systems it does not run, tracking stat
 * **OpenClaw** — external agent adapter.
 * **OpenHands** — optional containerized agent that consumes MoonMind's MCP `/context` endpoint.
 
-See: [External Agent Integration System](ExternalAgents/ExternalAgentIntegrationSystem.md) · [Jules Client Adapter](ExternalAgents/JulesClientAdapter.md) · [Adding an External Provider](ExternalAgents/AddingExternalProvider.md)
+See: [External Agent Integration System](ExternalAgents/ExternalAgentIntegrationSystem.md) · [Jules Adapter](ExternalAgents/JulesAdapter.md) · [Adding an External Provider](ExternalAgents/AddingExternalProvider.md)
 
 ---
 

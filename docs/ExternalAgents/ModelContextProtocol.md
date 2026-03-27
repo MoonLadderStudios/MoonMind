@@ -1,6 +1,6 @@
 # Model Context Protocol in MoonMind
 
-This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: a **context-style chat completion** endpoint and a small **MCP tool HTTP API** for discovery and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesClientAdapter.md`](ExternalAgents/JulesClientAdapter.md) (§ MCP tooling posture).
+This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: a **context-style chat completion** endpoint and a small **MCP tool HTTP API** for discovery and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](ExternalAgents/JulesAdapter.md) (§ MCP tooling posture).
 
 MoonMind does **not** implement the full MCP streamable-HTTP or JSON-RPC transport on `/context`; that route is a **REST JSON** contract documented below. Tooling uses **JSON over HTTP** at `/mcp/*`, which clients such as Codex CLI can configure as an HTTP MCP tool server.
 
@@ -186,5 +186,5 @@ For tool use, the same host and port apply to `/mcp/tools` and `/mcp/tools/call`
 
 ## Related documentation
 
-- [`docs/ExternalAgents/JulesClientAdapter.md`](ExternalAgents/JulesClientAdapter.md) — Jules adapter, including MCP as an optional consumer surface.
+- [`docs/ExternalAgents/JulesAdapter.md`](ExternalAgents/JulesAdapter.md) — Jules adapter, including MCP as an optional consumer surface.
 - [`docs/MoonMindArchitecture.md`](MoonMindArchitecture.md) — High-level mention of `/context` and agent integration.
