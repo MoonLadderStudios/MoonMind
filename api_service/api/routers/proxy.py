@@ -7,7 +7,6 @@ from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
 
 from api_service.core.encryption import get_encryption_key
-from moonmind.auth.resolvers import RootSecretResolver
 from api_service.db.base import get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from moonmind.config.providers import PROVIDERS

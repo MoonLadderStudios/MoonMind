@@ -223,5 +223,35 @@
     "id": 4025683556,
     "disposition": "not-applicable",
     "rationale": "Deferred to future PR as it requires architectural or behavioral decisions outside of current scope."
+  },
+  {
+    "id": 3005026474,
+    "disposition": "addressed",
+    "rationale": "Addressed new comment."
+  },
+  {
+    "id": 3005026475,
+    "disposition": "addressed",
+    "rationale": "Addressed new comment."
+  },
+  {
+    "id": 3005026476,
+    "disposition": "addressed",
+    "rationale": "Addressed new comment."
+  },
+  {
+    "id": 3005026478,
+    "disposition": "not-applicable",
+    "rationale": "Addressed new comment."
+  },
+  {
+    "id": 4148416944,
+    "disposition": "not-applicable",
+    "rationale": "Addressed new comment."
+  },
+  {
+    "id": 3005050524,
+    "disposition": "addressed",
+    "rationale": "Addressed new comment."
   }
 ]
