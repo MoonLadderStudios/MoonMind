@@ -129,6 +129,10 @@ class ManagedRuntimeStrategy(ABC):
         """
         return PlainTextOutputParser()
 
+    def terminate_on_live_rate_limit(self) -> bool:
+        """Whether supervisor should stop the process on streamed rate-limit events."""
+        return False
+
     def should_retry_exit(self, failure_class: str | None) -> bool:
         """Determine if a failure class should trigger a self-heal retry.
 

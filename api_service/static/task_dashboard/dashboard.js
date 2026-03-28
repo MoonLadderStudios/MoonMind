@@ -9495,7 +9495,7 @@
                 </label>
                 <label>
                   Cooldown After 429 (seconds)
-                  <input type="number" name="cooldown_after_429_seconds" min="0" value="60" />
+                  <input type="number" name="cooldown_after_429_seconds" min="0" value="900" />
                 </label>
                 <label>
                   Rate Limit Policy

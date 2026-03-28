@@ -125,6 +125,13 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 )
 
 
+def _managed_runtime_artifact_root() -> Path:
+    root = Path(os.environ.get("MOONMIND_AGENT_RUNTIME_ARTIFACTS", "/work/agent_jobs"))
+    if root.name != "artifacts":
+        root = root / "artifacts"
+    return root
+
+
 class TemporalActivityRuntimeError(RuntimeError):
     """Raised when one of the Temporal activity helpers cannot complete."""
 
@@ -3196,38 +3203,61 @@ class TemporalAgentRuntimeActivities:
             return result
         if record.status != "failed":
             return result
-        if result.failure_class not in {None, "execution_error"}:
+        if result.failure_class not in {None, "execution_error", "integration_error"}:
             return result
         if not cls._is_generic_process_exit_summary(result.summary):
             return result
 
         report = cls._load_gemini_error_report(record)
-        if report is None:
-            return result
-
-        message = str(report.get("message") or "").strip()
-        stack = str(report.get("stack") or "").strip()
-        merged = "\n".join(part for part in (message, stack) if part).lower()
-        if not merged:
-            return result
-
-        update_payload: dict[str, Any] | None = None
-        if any(marker in merged for marker in _GEMINI_QUOTA_MARKERS):
-            update_payload = {
-                "summary": message or "Gemini API quota exhausted",
-                "failure_class": "integration_error",
-                "provider_error_code": "quota_exhausted",
-            }
-        elif any(marker in merged for marker in _GEMINI_RATE_LIMIT_MARKERS):
-            update_payload = {
-                "summary": message or "Gemini API rate limit exceeded",
-                "failure_class": "integration_error",
-                "provider_error_code": "429",
-            }
+        update_payload = cls._gemini_failure_update_payload(report=report, record=record)
 
         if update_payload is not None:
             return result.model_copy(update=update_payload)
         return result
+
+    @classmethod
+    def _gemini_failure_update_payload(
+        cls,
+        *,
+        report: dict[str, str] | None,
+        record: ManagedRunRecord,
+    ) -> dict[str, Any] | None:
+        message = ""
+        stack = ""
+        if report is not None:
+            message = str(report.get("message") or "").strip()
+            stack = str(report.get("stack") or "").strip()
+
+        if not message and not stack:
+            diagnostics = cls._load_managed_runtime_diagnostics(record)
+            parsed_output = diagnostics.get("parsed_output") if isinstance(diagnostics, dict) else None
+            if isinstance(parsed_output, dict):
+                error_messages = parsed_output.get("error_messages") or []
+                if isinstance(error_messages, list):
+                    joined = [str(item).strip() for item in error_messages if str(item).strip()]
+                    if joined:
+                        message = joined[0]
+                        stack = "\n".join(joined[1:])
+                if not message and parsed_output.get("rate_limited") is True:
+                    message = "Gemini API rate limit exceeded"
+
+        merged = "\n".join(part for part in (message, stack) if part).lower()
+        if not merged:
+            return None
+
+        if any(marker in merged for marker in _GEMINI_QUOTA_MARKERS):
+            return {
+                "summary": message or "Gemini API quota exhausted",
+                "failure_class": "integration_error",
+                "provider_error_code": "quota_exhausted",
+            }
+        if any(marker in merged for marker in _GEMINI_RATE_LIMIT_MARKERS):
+            return {
+                "summary": message or "Gemini API rate limit exceeded",
+                "failure_class": "integration_error",
+                "provider_error_code": "429",
+            }
+        return None
 
     @classmethod
     def _load_gemini_error_report(
@@ -3281,6 +3311,20 @@ class TemporalAgentRuntimeActivities:
             return {"message": message, "stack": stack}
 
         return None
+
+    @classmethod
+    def _load_managed_runtime_diagnostics(
+        cls,
+        record: ManagedRunRecord,
+    ) -> dict[str, Any] | None:
+        diagnostics_ref = str(record.diagnostics_ref or "").strip()
+        if not diagnostics_ref:
+            return None
+        path = (_managed_runtime_artifact_root() / diagnostics_ref).resolve()
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
 
     @staticmethod
     def _report_matches_record(path: Path, record: ManagedRunRecord) -> bool:

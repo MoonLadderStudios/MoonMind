@@ -10,6 +10,7 @@ These tests specifically demonstrate:
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -295,6 +296,45 @@ async def test_supervise_nonzero_exit_classified_as_failed(tmp_path: Path):
 
     assert result.status == "failed"
     assert result.exit_code == 1
+
+
+@pytest.mark.asyncio
+async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
+    """Gemini rate-limit output should terminate the live process early."""
+    supervisor, store, storage = _make_supervisor(tmp_path)
+    run_id = "run-gemini-rate-limit"
+    _save_record(store, run_id)
+
+    process = await asyncio.create_subprocess_exec(
+        "python3",
+        "-c",
+        (
+            "import sys,time; "
+            "sys.stderr.write('Attempt 6 failed with status 429. Retrying with backoff...\\n'); "
+            "sys.stderr.write('reason: MODEL_CAPACITY_EXHAUSTED\\n'); "
+            "sys.stderr.flush(); "
+            "time.sleep(30)"
+        ),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    result = await asyncio.wait_for(
+        supervisor.supervise(
+            run_id=run_id,
+            process=process,
+            timeout_seconds=10,
+        ),
+        timeout=5,
+    )
+
+    assert result.status == "failed"
+    assert result.failure_class == "integration_error"
+    diagnostics = json.loads(
+        storage.resolve_storage_path(result.diagnostics_ref).read_text(encoding="utf-8")
+    )
+    assert diagnostics["parsed_output"]["rate_limited"] is True
 
 
 # ---------------------------------------------------------------------------

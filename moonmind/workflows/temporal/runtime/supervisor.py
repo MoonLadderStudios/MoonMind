@@ -78,6 +78,15 @@ class ManagedRunSupervisor:
             runtime_id = record.runtime_id if record else None
             strategy = get_strategy(runtime_id) if runtime_id else None
             parser = strategy.create_output_parser() if strategy else None
+            live_rate_limit_detected = asyncio.Event()
+
+            async def _handle_stream_events(events: list[dict[str, Any]]) -> None:
+                if strategy is None or not strategy.terminate_on_live_rate_limit():
+                    return
+                for event in events:
+                    if self._is_live_rate_limit_event(event):
+                        live_rate_limit_detected.set()
+                        break
 
             # Run heartbeat/wait and log streaming CONCURRENTLY so that OS
             # pipe buffers are drained in real-time.  Sequential streaming
@@ -96,12 +105,25 @@ class ManagedRunSupervisor:
                     process.stderr,
                     run_id=run_id,
                     parser=parser,
+                    event_callback=_handle_stream_events,
                 )
             )
+            terminate_on_rate_limit_task = None
+            if strategy is not None and strategy.terminate_on_live_rate_limit():
+                terminate_on_rate_limit_task = asyncio.create_task(
+                    self._terminate_on_live_rate_limit(
+                        process=process,
+                        trigger=live_rate_limit_detected,
+                    )
+                )
             (
                 (process_exit_code, timed_out),
-                (log_refs, stdout_content, stderr_content, parsed_output),
+                (log_refs, stdout_content, stderr_content, parsed_output, events),
             ) = await asyncio.gather(heartbeat_task, stream_task)
+            if terminate_on_rate_limit_task is not None:
+                terminate_on_rate_limit_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    _ = await terminate_on_rate_limit_task
 
             if timed_out:
                 exit_code = None
@@ -120,7 +142,7 @@ class ManagedRunSupervisor:
                 duration_seconds=duration,
                 log_refs=log_refs,
                 parsed_output=parsed_output,
-                events=parsed_output.events,
+                events=events,
             )
 
             # Classify exit
@@ -277,6 +299,26 @@ class ManagedRunSupervisor:
         TmateSessionManager.gc_orphaned_sockets(active_session_names)
 
         return reconciled
+
+    @staticmethod
+    async def _terminate_on_live_rate_limit(
+        *,
+        process: asyncio.subprocess.Process,
+        trigger: asyncio.Event,
+    ) -> None:
+        await trigger.wait()
+        await ManagedRunSupervisor._terminate_process(process)
+
+    @staticmethod
+    def _is_live_rate_limit_event(event: dict[str, Any]) -> bool:
+        event_type = str(event.get("type") or "").strip().lower()
+        if event_type == "rate_limit":
+            return True
+        status_code = event.get("status_code") or event.get("statusCode")
+        try:
+            return int(status_code) == 429
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     async def _terminate_process(process: asyncio.subprocess.Process) -> None:
