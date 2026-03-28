@@ -100,13 +100,13 @@ class RuntimeLogStreamer:
         run_id: str,
         parser: RuntimeOutputParser | None = None,
         event_callback: Any | None = None,
-    ) -> tuple[dict[str, str], str, str, ParsedOutput]:
+    ) -> tuple[dict[str, str], str, str, ParsedOutput, list[dict]]:
         """Stream both stdout/stderr to artifacts and parse the output.
 
         Combines the two ``stream_to_artifact`` calls and runs the
         strategy's output parser over the decoded content.
 
-        Returns ``(log_refs, stdout_content, stderr_content, parsed_output)``.
+        Returns ``(log_refs, stdout_content, stderr_content, parsed_output, events)``.
         """
         log_refs: dict[str, str] = {}
         stdout_content = ""
@@ -189,4 +189,3 @@ class RuntimeLogStreamer:
             data=data,
         )
         return storage_ref
-ref

@@ -118,7 +118,7 @@ class ManagedRunSupervisor:
                 )
             (
                 (process_exit_code, timed_out),
-                (log_refs, stdout_content, stderr_content, parsed_output),
+                (log_refs, stdout_content, stderr_content, parsed_output, events),
             ) = await asyncio.gather(heartbeat_task, stream_task)
             if terminate_on_rate_limit_task is not None:
                 terminate_on_rate_limit_task.cancel()
@@ -437,8 +437,5 @@ class ManagedRunSupervisor:
             return True
         except (ProcessLookupError, PermissionError):
             return False
-        except OSError:
-            return False
-turn False
         except OSError:
             return False

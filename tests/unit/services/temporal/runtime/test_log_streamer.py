@@ -101,7 +101,7 @@ async def test_stream_and_parse_with_plain_text_parser(streamer):
     stderr_reader.feed_data(b"Error: oops\n")
     stderr_reader.feed_eof()
 
-    log_refs, stdout, stderr, parsed = await log_streamer.stream_and_parse(
+    log_refs, stdout, stderr, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-plain", parser=PlainTextOutputParser(),
     )
@@ -129,7 +129,7 @@ async def test_stream_and_parse_with_ndjson_parser(streamer):
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
 
-    log_refs, stdout, stderr, parsed = await log_streamer.stream_and_parse(
+    log_refs, stdout, stderr, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-ndjson", parser=NdjsonOutputParser(),
     )
@@ -149,7 +149,7 @@ async def test_stream_and_parse_detects_rate_limit(streamer):
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
 
-    _, _, _, parsed = await log_streamer.stream_and_parse(
+    _, _, _, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-rl", parser=NdjsonOutputParser(),
     )
@@ -173,7 +173,7 @@ async def test_stream_and_parse_invokes_event_callback(streamer):
     async def _callback(events: list[dict]) -> None:
         seen_events.extend(events)
 
-    _, _, _, parsed = await log_streamer.stream_and_parse(
+    _, _, _, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader,
         stderr_reader,
         run_id="run-parse-gemini-callback",
@@ -222,7 +222,7 @@ async def test_stream_and_parse_no_parser_uses_default(streamer):
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
 
-    log_refs, stdout, stderr, parsed = await log_streamer.stream_and_parse(
+    log_refs, stdout, stderr, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-default",
     )
