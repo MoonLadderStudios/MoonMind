@@ -515,9 +515,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 return []
 
             logger.info(
-                "Auto-seeding %d missing provider profile(s): %s",
+                "Auto-seeding %d missing provider profile(s)",
                 len(to_insert),
-                [p["profile_id"] for p in to_insert],
             )
 
             for profile_def in to_insert:
