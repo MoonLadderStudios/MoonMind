@@ -17,13 +17,13 @@ interface WorkerSnapshot {
     isDrained?: boolean;
   };
   audit?: {
-    latest?: any[];
+    latest?: Record<string, unknown>[];
   };
 }
 
 function WorkersPage() {
   const queryClient = useQueryClient();
-  const [workerPauseConfig, setWorkerPauseConfig] = useState<any>(null);
+  const [workerPauseConfig, setWorkerPauseConfig] = useState<Record<string, string> | null>(null);
   const [notice, setNotice] = useState<{ level: 'ok' | 'error', text: string } | null>(null);
 
   // Form states
@@ -62,7 +62,7 @@ function WorkersPage() {
   });
 
   const actionMutation = useMutation({
-    mutationFn: async (payload: any) => {
+    mutationFn: async (payload: Record<string, unknown>) => {
       const response = await fetch(workerPauseConfig.post, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -211,7 +211,7 @@ function WorkersPage() {
               <div data-system-settings-audit>
                 {snapshot?.audit?.latest && snapshot.audit.latest.length > 0 ? (
                   <ul className="space-y-3">
-                    {snapshot.audit.latest.map((event: any, i: number) => (
+                    {snapshot.audit.latest.map((event: Record<string, unknown>, i: number) => (
                       <li key={i} className="text-sm">
                         <strong className="block">{(event?.action || '-').toUpperCase()}{event?.mode ? ` | ${event.mode.toUpperCase()}` : ''}</strong>
                         <span className="block text-gray-600">{event?.reason || '(no reason)'}</span>

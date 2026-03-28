@@ -27,7 +27,7 @@ function SchedulesPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: any) => {
+    mutationFn: async (payload: Record<string, unknown>) => {
       const method = editId ? 'PUT' : 'POST';
       const endpoint = editId ? `/api/recurring-tasks/${editId}` : '/api/recurring-tasks';
       const response = await fetch(endpoint, {
