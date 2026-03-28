@@ -1,7 +1,7 @@
 """Shared Temporal signal payload contracts."""
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,7 +24,10 @@ class ExternalEventSignal(BaseModel):
     provider_status: Optional[str] = Field(None, alias="providerStatus")
     observed_at: Optional[datetime] = Field(None, alias="observedAt")
     external_url: Optional[str] = Field(None, alias="externalUrl")
-    provider_summary: dict[str, Any] = Field(default_factory=dict, alias="providerSummary")
+    provider_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="providerSummary",
+    )
 
 
 class RescheduleSignal(BaseModel):
@@ -79,7 +82,6 @@ class SyncProfilesSignal(BaseModel):
     Requests the manager to reload its target profile definitions.
     """
     model_config = ConfigDict(populate_by_name=True)
-    pass
 
 
 class SlotAssignedSignal(BaseModel):
@@ -136,7 +138,6 @@ class FinalizeSessionSignal(BaseModel):
     Requests transition from waiting-for-user to verification and registration.
     """
     model_config = ConfigDict(populate_by_name=True)
-    pass
 
 
 class CancelSessionSignal(BaseModel):
@@ -145,4 +146,3 @@ class CancelSessionSignal(BaseModel):
     Stops the session before completion.
     """
     model_config = ConfigDict(populate_by_name=True)
-    pass
