@@ -4,6 +4,9 @@ module.exports = {
     "./api_service/templates/task_dashboard.html",
     "./api_service/templates/_navigation.html",
     "./api_service/static/task_dashboard/**/*.js",
+    // Vite/React entrypoints use Tailwind utilities in TSX; Docker runs Tailwind after
+    // wiping dist/, so source must be scanned (dist bundles are optional).
+    "./frontend/src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: "class",
   corePlugins: {

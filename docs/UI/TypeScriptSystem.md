@@ -347,13 +347,14 @@ Recommended scripts:
 
 - **CI** runs typecheck, lint, and frontend tests, then **`npm run ui:clean-dist`**, **`npm run ui:build`**, and **`npm run ui:verify-manifest`**, followed by OpenAPI type checks as applicable. The workflow may upload **`mission-control-dist`** as an artifact.
 - **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, production Tailwind (`dashboard:css:min`), `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
+- **Shared `dashboard.css`:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** (and templates / static dashboard JS) so utility classes used in React are emitted even when **`dist/` does not exist yet**—which is exactly the state during `dashboard:css:min` in Docker. Do not rely on scanning Vite output alone. See [`docs/UI/MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2.
 - **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the task dashboard router instead of an empty content area.
 
 ### Committed `dist/` (convenience only)
 
 Tracking `dist/` in git helps **fresh clones** and local bootstrap when Node has not been run yet.
 
-The **Sync Vite dist** GitHub Action may commit refreshed `dist/` for **same-repo** branches when relevant paths change. That workflow is a **developer convenience**, not the correctness gate. It does **not** run for fork PRs; do **not** “fix” that with **`pull_request_target`** and write access to untrusted code.
+The **Sync Vite dist** GitHub Action may commit refreshed `dist/` for **same-repo** branches when relevant paths change. That workflow is a **developer convenience**, not the correctness gate. It does **not** run **`dashboard:css`**; if you add Tailwind utilities in TSX, regenerate and commit `dashboard.css` separately (or rely on CI/Docker, which already runs Tailwind). It does **not** run for fork PRs; do **not** “fix” that with **`pull_request_target`** and write access to untrusted code.
 
 ### Fork pull requests
 

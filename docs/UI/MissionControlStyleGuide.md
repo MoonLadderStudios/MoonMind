@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-03-27
+Last Updated: 2026-03-28
 
 **Implementation tracking:** [`docs/tmp/remaining-work/UI-MissionControlStyleGuide.md`](../tmp/remaining-work/UI-MissionControlStyleGuide.md)
 
@@ -144,7 +144,7 @@ Do not hand-edit `dashboard.css` during normal development.
 
 Current config expectations:
 
-- `content` includes template and dashboard JS.
+- `content` includes HTML templates, legacy dashboard JS under `api_service/static/task_dashboard/`, and **React source** under `frontend/src/` (see [`MissionControlArchitecture.md`](MissionControlArchitecture.md) §3.2). Without the `frontend/src` glob, Vite/React routes that use utility classes ship without matching rules in `dashboard.css`—especially in Docker, where Tailwind runs **after** `dist/` is wiped and **before** `ui:build`.
 - `darkMode: "class"` is enabled.
 - `corePlugins.preflight` remains `false` to avoid reset regressions.
 - Token colors map to `rgb(var(--mm-*) / <alpha-value>)`.
@@ -155,7 +155,9 @@ Reference snippet:
 module.exports = {
   content: [
     "./api_service/templates/task_dashboard.html",
+    "./api_service/templates/_navigation.html",
     "./api_service/static/task_dashboard/**/*.js",
+    "./frontend/src/**/*.{js,jsx,ts,tsx}",
   ],
   darkMode: "class",
   corePlugins: { preflight: false },
@@ -687,7 +689,7 @@ The **toolchain** (Tailwind/PostCSS → `dashboard.css`), **`--mm-*` tokens**, *
 
 ### Tailwind classes do not appear
 
-1. Confirm `tailwind.config.cjs` `content` includes both template and JS paths.
+1. Confirm `tailwind.config.cjs` `content` includes templates, `api_service/static/task_dashboard/**/*.js`, and `./frontend/src/**/*.{js,jsx,ts,tsx}`.
 2. Avoid dynamic utility class construction in JS; use semantic classes.
 3. Confirm CSS was rebuilt (`npm run dashboard:css:min`).
 
