@@ -321,7 +321,13 @@ async def task_tasks_list_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered tasks-list page."""
-    return _render_react_page(request, "tasks-list", "/tasks/tasks-list")
+    list_path = "/tasks/tasks-list"
+    return _render_react_page(
+        request,
+        "tasks-list",
+        list_path,
+        initial_data={"dashboardConfig": build_runtime_config(list_path)},
+    )
 
 
 @router.get("/tasks/list", response_class=HTMLResponse)
@@ -330,7 +336,13 @@ async def task_list_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered tasks list page."""
-    return _render_react_page(request, "tasks-list", "/tasks/list")
+    list_path = "/tasks/list"
+    return _render_react_page(
+        request,
+        "tasks-list",
+        list_path,
+        initial_data={"dashboardConfig": build_runtime_config(list_path)},
+    )
 
 
 @router.get("/tasks/workers", response_class=HTMLResponse)
@@ -383,7 +395,13 @@ async def task_dashboard_route(
     # Exclude known static paths from the task detail React shell, so they fall back to the legacy shell
     if normalized not in _STATIC_PATHS:
         if _is_safe_detail_segment(normalized) or any(_is_dynamic_detail(normalized, source) for source in ("proposals", "manifests", "schedules")):
-            return _render_react_page(request, "task-detail", f"/tasks/{normalized}")
+            detail_path = f"/tasks/{normalized}"
+            return _render_react_page(
+                request,
+                "task-detail",
+                detail_path,
+                initial_data={"dashboardConfig": build_runtime_config(detail_path)},
+            )
 
     return _render_dashboard(request, f"/tasks/{normalized}")
 

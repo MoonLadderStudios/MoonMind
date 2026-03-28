@@ -8,46 +8,68 @@ import { MockInstance } from 'vitest';
 describe('Task Detail Entrypoint', () => {
   const mockPayload: BootPayload = {
     page: 'task-detail',
-    apiBase: '/api/v1',
+    apiBase: '/api',
   };
 
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
-    // Reset path
-    window.history.pushState({}, 'Test', '/tasks/test-123');
+    window.history.pushState({}, 'Test', '/tasks/test-123?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch');
   });
 
   it('renders loading state initially', () => {
-    fetchSpy.mockImplementation(() => new Promise(() => {})); // Never resolves
+    fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
-    expect(screen.getByText(/Loading task details/i)).toBeTruthy();
+    expect(screen.getByText(/Loading task/i)).toBeTruthy();
   });
 
   it('renders task details on successful fetch', async () => {
-    const mockTask = {
+    const mockExecution = {
       taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
       source: 'temporal',
-      sourceLabel: 'Temporal API',
+      workflowType: 'MoonMind.Run',
+      entry: 'run',
+      title: 'Example task',
+      summary: 'Did work',
       status: 'completed',
+      state: 'succeeded',
+      rawState: 'succeeded',
+      temporalStatus: 'completed',
+      closeStatus: 'COMPLETED',
       createdAt: '2026-03-28T00:00:00Z',
+      startedAt: '2026-03-28T00:00:01Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      closedAt: '2026-03-28T00:00:03Z',
+      actions: { canSetTitle: true, canCancel: false, canRerun: false },
     };
 
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      json: async () => mockTask,
-    } as Response);
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
 
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText('test-123')).toBeTruthy();
-      expect(screen.getByText('completed')).toBeTruthy();
-      expect(screen.getByText('Temporal API')).toBeTruthy();
+      expect(screen.getByText('Example task')).toBeTruthy();
+      expect(screen.getByText('Did work')).toBeTruthy();
     });
 
-    expect(fetchSpy).toHaveBeenCalledWith('/api/v1/executions/test-123');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/executions/test-123?source=temporal');
   });
 
   it('renders error state on failed fetch', async () => {
@@ -60,7 +82,7 @@ describe('Task Detail Entrypoint', () => {
     renderWithClient(<TaskDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Failed to fetch task test-123: Not Found/i)).toBeTruthy();
+      expect(screen.getByText(/Failed to fetch task: Not Found/i)).toBeTruthy();
     });
   });
 });

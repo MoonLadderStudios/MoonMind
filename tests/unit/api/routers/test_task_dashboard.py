@@ -129,6 +129,16 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert "/static/task_dashboard/dist/assets/" in response.text
 
 
+def test_react_tasks_list_and_detail_boot_include_dashboard_config(client: TestClient) -> None:
+    for path in ("/tasks/list", "/tasks/tasks-list"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "dashboardConfig" in response.text
+    detail = client.get(f"/tasks/{uuid4()}")
+    assert detail.status_code == 200
+    assert "dashboardConfig" in detail.text
+
+
 def test_legacy_system_dashboard_route_returns_404(client: TestClient) -> None:
     response = client.get("/tasks/system")
 
