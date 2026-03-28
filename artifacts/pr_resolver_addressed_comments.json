@@ -1,267 +1,42 @@
 [
   {
-    "id": 4148262704,
+    "id": 4148799672,
     "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "rationale": "Automated warning limits from Codex, no code changes required."
   },
   {
-    "id": 3004953878,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "id": 3005318142,
+    "disposition": "addressed",
+    "rationale": "Sorted log_streaming_enabled alphabetically in moonmind/config/settings.py."
   },
   {
-    "id": 3004953882,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "id": 3005318144,
+    "disposition": "addressed",
+    "rationale": "Updated the feature flag file path in requirements-traceability.md to reference moonmind/config/settings.py."
   },
   {
-    "id": 3004953885,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "id": 3005318150,
+    "disposition": "addressed",
+    "rationale": "Added moonmind/config/settings.py to the project structure documentation in plan.md."
   },
   {
-    "id": 3004953888,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "id": 3005318151,
+    "disposition": "addressed",
+    "rationale": "Updated the configuration path to moonmind/config/settings.py in research.md."
   },
   {
-    "id": 3004953890,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "id": 3005318155,
+    "disposition": "addressed",
+    "rationale": "Corrected the specification analysis report for issue C2 to reflect production changes."
   },
   {
-    "id": 3004953894,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "id": 3005318156,
+    "disposition": "addressed",
+    "rationale": "Fixed the configuration file path from api_service to moonmind in tasks.md."
   },
   {
-    "id": 3004953896,
+    "id": 4026020322,
     "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004953900,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004953904,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004953907,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004954656,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004954658,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004954661,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004954662,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004954664,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004954666,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 4025677396,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960346,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960355,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960361,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960367,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960371,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960374,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960388,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960399,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960408,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960410,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960416,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960420,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960425,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960431,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960438,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960442,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960443,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960448,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960455,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960459,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960463,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960467,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960469,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960472,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960476,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3004960482,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 4025683556,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005026474,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005026475,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005026476,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005026478,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 4148416944,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005050524,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005105739,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
-  },
-  {
-    "id": 3005105741,
-    "disposition": "not-applicable",
-    "rationale": "Bot feedback assessed and fixed"
+    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
   }
 ]

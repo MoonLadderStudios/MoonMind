@@ -40,4 +40,4 @@
 
 ## 6. Implementation Feature Flags (`DOC-REQ-007`)
 
-- We must track `logStreamingEnabled` natively in the backend config API environment schemas (`api_service/core/config.py`).
+- We must track `logStreamingEnabled` natively in the backend config API environment schemas (`moonmind/config/settings.py`).

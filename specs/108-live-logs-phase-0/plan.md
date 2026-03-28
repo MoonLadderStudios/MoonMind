@@ -54,6 +54,10 @@ frontend/
 ├── src/
 │   └── [...]
 
+moonmind/
+├── config/
+│   └── settings.py
+
 docs/
 ├── ManagedAgents/
 │   └── LiveLogs.md

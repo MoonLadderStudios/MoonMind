@@ -3,7 +3,7 @@
 | ID  | Category    | Severity | Location(s)      | Summary                      | Recommendation                       |
 | --- | ----------- | -------- | ---------------- | ---------------------------- | ------------------------------------ |
 | C1  | Coverage    | CRITICAL | tasks.md         | Fails runtime scope script validation | Ensure validation tasks are explicitly tagged so the script recognizes them |
-| C2  | Coverage    | HIGH     | tasks.md         | Missing runtime codebase alterations mapped to DOC-REQ | Phase 0 tasks list only research/validation but no production code changes to config or docs |
+| C2  | Coverage    | HIGH     | tasks.md         | Missing runtime codebase alterations mapped to DOC-REQ | Phase 0 tasks list production code changes to config or docs, but originally failed scope due to validation tracking mismatches |
 
 **Coverage Summary Table:**
 
