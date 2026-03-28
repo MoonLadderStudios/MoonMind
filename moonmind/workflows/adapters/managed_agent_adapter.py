@@ -211,45 +211,22 @@ class ManagedAgentAdapter:
         )
         auth_mode: str = profile.get("auth_mode", default_auth)
 
-        # Build a safe delta-only env_overrides dict for ManagedRuntimeProfile.
-        #
-        # The launcher (launcher.py) already starts from os.environ and then
-        # overlays env_overrides on top.  Therefore env_overrides MUST contain
-        # only the profile-specific delta keys — never the full base environment.
-        # Passing the entire shaped_env (which inherits os.environ) would cause
-        # the ManagedRuntimeProfile validator to reject any sensitive-named env
-        # vars that the profile legitimately reads from the ambient environment
-        # (e.g. ANTHROPIC_AUTH_TOKEN, MINIMAX_API_KEY).
-        #
-        # The full shaped_env is still computed below for use in env_keys_count
-        # metadata only.
+        # Shape environment according to auth mode (DOC-REQ-005, DOC-REQ-006).
         base_env = {
             k: v for k, v in os.environ.items()
             if not _should_filter_base_env_var(k)
         }
-        # delta_env_overrides: only the safe profile-specific additions.
-        delta_env_overrides: dict[str, str] = {}
         if auth_mode == "oauth":
             shaped_env = shape_environment_for_oauth(
                 base_env,
                 volume_mount_path=profile.get("volume_mount_path"),
             )
-            volume_mount_path = profile.get("volume_mount_path")
-            if volume_mount_path:
-                delta_env_overrides["MANAGED_AUTH_VOLUME_PATH"] = volume_mount_path
         else:
             shaped_env = shape_environment_for_api_key(
                 base_env,
                 api_key_ref=profile.get("api_key_ref"),
                 account_label=profile.get("account_label"),
             )
-            api_key_ref = profile.get("api_key_ref")
-            if api_key_ref:
-                # Pass only the reference name, not any raw credential value.
-                delta_env_overrides["MANAGED_API_KEY_REF"] = api_key_ref
-            account_label = profile.get("account_label")
-            if account_label:
-                delta_env_overrides["MANAGED_ACCOUNT_LABEL"] = account_label
             runtime_env_overrides = profile.get("runtime_env_overrides") or {}
             if isinstance(runtime_env_overrides, dict):
                 for key, value in runtime_env_overrides.items():
@@ -257,17 +234,9 @@ class ManagedAgentAdapter:
                     if not ks:
                         continue
                     shaped_env[ks] = str(value) if value is not None else ""
-                    # Only propagate non-sensitive runtime_env_overrides keys
-                    # into delta_env_overrides so they reach the launcher.
-                    # Sensitive-keyed entries must be handled through secret_refs.
-                    if not _should_filter_base_env_var(ks):
-                        delta_env_overrides[ks] = str(value) if value is not None else ""
             api_key_env_var = profile.get("api_key_env_var")
             if api_key_env_var and str(api_key_env_var).strip():
                 shaped_env["MANAGED_API_KEY_TARGET_ENV"] = (
-                    str(api_key_env_var).strip().upper()
-                )
-                delta_env_overrides["MANAGED_API_KEY_TARGET_ENV"] = (
                     str(api_key_env_var).strip().upper()
                 )
         passthrough_env_keys = [
@@ -307,13 +276,7 @@ class ManagedAgentAdapter:
                 profile_id=profile_id,
                 runtime_id=runtime_id_for_profile,
                 auth_mode=auth_mode,
-                # Use delta_env_overrides (profile-specific additions only), NOT
-                # shaped_env (which contains the full base environment).  The
-                # launcher already starts from os.environ and overlays
-                # env_overrides on top, so passing the full base env here would
-                # (a) violate the ManagedRuntimeProfile security validator and
-                # (b) be redundant.
-                env_overrides=delta_env_overrides,
+                env_overrides=shaped_env,
                 passthrough_env_keys=passthrough_env_keys,
                 command_template=cmd_template,
                 secret_refs=profile.get("secret_refs") or {},

@@ -283,8 +283,6 @@ MoonMind deploys as a set of decoupled containers from a single `docker-compose.
 5. Auth-init and workspace-init containers prepare volumes, then exit.
 6. API and all worker containers start.
 
-For the baseline local operator path, this startup flow should succeed with `docker compose up -d` and no required `.env` editing. After startup, the operator should be able to open Mission Control, enter a small set of secrets such as a provider API key and GitHub PAT, and reach a runnable state without external secret-manager infrastructure.
-
 ---
 
 ## Security
@@ -292,8 +290,7 @@ For the baseline local operator path, this startup flow should succeed with `doc
 * **Fleet isolation** — Workers are segmented by capability. Sandbox workers never hold provider API keys. Integration workers never run arbitrary shell commands.
 * **Docker socket proxy** — Workers that need Docker API access use `tecnativa/docker-socket-proxy` with strict endpoint allowlisting. Direct host socket exposure is avoided.
 * **Secret hygiene** — Secrets never appear in artifacts, logs, workflow history, or PR text. Raw credentials are passed via environment variables and secret stores only.
-* **Secrets system** — The baseline path is local-first and personal-use friendly: MoonMind should boot without required `.env` edits, store UI-managed secrets encrypted at rest, and treat external secret managers as optional hardening. See [SecretsSystem.md](Security/SecretsSystem.md).
-* **Provider profiles** — Managed agent credentials are stored in persistent Docker volumes or referenced indirectly through the Secrets System. Runtime-specific environment shaping prevents credential mode conflicts. See [ProviderProfiles.md](Security/ProviderProfiles.md).
+* **Provider profiles** — Managed agent credentials are stored in persistent Docker volumes and referenced indirectly. Runtime-specific environment shaping prevents credential mode conflicts. See [ProviderProfiles.md](Security/ProviderProfiles.md).
 * **OIDC** — Optional Keycloak profile provides full OIDC login/identity management.
 
 ---
@@ -307,11 +304,11 @@ The `docs/` tree is organized by topic area:
 | [Api/](Api/) | API-specific documentation |
 | [Development/](Development/) | Developer workflow and local tooling guides |
 | [ExternalAgents/](ExternalAgents/) | Jules adapter, OpenClaw adapter, external agent integration system, adding providers |
-| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, and Git integration |
+| [ManagedAgents/](ManagedAgents/) | Runtime authentication, Docker-out-of-Docker, Cursor CLI, Git integration, secret store |
 | [Memory/](Memory/) | Memory architecture and research |
 | [Observability/](Observability/) | OpenTelemetry system design |
 | [Rag/](Rag/) | LlamaIndex manifest system, manifest ingest design, workflow RAG |
-| [Security/](Security/) | Secrets system, provider profiles, and related security guidance |
+| [Security/](Security/) | Provider profiles and related security guidance |
 | [Tasks/](Tasks/) | Task architecture, skill/plan contracts, proposals, presets, cancellation, runs API |
 | [Temporal/](Temporal/) | Temporal architecture, worker topology, workflow catalog, artifact system, scheduling, visibility, routing, ops runbook |
 | [Troubleshooting/](Troubleshooting/) | Debugging guides |
