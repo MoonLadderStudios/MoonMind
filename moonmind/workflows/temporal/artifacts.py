@@ -2083,6 +2083,33 @@ class TemporalArtifactActivities:
             principal=principal,
         )
 
+
+    def _resolve_provider_default_model(self, row: Any) -> str | None:
+        cmd_behavior = row.command_behavior or {}
+        env_tmpl = row.env_template or {}
+        raw_model = cmd_behavior.get("default_model") or env_tmpl.get("default_model")
+        
+        if raw_model is not None:
+            custom_model = str(raw_model).strip()
+            if custom_model:
+                return custom_model
+
+        r = row.runtime_id
+        p = row.provider_id
+
+        if r == "codex_cli" and p == "openai":
+            return "gpt-5.4"
+        elif r == "claude_code" and p == "minimax":
+            return "MiniMax-M2.7"
+        elif r == "claude_code" and p == "anthropic":
+            return "Sonnet-4.6"
+        elif r == "gemini_cli" and p == "google":
+            return "gemini-3.1-pro-preview"
+        return None
+
+    def _resolve_provider_default_effort(self, row: Any) -> str | None:
+        return (row.command_behavior or {}).get("default_effort")
+
     async def auth_profile_list(
         self,
         *,
@@ -2122,6 +2149,8 @@ class TemporalArtifactActivities:
                     "auth_mode": "oauth" if row.credential_source.value == "oauth_volume" else "api_key",
                     "credential_source": row.credential_source.value,
                     "runtime_materialization_mode": row.runtime_materialization_mode.value,
+                    "default_model": self._resolve_provider_default_model(row),
+                    "default_effort": self._resolve_provider_default_effort(row),
                     "volume_ref": row.volume_ref,
                     "volume_mount_path": row.volume_mount_path,
                     "account_label": row.account_label,
