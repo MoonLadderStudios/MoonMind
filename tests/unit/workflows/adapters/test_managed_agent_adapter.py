@@ -339,7 +339,8 @@ async def test_start_applies_runtime_env_overrides_and_key_target() -> None:
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
 
 
-async def test_start_applies_proxy_mode_when_tagged_proxy_first() -> None:
+async def test_start_applies_proxy_mode_when_tagged_proxy_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
     profiles = [
         {
             "profile_id": "proxy-prof",
