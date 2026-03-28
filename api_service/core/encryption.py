@@ -1,5 +1,4 @@
 import os
-import stat
 from pathlib import Path
 
 from cryptography.fernet import Fernet

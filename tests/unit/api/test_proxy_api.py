@@ -1,6 +1,6 @@
-import json
+
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
