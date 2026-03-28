@@ -1950,18 +1950,19 @@ class TemporalArtifactActivities:
             # Normalize complex artifact_ref handles (e.g. legacy objects or mappings)
             # into a flat string ID *before* Pydantic validation, which also enforces
             # proper TemporalArtifactValidationError on missing/blank inputs.
-            if "artifact_ref" in payload:
-                payload["artifact_ref"] = self._normalize_activity_artifact_id(
-                    payload["artifact_ref"]
-                )
+            payload["artifact_ref"] = self._normalize_activity_artifact_id(
+                payload.get("artifact_ref")
+            )
             validated = ArtifactReadInput.model_validate(payload)
 
-        # Extract the artifact_id from the reference
-        artifact_id = (
+        # Extract and validate the artifact_id from the reference
+        artifact_id = str(
             validated.artifact_ref
             if isinstance(validated.artifact_ref, str)
             else validated.artifact_ref.artifact_id
-        )
+        ).strip()
+        if not artifact_id:
+            raise TemporalArtifactValidationError("artifact_ref is required")
 
         _artifact, payload_bytes = await self._service.read(
             artifact_id=artifact_id,
