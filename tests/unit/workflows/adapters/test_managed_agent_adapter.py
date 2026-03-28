@@ -624,6 +624,64 @@ async def test_auth_profile_list_filters_by_runtime_id(tmp_path: Path):
         assert profiles[0]["profile_id"] == "c1"
 
 
+async def test_auth_profile_list_preserves_secret_ref_materialization_fields(
+    tmp_path: Path,
+):
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="claude-minimax",
+                    runtime_id="claude_code",
+                    credential_source=ProviderCredentialSource.SECRET_REF,
+                    runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
+                    secret_refs={"ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"},
+                    clear_env_keys=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
+                    env_template={
+                        "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                        "ANTHROPIC_MODEL": "MiniMax-M2.7",
+                    },
+                    max_parallel_runs=1,
+                    cooldown_after_429_seconds=300,
+                    rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+            session_factory
+        )
+        try:
+            result = await activities.auth_profile_list(runtime_id="claude_code")
+        finally:
+            _db_base_mod.get_async_session_context = orig
+
+        profiles = result["profiles"]
+        assert len(profiles) == 1
+        assert profiles[0]["profile_id"] == "claude-minimax"
+        assert profiles[0]["secret_refs"] == {
+            "ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"
+        }
+        assert profiles[0]["clear_env_keys"] == [
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+        ]
+        assert profiles[0]["runtime_env_overrides"] == {
+            "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+            "ANTHROPIC_MODEL": "MiniMax-M2.7",
+        }
+
+
 # ---------------------------------------------------------------------------
 # Store-backed status / fetch_result tests
 # ---------------------------------------------------------------------------
