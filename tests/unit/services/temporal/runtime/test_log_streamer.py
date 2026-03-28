@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.output_parser import (
+    GeminiCliOutputParser,
     NdjsonOutputParser,
     ParsedOutput,
     PlainTextOutputParser,
@@ -100,7 +101,7 @@ async def test_stream_and_parse_with_plain_text_parser(streamer):
     stderr_reader.feed_data(b"Error: oops\n")
     stderr_reader.feed_eof()
 
-    log_refs, stdout, stderr, parsed = await log_streamer.stream_and_parse(
+    log_refs, stdout, stderr, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-plain", parser=PlainTextOutputParser(),
     )
@@ -128,7 +129,7 @@ async def test_stream_and_parse_with_ndjson_parser(streamer):
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
 
-    log_refs, stdout, stderr, parsed = await log_streamer.stream_and_parse(
+    log_refs, stdout, stderr, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-ndjson", parser=NdjsonOutputParser(),
     )
@@ -148,13 +149,40 @@ async def test_stream_and_parse_detects_rate_limit(streamer):
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
 
-    _, _, _, parsed = await log_streamer.stream_and_parse(
+    _, _, _, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-rl", parser=NdjsonOutputParser(),
     )
 
     assert parsed.rate_limited
     assert len(parsed.error_messages) > 0
+
+
+@pytest.mark.asyncio
+async def test_stream_and_parse_invokes_event_callback(streamer):
+    log_streamer, _ = streamer
+    stdout_reader = asyncio.StreamReader()
+    stdout_reader.feed_data(
+        b"Attempt 6 failed with status 429. Retrying with backoff...\n"
+    )
+    stdout_reader.feed_eof()
+    stderr_reader = asyncio.StreamReader()
+    stderr_reader.feed_eof()
+    seen_events: list[dict] = []
+
+    async def _callback(events: list[dict]) -> None:
+        seen_events.extend(events)
+
+    _, _, _, parsed, events = await log_streamer.stream_and_parse(
+        stdout_reader,
+        stderr_reader,
+        run_id="run-parse-gemini-callback",
+        parser=GeminiCliOutputParser(),
+        event_callback=_callback,
+    )
+
+    assert parsed.rate_limited
+    assert any(event.get("type") == "rate_limit" for event in seen_events)
 
 
 def test_diagnostics_includes_parsed_output(streamer):
@@ -194,7 +222,7 @@ async def test_stream_and_parse_no_parser_uses_default(streamer):
     stderr_reader = asyncio.StreamReader()
     stderr_reader.feed_eof()
 
-    log_refs, stdout, stderr, parsed = await log_streamer.stream_and_parse(
+    log_refs, stdout, stderr, parsed, events = await log_streamer.stream_and_parse(
         stdout_reader, stderr_reader,
         run_id="run-parse-default",
     )

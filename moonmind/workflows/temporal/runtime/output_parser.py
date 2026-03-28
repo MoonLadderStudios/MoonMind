@@ -9,6 +9,17 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
+    "model_capacity_exhausted",
+    "no capacity available for model",
+    "resource_exhausted",
+    "status: 429",
+    "status 429",
+    "too many requests",
+    "ratelimitexceeded",
+    "retrying with backoff",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ParsedOutput:
@@ -61,6 +72,51 @@ class PlainTextOutputParser(RuntimeOutputParser):
 
     def parse_stream_chunk(self, chunk: str) -> list[dict]:
         return []
+
+
+class GeminiCliOutputParser(PlainTextOutputParser):
+    """Plain-text parser with Gemini-specific 429/capacity detection."""
+
+    @staticmethod
+    def _extract_rate_limit_lines(*texts: str) -> list[str]:
+        matches: list[str] = []
+        for text in texts:
+            for line in text.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                lower = stripped.lower()
+                if any(marker in lower for marker in _GEMINI_RATE_LIMIT_MARKERS):
+                    matches.append(stripped)
+        return matches
+
+    def parse(self, stdout: str, stderr: str) -> ParsedOutput:
+        base = super().parse(stdout, stderr)
+        rate_limit_lines = self._extract_rate_limit_lines(stdout, stderr)
+        error_messages = list(base.error_messages)
+        for line in rate_limit_lines:
+            if line not in error_messages:
+                error_messages.append(line)
+        return ParsedOutput(
+            raw_text=base.raw_text,
+            events=[],
+            error_messages=error_messages,
+            rate_limited=bool(rate_limit_lines),
+            has_structured_output=False,
+        )
+
+    def parse_stream_chunk(self, chunk: str) -> list[dict]:
+        events: list[dict] = []
+        for line in self._extract_rate_limit_lines(chunk):
+            events.append(
+                {
+                    "type": "rate_limit",
+                    "provider": "gemini_cli",
+                    "status_code": 429,
+                    "message": line,
+                }
+            )
+        return events
 
 
 class NdjsonOutputParser(RuntimeOutputParser):

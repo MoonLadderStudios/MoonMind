@@ -7709,7 +7709,7 @@
           "cooldown_after_429_seconds": {
             "type": "integer",
             "title": "Cooldown After 429 Seconds",
-            "default": 300
+            "default": 900
           },
           "rate_limit_policy": {
             "$ref": "#/components/schemas/ManagedAgentRateLimitPolicy",
@@ -10601,7 +10601,7 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Cooldown After 429 Seconds",
-            "default": 300
+            "default": 900
           },
           "rate_limit_policy": {
             "type": "string",

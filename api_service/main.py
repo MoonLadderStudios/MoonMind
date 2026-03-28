@@ -538,7 +538,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     clear_env_keys=profile_def.get("clear_env_keys"),
                     env_template=profile_def.get("env_template"),
                     max_parallel_runs=1,
-                    cooldown_after_429_seconds=300,
+                    cooldown_after_429_seconds=900,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
                     enabled=True,
                 )

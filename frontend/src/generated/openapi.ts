@@ -2359,7 +2359,7 @@ export interface components {
             max_parallel_runs: number;
             /**
              * Cooldown After 429 Seconds
-             * @default 300
+             * @default 900
              */
             cooldown_after_429_seconds: number;
             /** @default backoff */
@@ -3420,7 +3420,7 @@ export interface components {
             max_parallel_runs: number;
             /**
              * Cooldown After 429 Seconds
-             * @default 300
+             * @default 900
              */
             cooldown_after_429_seconds: number;
             /**

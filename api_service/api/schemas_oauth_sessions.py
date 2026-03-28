@@ -12,7 +12,7 @@ class CreateOAuthSessionRequest(BaseModel):
     volume_ref: str
     account_label: str
     max_parallel_runs: int = 1
-    cooldown_after_429_seconds: int = 300
+    cooldown_after_429_seconds: int = 900
     rate_limit_policy: ManagedAgentRateLimitPolicy = ManagedAgentRateLimitPolicy.BACKOFF
 
 

@@ -217,6 +217,50 @@ def test_runtime_planner_multi_step_generates_multiple_nodes_with_edges():
     assert edges[1] == {"from": "s2", "to": "s3"}
 
 
+def test_runtime_planner_multi_step_preserves_custom_keys():
+    planner = _build_runtime_planner()
+    snapshot = _make_snapshot()
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Objective",
+                "steps": [
+                    {
+                        "id": "s1",
+                        "instructions": "Step one instructions",
+                        "custom_field": "custom_value",
+                        "another_field": 42,
+                        "tool": {"name": "ignored_in_inputs"},
+                    },
+                    {
+                        "id": "s2",
+                        "instructions": "Step two instructions",
+                    }
+                ],
+                "runtime": {"mode": "jules"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    nodes = plan["nodes"]
+    assert len(nodes) == 2
+    
+    s1_inputs = nodes[0]["inputs"]
+    assert s1_inputs["instructions"] == "Step one instructions"
+    assert s1_inputs["custom_field"] == "custom_value"
+    assert s1_inputs["another_field"] == 42
+    assert "id" not in s1_inputs
+    assert "tool" not in s1_inputs
+    assert "skill" not in s1_inputs
+
+    s2_inputs = nodes[1]["inputs"]
+    assert s2_inputs["instructions"] == "Step two instructions"
+    assert "custom_field" not in s2_inputs
+
+
 def test_runtime_planner_single_step_falls_back_to_single_node():
     planner = _build_runtime_planner()
     snapshot = _make_snapshot()

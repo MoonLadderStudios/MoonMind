@@ -23,14 +23,17 @@ from datetime import UTC, datetime
 from typing import Any, Mapping
 
 
+import temporalio.activity
+import temporalio.workflow
+from opentelemetry import trace as otel_trace
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from api_service.db.base import get_async_session_context
 from moonmind.config.settings import settings
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
-from moonmind.workflows.task_proposals.service import TaskProposalService
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
     TemporalIntegrationActivities,
@@ -340,6 +343,7 @@ def _build_runtime_planner():
                 step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
                 step_node_inputs: dict[str, Any] = {
                     **node_inputs,
+                    **{k: v for k, v in step_entry.items() if k not in {"id", "tool", "skill", "instructions"}},
                     "instructions": step_instructions,
                 }
 
@@ -599,25 +603,49 @@ async def main_async() -> None:
 
     import os
     interceptors = []
+    runtime = None
     if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
         try:
+            from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
             from opentelemetry import trace
             from temporalio.contrib.opentelemetry import TracingInterceptor
 
             if not isinstance(trace.get_tracer_provider(), TracerProvider):
-                trace.set_tracer_provider(TracerProvider())
+                resource = Resource.create({"service.name": topology.service_name})
+                trace.set_tracer_provider(TracerProvider(resource=resource))
             interceptors.append(TracingInterceptor())
-            logger.info("OpenTelemetry tracing enabled for Temporal worker.")
+
+            # Setup Prometheus metrics for worker health and queue polling behavior.
+            # Bind address can be configured via MOONMIND_PROMETHEUS_BIND_ADDRESS.
+            # Default to localhost-only to avoid exposing metrics on all interfaces.
+            prometheus_bind_address = os.environ.get(
+                "MOONMIND_PROMETHEUS_BIND_ADDRESS",
+                "127.0.0.1:9090",
+            )
+            runtime = Runtime(
+                telemetry=TelemetryConfig(
+                    metrics=PrometheusConfig(bind_address=prometheus_bind_address)
+                )
+            )
+
+            logger.info(
+                "OpenTelemetry tracing enabled for Temporal worker with "
+                "service.name=%s.",
+                topology.service_name,
+            )
         except ImportError as e:
             logger.warning(f"OpenTelemetry tracing requested but failed to initialize: {e}")
 
-    client = await Client.connect(
-        settings.temporal.address, 
-        namespace=settings.temporal.namespace,
-        data_converter=pydantic_data_converter,
-        interceptors=interceptors,
-    )
+    client_kwargs = {
+        "namespace": settings.temporal.namespace,
+        "data_converter": pydantic_data_converter,
+        "interceptors": interceptors,
+    }
+    if runtime:
+        client_kwargs["runtime"] = runtime
+
+    client = await Client.connect(settings.temporal.address, **client_kwargs)
 
     workflows = []
     activities = []
@@ -679,6 +707,55 @@ async def main_async() -> None:
             await healthcheck_server.wait_closed()
 
 
+class OpenTelemetryLoggingFilter(logging.Filter):
+    """Injects OpenTelemetry and Temporal trace context into standard logging."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.trace_id = ""
+        record.span_id = ""
+        record.temporal_workflow_id = ""
+        record.temporal_run_id = ""
+        record.temporal_activity_id = ""
+
+        # 1. OpenTelemetry trace/span IDs
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            record.trace_id = otel_trace.format_trace_id(ctx.trace_id)
+            record.span_id = otel_trace.format_span_id(ctx.span_id)
+
+        # 2. Temporal execution context
+        try:
+            if temporalio.workflow.in_workflow():
+                info = temporalio.workflow.info()
+                record.temporal_workflow_id = info.workflow_id
+                record.temporal_run_id = info.run_id
+        except Exception:
+            logging.debug("Failed to retrieve Temporal workflow context", exc_info=True)
+
+        try:
+            if temporalio.activity.in_activity():
+                info = temporalio.activity.info()
+                record.temporal_workflow_id = info.workflow_id
+                record.temporal_run_id = info.workflow_run_id
+                record.temporal_activity_id = info.activity_id
+        except Exception:
+            logging.debug("Failed to retrieve Temporal activity context", exc_info=True)
+
+        return True
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    import os
+    if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
+        log_format = (
+            "%(asctime)s %(levelname)s [%(name)s] "
+            "[trace_id=%(trace_id)s span_id=%(span_id)s] "
+            "[workflow_id=%(temporal_workflow_id)s run_id=%(temporal_run_id)s "
+            "activity_id=%(temporal_activity_id)s] %(message)s"
+        )
+        logging.basicConfig(level=logging.INFO, format=log_format)
+        for handler in logging.root.handlers:
+            handler.addFilter(OpenTelemetryLoggingFilter())
+    else:
+        logging.basicConfig(level=logging.INFO)
     asyncio.run(main_async())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -26,6 +27,18 @@ from moonmind.workflows.temporal.service import (
     TemporalExecutionValidationError,
 )
 
+
+
+@pytest.fixture
+def mock_client_adapter():
+    adapter = MagicMock()
+    adapter.start_workflow = AsyncMock()
+    adapter.describe_workflow = AsyncMock()
+    adapter.update_workflow = AsyncMock()
+    adapter.signal_workflow = AsyncMock()
+    adapter.cancel_workflow = AsyncMock()
+    adapter.terminate_workflow = AsyncMock()
+    return adapter
 
 @asynccontextmanager
 async def temporal_db(tmp_path):
@@ -232,6 +245,156 @@ async def test_create_execution_rejects_empty_failure_policy(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_execution_rejects_more_than_10_dependencies(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="dependsOn can have a maximum of 10 items",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": [f"dep-{i}" for i in range(11)]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_missing_dependency(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Dependency not found: non-existent",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": ["non-existent"]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_non_run_dependency(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    from api_service.db.models import TemporalWorkflowType
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        owner_id = uuid4()
+        
+        # Mock describe_execution to return a non-run record
+        mock_record = MagicMock()
+        mock_record.workflow_type = TemporalWorkflowType.MANIFEST_INGEST
+        service.describe_execution = AsyncMock(return_value=mock_record)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match=f"Dependency fake-id is a MoonMind.ManifestIngest workflow, not a MoonMind.Run workflow",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=owner_id,
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": ["fake-id"]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_dependency_graph_too_deep(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    from api_service.db.models import TemporalWorkflowType
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        
+        async def mock_describe(execution_id: str):
+            mock_record = MagicMock()
+            mock_record.workflow_type = TemporalWorkflowType.RUN
+            try:
+                num = int(execution_id.split("-")[1])
+                mock_record.parameters = {"task": {"dependsOn": [f"node-{num + 1}"]}}
+            except Exception:
+                mock_record.parameters = {}
+            return mock_record
+            
+        service.describe_execution = AsyncMock(side_effect=mock_describe)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Dependency graph too deep \\(exceeded depth 10\\)",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": ["node-1"]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_dependency_graph_too_large(tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+    from api_service.db.models import TemporalWorkflowType
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        
+        async def mock_describe(execution_id: str):
+            mock_record = MagicMock()
+            mock_record.workflow_type = TemporalWorkflowType.RUN
+            try:
+                num = int(execution_id.split("-")[1])
+                # Each node branches into 10 next nodes to quickly exceed 50
+                mock_record.parameters = {"task": {"dependsOn": [f"node-{num * 10 + i}" for i in range(1, 11)]}}
+            except Exception:
+                mock_record.parameters = {}
+            return mock_record
+            
+        service.describe_execution = AsyncMock(side_effect=mock_describe)
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Dependency graph too large \\(exceeded 50 nodes\\)",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.Run",
+                owner_id=uuid4(),
+                title=None,
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"task": {"dependsOn": ["node-1"]}},
+                idempotency_key=None,
+            )
+
+
+@pytest.mark.asyncio
 async def test_create_execution_returns_existing_record_after_idempotency_race(
     tmp_path, monkeypatch
 ):
@@ -422,14 +585,11 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
         assert commit_calls == 1
 
 
-from unittest.mock import AsyncMock
-
-
 @pytest.mark.asyncio
-async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
+async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -480,10 +640,10 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_allowed_for_terminal_execution(tmp_path):
+async def test_request_rerun_allowed_for_terminal_execution(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -529,10 +689,10 @@ async def test_request_rerun_allowed_for_terminal_execution(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_falls_back_when_temporal_reports_completed(tmp_path):
+async def test_request_rerun_falls_back_when_temporal_reports_completed(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -574,10 +734,10 @@ async def test_request_rerun_falls_back_when_temporal_reports_completed(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path):
+async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -610,10 +770,10 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path):
+async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -686,10 +846,10 @@ async def test_update_execution_rejects_unknown_update_name(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
+async def test_signal_pause_resume_and_external_event_transitions(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -732,10 +892,10 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_signal_resume_forwards_payload_via_workflow_update(tmp_path):
+async def test_signal_resume_forwards_payload_via_workflow_update(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -796,10 +956,10 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cancel_marks_terminal_state_and_close_status(tmp_path):
+async def test_cancel_marks_terminal_state_and_close_status(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.ManifestIngest",
@@ -826,10 +986,10 @@ async def test_cancel_marks_terminal_state_and_close_status(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_forced_cancel_marks_failed_with_terminated_close_status(tmp_path):
+async def test_forced_cancel_marks_failed_with_terminated_close_status(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -855,10 +1015,10 @@ async def test_forced_cancel_marks_failed_with_terminated_close_status(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
+async def test_request_rerun_can_override_inputs_and_parameters(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -896,11 +1056,11 @@ async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
 
 @pytest.mark.asyncio
 async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_new_cause(
-    tmp_path,
+    tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1091,10 +1251,10 @@ async def test_configure_integration_monitoring_rejects_blank_external_operation
 
 
 @pytest.mark.asyncio
-async def test_ingest_integration_callback_deduplicates_provider_event_ids(tmp_path):
+async def test_ingest_integration_callback_deduplicates_provider_event_ids(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1269,10 +1429,10 @@ async def test_projection_sync_markers_round_trip_between_stale_and_fresh(tmp_pa
 @pytest.mark.asyncio
 async def test_update_execution_persists_repair_pending_when_projection_refresh_fails(
     tmp_path, monkeypatch
-):
+, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1385,11 +1545,11 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
 
 @pytest.mark.asyncio
 async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and_update(
-    tmp_path,
+    tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1483,10 +1643,10 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_mark_execution_succeeded_rejects_terminal_execution(tmp_path):
+async def test_mark_execution_succeeded_rejects_terminal_execution(tmp_path, mock_client_adapter):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1728,11 +1888,11 @@ async def test_polling_backoff_resets_after_status_change_and_updates_visibility
 
 @pytest.mark.asyncio
 async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
-    tmp_path,
+    tmp_path, mock_client_adapter
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = mock_client_adapter
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",

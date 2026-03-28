@@ -90,6 +90,37 @@ async def test_fetch_result_maps_gemini_quota_report_to_integration_error(
     assert "exhausted your capacity" in result["summary"].lower()
 
 
+async def test_fetch_result_returns_structured_provider_error_from_record(
+    tmp_path: Path,
+) -> None:
+    run_store = ManagedRunStore(tmp_path / "run_store")
+    now = datetime.now(tz=UTC)
+    run_store.save(
+        ManagedRunRecord(
+            runId="gemini-run-structured-429",
+            agentId="gemini_cli",
+            runtimeId="gemini_cli",
+            status="failed",
+            pid=1234,
+            exitCode=1,
+            startedAt=now - timedelta(minutes=2),
+            finishedAt=now - timedelta(minutes=1),
+            errorMessage="Gemini API rate limit exceeded",
+            failureClass="integration_error",
+            providerErrorCode="429",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+    result = await activities.agent_runtime_fetch_result(
+        {"run_id": "gemini-run-structured-429"}
+    )
+
+    assert result["failureClass"] == "integration_error"
+    assert result["providerErrorCode"] == "429"
+    assert result["summary"] == "Gemini API rate limit exceeded"
+
+
 async def test_fetch_result_keeps_non_generic_failure_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -242,3 +273,60 @@ async def test_fetch_result_prefers_report_with_matching_run_workspace(
 
     assert result["failureClass"] == "integration_error"
     assert result["providerErrorCode"] == "quota_exhausted"
+
+
+async def test_fetch_result_uses_diagnostics_when_report_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(activity_runtime_module, "_GEMINI_ERROR_REPORT_DIR", report_dir)
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(tmp_path))
+
+    run_store = ManagedRunStore(tmp_path / "run_store")
+    now = datetime.now(tz=UTC)
+    started_at = now - timedelta(minutes=3)
+    finished_at = now - timedelta(minutes=2)
+    run_id = "gemini-run-diagnostics-429"
+    diagnostics_ref = f"{run_id}/diagnostics.json"
+    diagnostics_path = tmp_path / "artifacts" / diagnostics_ref
+    diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostics_path.write_text(
+        json.dumps(
+            {
+                "parsed_output": {
+                    "rate_limited": True,
+                    "error_messages": [
+                        "Attempt 6 failed with status 429. Retrying with backoff...",
+                        "reason: MODEL_CAPACITY_EXHAUSTED",
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="gemini_cli",
+            runtimeId="gemini_cli",
+            status="failed",
+            pid=1234,
+            exitCode=143,
+            startedAt=started_at,
+            finishedAt=finished_at,
+            diagnosticsRef=diagnostics_ref,
+            errorMessage="Process exited with code 143",
+            failureClass="integration_error",
+            workspacePath=f"/work/agent_jobs/workspaces/{run_id}/repo",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+    result = await activities.agent_runtime_fetch_result({"run_id": run_id})
+
+    assert result["failureClass"] == "integration_error"
+    assert result["providerErrorCode"] == "429"
+    assert "429" in result["summary"]

@@ -9,11 +9,29 @@ using if/elif branching on ``runtime_id``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from moonmind.workflows.temporal.runtime.output_parser import PlainTextOutputParser, RuntimeOutputParser
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunState,
+    FailureClass as RuntimeFailureClass,
+)
+from moonmind.workflows.temporal.runtime.output_parser import (
+    ParsedOutput,
+    PlainTextOutputParser,
+    RuntimeOutputParser,
+)
 from moonmind.workflows.temporal.runtime.self_heal import FailureClass, is_failure_retryable
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedRuntimeExitResult:
+    """Structured managed-runtime exit classification."""
+
+    status: AgentRunState
+    failure_class: RuntimeFailureClass | None
+    provider_error_code: str | None = None
 
 
 class ManagedRuntimeStrategy(ABC):
@@ -119,6 +137,25 @@ class ManagedRuntimeStrategy(ABC):
             return "completed", None
         return "failed", "execution_error"
 
+    def classify_result(
+        self,
+        *,
+        exit_code: int | None,
+        stdout: str,
+        stderr: str,
+        parsed_output: ParsedOutput | None = None,
+    ) -> ManagedRuntimeExitResult:
+        """Return structured exit metadata for one managed runtime process."""
+        status, failure_class = self.classify_exit(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
+        return ManagedRuntimeExitResult(
+            status=status,
+            failure_class=failure_class,
+        )
+
     def create_output_parser(self) -> RuntimeOutputParser:
         """Factory for the runtime's stream parser.
 
@@ -128,6 +165,10 @@ class ManagedRuntimeStrategy(ABC):
         See :class:`~moonmind.workflows.temporal.runtime.output_parser.RuntimeOutputParser`.
         """
         return PlainTextOutputParser()
+
+    def terminate_on_live_rate_limit(self) -> bool:
+        """Whether supervisor should stop the process on streamed rate-limit events."""
+        return False
 
     def should_retry_exit(self, failure_class: str | None) -> bool:
         """Determine if a failure class should trigger a self-heal retry.

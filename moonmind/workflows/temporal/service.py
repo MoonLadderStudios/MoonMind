@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -215,6 +216,54 @@ class TemporalExecutionService:
         """Send a Quiesce resume signal to all paused workflows (DOC-REQ-003, FR-010)."""
         return await self._client_adapter.send_batch_resume_signal()
 
+    async def _validate_dependencies(self, depends_on: list[str], new_workflow_id: str) -> None:
+        if len(depends_on) > 10:
+            raise TemporalExecutionValidationError("dependsOn can have a maximum of 10 items.")
+
+        if new_workflow_id in depends_on:
+            raise TemporalExecutionValidationError(f"Workflow cannot depend on itself: {new_workflow_id}")
+
+        visited: set[str] = set()
+        queue: deque[tuple[str, int]] = deque([(dep_id, 1) for dep_id in depends_on])
+        total_nodes_checked = 0
+
+        while queue:
+            current_id, depth = queue.popleft()
+
+            if current_id in visited:
+                continue
+
+            visited.add(current_id)
+            total_nodes_checked += 1
+
+            if total_nodes_checked > 50:
+                raise TemporalExecutionValidationError("Dependency graph too large (exceeded 50 nodes).")
+
+            if depth > 10:
+                raise TemporalExecutionValidationError("Dependency graph too deep (exceeded depth 10).")
+
+            try:
+                record = await self.describe_execution(current_id)
+            except TemporalExecutionNotFoundError:
+                raise TemporalExecutionValidationError(f"Dependency not found: {current_id}")
+
+            if getattr(record, "workflow_type", None) is not TemporalWorkflowType.RUN:
+                wf_type_value = getattr(getattr(record, 'workflow_type', None), 'value', getattr(record, 'workflow_type', 'unknown'))
+                raise TemporalExecutionValidationError(
+                    f"Dependency {current_id} is a {wf_type_value} workflow, not a MoonMind.Run workflow."
+                )
+
+            params = getattr(record, "parameters", {}) or {}
+            task_params = params.get("task", {}) or {}
+            transitive_deps = task_params.get("dependsOn", [])
+
+            if isinstance(transitive_deps, list):
+                for td in transitive_deps:
+                    if isinstance(td, str):
+                        td_clean = td.strip()
+                        if td_clean:
+                            queue.append((td_clean, depth + 1))
+
     async def create_execution(
         self,
         *,
@@ -255,6 +304,15 @@ class TemporalExecutionService:
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
                 )
 
+        now = _utc_now()
+        workflow_id = f"mm:{uuid4()}"
+        run_id = str(uuid4())
+
+        if workflow_type_enum is TemporalWorkflowType.RUN:
+            depends_on = (initial_parameters or {}).get("task", {}).get("dependsOn")
+            if isinstance(depends_on, list) and depends_on:
+                await self._validate_dependencies(depends_on, workflow_id)
+
         if (
             failure_policy is not None
             and failure_policy not in ALLOWED_FAILURE_POLICIES
@@ -274,9 +332,6 @@ class TemporalExecutionService:
             if existing is not None:
                 return await self._sync_projection_best_effort(existing)
 
-        now = _utc_now()
-        workflow_id = f"mm:{uuid4()}"
-        run_id = str(uuid4())
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)

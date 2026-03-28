@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import dataclasses
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
@@ -94,11 +94,19 @@ INTEGRATIONS_STATUS_TIMEOUT = timedelta(seconds=60)
 WORKFLOW_TASK_QUEUE = "mm.workflow"
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
+MANAGED_429_CONTINUE_AS_NEW_PATCH_ID = "agent-run-managed-429-continue-as-new-v1"
 
 # How long to wait for a slot_assigned signal before assuming the manager is
 # stuck (e.g. nondeterminism error) and resetting it.
 _SLOT_WAIT_TIMEOUT_SECONDS = 120
 _SLOT_WAIT_MAX_RESETS = 3
+_DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS = 900
+_MAX_AGENT_RUN_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
+_MAX_MANAGED_429_RETRIES_BEFORE_CONTINUE_AS_NEW = 25
+_INTERNAL_REQUEST_STATE_KEY = "__moonmind_temporal_internal"
+_INTERNAL_MANAGED_429_RETRY_COUNT_KEY = "managed_429_retry_count"
+_INTERNAL_MANAGED_429_WAITING_REASON_KEY = "managed_429_waiting_reason"
+_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY = "managed_429_slot_wait_timeout_seconds"
 
 
 @activity.defn(name="integration.get_activity_route")
@@ -184,6 +192,10 @@ class MoonMindAgentRun:
         self._auto_answer_count: int = 0
         self._pending_operator_messages: list[str] = []
         self._route_cache: dict[str, tuple[str, timedelta, timedelta, RetryPolicy | None, timedelta | None]] = {}
+        self._profile_snapshots: dict[str, dict[str, Any]] = {}
+        self._awaiting_slot_reason_override: str | None = None
+        self._slot_wait_timeout_override_seconds: int | None = None
+        self._managed_429_retry_count = 0
 
     async def _get_route_info(self, activity_name: str, fallback_queue: str, fallback_timeout: timedelta) -> tuple[str, timedelta, timedelta, RetryPolicy | None, timedelta | None]:
         if activity_name in self._route_cache:
@@ -256,6 +268,122 @@ class MoonMindAgentRun:
             activity,
             args,
             **options,
+        )
+
+    @staticmethod
+    def _managed_runtime_id(agent_id: str) -> str:
+        runtime_mapping = {
+            "gemini_cli": "gemini_cli",
+            "claude": "claude_code",
+            "codex": "codex_cli",
+        }
+        return runtime_mapping.get(agent_id, agent_id)
+
+    def _cooldown_seconds_for_profile(self, profile_id: str | None) -> int:
+        normalized_profile_id = str(profile_id or "").strip()
+        if normalized_profile_id:
+            profile = self._profile_snapshots.get(normalized_profile_id) or {}
+            raw_seconds = profile.get("cooldown_after_429_seconds")
+            try:
+                seconds = int(raw_seconds)
+            except (TypeError, ValueError):
+                seconds = 0
+            if seconds >= 0:
+                return seconds
+        return _DEFAULT_MANAGED_429_RETRY_DELAY_SECONDS
+
+    @staticmethod
+    def _format_retry_timestamp(value: datetime) -> str:
+        rendered = value.isoformat()
+        if rendered.endswith("+00:00"):
+            return rendered[:-6] + "Z"
+        return rendered
+
+    def _build_managed_rate_limit_waiting_reason(
+        self,
+        *,
+        runtime_id: str,
+        profile_id: str | None,
+        cooldown_seconds: int,
+    ) -> str:
+        retry_at = workflow.now() + timedelta(seconds=max(cooldown_seconds, 0))
+        profile_fragment = f" on profile {profile_id}" if profile_id else ""
+        return (
+            f"Gemini capacity exhausted for {runtime_id}{profile_fragment}; retry scheduled for "
+            f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
+        )
+
+    @staticmethod
+    def _request_internal_state(request: AgentExecutionRequest) -> dict[str, Any]:
+        params = request.parameters or {}
+        raw_state = params.get(_INTERNAL_REQUEST_STATE_KEY)
+        if isinstance(raw_state, dict):
+            return dict(raw_state)
+        return {}
+
+    def _restore_internal_request_state(self, request: AgentExecutionRequest) -> None:
+        internal_state = self._request_internal_state(request)
+        raw_retry_count = internal_state.get(_INTERNAL_MANAGED_429_RETRY_COUNT_KEY, 0)
+        try:
+            retry_count = int(raw_retry_count)
+        except (TypeError, ValueError):
+            retry_count = 0
+        self._managed_429_retry_count = max(retry_count, 0)
+
+        waiting_reason = internal_state.get(_INTERNAL_MANAGED_429_WAITING_REASON_KEY)
+        if isinstance(waiting_reason, str) and waiting_reason.strip():
+            self._awaiting_slot_reason_override = waiting_reason.strip()
+
+        raw_wait_timeout = internal_state.get(_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY)
+        try:
+            wait_timeout = int(raw_wait_timeout)
+        except (TypeError, ValueError):
+            wait_timeout = 0
+        if wait_timeout > 0:
+            self._slot_wait_timeout_override_seconds = wait_timeout
+
+    @staticmethod
+    def _request_with_internal_state(
+        request: AgentExecutionRequest,
+        *,
+        retry_count: int,
+        waiting_reason: str | None,
+        slot_wait_timeout_seconds: int | None,
+    ) -> AgentExecutionRequest:
+        params = dict(request.parameters or {})
+        raw_internal_state = params.get(_INTERNAL_REQUEST_STATE_KEY)
+        internal_state = (
+            dict(raw_internal_state)
+            if isinstance(raw_internal_state, dict)
+            else {}
+        )
+        internal_state[_INTERNAL_MANAGED_429_RETRY_COUNT_KEY] = max(retry_count, 0)
+        if waiting_reason:
+            internal_state[_INTERNAL_MANAGED_429_WAITING_REASON_KEY] = waiting_reason
+        else:
+            internal_state.pop(_INTERNAL_MANAGED_429_WAITING_REASON_KEY, None)
+        if slot_wait_timeout_seconds and slot_wait_timeout_seconds > 0:
+            internal_state[_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY] = (
+                slot_wait_timeout_seconds
+            )
+        else:
+            internal_state.pop(_INTERNAL_MANAGED_429_SLOT_WAIT_TIMEOUT_KEY, None)
+        params[_INTERNAL_REQUEST_STATE_KEY] = internal_state
+        return request.model_copy(update={"parameters": params})
+
+    def _should_continue_as_new_after_managed_429(self) -> bool:
+        if not workflow.patched(MANAGED_429_CONTINUE_AS_NEW_PATCH_ID):
+            return False
+        if workflow.info().is_continue_as_new_suggested():
+            return True
+        if (
+            workflow.info().get_current_history_length()
+            >= _MAX_AGENT_RUN_EVENTS_BEFORE_CONTINUE_AS_NEW
+        ):
+            return True
+        return (
+            self._managed_429_retry_count
+            >= _MAX_MANAGED_429_RETRIES_BEFORE_CONTINUE_AS_NEW
         )
 
 
@@ -389,6 +517,11 @@ class MoonMindAgentRun:
                 raw_profiles = profile_snapshot.get("profiles", [])
                 if isinstance(raw_profiles, list):
                     profiles = raw_profiles
+            self._profile_snapshots = {
+                str(profile.get("profile_id")).strip(): profile
+                for profile in profiles
+                if isinstance(profile, dict) and str(profile.get("profile_id", "")).strip()
+            }
             await manager_handle.signal("sync_profiles", {"profiles": profiles})
             return len(profiles)
         except Exception:
@@ -620,6 +753,7 @@ class MoonMindAgentRun:
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
+        self._restore_internal_request_state(request)
 
         timeout_seconds = (
             DEFAULT_EXTERNAL_TIMEOUT_SECONDS
@@ -646,12 +780,7 @@ class MoonMindAgentRun:
                 manager_handle = None
                 # Acquire auth slot if managed
                 if request.agent_kind == "managed":
-                    runtime_mapping = {
-                        "gemini_cli": "gemini_cli",
-                        "claude": "claude_code",
-                        "codex": "codex_cli",
-                    }
-                    runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
+                    runtime_id = self._managed_runtime_id(request.agent_id)
                     manager_id = f"auth-profile-manager:{runtime_id}"
 
                     self.slot_assigned_event.clear()
@@ -688,22 +817,31 @@ class MoonMindAgentRun:
 
                     if not self.slot_assigned_event.is_set():
                         self.run_status = RunStatus.awaiting_slot
+                        waiting_reason = (
+                            self._awaiting_slot_reason_override
+                            or f"Waiting for auth profile slot on {runtime_id}"
+                        )
+                        self._awaiting_slot_reason_override = None
                         if parent_info:
                             parent_handle = workflow.get_external_workflow_handle(
                                 parent_info.workflow_id, run_id=parent_info.run_id
                             )
                             await parent_handle.signal(
                                 "child_state_changed",
-                                args=["awaiting_slot", f"Waiting for auth profile slot on {runtime_id}"]
+                                args=["awaiting_slot", waiting_reason]
                             )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_resets = 0
                         while not self.slot_assigned_event.is_set():
                             try:
+                                slot_wait_timeout_seconds = (
+                                    self._slot_wait_timeout_override_seconds
+                                    or _SLOT_WAIT_TIMEOUT_SECONDS
+                                )
                                 await workflow.wait_condition(
                                     lambda: self.slot_assigned_event.is_set(),
-                                    timeout=timedelta(seconds=_SLOT_WAIT_TIMEOUT_SECONDS),
+                                    timeout=timedelta(seconds=slot_wait_timeout_seconds),
                                 )
                             except TimeoutError:
                                 if slot_resets >= _SLOT_WAIT_MAX_RESETS:
@@ -731,6 +869,8 @@ class MoonMindAgentRun:
                     # Reset the execution clock so the timeout budget starts
                     # from slot acquisition, not from workflow start.
                     overall_start = workflow.now()
+                    self._awaiting_slot_reason_override = None
+                    self._slot_wait_timeout_override_seconds = None
                     
                     self.run_status = RunStatus.launching
                     if parent_info:
@@ -1308,11 +1448,64 @@ class MoonMindAgentRun:
 
                 # Check for 429
                 if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
-                    await manager_handle.signal("report_cooldown", {"profile_id": request.execution_profile_ref, "cooldown_seconds": 300})
-                    await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
-                    self.completion_event.clear()
-                    self.final_result = None
-                    continue # Retries loop
+                    if workflow.patched("gemini-429-cooldown-retry-signal"):
+                        runtime_id = self._managed_runtime_id(request.agent_id)
+                        profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
+                        cooldown_seconds = self._cooldown_seconds_for_profile(profile_id)
+                        waiting_reason = self._build_managed_rate_limit_waiting_reason(
+                            runtime_id=runtime_id,
+                            profile_id=profile_id,
+                            cooldown_seconds=cooldown_seconds,
+                        )
+                        parent_info = workflow.info().parent
+                        if parent_info:
+                            parent_handle = workflow.get_external_workflow_handle(
+                                parent_info.workflow_id, run_id=parent_info.run_id
+                            )
+                            await parent_handle.signal(
+                                "child_state_changed",
+                                args=["awaiting_slot", waiting_reason],
+                            )
+                        await manager_handle.signal(
+                            "report_cooldown",
+                            {
+                                "profile_id": profile_id or request.execution_profile_ref,
+                                "cooldown_seconds": cooldown_seconds,
+                            },
+                        )
+                        await manager_handle.signal(
+                            "release_slot",
+                            {
+                                "requester_workflow_id": workflow.info().workflow_id,
+                                "profile_id": profile_id or request.execution_profile_ref,
+                            },
+                        )
+                        self._awaiting_slot_reason_override = waiting_reason
+                        self._slot_wait_timeout_override_seconds = max(
+                            cooldown_seconds + 60,
+                            _SLOT_WAIT_TIMEOUT_SECONDS,
+                        )
+                        self._managed_429_retry_count += 1
+                        if self._should_continue_as_new_after_managed_429():
+                            workflow.continue_as_new(
+                                self._request_with_internal_state(
+                                    request,
+                                    retry_count=self._managed_429_retry_count,
+                                    waiting_reason=waiting_reason,
+                                    slot_wait_timeout_seconds=self._slot_wait_timeout_override_seconds,
+                                )
+                            )
+                        self.completion_event.clear()
+                        self.final_result = None
+                        self._assigned_profile_id = None
+                        self.run_status = RunStatus.awaiting_slot
+                        continue # Retries loop
+                    else:
+                        await manager_handle.signal("report_cooldown", {"profile_id": request.execution_profile_ref, "cooldown_seconds": 300})
+                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                        self.completion_event.clear()
+                        self.final_result = None
+                        continue # Retries loop
 
                 # Not a 429 or external agent
                 if manager_handle and request.execution_profile_ref:

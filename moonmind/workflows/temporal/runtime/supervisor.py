@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 CompletionCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 from moonmind.schemas.agent_runtime_models import (
-    AgentRunState,
-    FailureClass,
     ManagedRunRecord,
 )
 
 from .log_streamer import RuntimeLogStreamer
 from .store import ManagedRunStore
 from .strategies import get_strategy
+from .strategies.base import ManagedRuntimeExitResult
+from .output_parser import ParsedOutput
 
 HEARTBEAT_INTERVAL = 30  # seconds
 GRACEFUL_TERMINATE_WAIT_SECONDS = (
@@ -78,6 +78,15 @@ class ManagedRunSupervisor:
             runtime_id = record.runtime_id if record else None
             strategy = get_strategy(runtime_id) if runtime_id else None
             parser = strategy.create_output_parser() if strategy else None
+            live_rate_limit_detected = asyncio.Event()
+
+            async def _handle_stream_events(events: list[dict[str, Any]]) -> None:
+                if strategy is None or not strategy.terminate_on_live_rate_limit():
+                    return
+                for event in events:
+                    if self._is_live_rate_limit_event(event):
+                        live_rate_limit_detected.set()
+                        break
 
             # Run heartbeat/wait and log streaming CONCURRENTLY so that OS
             # pipe buffers are drained in real-time.  Sequential streaming
@@ -96,12 +105,25 @@ class ManagedRunSupervisor:
                     process.stderr,
                     run_id=run_id,
                     parser=parser,
+                    event_callback=_handle_stream_events,
                 )
             )
+            terminate_on_rate_limit_task = None
+            if strategy is not None and strategy.terminate_on_live_rate_limit():
+                terminate_on_rate_limit_task = asyncio.create_task(
+                    self._terminate_on_live_rate_limit(
+                        process=process,
+                        trigger=live_rate_limit_detected,
+                    )
+                )
             (
                 (process_exit_code, timed_out),
-                (log_refs, stdout_content, stderr_content, parsed_output),
+                (log_refs, stdout_content, stderr_content, parsed_output, events),
             ) = await asyncio.gather(heartbeat_task, stream_task)
+            if terminate_on_rate_limit_task is not None:
+                terminate_on_rate_limit_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    _ = await terminate_on_rate_limit_task
 
             if timed_out:
                 exit_code = None
@@ -120,23 +142,29 @@ class ManagedRunSupervisor:
                 duration_seconds=duration,
                 log_refs=log_refs,
                 parsed_output=parsed_output,
-                events=parsed_output.events,
+                events=events,
             )
 
             # Classify exit
-            status, failure_class = self._classify_exit(
+            exit_result = self._classify_exit(
                 runtime_id=runtime_id,
                 exit_code=exit_code,
                 timed_out=timed_out,
                 stdout=stdout_content,
                 stderr=stderr_content,
+                parsed_output=parsed_output,
             )
+            status = exit_result.status
+            failure_class = exit_result.failure_class
 
             error_message = None
             if status == "failed":
-                error_message = f"Process exited with code {exit_code}"
-                if parsed_output.error_messages:
-                    error_message += f": {parsed_output.error_messages[0]}"
+                if runtime_id == "gemini_cli" and exit_result.provider_error_code == "429":
+                    error_message = "Gemini API rate limit exceeded"
+                else:
+                    error_message = f"Process exited with code {exit_code}"
+                    if parsed_output.error_messages:
+                        error_message += f": {parsed_output.error_messages[0]}"
             elif status == "timed_out":
                 error_message = (
                     f"Process timed out after {timeout_seconds}s"
@@ -150,6 +178,7 @@ class ManagedRunSupervisor:
                 diagnostics_ref=diagnostics_ref,
                 log_artifact_ref=log_refs.get("stdout"),
                 failure_class=failure_class,
+                provider_error_code=exit_result.provider_error_code,
                 error_message=error_message,
             )
 
@@ -279,6 +308,26 @@ class ManagedRunSupervisor:
         return reconciled
 
     @staticmethod
+    async def _terminate_on_live_rate_limit(
+        *,
+        process: asyncio.subprocess.Process,
+        trigger: asyncio.Event,
+    ) -> None:
+        await trigger.wait()
+        await ManagedRunSupervisor._terminate_process(process)
+
+    @staticmethod
+    def _is_live_rate_limit_event(event: dict[str, Any]) -> bool:
+        event_type = str(event.get("type") or "").strip().lower()
+        if event_type == "rate_limit":
+            return True
+        status_code = event.get("status_code") or event.get("statusCode")
+        try:
+            return int(status_code) == 429
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
     async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         """Graceful terminate -> wait(2s) -> kill sequence."""
         with suppress(ProcessLookupError):
@@ -302,26 +351,35 @@ class ManagedRunSupervisor:
         timed_out: bool,
         stdout: str,
         stderr: str,
-    ) -> tuple[AgentRunState, FailureClass | None]:
+        parsed_output: ParsedOutput | None = None,
+    ) -> ManagedRuntimeExitResult:
         """Classify process exit into a run state and optional failure class."""
+
         if timed_out:
-            return "timed_out", "execution_error"
+            return ManagedRuntimeExitResult(
+                status="timed_out",
+                failure_class="execution_error",
+            )
 
         if runtime_id:
             strategy = get_strategy(runtime_id)
             if strategy:
-                # strategy.classify_exit returns (status, failure_class)
-                status, failure_class = strategy.classify_exit(
+                return strategy.classify_result(
                     exit_code=exit_code,
                     stdout=stdout,
                     stderr=stderr,
+                    parsed_output=parsed_output,
                 )
-                # Map to AgentRunState if needed, or assume strategy returns one
-                return status, failure_class
 
         if exit_code == 0:
-            return "completed", None
-        return "failed", "execution_error"
+            return ManagedRuntimeExitResult(
+                status="completed",
+                failure_class=None,
+            )
+        return ManagedRuntimeExitResult(
+            status="failed",
+            failure_class="execution_error",
+        )
 
     @staticmethod
     def _resolve_effective_exit_code(
@@ -385,6 +443,7 @@ class ManagedRunSupervisor:
             "summary": summary,
             "output_refs": output_refs,
             "failure_class": record.failure_class,
+            "provider_error_code": record.provider_error_code,
         }
 
     @staticmethod

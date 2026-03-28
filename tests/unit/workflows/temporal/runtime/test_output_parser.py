@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from moonmind.workflows.temporal.runtime.output_parser import (
+    GeminiCliOutputParser,
     NdjsonOutputParser,
     PlainTextOutputParser,
 )
@@ -187,6 +188,13 @@ class TestDefaultStrategyClassifyExit:
         assert status == "failed"
         assert failure == "execution_error"
 
+    def test_gemini_rate_limited(self) -> None:
+        s = GeminiCliStrategy()
+        stderr = "Error 429: Too many requests\nreason: MODEL_CAPACITY_EXHAUSTED"
+        status, failure = s.classify_exit(143, "", stderr)
+        assert status == "failed"
+        assert failure == "integration_error"
+
     def test_claude_success(self) -> None:
         s = ClaudeCodeStrategy()
         status, failure = s.classify_exit(0, "", "")
@@ -203,7 +211,7 @@ class TestDefaultStrategyClassifyExit:
 class TestDefaultOutputParser:
     def test_gemini_returns_plain_text(self) -> None:
         s = GeminiCliStrategy()
-        assert isinstance(s.create_output_parser(), PlainTextOutputParser)
+        assert isinstance(s.create_output_parser(), GeminiCliOutputParser)
 
     def test_claude_returns_plain_text(self) -> None:
         s = ClaudeCodeStrategy()
@@ -212,3 +220,24 @@ class TestDefaultOutputParser:
     def test_codex_returns_plain_text(self) -> None:
         s = CodexCliStrategy()
         assert isinstance(s.create_output_parser(), PlainTextOutputParser)
+
+
+class TestGeminiCliOutputParser:
+    def test_parse_stream_chunk_detects_capacity_rate_limit(self) -> None:
+        parser = GeminiCliOutputParser()
+        events = parser.parse_stream_chunk(
+            'Attempt 6 failed with status 429. Retrying with backoff...\n'
+        )
+        assert len(events) == 1
+        assert events[0]["type"] == "rate_limit"
+        assert events[0]["status_code"] == 429
+
+    def test_parse_detects_capacity_markers(self) -> None:
+        parser = GeminiCliOutputParser()
+        result = parser.parse(
+            "",
+            'message: No capacity available for model gemini-3.1-pro-preview\n'
+            'reason: MODEL_CAPACITY_EXHAUSTED\n',
+        )
+        assert result.rate_limited
+        assert any("capacity" in message.lower() for message in result.error_messages)

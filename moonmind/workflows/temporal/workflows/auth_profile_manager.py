@@ -283,9 +283,12 @@ class MoonMindAuthProfileManagerWorkflow:
         self._event_count += 1
         self._has_new_events = True
         profile_id = payload["profile_id"]
-        cooldown_seconds = payload.get("cooldown_seconds", 300)
         profile = self._profiles.get(profile_id)
         if profile:
+            cooldown_seconds = payload.get(
+                "cooldown_seconds",
+                profile.cooldown_after_429_seconds,
+            )
             now = workflow.now()
             cooldown_until = now + timedelta(seconds=cooldown_seconds)
             profile.cooldown_until = cooldown_until.isoformat()
@@ -423,7 +426,7 @@ class MoonMindAuthProfileManagerWorkflow:
             state = ProfileSlotState(
                 profile_id=pid,
                 max_parallel_runs=p.get("max_parallel_runs", 1),
-                cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 300),
+                cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
                 max_lease_duration_seconds=p.get(
@@ -472,7 +475,7 @@ class MoonMindAuthProfileManagerWorkflow:
                     profile_id=pid,
                     max_parallel_runs=p.get("max_parallel_runs", 1),
                     cooldown_after_429_seconds=p.get(
-                        "cooldown_after_429_seconds", 300
+                        "cooldown_after_429_seconds", 900
                     ),
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),

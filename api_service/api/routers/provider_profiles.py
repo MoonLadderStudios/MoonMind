@@ -66,7 +66,7 @@ class ProviderProfileCreate(BaseModel):
     command_behavior: Optional[dict[str, Any]] = None
 
     max_parallel_runs: int = Field(default=1, ge=1)
-    cooldown_after_429_seconds: int = Field(default=300, ge=0)
+    cooldown_after_429_seconds: int = Field(default=900, ge=0)
     rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
     enabled: bool = True
     max_lease_duration_seconds: int = Field(default=7200, ge=60)
