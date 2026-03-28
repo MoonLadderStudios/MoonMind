@@ -23,7 +23,7 @@ On `temporal-worker-sandbox` startup, configure GitHub auth for `git` using `gh 
 1. No secret material in Temporal payload histories or workflow inputs.
 2. No immediate requirement for Vault resolver in baseline path.
 3. Existing Git operations continue to work with minimal runtime changes.
-4. Compatible with later migration to secret references (`repoAuthRef`) in `docs/ManagedAgents/SecretStore.md`.
+4. Compatible with later migration to SecretRef-based secret resolution in `docs/Security/SecretsSystem.md`.
 
 ## 4. Current Workflow Behavior Summary
 
@@ -119,4 +119,4 @@ When `PublishActivity` fails:
 
 ## 10. Next Step
 
-Move to Vault-backed secret references (`repoAuthRef`) for hardened private repo auth (`docs/ManagedAgents/SecretStore.md`).
+Move to SecretRef-based Git credential handling aligned with `docs/Security/SecretsSystem.md` and `docs/Security/ProviderProfiles.md` while preserving the simple local-first operator path.

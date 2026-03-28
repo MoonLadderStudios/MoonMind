@@ -1140,6 +1140,86 @@
     }
   }
 
+  function formatRelativeTime(value, options = {}) {
+    const fallback = String(options.fallback || "-");
+    if (!value) {
+      return fallback;
+    }
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) {
+      return fallback;
+    }
+    const deltaMs = Date.now() - timestamp;
+    const absoluteMs = Math.abs(deltaMs);
+    const suffix = deltaMs >= 0 ? "ago" : "from now";
+    const units = [
+      { max: 60 * 1000, size: 1000, label: "s" },
+      { max: 60 * 60 * 1000, size: 60 * 1000, label: "m" },
+      { max: 24 * 60 * 60 * 1000, size: 60 * 60 * 1000, label: "h" },
+      { max: 7 * 24 * 60 * 60 * 1000, size: 24 * 60 * 60 * 1000, label: "d" },
+    ];
+    const unit = units.find((candidate) => absoluteMs < candidate.max);
+    if (!unit) {
+      return formatTimestamp(value);
+    }
+    const amount = Math.max(1, Math.round(absoluteMs / unit.size));
+    return `${amount}${unit.label} ${suffix}`;
+  }
+
+  function formatDurationFromTimestamps(startValue, endValue) {
+    const startMs = Date.parse(startValue || "");
+    if (!Number.isFinite(startMs)) {
+      return "-";
+    }
+    const endMs = endValue ? Date.parse(endValue) : Date.now();
+    if (!Number.isFinite(endMs) || endMs < startMs) {
+      return "-";
+    }
+    let remainingSeconds = Math.floor((endMs - startMs) / 1000);
+    const hours = Math.floor(remainingSeconds / 3600);
+    remainingSeconds -= hours * 3600;
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds - minutes * 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  }
+
+  function renderRelativeTimestamp(value) {
+    if (!value) {
+      return "-";
+    }
+    const exact = formatTimestamp(value);
+    const relative = formatRelativeTime(value, { fallback: exact });
+    return `<span title="${escapeHtml(exact)}">${escapeHtml(relative)}</span>`;
+  }
+
+  function shortenIdentifier(value, options = {}) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return "-";
+    }
+    const leading = Number(options.leading) || 10;
+    const trailing = Number(options.trailing) || 6;
+    if (raw.length <= leading + trailing + 1) {
+      return raw;
+    }
+    return `${raw.slice(0, leading)}...${raw.slice(-trailing)}`;
+  }
+
+  function renderListPill(value, tone = "neutral") {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "-";
+    }
+    const toneClass = sanitizeCssToken(tone, "neutral");
+    return `<span class="table-pill table-pill-${toneClass}">${escapeHtml(text)}</span>`;
+  }
+
   function sanitizeCssToken(value, fallback = "") {
     const token = String(value ?? "")
       .toLowerCase()
@@ -1271,7 +1351,7 @@
   }
 
   function renderRuntime(runtime) {
-    return runtime ? escapeHtml(runtime) : "-";
+    return runtime ? escapeHtml(formatRuntimeLabel(runtime)) : "-";
   }
 
   function deriveStageFromEvent(event) {
@@ -2015,59 +2095,89 @@
       return `<th class="${thClass(field)}" data-sort-field="${escapeHtml(field)}" aria-sort="${ariaSort(field)}">${escapeHtml(label)}${sortIndicator(field)}</th>`;
     }
 
-    const primaryFields = taskFieldDefinitions.filter(
-      (definition) => definition.tableSection !== "timeline",
-    );
-    const timelineFields = taskFieldDefinitions.filter(
-      (definition) => definition.tableSection === "timeline",
-    );
-
     const renderDefinitionHeader = (definition) =>
       sortableTh(definition.key, definition.label);
-    const primaryHeaders = primaryFields.map(renderDefinitionHeader).join("");
-    const timelineHeaders = timelineFields.map(renderDefinitionHeader).join("");
+    const metadataHeaders = taskFieldDefinitions.map(renderDefinitionHeader).join("");
 
     const renderDefinitionCell = (row, definition) =>
       `<td data-field="${escapeHtml(definition.key)}">${renderTaskFieldValue(row, definition)}</td>`;
 
+    const renderTaskIdCell = (row) => {
+      const fullId = String(row.id || row.taskId || "").trim();
+      if (!fullId) {
+        return "-";
+      }
+      const linkTarget = row.link ? escapeHtml(row.link) : "#";
+      const label = shortenIdentifier(fullId, { leading: 14, trailing: 8 });
+      return `<a class="task-id-link" href="${linkTarget}" title="${escapeHtml(fullId)}">${escapeHtml(label)}</a>`;
+    };
+
+    const renderTaskStatusCell = (row) => {
+      const normalized = normalizeStatus(row.source, row.rawStatus);
+      return `
+        <div class="task-status-cell">
+          ${statusBadge(row.source, row.rawStatus)}
+          ${row.attentionRequired ? '<span class="small">Attention needed</span>' : ""}
+          ${normalized === "awaiting_action" && row.waitingReason
+            ? `<span class="small">${escapeHtml(row.waitingReason)}</span>`
+            : ""}
+        </div>
+      `;
+    };
+
+    const renderTaskTitleCell = (row) => {
+      const linkTarget = row.link ? escapeHtml(row.link) : "#";
+      const titleLabel = String(row.title || "").trim() || "Untitled task";
+      const summary = String(row.summary || row.waitingReason || "").trim();
+      const secondaryParts = [];
+      if (row.repository) {
+        secondaryParts.push(row.repository);
+      }
+      if (row.integration) {
+        secondaryParts.push(row.integration);
+      }
+      if (row.skillId && String(row.skillId).trim().toLowerCase() !== "auto") {
+        secondaryParts.push(row.skillId);
+      }
+      return `
+        <div class="task-title-cell">
+          <a class="task-title-link" href="${linkTarget}">${escapeHtml(titleLabel)}</a>
+          ${summary ? `<div class="task-title-summary">${escapeHtml(summary)}</div>` : ""}
+          ${secondaryParts.length
+            ? `<div class="task-title-meta">${escapeHtml(secondaryParts.join(" · "))}</div>`
+            : ""}
+        </div>
+      `;
+    };
+
     const body = rows
       .map((row) => {
-        const primaryCells = primaryFields.map((definition) => renderDefinitionCell(row, definition)).join("");
-        const timelineCells = timelineFields.map((definition) => renderDefinitionCell(row, definition)).join("");
-        const linkTarget = row.link ? escapeHtml(row.link) : "#";
-        const idLabel = row.id ? escapeHtml(row.id) : "-";
-        const titleLabel = row.title ? escapeHtml(row.title) : "-";
-        const sourceLabel = row.sourceLabel ? escapeHtml(row.sourceLabel) : "-";
-        const rawStatus = String(row.rawStatus || "").trim() || "-";
+        const metadataCells = taskFieldDefinitions.map((definition) => renderDefinitionCell(row, definition)).join("");
         return `
-        <tr>
-          <td>${sourceLabel}</td>
-          <td><a href="${linkTarget}">${idLabel}</a></td>
-          ${primaryCells}
-          <td>${statusBadge(row.source, row.rawStatus)} <span class="small">${escapeHtml(
-          rawStatus,
-        )}</span></td>
-          <td>${titleLabel}</td>
-          ${timelineCells}
+        <tr class="task-row">
+          <td data-field="id">${renderTaskIdCell(row)}</td>
+          <td data-field="title">${renderTaskTitleCell(row)}</td>
+          ${metadataCells}
+          <td data-field="status">${renderTaskStatusCell(row)}</td>
         </tr>
       `;
       })
       .join("");
 
     return `
-      <table>
+      <div class="table-wrap task-table-wrap">
+      <table class="task-table">
         <thead>
           <tr>
-            ${sortableTh("type", "Type")}
             ${sortableTh("id", "ID")}
-            ${primaryHeaders}
-            ${sortableTh("status", "Status")}
             ${sortableTh("title", "Title")}
-            ${timelineHeaders}
+            ${metadataHeaders}
+            ${sortableTh("status", "Status")}
           </tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
+      </div>
     `;
   }
 
@@ -2091,21 +2201,22 @@
             `,
           )
           .join("");
-        const skillLabel = row.skillId || "";
-        const runtimeLabel = row.runtimeMode || "";
-        const metaParts = [runtimeLabel, skillLabel].filter(Boolean);
+        const metaParts = [
+          formatTemporalWorkflowType(row.workflowType),
+          row.repository || "",
+          row.integration || "",
+        ].filter(Boolean);
         const metaText = metaParts.join(" · ") || "Task";
         const linkTarget = row.link ? escapeHtml(row.link) : "#";
-        const titleBase = row.title ? row.title : "Queue Job";
-        const titleWithId = row.id ? `${titleBase} · ${row.id}` : titleBase;
-        const rawStatus = String(row.rawStatus || "").trim() || "-";
+        const titleBase = row.title ? row.title : "Task";
+        const idLabel = shortenIdentifier(row.id || row.taskId || "", { leading: 12, trailing: 8 });
         const statusField = `
           <div>
             <dt>Status</dt>
             <dd>
               <span class="queue-card-status-field">
                 ${statusBadge(row.source, row.rawStatus)}
-                <span class="queue-card-status-raw small">${escapeHtml(rawStatus)}</span>
+                ${row.waitingReason ? `<span class="queue-card-status-raw small">${escapeHtml(row.waitingReason)}</span>` : ""}
               </span>
             </dd>
           </div>
@@ -2114,10 +2225,11 @@
           <li class="queue-card">
             <div class="queue-card-header">
               <div>
-                <a href="${linkTarget}" class="queue-card-title">${escapeHtml(titleWithId)}</a>
+                <a href="${linkTarget}" class="queue-card-title">${escapeHtml(titleBase)}</a>
                 <p class="queue-card-meta">${escapeHtml(metaText)}</p>
               </div>
             </div>
+            <div class="queue-card-id small">${escapeHtml(idLabel)}</div>
             <dl class="queue-card-fields">
               ${statusField}
               ${fieldItems}
@@ -2457,41 +2569,31 @@
     return `<div class="proposal-action-feedback">${content}</div>`;
   }
 
-  // Queue metadata for table columns and card field rows is centralized here.
-  // Card status remains a fixed leading row in renderTaskCards so mobile keeps
-  // status first regardless of future taskFieldDefinitions ordering. When
-  // expanding queue metadata, update docs/TaskUiQueue.md ("Extending queue
-  // fields") and add tests that exercise the new label/value pairs.
+  // Task list metadata shared by desktop and mobile layouts is centralized here.
   const taskFieldDefinitions = [
+    {
+      key: "workflowType",
+      label: "Workflow",
+      render: (row) => renderListPill(formatTemporalWorkflowType(row.workflowType), "neutral"),
+      tableSection: "primary",
+    },
     {
       key: "runtimeMode",
       label: "Runtime",
-      render: (row) => renderRuntime(row.runtimeMode),
+      render: (row) => renderListPill(formatRuntimeLabel(row.runtimeMode), "neutral"),
       tableSection: "primary",
-    },
-    {
-      key: "skillId",
-      label: "Skill",
-      render: (row) => escapeHtml(row.skillId || "-"),
-      tableSection: "primary",
-    },
-    {
-      key: "scheduledFor",
-      label: "Scheduled",
-      render: (row) => escapeHtml(formatTimestamp(row.scheduledFor || row.createdAt)),
-      tableSection: "timeline",
     },
     {
       key: "startedAt",
       label: "Started",
-      render: (row) => escapeHtml(formatTimestamp(row.startedAt)),
-      tableSection: "timeline",
+      render: (row) => renderRelativeTimestamp(row.startedAt || row.scheduledFor || row.createdAt),
+      tableSection: "primary",
     },
     {
-      key: "finishedAt",
-      label: "Finished",
-      render: (row) => escapeHtml(formatTimestamp(row.finishedAt)),
-      tableSection: "timeline",
+      key: "updatedAt",
+      label: "Updated",
+      render: (row) => renderRelativeTimestamp(row.updatedAt || row.closedAt || row.finishedAt),
+      tableSection: "primary",
     },
   ];
 
@@ -3325,7 +3427,14 @@
     });
   }
 
-  const TIMESTAMP_SORT_FIELDS = new Set(["scheduledFor", "createdAt", "startedAt", "finishedAt"]);
+  const TIMESTAMP_SORT_FIELDS = new Set([
+    "scheduledFor",
+    "createdAt",
+    "startedAt",
+    "finishedAt",
+    "updatedAt",
+    "closedAt",
+  ]);
 
   function sortRowsByColumn(rows, field, direction) {
     const dir = direction === "asc" ? 1 : -1;
@@ -3523,14 +3632,14 @@
     );
 
     const filterState = {
+      searchText: String(initialQuery.get("search") || "").trim().toLowerCase(),
       runtime: initialFilterRuntime,
       skill: String(initialQuery.get("skill") || "").trim().toLowerCase(),
       stageStatus: String(initialQuery.get("stageStatus") || "").trim().toLowerCase(),
       publishMode: String(initialQuery.get("publishMode") || "").trim().toLowerCase(),
-      source: allowedSources.includes(initialSource) ? initialSource : "",
+      source: allowedSources.includes(initialSource) ? initialSource : "temporal",
       workflowType: String(initialQuery.get("workflowType") || "").trim(),
       temporalState: String(initialQuery.get("state") || "").trim().toLowerCase(),
-      entry: String(initialQuery.get("entry") || "").trim().toLowerCase(),
       ownerType: String(initialQuery.get("ownerType") || "").trim().toLowerCase(),
       ownerId: String(initialQuery.get("ownerId") || "").trim(),
       repository: String(initialQuery.get("repo") || "").trim(),
@@ -3559,7 +3668,7 @@
       pageEnd: 0,
     };
     let stableListOrderIndex = new Map();
-    let columnSort = { field: "scheduledFor", direction: "desc" };
+    let columnSort = { field: "updatedAt", direction: "desc" };
     let pageActive = true;
     registerDisposer(() => {
       pageActive = false;
@@ -3568,6 +3677,7 @@
     function syncListQueryParams() {
       const params = new URLSearchParams(window.location.search || "");
       const filterEntries = [
+        ["search", filterState.searchText],
         ["source", filterState.source],
         ["filterRuntime", filterState.runtime],
         ["skill", filterState.skill],
@@ -3575,7 +3685,6 @@
         ["publishMode", filterState.publishMode],
         ["workflowType", filterState.workflowType],
         ["state", filterState.temporalState],
-        ["entry", filterState.entry],
         ["ownerType", filterState.ownerType],
         ["ownerId", filterState.ownerId],
         ["repo", filterState.repository],
@@ -3617,6 +3726,24 @@
           }
         }
         if (filterState.source === "temporal") {
+          if (filterState.searchText) {
+            const haystack = [
+              row.id,
+              row.taskId,
+              row.title,
+              row.summary,
+              row.workflowType,
+              row.repository,
+              row.integration,
+              row.runtimeMode,
+              row.skillId,
+            ]
+              .map((value) => String(value || "").trim().toLowerCase())
+              .join(" ");
+            if (!haystack.includes(filterState.searchText)) {
+              return false;
+            }
+          }
           if (filterState.workflowType) {
             const rowWorkflowType = String(row.workflowType || "").trim();
             if (rowWorkflowType !== filterState.workflowType) {
@@ -3629,9 +3756,21 @@
               return false;
             }
           }
-          if (filterState.entry) {
-            const rowEntry = String(row.entry || "").trim().toLowerCase();
-            if (rowEntry !== filterState.entry) {
+          if (filterState.runtime) {
+            const rowRuntime = String(row.runtimeMode || "").trim().toLowerCase();
+            if (rowRuntime !== filterState.runtime) {
+              return false;
+            }
+          }
+          if (filterState.repository) {
+            const rowRepo = String(row.repository || "").trim().toLowerCase();
+            if (!rowRepo.includes(filterState.repository.toLowerCase())) {
+              return false;
+            }
+          }
+          if (filterState.integration) {
+            const rowIntegration = String(row.integration || "").trim().toLowerCase();
+            if (!rowIntegration.includes(filterState.integration.toLowerCase())) {
               return false;
             }
           }
@@ -3674,87 +3813,88 @@
     }
 
     function renderQueueFilters() {
-      const sourceOptions = [
-        ["", "All sources"],
-        ["queue", "Queue"],
-        ...(temporalListEnabled ? [["temporal", "Temporal"]] : []),
-      ]
-        .map(
-          ([value, label]) =>
-            `<option value="${escapeHtml(value)}" ${filterState.source === value ? "selected" : ""
-            }>${escapeHtml(label)}</option>`,
-        )
-        .join("");
-      const pageSizeOptions = QUEUE_PAGE_SIZE_OPTIONS.map(
-        (value) =>
-          `<option value="${escapeHtml(value)}" ${paginationState.limit === value ? "selected" : ""
-          }>${escapeHtml(value)}</option>`,
-      ).join("");
       if (filterState.source === "temporal") {
         const workflowTypeOptions = ["MoonMind.Run", "MoonMind.ManifestIngest"]
           .map(
             (value) =>
               `<option value="${escapeHtml(value)}" ${filterState.workflowType === value ? "selected" : ""
-              }>${escapeHtml(value)}</option>`,
+              }>${escapeHtml(formatTemporalWorkflowType(value))}</option>`,
           )
           .join("");
-        const rawStateOptions = [
-          "initializing",
-          "planning",
-          "executing",
-          "awaiting_external",
-          "finalizing",
-          "succeeded",
-          "failed",
-          "canceled",
+        const stateOptions = [
+          ["scheduled", "Scheduled"],
+          ["initializing", "Initializing"],
+          ["planning", "Planning"],
+          ["executing", "Running"],
+          ["awaiting_external", "Awaiting action"],
+          ["finalizing", "Finalizing"],
+          ["completed", "Completed"],
+          ["failed", "Failed"],
+          ["canceled", "Canceled"],
         ]
           .map(
-            (value) =>
+            ([value, label]) =>
               `<option value="${escapeHtml(value)}" ${filterState.temporalState === value ? "selected" : ""
-              }>${escapeHtml(value)}</option>`,
+              }>${escapeHtml(label)}</option>`,
           )
           .join("");
-        const entryOptions = ["run", "manifest"]
-          .map(
-            (value) =>
-              `<option value="${escapeHtml(value)}" ${filterState.entry === value ? "selected" : ""
-              }>${escapeHtml(value)}</option>`,
-          )
-          .join("");
+        const runtimeOptions = renderRuntimeOptions(supportedTaskRuntimes, filterState.runtime);
+        const advancedOpen =
+          filterState.repository ||
+          filterState.integration ||
+          filterState.ownerType ||
+          filterState.ownerId;
         return `
-          <form id="queue-filter-form">
-            <div class="grid-2">
-              <label>Source
-                <select name="source">
-                  ${sourceOptions}
-                </select>
+          <form id="queue-filter-form" class="task-list-filters">
+            <div class="task-list-filter-primary">
+              <label class="task-list-filter-search">Search
+                <input name="searchText" placeholder="Title, workflow ID, repo, runtime..." value="${escapeHtml(
+          filterState.searchText,
+        )}" />
               </label>
-              <label>Page Size
-                <select name="pageSize">
-                  ${pageSizeOptions}
-                </select>
-              </label>
-            </div>
-            <div class="grid-2">
-              <label>Workflow Type
+              <label>Workflow
                 <select name="workflowType">
-                  <option value="">(all)</option>
+                  <option value="">All workflows</option>
                   ${workflowTypeOptions}
                 </select>
               </label>
-              <label>Temporal State
+              <label>Status
                 <select name="temporalState">
-                  <option value="">(all)</option>
-                  ${rawStateOptions}
+                  <option value="">All statuses</option>
+                  ${stateOptions}
+                </select>
+              </label>
+              <label>Runtime
+                <select name="runtime">
+                  <option value="">All runtimes</option>
+                  ${runtimeOptions}
                 </select>
               </label>
             </div>
-            <label>Entry
-              <select name="entry">
-                <option value="">(all)</option>
-                ${entryOptions}
-              </select>
-            </label>
+            <details class="task-list-advanced-filters" ${advancedOpen ? "open" : ""}>
+              <summary>Advanced filters</summary>
+              <div class="grid-2">
+                <label>Repository
+                  <input name="repository" placeholder="owner/repo" value="${escapeHtml(
+          filterState.repository,
+        )}" />
+                </label>
+                <label>Integration
+                  <input name="integration" placeholder="github, jira, ..." value="${escapeHtml(
+          filterState.integration,
+        )}" />
+                </label>
+                ${filterState.ownerType || filterState.ownerId
+            ? `<label>Owner Type
+                  <input name="ownerType" value="${escapeHtml(filterState.ownerType)}" />
+                </label>
+                <label>Owner ID
+                  <input name="ownerId" value="${escapeHtml(filterState.ownerId)}" />
+                </label>`
+            : ""
+          }
+              </div>
+            </details>
           </form>
         `;
       }
@@ -3779,14 +3919,8 @@
             }>${escapeHtml(mode)}</option>`,
         )
         .join("");
-
       return `
         <form id="queue-filter-form">
-          <label>Source
-            <select name="source">
-              ${sourceOptions}
-            </select>
-          </label>
           <div class="grid-2">
             <label>Runtime
               <select name="runtime">
@@ -3807,18 +3941,13 @@
                 ${stageStatusOptions}
               </select>
             </label>
-            <label>Page Size
-              <select name="pageSize">
-                ${pageSizeOptions}
+            <label>Publish Mode
+              <select name="publishMode">
+                <option value="">(all)</option>
+                ${publishOptions}
               </select>
             </label>
           </div>
-          <label>Publish Mode
-            <select name="publishMode">
-              <option value="">(all)</option>
-              ${publishOptions}
-            </select>
-          </label>
         </form>
       `;
     }
@@ -3829,7 +3958,12 @@
       const showingRange = paginationState.pageEnd > 0
         ? `${paginationState.pageStart}-${paginationState.pageEnd}`
         : "0";
-      
+      const pageSizeOptions = QUEUE_PAGE_SIZE_OPTIONS.map(
+        (value) =>
+          `<option value="${escapeHtml(value)}" ${paginationState.limit === value ? "selected" : ""
+          }>${escapeHtml(value)}</option>`,
+      ).join("");
+
       let totalCountInfo = "";
       if (filterState.source === "temporal" && typeof currentTemporalCount === "number") {
         const modeLabel = currentTemporalCountMode && currentTemporalCountMode !== "exact" 
@@ -3839,20 +3973,28 @@
       }
 
       return `
-        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; margin-bottom: 0.75rem;">
-          <div style="font-size: 0.85rem; color: rgba(255, 255, 255, 0.7);">
-            <strong style="color: rgba(255, 255, 255, 0.95); font-weight: 500;">Page ${escapeHtml(page)}</strong>
-            <span style="margin: 0 0.5rem; opacity: 0.3;">|</span>
+        <div class="task-list-results-toolbar">
+          <div class="task-list-results-meta">
+            <strong>Page ${escapeHtml(page)}</strong>
+            <span class="task-list-results-separator">|</span>
             Showing ${escapeHtml(showingRange)}${escapeHtml(totalCountInfo)} tasks
-            ${filteredRows.length !== rows.length ? `<span style="opacity: 0.8; margin-left: 0.25rem;">(${escapeHtml(filteredRows.length)} filtered on page)</span>` : ""}
+            ${filteredRows.length !== rows.length
+          ? `<span class="task-list-filtered-count">(${escapeHtml(filteredRows.length)} visible on this page)</span>`
+          : ""
+        }
           </div>
-          <div style="display: flex; gap: 0.4rem;">
+          <div class="task-list-results-controls">
+            <label class="task-list-page-size">Rows
+              <select name="pageSize">
+                ${pageSizeOptions}
+              </select>
+            </label>
             <button type="button" class="secondary" title="Previous page" data-queue-page-prev ${
               paginationState.cursorStack.length === 0 || !hasRows ? "disabled" : ""
-            } style="padding: 0.2rem 0.6rem; min-width: unset; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
+            }"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
             <button type="button" class="secondary" title="Next page" data-queue-page-next ${
               paginationState.hasMore ? "" : "disabled"
-            } style="padding: 0.2rem 0.6rem; min-width: unset; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg></button>
+            }"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg></button>
           </div>
         </div>
       `;
@@ -3892,12 +4034,9 @@
       const telemetryHtml =
         filterState.source === "temporal" ? "" : renderTelemetrySummary(telemetryPayload);
       const paginationHtml = renderQueuePaginationSummary(rows, filteredRows);
-      const subtitle =
-        filterState.source === "temporal"
-          ? "Temporal-backed tasks with exact Temporal pagination."
-          : temporalListEnabled
-            ? `Tasks ordered by recency.`
-            : `Tasks ordered by creation time.`;
+      const subtitle = temporalListEnabled
+        ? `Tasks ordered by recency.`
+        : `Tasks ordered by creation time.`;
       setView(
         "Tasks List",
         subtitle,
@@ -3935,35 +4074,40 @@
       if (!filterForm) {
         return;
       }
+      let searchTimer = null;
+      const searchField = filterForm.elements.namedItem("searchText");
       const runtimeField = filterForm.elements.namedItem("runtime");
       const skillField = filterForm.elements.namedItem("skill");
       const stageField = filterForm.elements.namedItem("stageStatus");
       const publishField = filterForm.elements.namedItem("publishMode");
-      const sourceField = filterForm.elements.namedItem("source");
       const workflowTypeField = filterForm.elements.namedItem("workflowType");
       const temporalStateField = filterForm.elements.namedItem("temporalState");
-      const entryField = filterForm.elements.namedItem("entry");
+      const repositoryField = filterForm.elements.namedItem("repository");
+      const integrationField = filterForm.elements.namedItem("integration");
+      const ownerTypeField = filterForm.elements.namedItem("ownerType");
+      const ownerIdField = filterForm.elements.namedItem("ownerId");
       const pageSizeField = filterForm.elements.namedItem("pageSize");
       const prevButtons = root.querySelectorAll("[data-queue-page-prev]");
       const nextButtons = root.querySelectorAll("[data-queue-page-next]");
 
-      if (sourceField) {
-        sourceField.addEventListener("change", () => {
-          const nextSource = String(sourceField.value || "").trim().toLowerCase();
-          filterState.source = allowedSources.includes(nextSource) ? nextSource : "";
-          resetPaginationToFirstPage();
-          load().catch((error) => {
-            console.error("queue source filter update failed", error);
-          });
+      if (searchField) {
+        searchField.addEventListener("input", () => {
+          if (searchTimer !== null) {
+            clearTimeout(searchTimer);
+          }
+          searchTimer = setTimeout(() => {
+            searchTimer = null;
+            filterState.searchText = String(searchField.value || "").trim().toLowerCase();
+            resetPaginationToFirstPage();
+            renderQueueList(rows);
+          }, 120);
         });
       }
       if (runtimeField) {
         runtimeField.addEventListener("change", () => {
           filterState.runtime = normalizeTaskRuntimeInput(runtimeField.value);
           resetPaginationToFirstPage();
-          load().catch((error) => {
-            console.error("queue runtime filter update failed", error);
-          });
+          renderQueueList(rows);
         });
       }
       if (skillField) {
@@ -4011,12 +4155,39 @@
           });
         });
       }
-      if (entryField) {
-        entryField.addEventListener("change", () => {
-          filterState.entry = String(entryField.value || "").trim().toLowerCase();
+      if (repositoryField) {
+        repositoryField.addEventListener("change", () => {
+          filterState.repository = String(repositoryField.value || "").trim();
           resetPaginationToFirstPage();
           load().catch((error) => {
-            console.error("temporal entry filter update failed", error);
+            console.error("temporal repository filter update failed", error);
+          });
+        });
+      }
+      if (integrationField) {
+        integrationField.addEventListener("change", () => {
+          filterState.integration = String(integrationField.value || "").trim();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("temporal integration filter update failed", error);
+          });
+        });
+      }
+      if (ownerTypeField) {
+        ownerTypeField.addEventListener("change", () => {
+          filterState.ownerType = String(ownerTypeField.value || "").trim().toLowerCase();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("temporal owner type filter update failed", error);
+          });
+        });
+      }
+      if (ownerIdField) {
+        ownerIdField.addEventListener("change", () => {
+          filterState.ownerId = String(ownerIdField.value || "").trim();
+          resetPaginationToFirstPage();
+          load().catch((error) => {
+            console.error("temporal owner id filter update failed", error);
           });
         });
       }
@@ -4123,9 +4294,6 @@
       }
       if (filterState.temporalState) {
         params.set("state", filterState.temporalState);
-      }
-      if (filterState.entry) {
-        params.set("entry", filterState.entry);
       }
       if (filterState.ownerType) {
         params.set("ownerType", filterState.ownerType);
@@ -4626,7 +4794,7 @@
       : "";
 
     setView(
-      isEditMode ? "Edit Queue Task" : "Submit Queue Task",
+      isEditMode ? "Edit Queue Task" : "Create Task",
       isEditMode ? `Editing queued task ${editJobId}.` : "",
       `
       <form id="queue-submit-form" class="queue-submit-form">
@@ -4639,9 +4807,9 @@
             ${runtimeOptions}
           </select>
         </label>
-        <div id="queue-auth-profile-wrap" class="hidden">
-          <label>Auth profile
-            <select name="authProfile">
+        <div id="queue-provider-profile-wrap" class="hidden">
+          <label>Provider profile
+            <select name="providerProfile">
               <option value="">Default (system chooses)</option>
             </select>
           </label>
@@ -7275,7 +7443,6 @@
           artifactId ||
           "artifact";
         const size = pick(artifact, "size_bytes", "sizeBytes");
-        const contentType = pick(artifact, "content_type", "contentType") || "-";
         const rawAccessAllowed = Boolean(pick(artifact, "raw_access_allowed", "rawAccessAllowed"));
         const readableArtifactId = previewArtifactId || defaultReadArtifactId || artifactId;
         const actionLabel = previewArtifactId ? "Preview" : "Download";
@@ -7292,7 +7459,6 @@
           <tr>
             <td><code>${escapeHtml(label)}</code></td>
             <td>${escapeHtml(String(size ?? "-"))}</td>
-            <td>${escapeHtml(String(contentType))}</td>
             <td>${escapeHtml(String(pick(artifact, "status") || "-"))}</td>
             <td>${action}</td>
           </tr>
@@ -7408,30 +7574,83 @@
       debugFields,
       liveLogsAvailable,
     } = detail;
+    const workflowType = formatTemporalWorkflowType(pick(execution, "workflowType"));
+    const runtimeLabel = formatRuntimeLabel(pick(execution, "targetRuntime"));
+    const summaryText = deriveTemporalSummary(execution) || "-";
+    const durationText = formatDurationFromTimestamps(
+      pick(execution, "startedAt"),
+      pick(execution, "closedAt"),
+    );
+    const metadataCards = [
+      {
+        label: "Workflow ID",
+        value: `<code>${escapeHtml(latestWorkflowId)}</code>`,
+      },
+      latestRunId
+        ? {
+          label: "Latest Run",
+          value: `<code>${escapeHtml(latestRunId)}</code>`,
+        }
+        : null,
+      pick(execution, "namespace")
+        ? { label: "Namespace", value: escapeHtml(String(pick(execution, "namespace"))) }
+        : null,
+      pick(execution, "repository")
+        ? { label: "Repository", value: escapeHtml(String(pick(execution, "repository"))) }
+        : null,
+      pick(execution, "integration")
+        ? { label: "Integration", value: escapeHtml(String(pick(execution, "integration"))) }
+        : null,
+      pick(execution, "ownerId")
+        ? { label: "Owner", value: escapeHtml(String(pick(execution, "ownerId"))) }
+        : null,
+      pick(execution, "scheduledFor")
+        ? { label: "Scheduled For", value: escapeHtml(formatTimestamp(pick(execution, "scheduledFor"))) }
+        : null,
+      pick(execution, "closedAt")
+        ? { label: "Closed", value: escapeHtml(formatTimestamp(pick(execution, "closedAt"))) }
+        : null,
+    ]
+      .filter(Boolean)
+      .map(
+        (entry) => `
+          <div class="card task-detail-meta-card">
+            <strong>${escapeHtml(entry.label)}</strong>
+            <div>${entry.value}</div>
+          </div>
+        `,
+      )
+      .join("");
     return `
       ${noticeHtml}
-      <div class="grid-2">
-        <div class="card"><strong>Status:</strong> ${statusBadge("temporal", pick(execution, "status", "state"))}</div>
-        <div class="card"><strong>Source:</strong> Temporal</div>
-        <div class="card"><strong>Title:</strong> ${escapeHtml(detailTitle)}</div>
-        <div class="card"><strong>Workflow Type:</strong> ${escapeHtml(String(pick(execution, "workflowType") || "-"))}</div>
-        ${pick(execution, "targetRuntime") ? `<div class="card"><strong>Runtime:</strong> ${escapeHtml(formatRuntimeLabel(pick(execution, "targetRuntime")))}</div>` : ""}
-        ${pick(execution, "model") ? `<div class="card"><strong>Model:</strong> <code>${escapeHtml(String(pick(execution, "model")))}</code></div>` : ""}
-        ${pick(execution, "effort") ? `<div class="card"><strong>Effort:</strong> ${escapeHtml(String(pick(execution, "effort")))}</div>` : ""}
-        ${pick(execution, "startingBranch") ? `<div class="card"><strong>Starting Branch:</strong> <code>${escapeHtml(String(pick(execution, "startingBranch")))}</code></div>` : ""}
-        ${pick(execution, "targetBranch") ? `<div class="card"><strong>Target Branch:</strong> <code>${escapeHtml(String(pick(execution, "targetBranch")))}</code></div>` : ""}
-        ${pick(execution, "publishMode") ? `<div class="card"><strong>Publish Mode:</strong> <code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div>` : ""}
-        ${pick(execution, "scheduledFor") ? `<div class="card"><strong>Scheduled For:</strong> ${escapeHtml(formatTimestamp(pick(execution, "scheduledFor")))}</div>` : ""}
-        <div class="card"><strong>Created:</strong> ${escapeHtml(formatTimestamp(pick(execution, "createdAt")))}</div>
-        <div class="card"><strong>Latest Run:</strong> <code>${escapeHtml(latestRunId || "-")}</code></div>
-        <div class="card"><strong>Started:</strong> ${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div>
-        <div class="card"><strong>Updated:</strong> ${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div>
-        <div class="card"><strong>Closed:</strong> ${escapeHtml(formatTimestamp(pick(execution, "closedAt")))}</div>
-        <div class="card"><strong>Workflow ID:</strong> <code>${escapeHtml(latestWorkflowId)}</code></div>
+      <section class="task-detail-hero">
+        <div>
+          <p class="eyebrow">Task Details</p>
+          <h3 class="task-detail-heading">${escapeHtml(detailTitle)}</h3>
+          <p class="task-detail-summary">${escapeHtml(summaryText)}</p>
+        </div>
+        <div class="task-detail-hero-status">${statusBadge("temporal", pick(execution, "status", "state"))}</div>
+      </section>
+      <div class="task-detail-facts-grid">
+        <div class="card task-detail-fact-card"><strong>Workflow</strong><div>${escapeHtml(workflowType)}</div></div>
+        ${runtimeLabel ? `<div class="card task-detail-fact-card"><strong>Runtime</strong><div>${escapeHtml(runtimeLabel)}</div></div>` : ""}
+        ${pick(execution, "model") ? `<div class="card task-detail-fact-card"><strong>Model</strong><div><code>${escapeHtml(String(pick(execution, "model")))}</code></div></div>` : ""}
+        ${pick(execution, "effort") ? `<div class="card task-detail-fact-card"><strong>Effort</strong><div>${escapeHtml(String(pick(execution, "effort")))}</div></div>` : ""}
+        <div class="card task-detail-fact-card"><strong>Started</strong><div>${escapeHtml(formatTimestamp(pick(execution, "startedAt")))}</div></div>
+        <div class="card task-detail-fact-card"><strong>Updated</strong><div>${escapeHtml(formatTimestamp(pick(execution, "updatedAt")))}</div></div>
+        <div class="card task-detail-fact-card"><strong>Duration</strong><div>${escapeHtml(durationText)}</div></div>
+        ${pick(execution, "publishMode") ? `<div class="card task-detail-fact-card"><strong>Publish Mode</strong><div><code>${escapeHtml(String(pick(execution, "publishMode")))}</code></div></div>` : ""}
       </div>
+      ${metadataCards
+        ? `<section>
+        <h3>Execution Metadata</h3>
+        <div class="task-detail-meta-grid">${metadataCards}</div>
+      </section>`
+        : ""
+      }
       <section>
         <h3>Summary</h3>
-        <p>${escapeHtml(deriveTemporalSummary(execution) || "-")}</p>
+        <p>${escapeHtml(summaryText)}</p>
       </section>
       ${waitingReason
         ? `<section><h3>Waiting Reason</h3><p>${escapeHtml(waitingReason)}</p></section>`
@@ -7452,9 +7671,9 @@
       <section>
         <h3>Artifacts</h3>
         <table>
-          <thead><tr><th>Artifact</th><th>Size</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
+          <thead><tr><th>Artifact</th><th>Size</th><th>Status</th><th>Action</th></tr></thead>
           <tbody>${renderTemporalArtifactRows(artifacts?.artifacts || []) ||
-      "<tr><td colspan='5' class='small'>No artifacts.</td></tr>"
+      "<tr><td colspan='4' class='small'>No artifacts.</td></tr>"
       }</tbody>
         </table>
       </section>

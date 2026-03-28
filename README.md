@@ -16,13 +16,14 @@ MoonMind is an open-source platform that orchestrates leading AI agents out of t
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. `cp .env-template .env`
-5. configure your .env with `nano .env`, `notepad .env`, or your favorite text editor
-6. run `docker compose up -d` to start the service
+4. run `docker compose up -d` to start the service
+5. open [http://localhost:5000/tasks](http://localhost:5000/tasks)
+6. add the few secrets you need for your first workload, such as a model-provider API key and GitHub PAT, through Mission Control
+7. submit a task
+
+`.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch.
 
 *Note: The local Temporal deployment defaults to the built-in `default` namespace. You can override this by setting `TEMPORAL_NAMESPACE` in your `.env` file.*
-
-Go to [http://localhost:5000/tasks](http://localhost:5000/tasks) to access Mission Control.
 
 ### Authenticate a runtime with OAuth
 
@@ -38,6 +39,7 @@ Other platforms make you rebuild agents in their SDK. MoonMind operates at a hig
 - **Managed Runtimes:** MoonMind can run Claude Code, Gemini CLI, and Codex CLI as managed workers on your own infrastructure using your existing subscriptions or API keys.
 - **Black-Box Coordination:** Even cloud-hosted agents like Jules and Codex Cloud benefit from coordination. MoonMind tracks status, injects context, and closes the feedback loop — whether you control the internals or not.
 - **Sandboxed Execution:** Runtimes run behind a Docker socket proxy with strict capability routing. File allowlists restrict modifications, and credentials are automatically sanitized from logs.
+- **Personal-use friendly defaults:** A fresh local install should boot successfully with `docker compose up -d`, then let you enter a small number of secrets in Mission Control instead of forcing enterprise-only secret infrastructure up front.
 
 ### 1️⃣ Orchestration Starts At One
 You don't need ten agents to benefit from a task execution system. MoonMind supercharges the planning, resiliency, and context management of even a single agent.

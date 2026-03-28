@@ -159,5 +159,5 @@ If no profile is explicitly selected, the `ProviderProfileManager` picks the nex
 ## 8. Related Documentation
 
 - [ProviderProfiles](../Security/ProviderProfiles.md) — provider profile registry, volume system, and slot management
+- [SecretsSystem](../Security/SecretsSystem.md) — canonical secrets model for `secret_ref`, encrypted managed secrets, and local-first defaults
 - [ManagedAndExternalAgentExecutionModel](../Temporal/ManagedAndExternalAgentExecutionModel.md) — execution model for managed agent runtimes
-- [SecretStore](./SecretStore.md) — vault-based secret resolution for `api_key_ref`
