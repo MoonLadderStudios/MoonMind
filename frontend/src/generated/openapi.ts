@@ -1291,6 +1291,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tasks/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Secrets Route
+         * @description Serve the React-powered secrets page.
+         */
+        get: operations["task_secrets_route_tasks_secrets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tasks": {
         parameters: {
             query?: never;
@@ -1443,26 +1463,6 @@ export interface paths {
          * @description Serve the React-powered settings page.
          */
         get: operations["task_settings_route_tasks_settings_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/tasks/secrets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Task Secrets Route
-         * @description Serve the React-powered secrets page.
-         */
-        get: operations["task_secrets_route_tasks_secrets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7961,6 +7961,26 @@ export interface operations {
             };
         };
     };
+    task_secrets_route_tasks_secrets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+        };
+    };
     task_dashboard_root_tasks_get: {
         parameters: {
             query?: never;
@@ -8102,26 +8122,6 @@ export interface operations {
         };
     };
     task_settings_route_tasks_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-        };
-    };
-    task_secrets_route_tasks_secrets_get: {
         parameters: {
             query?: never;
             header?: never;
