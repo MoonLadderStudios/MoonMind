@@ -410,3 +410,124 @@ async def test_tmate_concurrent_stdout_stderr_streaming(tmp_path: Path):
     assert stderr_artifact.exists()
     assert stdout_artifact.read_bytes() == stdout_content
     assert stderr_artifact.read_bytes() == stderr_content
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — supervisor streams concurrently (regression: deadlock prevention)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_supervisor_streams_concurrently_with_process(tmp_path: Path):
+    """Supervisor does not deadlock when the process produces large output.
+
+    This is the critical regression test for the sequential-streaming bug.
+    Before the fix, stream_and_parse was called AFTER _heartbeat_and_wait,
+    meaning the process had to fully exit before any data was consumed.
+    For output larger than the OS pipe buffer (~64KB), the subprocess
+    write-end would block indefinitely — a deadlock.
+
+    The fix runs streaming concurrently with heartbeating via asyncio.gather(),
+    ensuring pipe buffers are drained in real-time.  This test produces ~256KB
+    of output and must complete successfully within a reasonable timeout.
+    """
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    storage = _StubArtifactStorage(artifact_root)
+    store_root = tmp_path / "store"
+    store_root.mkdir()
+    store = ManagedRunStore(store_root)
+    streamer = RuntimeLogStreamer(storage)
+    supervisor = ManagedRunSupervisor(store, streamer)
+
+    run_id = "integ-large-concurrent"
+    record = ManagedRunRecord(
+        run_id=run_id,
+        agent_id="test-agent",
+        runtime_id="gemini_cli",
+        status="launching",
+        pid=0,
+        started_at=datetime.now(tz=UTC),
+    )
+    store.save(record)
+
+    # Produce ~256KB — well above the typical 64KB OS pipe buffer.
+    # A sequential-streaming supervisor would deadlock here.
+    big_output_cmd = "print('x' * 256_000)"
+    process = await asyncio.create_subprocess_exec(
+        "python3", "-c", big_output_cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    # If this hangs for more than 15 seconds it means the deadlock regressed.
+    result = await asyncio.wait_for(
+        supervisor.supervise(
+            run_id=run_id,
+            process=process,
+            timeout_seconds=60,
+        ),
+        timeout=15,
+    )
+
+    assert result.status == "completed", f"Expected completed, got {result.status}"
+    stdout_artifact = artifact_root / run_id / "stdout.log"
+    assert stdout_artifact.exists(), "stdout.log artifact was not written"
+    assert len(stdout_artifact.read_bytes()) >= 256_000
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — supervisor handles None stdout/stderr gracefully (tmate path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_supervisor_with_none_stdout_stderr_completes(tmp_path: Path):
+    """Supervisor completes gracefully when process has no piped streams.
+
+    When tmate wraps the agent process, process.stdout and process.stderr
+    may be None (the streams are not piped back to the parent process —
+    tmate captures them in the TTY session instead).
+
+    The supervisor must handle this without crashing, and should still
+    produce a diagnostics artifact summarising the run outcome.
+    """
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    storage = _StubArtifactStorage(artifact_root)
+    store_root = tmp_path / "store"
+    store_root.mkdir()
+    store = ManagedRunStore(store_root)
+    streamer = RuntimeLogStreamer(storage)
+    supervisor = ManagedRunSupervisor(store, streamer)
+
+    run_id = "integ-none-streams"
+    record = ManagedRunRecord(
+        run_id=run_id,
+        agent_id="test-agent",
+        runtime_id="gemini_cli",
+        status="launching",
+        pid=0,
+        started_at=datetime.now(tz=UTC),
+    )
+    store.save(record)
+
+    # Spawn 'true' with no PIPE — stdout/stderr will be None
+    process = await asyncio.create_subprocess_exec(
+        "true",
+        stdin=asyncio.subprocess.DEVNULL,
+        # stdout/stderr intentionally NOT piped
+    )
+    assert process.stdout is None
+    assert process.stderr is None
+
+    result = await supervisor.supervise(
+        run_id=run_id,
+        process=process,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "completed"
+    diag_artifact = artifact_root / run_id / "diagnostics.json"
+    assert diag_artifact.exists(), "diagnostics.json was not written"

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -93,54 +91,6 @@ async def test_upsert_manifest_persists_normalized_hash_and_version(
             )
             assert updated.id == record.id
             assert updated.content_hash == first_hash
-
-
-@pytest.mark.skip(reason='Queue substrate removed in Phase 3')
-async def test_submit_manifest_run_enqueues_queue_job_and_updates_registry(
-    tmp_path: Path,
-) -> None:
-    """submit_manifest_run should enqueue manifest jobs with derived payloads."""
-
-    async with manifest_db(tmp_path) as session_maker:
-        async with session_maker() as session:
-            job_id = uuid4()
-            queue_service = SimpleNamespace()
-
-            async def _create_job(**kwargs):
-                assert kwargs["job_type"] == MANIFEST_JOB_TYPE
-                payload = kwargs["payload"]
-                assert payload["manifest"]["source"]["kind"] == "registry"
-                return SimpleNamespace(
-                    id=job_id,
-                    type=MANIFEST_JOB_TYPE,
-                    status=None.QUEUED,
-                    payload={
-                        "manifestHash": "sha256:abc",
-                        "requiredCapabilities": ["manifest"],
-                    },
-                    created_at=datetime.now(UTC),
-                )
-
-            queue_service.create_job = _create_job  # type: ignore[attr-defined]
-            service = ManifestsService(session)
-
-            await service.upsert_manifest(name="demo", content=REGISTRY_MANIFEST)
-            submission = await service.submit_manifest_run(
-                name="demo",
-                action="run",
-                options={"dryRun": True},
-                user_id=uuid4(),
-            )
-
-            assert submission.source == "queue"
-            assert submission.job is not None
-            assert submission.job.id == job_id
-            record = await service.get_manifest("demo")
-            assert record is not None
-            assert record.last_run_job_id == job_id
-            assert record.last_run_source == "queue"
-            assert record.last_run_status is None  # AgentJobStatus.QUEUED.value
-
 
 async def test_submit_manifest_run_starts_temporal_execution_with_artifact_ref(
     tmp_path: Path, monkeypatch

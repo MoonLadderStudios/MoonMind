@@ -23,5 +23,70 @@
     "id": 4024206168,
     "disposition": "not-applicable",
     "rationale": "Automated PR overview from Copilot."
+  },
+  {
+    "id": 4145879438,
+    "disposition": "not-applicable",
+    "rationale": "Informational summary from Jules bot."
+  },
+  {
+    "id": 4145879874,
+    "disposition": "not-applicable",
+    "rationale": "Warning about usage limits."
+  },
+  {
+    "id": 3003650706,
+    "disposition": "addressed",
+    "rationale": "Fixed listEndpoint no-op replacement logic."
+  },
+  {
+    "id": 3003654066,
+    "disposition": "addressed",
+    "rationale": "Updated detail/update/delete endpoints to use /api/v1/provider-profiles."
+  },
+  {
+    "id": 4024139908,
+    "disposition": "not-applicable",
+    "rationale": "Review summary, not actionable code."
+  },
+  {
+    "id": 3003654082,
+    "disposition": "addressed",
+    "rationale": "Renamed queueDraftAuthProfile to queueDraftProviderProfile."
+  },
+  {
+    "id": 3003654086,
+    "disposition": "addressed",
+    "rationale": "Renamed applyQueueDraftAuthProfileOnce and refreshAuthProfileOptions."
+  },
+  {
+    "id": 3003654088,
+    "disposition": "addressed",
+    "rationale": "Fixed listEndpoint no-op replacement logic."
+  },
+  {
+    "id": 3003654091,
+    "disposition": "addressed",
+    "rationale": "Renamed data-auth-profile-form to data-provider-profile-form."
+  },
+  {
+    "id": 3003654096,
+    "disposition": "addressed",
+    "rationale": "Removed temporary artifact changes.patch file."
+  },
+  {
+    "id": 3003660230,
+    "disposition": "addressed",
+    "rationale": "Updated detail/update/delete endpoints to use /api/v1/provider-profiles."
+  },
+  {
+    "id": 3003660259,
+    "disposition": "addressed",
+    "rationale": "Fixed listEndpoint no-op replacement logic."
+  },
+  {
+    "id": 4024146765,
+    "disposition": "not-applicable",
+    "rationale": "Review summary, not actionable code."
   }
 ]

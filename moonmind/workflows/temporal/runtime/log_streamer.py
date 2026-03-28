@@ -12,6 +12,12 @@ from moonmind.workflows.temporal.runtime.output_parser import (
     RuntimeOutputParser,
 )
 
+# Read chunks of 64KB at a time.  Larger than readline()'s default 64KB
+# *per-line* limit but without any per-line restriction, so processes that
+# produce long lines (base64, JSON blobs, our large-output tests) never
+# trigger LimitOverrunError.
+_STREAM_CHUNK_SIZE = 65536
+
 
 class RuntimeLogStreamer:
     """Streams subprocess output to artifact storage and collects diagnostics."""
@@ -27,23 +33,45 @@ class RuntimeLogStreamer:
         stream_name: str,
         parser: RuntimeOutputParser | None = None,
     ) -> tuple[str, str, list[dict]]:
-        """Read an asyncio.StreamReader line by line and write to an artifact file.
+        """Read an asyncio.StreamReader in fixed-size chunks and write to an artifact file.
+
+        Uses ``reader.read(_STREAM_CHUNK_SIZE)`` instead of ``readline()`` to
+        avoid the 64KB-per-line limit imposed by asyncio's StreamReader.
+
+        When a *parser* is provided, decoded text is line-buffered before being
+        passed to ``parser.parse_stream_chunk()`` so that the parser always
+        receives complete newline-delimited lines — matching the contract
+        expected by ``NdjsonOutputParser`` and similar line-oriented parsers.
 
         Returns the storage-relative artifact reference, the decoded string content,
         and a list of structured events extracted during streaming if a parser is provided.
         """
         chunks: list[bytes] = []
         events: list[dict] = []
+        # Carry-over buffer for incomplete lines when the parser is active.
+        _line_buf: str = ""
 
         while True:
-            line = await reader.readline()
-            if not line:
+            chunk = await reader.read(_STREAM_CHUNK_SIZE)
+            if not chunk:
                 break
-            chunks.append(line)
+            chunks.append(chunk)
             if parser is not None:
-                decoded_line = line.decode("utf-8", errors="replace")
-                parsed_events = parser.parse_stream_chunk(decoded_line)
-                events.extend(parsed_events)
+                # Accumulate decoded text and split by newlines so that the
+                # parser always receives whole lines, not raw read() chunks
+                # that may straddle a newline boundary.
+                decoded_chunk = chunk.decode("utf-8", errors="replace")
+                _line_buf += decoded_chunk
+                *complete_lines, _line_buf = _line_buf.split("\n")
+                for line in complete_lines:
+                    line_with_nl = line + "\n"
+                    parsed_events = parser.parse_stream_chunk(line_with_nl)
+                    events.extend(parsed_events)
+
+        # Flush any remaining partial line to the parser (no trailing newline).
+        if parser is not None and _line_buf:
+            parsed_events = parser.parse_stream_chunk(_line_buf)
+            events.extend(parsed_events)
 
         data = b"".join(chunks)
         artifact_name = f"{stream_name}.log"
