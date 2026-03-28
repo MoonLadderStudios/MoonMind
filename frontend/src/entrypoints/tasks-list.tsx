@@ -405,7 +405,7 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
         ) : (
           <div className="overflow-x-auto w-full rounded border border-gray-200 dark:border-gray-700">
             <table className="min-w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+              <thead className="border-b border-gray-200/80 dark:border-gray-700/80 bg-transparent">
                 <tr>
                   {(
                     [
@@ -419,18 +419,27 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
                       ['startedAt', 'Started'],
                       ['closedAt', 'Finished'],
                     ] as const
-                  ).map(([field, label]) => (
-                    <th key={field} className="px-3 py-2 font-medium">
-                      <button
-                        type="button"
-                        className="hover:underline text-left font-medium text-gray-900 dark:text-gray-100"
-                        onClick={() => onHeaderClick(field)}
-                      >
-                        {label}
-                        {sortIndicator(field)}
-                      </button>
-                    </th>
-                  ))}
+                  ).map(([field, label]) => {
+                    const active = sortField === field;
+                    return (
+                      <th key={field} className="px-1.5 py-2 align-bottom first:pl-0 last:pr-0">
+                        <button
+                          type="button"
+                          className={[
+                            'w-full min-w-0 rounded-full border px-3 py-1.5 text-left text-sm font-medium backdrop-blur-sm transition',
+                            'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500',
+                            active
+                              ? 'border-violet-500 bg-violet-600/15 text-violet-950 shadow-[0_0_0_1px_rgb(139_92_246/0.35)] dark:border-violet-400 dark:bg-violet-500/20 dark:text-violet-50 dark:shadow-[0_0_0_1px_rgb(167_139_250/0.4)]'
+                              : 'border-gray-300/90 bg-white/70 text-gray-800 hover:border-violet-400 hover:bg-violet-500/10 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-100 dark:hover:border-violet-400 dark:hover:bg-violet-500/15',
+                          ].join(' ')}
+                          onClick={() => onHeaderClick(field)}
+                        >
+                          {label}
+                          {sortIndicator(field)}
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
