@@ -10068,43 +10068,6 @@
       return;
     }
 
-
-      const explicitSource = String(searchParams?.get("source") || "")
-        .trim()
-        .toLowerCase();
-      
-      const { source: resolvedSource, resolvedId } = await resolveUnifiedTaskSource(candidateTaskId);
-      if (explicitSource === "temporal" && temporalDetailEnabled) {
-        await renderTemporalDetailPage(resolvedId || candidateTaskId);
-        return;
-      }
-      if (resolvedSource === "temporal" && temporalDetailEnabled) {
-        await renderTemporalDetailPage(resolvedId);
-        return;
-      }
-      if (temporalDetailEnabled) {
-        try {
-          await fetchJson(
-            withTemporalSourceFlag(
-              endpoint(
-                temporalSourceConfig.detail || "/api/executions/{workflowId}",
-                { workflowId: candidateTaskId, id: candidateTaskId, taskId: candidateTaskId },
-              ),
-            ),
-          );
-          await renderTemporalDetailPage(candidateTaskId);
-          return;
-        } catch (_error) {
-          renderNotFound();
-          return;
-        }
-      }
-      renderNotFound();
-      return;
-    }
-
-
-
     renderNotFound();
   }
 
