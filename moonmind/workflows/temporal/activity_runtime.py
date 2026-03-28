@@ -540,8 +540,8 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
 def _iter_requested_registry_tools(
     parameters: Mapping[str, Any] | None,
 ) -> tuple[tuple[str, str], ...]:
-    selected: list[tuple[str, str]] = [("auto", "1.0")]
-    seen = {("auto", "1.0")}
+    selected: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
 
     if not isinstance(parameters, Mapping):
         return tuple(selected)
@@ -577,6 +577,12 @@ def _iter_requested_registry_tools(
             continue
         seen.add(key)
         selected.append(key)
+
+    # 'auto' is a placeholder meaning "no explicit skill selected". It should
+    # not be included in the registry as a dispatchable skill — when only 'auto'
+    # is present, the runtime should be used directly without skill dispatch.
+    if selected and all(name == "auto" for name, _ in selected):
+        selected = []
 
     return tuple(selected)
 

@@ -333,7 +333,7 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
                     "nodes": [
                         {
                             "id": "n1",
-                            "skill": {"name": "auto", "version": "1.0"},
+                            "skill": {"name": "code", "version": "1.0"},
                             "inputs": {
                                 "instructions": "Do work",
                                 "runtime": {"mode": "codex"},
@@ -353,11 +353,17 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
             ):
                 await planner.plan_generate(
                     principal="user-1",
-                    parameters={"repository": "moonladder/moonmind"},
+                    parameters={
+                        "repository": "moonladder/moonmind",
+                        "task": {
+                            "tool": {"type": "skill", "name": "code", "version": "1.0"},
+                        },
+                    },
                 )
 
 
-async def test_default_skill_registry_payload_includes_selected_task_tool():
+async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_selected():
+    """When an explicit skill is selected, 'auto' (the placeholder) must not appear in the registry."""
     payload = _default_skill_registry_payload(
         parameters={
             "task": {
@@ -376,8 +382,32 @@ async def test_default_skill_registry_payload_includes_selected_task_tool():
         for item in skills
         if isinstance(item, dict)
     }
-    assert ("auto", "1.0") in keyset
+    # 'auto' is a placeholder and must not be in the registry when explicit skills are present
+    assert ("auto", "1.0") not in keyset
     assert ("pr-resolver", "1.0") in keyset
+
+
+async def test_default_skill_registry_payload_auto_placeholder_filtered():
+    """When 'auto' is the only (placeholder) skill, it must not appear in the registry."""
+    payload = _default_skill_registry_payload(
+        parameters={
+            "task": {
+                "skill": {
+                    "name": "auto",
+                    "version": "1.0",
+                }
+            }
+        }
+    )
+    skills = payload.get("skills")
+    assert isinstance(skills, list)
+    keyset = {
+        (str(item.get("name")), str(item.get("version")))
+        for item in skills
+        if isinstance(item, dict)
+    }
+    # 'auto' is a placeholder and must not appear in the registry at all
+    assert ("auto", "1.0") not in keyset
 
 
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
