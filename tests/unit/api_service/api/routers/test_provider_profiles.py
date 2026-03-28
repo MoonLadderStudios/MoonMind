@@ -71,7 +71,7 @@ async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
 
 @pytest.mark.asyncio
 async def test_create_provider_profile(client_app: AsyncClient, _module_db):
-    """Test creating a new auth profile."""
+    """Test creating a new provider profile."""
     payload = {
         "profile_id": "new_profile",
         "runtime_id": "claude_v1",

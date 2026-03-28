@@ -314,7 +314,7 @@ class ManagedRuntimeProfile(BaseModel):
     home_path_overrides: dict[str, str] = Field(default_factory=dict, alias="homePathOverrides")
     passthrough_env_keys: list[str] = Field(default_factory=list, alias="passthroughEnvKeys")
     clear_env_keys: list[str] = Field(default_factory=list, alias="clearEnvKeys")
-    secret_refs: dict[str, Any] = Field(default_factory=dict, alias="secretRefs")
+    secret_refs: dict[str, str | dict[str, str]] = Field(default_factory=dict, alias="secretRefs")
 
     @model_validator(mode="after")
     def _validate_profile(self) -> "ManagedRuntimeProfile":

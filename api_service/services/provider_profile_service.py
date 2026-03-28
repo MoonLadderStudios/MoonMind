@@ -65,7 +65,8 @@ async def sync_provider_profile_manager(
             await temporal_client.start_workflow(
                 WORKFLOW_NAME,
                 ProviderProfileManagerInput(
-                    runtime_id=runtime_id,),
+                    runtime_id=runtime_id
+                ),
                 id=workflow_id,
                 task_queue="mm.workflow",
             )

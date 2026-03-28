@@ -602,7 +602,7 @@ class TestDBLeaseSync:
         from moonmind.workflows.temporal.workflows.provider_profile_manager import (
             DB_LEASE_PERSISTENCE_PATCH,
         )
-        assert DB_LEASE_PERSISTENCE_PATCH == "auth-profile-manager-db-lease-persistence-v1"
+        assert DB_LEASE_PERSISTENCE_PATCH == "provider-profile-manager-db-lease-persistence-v1"
 
 
 # ---------------------------------------------------------------------------

@@ -318,7 +318,7 @@ def _parse_migration_graph():
 
 import pytest
 
-@pytest.mark.skip(reason="Migrations land in Phase 2")
+@pytest.mark.xfail(reason="Migrations land in Phase 2 (tracking: migration graph validation)", strict=False)
 class TestMigrationGraph:
     """The migration graph must have exactly one head after our merge migration."""
 

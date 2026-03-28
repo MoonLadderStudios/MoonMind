@@ -5,8 +5,8 @@ own long-lived ProviderProfileManager workflow instance. The manager owns the tr
 about slot leases — which profiles have available capacity and which are in
 cooldown — and assigns slots to AgentRun workflows via Temporal Signals.
 
-Workflow ID convention: ``auth-profile-manager:<runtime_id>``
-  e.g. ``auth-profile-manager:gemini_cli``
+Workflow ID convention: ``provider-profile-manager:<runtime_id>``
+  e.g. ``provider-profile-manager:gemini_cli``
 
 Design references:
   - docs/ManagedAgents/ManagedAgentsAuthentication.md (Section 5)
@@ -30,7 +30,7 @@ WORKFLOW_TASK_QUEUE = "mm.workflow"
 ACTIVITY_TASK_QUEUE = "mm.activity.artifacts"
 
 VERIFY_LEASE_HOLDERS_PATCH = "auth-profile-manager-verify-leases-v1"
-DB_LEASE_PERSISTENCE_PATCH = "auth-profile-manager-db-lease-persistence-v1"
+DB_LEASE_PERSISTENCE_PATCH = "provider-profile-manager-db-lease-persistence-v1"
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000

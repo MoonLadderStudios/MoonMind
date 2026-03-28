@@ -2165,7 +2165,7 @@ class TemporalArtifactActivities:
         *,
         runtime_id: str,
     ) -> dict[str, Any]:
-        """List enabled auth profiles for a runtime family.
+        """List provider profiles for a runtime family for a runtime family.
 
         Returns a dict with a ``profiles`` key containing a list of profile
         dicts suitable for the ProviderProfileManager workflow.
@@ -2226,7 +2226,7 @@ class TemporalArtifactActivities:
     ) -> dict[str, Any]:
         """Ensure the ProviderProfileManager workflow is running for *runtime_id*.
 
-        Starts the singleton ``auth-profile-manager:<runtime_id>`` workflow if
+        Starts the singleton ``provider-profile-manager:<runtime_id>`` workflow if
         it is not already running.  Handles ``WorkflowAlreadyStartedError``
         gracefully so this activity is safe to call repeatedly.
         """
@@ -2238,7 +2238,7 @@ class TemporalArtifactActivities:
             WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
         )
 
-        workflow_id = f"auth-profile-manager:{runtime_id}"
+        workflow_id = f"provider-profile-manager:{runtime_id}"
         adapter = TemporalClientAdapter()
         client = await adapter.get_client()
 
@@ -2281,7 +2281,7 @@ class TemporalArtifactActivities:
             WORKFLOW_TASK_QUEUE as PROVIDER_PROFILE_MANAGER_QUEUE,
         )
 
-        workflow_id = f"auth-profile-manager:{runtime_id}"
+        workflow_id = f"provider-profile-manager:{runtime_id}"
         adapter = TemporalClientAdapter()
         client = await adapter.get_client()
 

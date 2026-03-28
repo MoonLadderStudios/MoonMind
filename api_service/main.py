@@ -483,7 +483,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
             "secret_refs": {
-                "anthropic_api_key": "MINIMAX_API_KEY"
+                "anthropic_api_key": "env://MINIMAX_API_KEY"
             },
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
@@ -583,7 +583,7 @@ async def ensure_provider_profile_managers_started():
         temporal_client = await temporal_adapter.get_client()
         
         for runtime_id in runtime_ids:
-            workflow_id = f"auth-profile-manager:{runtime_id}"
+            workflow_id = f"provider-profile-manager:{runtime_id}"
             try:
                 await temporal_client.start_workflow(
                     WORKFLOW_NAME,

@@ -93,7 +93,7 @@ def test_managed_runtime_profile_rejects_github_tokens_in_env_overrides() -> Non
         ValidationError, match="envOverrides must not contain raw credential keys"
     ):
         ManagedRuntimeProfile(
-            profileId="gemini_oprovider_profile",
+            profileId="gemini_provider_profile",
             runtimeId="gemini_cli",
             commandTemplate=["gemini"],
             envOverrides={"GH_TOKEN": "ghp-1", "GITHUB_TOKEN": "ghp-2"},
@@ -105,7 +105,7 @@ def test_managed_runtime_profile_rejects_other_sensitive_env_override_keys() -> 
         ValidationError, match="envOverrides must not contain raw credential keys"
     ):
         ManagedRuntimeProfile(
-            profileId="gemini_oprovider_profile",
+            profileId="gemini_provider_profile",
             runtimeId="gemini_cli",
             commandTemplate=["gemini"],
             envOverrides={"OPENAI_API_KEY": "secret"},
@@ -128,7 +128,7 @@ def test_managed_runtime_profile_allows_managed_launch_metadata_keys() -> None:
 
 def test_managed_runtime_profile_allows_secret_passthrough_key_names() -> None:
     profile = ManagedRuntimeProfile(
-        profileId="gemini_oprovider_profile",
+        profileId="gemini_provider_profile",
         runtimeId="gemini_cli",
         commandTemplate=["gemini"],
         passthroughEnvKeys=["gh_token", "GITHUB_TOKEN", "GH_TOKEN"],
@@ -142,7 +142,7 @@ def test_managed_runtime_profile_rejects_unsupported_secret_passthrough_keys() -
         match="passthroughEnvKeys contains unsupported key",
     ):
         ManagedRuntimeProfile(
-            profileId="gemini_oprovider_profile",
+            profileId="gemini_provider_profile",
             runtimeId="gemini_cli",
             commandTemplate=["gemini"],
             passthroughEnvKeys=["OPENAI_API_KEY"],

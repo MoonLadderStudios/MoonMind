@@ -263,7 +263,7 @@ async def oauth_session_register_profile(
 
     async with get_async_session_context() as db:
         from sqlalchemy.future import select
-        from api_service.db.models import ManagedAgentProviderProfile, ManagedAgentRateLimitPolicy, ManagedAgentAuthMode
+        from api_service.db.models import ManagedAgentProviderProfile, ManagedAgentRateLimitPolicy, ProviderCredentialSource
         from api_service.services.provider_profile_service import sync_provider_profile_manager
 
         result = await db.execute(
@@ -291,7 +291,7 @@ async def oauth_session_register_profile(
 
         profile_data = {
             "runtime_id": session_obj.runtime_id,
-            "auth_mode": ManagedAgentAuthMode.OAUTH,
+            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
             "volume_ref": session_obj.volume_ref,
             "volume_mount_path": session_obj.volume_mount_path,
             "account_label": session_obj.account_label,
