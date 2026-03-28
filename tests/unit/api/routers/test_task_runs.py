@@ -27,10 +27,11 @@ def test_user() -> User:
 @pytest.fixture
 def test_worker_auth() -> _WorkerRequestAuth:
     return _WorkerRequestAuth(
-        worker_id="test-worker-123",
         auth_source="worker_token",
-        runtime_id="test-rt",
-        profile_id="test-profile",
+        worker_id="test-worker-123",
+        allowed_repositories=(),
+        allowed_job_types=(),
+        capabilities=(),
     )
 
 
@@ -135,6 +136,16 @@ def test_report_live_session_creates_new(
     scalars_mock.first.return_value = None
     result_mock.scalars.return_value = scalars_mock
     db_mock.execute.return_value = result_mock
+    db_mock.add = MagicMock()
+
+    async def mock_refresh(obj):
+        from uuid import uuid4
+        from datetime import datetime, UTC
+        obj.id = uuid4()
+        obj.created_at = datetime.now(UTC)
+        obj.updated_at = datetime.now(UTC)
+        
+    db_mock.refresh.side_effect = mock_refresh
 
     response = test_client.post(
         f"/api/task-runs/{task_run_id}/live-session/report",
@@ -254,3 +265,116 @@ def test_heartbeat_rejects_worker_id_mismatch(
     )
 
     assert response.status_code == 403
+
+
+from unittest.mock import patch
+
+def test_get_observability_summary_returns_404_when_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/observability-summary")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_get_observability_summary_returns_200(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    
+    # Mocking the dictionary returned by record.model_dump()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"runId": str(run_id), "status": "running"}
+
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{run_id}/observability-summary")
+    
+    assert response.status_code == 200
+    assert response.json()["summary"]["runId"] == str(run_id)
+    assert response.json()["summary"]["status"] == "running"
+
+
+def test_stream_task_run_log_returns_400_for_invalid_stream(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    response = test_client.get(f"/api/task-runs/{uuid4()}/logs/invalid_stream")
+    assert response.status_code == 400
+
+
+def test_stream_task_run_log_returns_404_when_record_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=None):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+    assert response.status_code == 404
+
+
+def test_stream_task_run_log_returns_404_when_artifact_ref_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.stdout_artifact_ref = None
+    
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+        
+    assert response.status_code == 404
+    assert "artifact not found" in response.json()["detail"].lower()
+
+
+def test_stream_task_run_log_returns_404_when_file_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.stdout_artifact_ref = "test/stdout.log"
+    
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch("api_service.api.routers.task_runs.Path.exists", return_value=False):
+            response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+            
+    assert response.status_code == 404
+    assert "does not exist" in response.json()["detail"].lower()
+
+
+def test_stream_task_run_log_returns_file_response(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.stdout_artifact_ref = "test/stdout.log"
+    
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch("api_service.api.routers.task_runs.Path.exists", return_value=True):
+            with patch("api_service.api.routers.task_runs.Path.is_file", return_value=True):
+                with patch("api_service.api.routers.task_runs.FileResponse") as mock_file_response:
+                    mock_file_response.return_value = {"mock": "response"}
+                    response = test_client.get(f"/api/task-runs/{uuid4()}/logs/stdout")
+                    
+    # The FastAPI test client doesn't automatically unwrap the manual patched FileResponse 
+    # if it's not a real response object. Since FileResponse inherits from Response, FastAPI 
+    # evaluates it. If we mock FileResponse itself, it returns a dict causing a generic error
+    # Let's verify the mock was called successfully instead.
+    assert mock_file_response.called
+    assert mock_file_response.call_args[1]["media_type"] == "text/plain"
+
+
+def test_get_task_run_diagnostics_returns_404_when_missing(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.diagnostics_ref = None
+    
+    with patch("api_service.api.routers.task_runs.ManagedRunStore.load", return_value=mock_record):
+        response = test_client.get(f"/api/task-runs/{uuid4()}/diagnostics")
+        
+    assert response.status_code == 404
+    assert "artifact not found" in response.json()["detail"].lower()
+

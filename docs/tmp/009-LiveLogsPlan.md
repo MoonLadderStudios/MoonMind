@@ -104,27 +104,27 @@ Expose artifact-backed observability through MoonMind-owned backend APIs and rec
 
 ### Tasks
 
-- [ ] Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
-- [ ] Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
-- [ ] Design and implement the replacement or successor to terminal-session-style observability records.
-- [ ] Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
-- [ ] Add an observability summary endpoint for task runs.
-- [ ] Add stdout tail retrieval endpoint(s).
-- [ ] Add stderr tail retrieval endpoint(s).
-- [ ] Add merged tail retrieval endpoint(s).
-- [ ] Add diagnostics retrieval endpoint(s).
-- [ ] Add full stdout/stderr download endpoint(s).
-- [ ] Ensure API responses are stable, typed, and suitable for Mission Control consumption.
-- [ ] Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.
-- [ ] Add authorization checks for observability endpoints.
-- [ ] Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
-- [ ] Add tests for tail semantics, pagination/range behavior, and large artifacts.
+- [x] Add or update the managed run persistence model to store `stdout_artifact_ref`, `stderr_artifact_ref`, optional `merged_log_artifact_ref`, `diagnostics_ref`, `last_log_offset`, and `last_log_at`.
+- [x] Add any missing fields for `exit_code`, `failure_class`, `error_message`, and live-stream capability metadata.
+- [x] Design and implement the replacement or successor to terminal-session-style observability records.
+- [x] Deprecate use of `TaskRunLiveSession`-style fields for managed-run log viewing.
+- [x] Add an observability summary endpoint for task runs.
+- [x] Add stdout tail retrieval endpoint(s).
+- [x] Add stderr tail retrieval endpoint(s).
+- [x] Add merged tail retrieval endpoint(s).
+- [x] Add diagnostics retrieval endpoint(s).
+- [x] Add full stdout/stderr download endpoint(s).
+- [x] Ensure API responses are stable, typed, and suitable for Mission Control consumption.
+- [x] Define the API payload shape for log records, including sequence, stream, offset, timestamp, and text.  
+- [x] Add authorization checks for observability endpoints.
+- [x] Add tests for ended runs, missing artifacts, partial artifacts, and failed diagnostics generation.
+- [x] Add tests for tail semantics, pagination/range behavior, and large artifacts.
 
 ### Exit criteria
 
-- [ ] Mission Control can fetch observability metadata without relying on terminal-session endpoints.
-- [ ] Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
-- [ ] The persisted model matches the contract described in `LiveLogs.md`.
+- [x] Mission Control can fetch observability metadata without relying on terminal-session endpoints.
+- [x] Stdout, stderr, diagnostics, and merged-tail retrieval all work from MoonMind APIs.
+- [x] The persisted model matches the contract described in `LiveLogs.md`.
 
 ---
 

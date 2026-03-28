@@ -157,9 +157,10 @@ class AgentExecutionRequest(BaseModel):
         self.idempotency_key = _require_non_blank(
             self.idempotency_key, field_name="idempotencyKey"
         )
-        if self.instruction_ref is not None:
+        instruction_ref = self.instruction_ref
+        if instruction_ref is not None:
             self.instruction_ref = _require_non_blank(
-                self.instruction_ref, field_name="instructionRef"
+                instruction_ref, field_name="instructionRef"
             )
         self.input_refs = [
             _require_non_blank(item, field_name="inputRefs[]") for item in self.input_refs
@@ -241,11 +242,13 @@ class AgentRunResult(BaseModel):
         self.output_refs = [
             _require_non_blank(item, field_name="outputRefs[]") for item in self.output_refs
         ]
-        if self.diagnostics_ref is not None:
+        diagnostics_ref = self.diagnostics_ref
+        if diagnostics_ref is not None:
             self.diagnostics_ref = _require_non_blank(
-                self.diagnostics_ref, field_name="diagnosticsRef"
+                diagnostics_ref, field_name="diagnosticsRef"
             )
-        if self.summary is not None and len(self.summary) > _MAX_SUMMARY_CHARS:
+        summary = self.summary
+        if summary is not None and len(summary) > _MAX_SUMMARY_CHARS:
             raise ValueError(
                 f"summary must be <= {_MAX_SUMMARY_CHARS} characters to keep payloads compact"
             )
@@ -274,11 +277,13 @@ class ManagedAgentAuthProfile(BaseModel):
         self.profile_id = _require_non_blank(self.profile_id, field_name="profileId")
         self.runtime_id = _require_non_blank(self.runtime_id, field_name="runtimeId")
         self.auth_mode = _require_non_blank(self.auth_mode, field_name="authMode")
-        if self.volume_ref is not None:
-            self.volume_ref = _require_non_blank(self.volume_ref, field_name="volumeRef")
-        if self.account_label is not None:
+        volume_ref = self.volume_ref
+        if volume_ref is not None:
+            self.volume_ref = _require_non_blank(volume_ref, field_name="volumeRef")
+        account_label = self.account_label
+        if account_label is not None:
             self.account_label = _require_non_blank(
-                self.account_label, field_name="accountLabel"
+                account_label, field_name="accountLabel"
             )
         if _contains_sensitive_key(self.rate_limit_policy):
             raise ValueError("rateLimitPolicy must not contain raw credential keys")
@@ -364,11 +369,19 @@ class ManagedRunRecord(BaseModel):
     finished_at: datetime | None = Field(None, alias="finishedAt")
     last_heartbeat_at: datetime | None = Field(None, alias="lastHeartbeatAt")
     workspace_path: str | None = Field(None, alias="workspacePath")
+    # deprecated: use stdout_artifact_ref and stderr_artifact_ref instead
     log_artifact_ref: str | None = Field(None, alias="logArtifactRef")
+    stdout_artifact_ref: str | None = Field(None, alias="stdoutArtifactRef")
+    stderr_artifact_ref: str | None = Field(None, alias="stderrArtifactRef")
+    merged_log_artifact_ref: str | None = Field(None, alias="mergedLogArtifactRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    last_log_offset: int | None = Field(None, alias="lastLogOffset")
+    last_log_at: datetime | None = Field(None, alias="lastLogAt")
     error_message: str | None = Field(None, alias="errorMessage")
     failure_class: FailureClass | None = Field(None, alias="failureClass")
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
+    # Capabilty metadata indicating if live streaming is supported for this run
+    live_stream_capable: bool | None = Field(None, alias="liveStreamCapable")
 
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedRunRecord":
@@ -379,13 +392,22 @@ class ManagedRunRecord(BaseModel):
         )
         if self.started_at.tzinfo is None:
             self.started_at = self.started_at.replace(tzinfo=UTC)
-        if self.finished_at is not None and self.finished_at.tzinfo is None:
-            self.finished_at = self.finished_at.replace(tzinfo=UTC)
-        if (
-            self.last_heartbeat_at is not None
-            and self.last_heartbeat_at.tzinfo is None
-        ):
-            self.last_heartbeat_at = self.last_heartbeat_at.replace(tzinfo=UTC)
+        
+        finished_at = self.finished_at
+        if finished_at is not None:
+            if finished_at.tzinfo is None:
+                self.finished_at = finished_at.replace(tzinfo=UTC)
+                
+        last_heartbeat_at = self.last_heartbeat_at
+        if last_heartbeat_at is not None:
+            if last_heartbeat_at.tzinfo is None:
+                self.last_heartbeat_at = last_heartbeat_at.replace(tzinfo=UTC)
+                
+        last_log_at = self.last_log_at
+        if last_log_at is not None:
+            if last_log_at.tzinfo is None:
+                self.last_log_at = last_log_at.replace(tzinfo=UTC)
+                
         return self
 
 
