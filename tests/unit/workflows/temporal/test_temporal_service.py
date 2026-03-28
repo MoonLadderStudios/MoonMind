@@ -422,14 +422,20 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
         assert commit_calls == 1
 
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.mark.asyncio
 async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -483,7 +489,13 @@ async def test_request_rerun_uses_continue_as_new_same_workflow_id(tmp_path):
 async def test_request_rerun_allowed_for_terminal_execution(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -532,7 +544,13 @@ async def test_request_rerun_allowed_for_terminal_execution(tmp_path):
 async def test_request_rerun_falls_back_when_temporal_reports_completed(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -577,7 +595,13 @@ async def test_request_rerun_falls_back_when_temporal_reports_completed(tmp_path
 async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -613,7 +637,13 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(tmp_path
 async def test_request_rerun_clears_pause_flags_when_continuing_as_new(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -689,7 +719,13 @@ async def test_update_execution_rejects_unknown_update_name(tmp_path):
 async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -735,7 +771,13 @@ async def test_signal_pause_resume_and_external_event_transitions(tmp_path):
 async def test_signal_resume_forwards_payload_via_workflow_update(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -799,7 +841,13 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
 async def test_cancel_marks_terminal_state_and_close_status(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.ManifestIngest",
@@ -829,7 +877,13 @@ async def test_cancel_marks_terminal_state_and_close_status(tmp_path):
 async def test_forced_cancel_marks_failed_with_terminated_close_status(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -858,7 +912,13 @@ async def test_forced_cancel_marks_failed_with_terminated_close_status(tmp_path)
 async def test_request_rerun_can_override_inputs_and_parameters(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -900,7 +960,13 @@ async def test_update_inputs_major_reconfiguration_records_distinct_continue_as_
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1094,7 +1160,13 @@ async def test_configure_integration_monitoring_rejects_blank_external_operation
 async def test_ingest_integration_callback_deduplicates_provider_event_ids(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1272,7 +1344,13 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1389,7 +1467,13 @@ async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1486,7 +1570,13 @@ async def test_ghost_projection_rows_without_canonical_source_are_hidden(tmp_pat
 async def test_mark_execution_succeeded_rejects_terminal_execution(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",
@@ -1732,7 +1822,13 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
 ):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
-        service._client_adapter = AsyncMock()
+        service._client_adapter = MagicMock()
+        service._client_adapter.start_workflow = AsyncMock()
+        service._client_adapter.describe_workflow = AsyncMock()
+        service._client_adapter.update_workflow = AsyncMock()
+        service._client_adapter.signal_workflow = AsyncMock()
+        service._client_adapter.cancel_workflow = AsyncMock()
+        service._client_adapter.terminate_workflow = AsyncMock()
 
         created = await service.create_execution(
             workflow_type="MoonMind.Run",

@@ -26,7 +26,10 @@ def _make_pause_state(paused: bool):
 
 async def test_check_system_paused_returns_false_after_queue_removal():
     """check_system_paused always returns False after Phase 3.5 queue removal (stub)."""
-    session = AsyncMock()
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
     adapter = AsyncMock()
     svc = TemporalExecutionService(session, client_adapter=adapter)
 
@@ -36,7 +39,10 @@ async def test_check_system_paused_returns_false_after_queue_removal():
 
 async def test_check_system_paused_returns_false():
     """check_system_paused should return False when pause state is inactive."""
-    session = AsyncMock()
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
     adapter = AsyncMock()
     svc = TemporalExecutionService(session, client_adapter=adapter)
 
@@ -58,7 +64,10 @@ async def test_check_system_paused_returns_false():
 
 async def test_create_execution_blocked_when_paused():
     """create_execution should raise TemporalExecutionValidationError when system is paused."""
-    session = AsyncMock()
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
     adapter = AsyncMock()
     svc = TemporalExecutionService(session, client_adapter=adapter)
 
@@ -79,7 +88,10 @@ async def test_create_execution_blocked_when_paused():
 
 async def test_create_execution_allowed_when_not_paused():
     """create_execution should NOT raise the pause error when system is not paused."""
-    session = AsyncMock()
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
     adapter = AsyncMock()
     svc = TemporalExecutionService(session, client_adapter=adapter)
 

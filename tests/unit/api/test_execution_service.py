@@ -16,7 +16,12 @@ from moonmind.workflows.temporal.service import (
 
 @pytest.fixture
 def mock_session():
-    session = AsyncMock()
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
+    session.execute = AsyncMock()
+    session.get = AsyncMock()
     return session
 
 
