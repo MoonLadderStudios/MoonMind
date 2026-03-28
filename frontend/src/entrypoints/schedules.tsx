@@ -3,43 +3,51 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
 import { DataTable } from '../components/tables/DataTable';
 
-interface Schedule {
-  id: string;
-  name: string;
-  lastDispatchStatus: string;
-  nextRunAt: string;
-  schedule?: string;
-}
+import { z } from 'zod';
+import { BootPayload } from '../boot/parseBootPayload';
+
+const ScheduleSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  lastDispatchStatus: z.string(),
+  nextRunAt: z.string(),
+  schedule: z.string().optional(),
+});
+type Schedule = z.infer<typeof ScheduleSchema>;
 
 interface SaveSchedulePayload {
   name: string;
   schedule: string;
 }
 
-function SchedulesPage() {
+const SchedulesResponseSchema = z.object({
+  items: z.array(ScheduleSchema),
+});
+
+function SchedulesPage({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
 
-  const { data, isLoading, isError, error } = useQuery<{ items: Schedule[] }>({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['schedules'],
     queryFn: async () => {
-      const response = await fetch('/api/recurring-tasks?scope=personal');
+      const response = await fetch(`${payload.apiBase}/recurring-tasks?scope=personal`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
       }
-      return response.json();
+      return SchedulesResponseSchema.parse(await response.json());
     },
   });
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: SaveSchedulePayload) => {
+    mutationFn: async (mutationPayload: SaveSchedulePayload) => {
       const method = editingSchedule ? 'PUT' : 'POST';
-      const endpoint = editingSchedule ? `/api/recurring-tasks/${editingSchedule.id}` : '/api/recurring-tasks';
+      const endpoint = editingSchedule ? `${payload.apiBase}/recurring-tasks/${editingSchedule.id}` : `${payload.apiBase}/recurring-tasks`;
       const response = await fetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(mutationPayload),
       });
       if (!response.ok) {
         throw new Error(`Failed to save: ${response.statusText}`);

@@ -2,22 +2,30 @@ import { DataTable } from '../components/tables/DataTable';
 import { useQuery } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
 
-interface TaskRun {
-  taskId: string;
-  source: string;
-  sourceLabel: string;
-  status: string;
-}
+import { z } from 'zod';
+import { BootPayload } from '../boot/parseBootPayload';
 
-function TasksListPage() {
-  const { data, isLoading, isError, error } = useQuery<{ items: TaskRun[] }>({
+const TaskRunSchema = z.object({
+  taskId: z.string(),
+  source: z.string(),
+  sourceLabel: z.string().optional(),
+  status: z.string(),
+});
+type TaskRun = z.infer<typeof TaskRunSchema>;
+
+const TasksListResponseSchema = z.object({
+  items: z.array(TaskRunSchema),
+});
+
+function TasksListPage({ payload }: { payload: BootPayload }) {
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['tasks-list'],
     queryFn: async () => {
-      const response = await fetch('/api/executions');
+      const response = await fetch(`${payload.apiBase}/executions`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
       }
-      return response.json();
+      return TasksListResponseSchema.parse(await response.json());
     },
   });
 

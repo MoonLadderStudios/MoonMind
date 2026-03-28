@@ -1,26 +1,33 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
+import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 
-interface WorkerSnapshot {
-  system?: {
-    workersPaused?: boolean;
-    mode?: string;
-    version?: string;
-    updatedAt?: string;
-    reason?: string;
-  };
-  metrics?: {
-    queued?: number;
-    running?: number;
-    staleRunning?: number;
-    isDrained?: boolean;
-  };
-  audit?: {
-    latest?: { action?: string; mode?: string; reason?: string; createdAt?: string; }[];
-  };
-}
+const WorkerSnapshotSchema = z.object({
+  system: z.object({
+    workersPaused: z.boolean().optional(),
+    mode: z.string().optional(),
+    version: z.string().optional(),
+    updatedAt: z.string().optional(),
+    reason: z.string().optional(),
+  }).optional(),
+  metrics: z.object({
+    queued: z.number().optional(),
+    running: z.number().optional(),
+    staleRunning: z.number().optional(),
+    isDrained: z.boolean().optional(),
+  }).optional(),
+  audit: z.object({
+    latest: z.array(z.object({
+      action: z.string().optional(),
+      mode: z.string().optional(),
+      reason: z.string().optional(),
+      createdAt: z.string().optional(),
+    })).optional(),
+  }).optional(),
+});
+type WorkerSnapshot = z.infer<typeof WorkerSnapshotSchema>;
 
 interface WorkerPauseConfig {
   get: string;
@@ -48,7 +55,7 @@ function WorkersPage({ payload }: { payload: BootPayload }) {
       if (!response.ok) {
         throw new Error(`Failed to fetch worker status: ${response.statusText}`);
       }
-      return response.json();
+      return WorkerSnapshotSchema.parse(await response.json());
     },
     enabled: !!workerPauseConfig,
     refetchInterval: workerPauseConfig ? Math.max(1000, Number(workerPauseConfig.pollIntervalMs) || 5000) : false,
@@ -66,7 +73,7 @@ function WorkersPage({ payload }: { payload: BootPayload }) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.detail || errData.message || `Server error: ${response.status}`);
       }
-      return response.json();
+      return WorkerSnapshotSchema.parse(await response.json());
     },
     onSuccess: (data, variables) => {
       setNotice({ level: 'ok', text: variables.action === 'pause' ? 'Workers paused successfully.' : 'Workers resumed successfully.' });
@@ -205,7 +212,7 @@ function WorkersPage({ payload }: { payload: BootPayload }) {
               <div data-system-settings-audit>
                 {snapshot?.audit?.latest && snapshot.audit.latest.length > 0 ? (
                   <ul className="space-y-3">
-                    {snapshot.audit.latest.map((event: { action?: string; mode?: string; reason?: string; createdAt?: string; }, i: number) => (
+                    {snapshot.audit.latest.map((event, i: number) => (
                       <li key={i} className="text-sm">
                         <strong className="block">{(event?.action || '-').toUpperCase()}{event?.mode ? ` | ${event.mode.toUpperCase()}` : ''}</strong>
                         <span className="block text-gray-600">{event?.reason || '(no reason)'}</span>

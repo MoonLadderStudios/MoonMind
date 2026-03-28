@@ -1,22 +1,28 @@
 import { DataTable } from '../components/tables/DataTable';
 import { useQuery } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
+import { z } from 'zod';
+import { BootPayload } from '../boot/parseBootPayload';
 
-interface Proposal {
-  id: string;
-  title: string;
-  status: string;
-}
+const ProposalSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: z.string(),
+});
 
-function ProposalsPage() {
-  const { data, isLoading, isError, error } = useQuery<{ items: Proposal[] }>({
+const ProposalsResponseSchema = z.object({
+  items: z.array(ProposalSchema),
+});
+
+function ProposalsPage({ payload }: { payload: BootPayload }) {
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['proposals'],
     queryFn: async () => {
-      const response = await fetch('/api/proposals');
+      const response = await fetch(`${payload.apiBase}/proposals`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
       }
-      return response.json();
+      return ProposalsResponseSchema.parse(await response.json());
     },
   });
 

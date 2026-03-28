@@ -2,19 +2,22 @@ import { useQuery } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
 import { BootPayload } from '../boot/parseBootPayload';
 
-interface TaskRunDetail {
-  taskId: string;
-  source: string;
-  sourceLabel: string;
-  status: string;
-  createdAt: string;
-  temporalRunId?: string;
-  namespace?: string;
-  executionEnvironment?: string;
-}
+import { z } from 'zod';
 
-function TaskDetailPage(_props: { payload: BootPayload }) {
-  const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:proposals\/|schedules\/|manifests\/)?([^/]+)$/);
+const TaskRunDetailSchema = z.object({
+  taskId: z.string(),
+  source: z.string(),
+  sourceLabel: z.string().optional(),
+  status: z.string(),
+  createdAt: z.string(),
+  temporalRunId: z.string().optional(),
+  namespace: z.string().optional(),
+  executionEnvironment: z.string().optional(),
+});
+type TaskRunDetail = z.infer<typeof TaskRunDetailSchema>;
+
+export function TaskDetailPage(_props: { payload: BootPayload }) {
+  const taskIdMatch = window.location.pathname.match(/^\/tasks\/(?:temporal\/|proposals\/|schedules\/|manifests\/)?([^/]+)$/);
   const taskId = taskIdMatch ? taskIdMatch[1] : null;
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
 
@@ -24,11 +27,11 @@ function TaskDetailPage(_props: { payload: BootPayload }) {
       if (!encodedTaskId) {
         throw new Error('Task ID is required to fetch task details.');
       }
-      const response = await fetch(`/api/executions/${encodedTaskId}`);
+      const response = await fetch(`${_props.payload.apiBase}/executions/${encodedTaskId}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch task ${taskId}: ${response.statusText}`);
       }
-      return response.json();
+      return TaskRunDetailSchema.parse(await response.json());
     },
     enabled: !!encodedTaskId,
   });

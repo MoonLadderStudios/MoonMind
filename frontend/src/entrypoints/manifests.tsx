@@ -1,23 +1,30 @@
 import { DataTable } from '../components/tables/DataTable';
 import { useQuery } from '@tanstack/react-query';
 import { mountPage } from '../boot/mountPage';
+import { z } from 'zod';
+import { BootPayload } from '../boot/parseBootPayload';
 
-interface ManifestRun {
-  taskId: string;
-  source: string;
-  sourceLabel: string;
-  status: string;
-}
+const ManifestRunSchema = z.object({
+  taskId: z.string(),
+  source: z.string(),
+  sourceLabel: z.string().optional(),
+  status: z.string(),
+});
+type ManifestRun = z.infer<typeof ManifestRunSchema>;
 
-function ManifestsPage() {
-  const { data, isLoading, isError, error } = useQuery<{ items: ManifestRun[] }>({
+const ManifestsResponseSchema = z.object({
+  items: z.array(ManifestRunSchema),
+});
+
+function ManifestsPage({ payload }: { payload: BootPayload }) {
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['manifests'],
     queryFn: async () => {
-      const response = await fetch('/api/executions?entry=manifest&limit=200');
+      const response = await fetch(`${payload.apiBase}/executions?entry=manifest&limit=200`);
       if (!response.ok) {
         throw new Error(`Failed to fetch: ${response.statusText}`);
       }
-      return response.json();
+      return ManifestsResponseSchema.parse(await response.json());
     },
   });
 
