@@ -1,5 +1,30 @@
 [
   {
+    "id": 4146000826,
+    "disposition": "not-applicable",
+    "rationale": "Automated codex usage limit warning."
+  },
+  {
+    "id": 3003713153,
+    "disposition": "addressed",
+    "rationale": "Added JSON Artifact Format section to include prUrl in run_summary.json."
+  },
+  {
+    "id": 4024205131,
+    "disposition": "not-applicable",
+    "rationale": "Automated PR review summary."
+  },
+  {
+    "id": 3003714343,
+    "disposition": "addressed",
+    "rationale": "Replaced hardcoded PR URL with a placeholder in the examples."
+  },
+  {
+    "id": 4024206168,
+    "disposition": "not-applicable",
+    "rationale": "Automated PR overview from Copilot."
+  },
+  {
     "id": 4145879438,
     "disposition": "not-applicable",
     "rationale": "Informational summary from Jules bot."
