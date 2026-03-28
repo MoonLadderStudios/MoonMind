@@ -9,7 +9,9 @@ services:
       - "9000"
       - "9001"
     networks:
-      - local-network
+      local-network:
+        aliases:
+          - moonmind-temporal-artifacts-s3
 
   pytest:
     build:
@@ -26,7 +28,7 @@ services:
       - TEST_TYPE=unit
       - MOONMIND_FORCE_LOCAL_TESTS=1
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
-      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://minio:9000}
+      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-temporal-artifacts-s3:9000}
       - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}

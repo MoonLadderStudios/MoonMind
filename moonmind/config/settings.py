@@ -305,7 +305,11 @@ class WorkflowSettings(BaseSettings):
         validation_alias=AliasChoices(
             "TEMPORAL_ARTIFACT_S3_ENDPOINT", "MINIO_ENDPOINT"
         ),
-        description="S3-compatible endpoint used by Temporal artifact storage.",
+        description=(
+            "S3-compatible endpoint used by Temporal artifact storage. "
+            "Docker Compose sets TEMPORAL_ARTIFACT_S3_ENDPOINT to "
+            "http://moonmind-temporal-artifacts-s3:9000 to avoid ambiguous `minio` DNS."
+        ),
     )
     temporal_artifact_s3_bucket: str = Field(
         "moonmind-temporal-artifacts",
