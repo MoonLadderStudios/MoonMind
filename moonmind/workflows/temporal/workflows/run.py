@@ -238,7 +238,7 @@ class MoonMindRunWorkflow:
         artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.create")
         artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
         artifact_ref, _upload_desc = await execute_typed_activity(
-            "artifact.create",
+            artifact_create_route.activity_type,
             {
                 "principal": self._principal(),
                 "name": name,
@@ -254,7 +254,7 @@ class MoonMindRunWorkflow:
         if not artifact_id:
             raise ValueError(f"artifact.create returned no artifact_id for {name}")
         await execute_typed_activity(
-            "artifact.write_complete",
+            artifact_write_route.activity_type,
             {
                 "principal": self._principal(),
                 "artifact_id": artifact_id,
@@ -546,7 +546,7 @@ class MoonMindRunWorkflow:
             plan_payload_args["idempotency_key"] = f"{workflow.info().workflow_id}_plan_generate"
 
         plan_result = await execute_typed_activity(
-            "plan.generate",
+            plan_route.activity_type,
             plan_payload_args,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(plan_route),
@@ -574,7 +574,7 @@ class MoonMindRunWorkflow:
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await execute_typed_activity(
-            "artifact.read",
+            artifact_read_route.activity_type,
             {
                 "principal": self._principal(),
                 "artifact_ref": plan_ref,
@@ -604,7 +604,7 @@ class MoonMindRunWorkflow:
 
         if registry_snapshot_ref:
             registry_payload = await execute_typed_activity(
-                "artifact.read",
+                artifact_read_route.activity_type,
                 {
                     "principal": self._principal(),
                     "artifact_ref": registry_snapshot_ref,
@@ -799,7 +799,7 @@ class MoonMindRunWorkflow:
                     if diag_ref:
                         try:
                             diag_payload = await execute_typed_activity(
-                                "artifact.read",
+                                artifact_read_route.activity_type,
                                 {
                                     "principal": self._principal(),
                                     "artifact_ref": diag_ref,
@@ -1164,7 +1164,7 @@ class MoonMindRunWorkflow:
             try:
                 artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
                 plan_payload = await execute_typed_activity(
-                    "artifact.read",
+                    artifact_read_route.activity_type,
                     {
                         "principal": self._principal(),
                         "artifact_ref": plan_ref,
@@ -1513,7 +1513,7 @@ class MoonMindRunWorkflow:
                 generate_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_generate"
 
             candidates = await execute_typed_activity(
-                "proposal.generate",
+                proposal_route.activity_type,
                 generate_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(proposal_route),
@@ -1555,7 +1555,7 @@ class MoonMindRunWorkflow:
                 submit_payload["idempotency_key"] = f"{workflow.info().workflow_id}_proposal_submit"
 
             submit_result = await execute_typed_activity(
-                "proposal.submit",
+                submit_route.activity_type,
                 submit_payload,
                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
                 **self._execute_kwargs_for_route(submit_route),
@@ -1626,7 +1626,7 @@ class MoonMindRunWorkflow:
 
             artifact_create_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.create")
             artifact_ref, upload_desc = await execute_typed_activity(
-                "artifact.create",
+                artifact_create_route.activity_type,
                 {
                     "principal": self._principal(),
                     "name": "reports/run_summary.json",
@@ -1637,7 +1637,7 @@ class MoonMindRunWorkflow:
 
             artifact_write_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.write_complete")
             await execute_typed_activity(
-                "artifact.write_complete",
+                artifact_write_route.activity_type,
                 {
                     "principal": self._principal(),
                     "artifact_id": self._get_from_result(artifact_ref, "artifact_id") or "",
