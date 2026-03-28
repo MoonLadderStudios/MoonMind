@@ -615,14 +615,24 @@ async def main_async() -> None:
                 trace.set_tracer_provider(TracerProvider(resource=resource))
             interceptors.append(TracingInterceptor())
 
-            # Setup Prometheus metrics for worker health and queue polling behavior
+            # Setup Prometheus metrics for worker health and queue polling behavior.
+            # Bind address can be configured via MOONMIND_PROMETHEUS_BIND_ADDRESS.
+            # Default to localhost-only to avoid exposing metrics on all interfaces.
+            prometheus_bind_address = os.environ.get(
+                "MOONMIND_PROMETHEUS_BIND_ADDRESS",
+                "127.0.0.1:9090",
+            )
             runtime = Runtime(
                 telemetry=TelemetryConfig(
-                    metrics=PrometheusConfig(bind_address="0.0.0.0:9090")
+                    metrics=PrometheusConfig(bind_address=prometheus_bind_address)
                 )
             )
 
-            logger.info("OpenTelemetry tracing enabled for Temporal worker with service.name=%s.", topology.service_name)
+            logger.info(
+                "OpenTelemetry tracing enabled for Temporal worker with "
+                "service.name=%s.",
+                topology.service_name,
+            )
         except ImportError as e:
             logger.warning(f"OpenTelemetry tracing requested but failed to initialize: {e}")
 
@@ -699,28 +709,27 @@ async def main_async() -> None:
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
     def filter(self, record: logging.LogRecord) -> bool:
-        # 1. OpenTelemetry trace/span IDs
-        span = otel_trace.get_current_span()
-        if span.is_recording():
-            ctx = span.get_span_context()
-            record.trace_id = otel_trace.format_trace_id(ctx.trace_id)
-            record.span_id = otel_trace.format_span_id(ctx.span_id)
-        else:
-            record.trace_id = ""
-            record.span_id = ""
-
-        # 2. Temporal execution context
+        record.trace_id = ""
+        record.span_id = ""
         record.temporal_workflow_id = ""
         record.temporal_run_id = ""
         record.temporal_activity_id = ""
 
+        # 1. OpenTelemetry trace/span IDs
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            record.trace_id = otel_trace.format_trace_id(ctx.trace_id)
+            record.span_id = otel_trace.format_span_id(ctx.span_id)
+
+        # 2. Temporal execution context
         try:
             if temporalio.workflow.in_workflow():
                 info = temporalio.workflow.info()
                 record.temporal_workflow_id = info.workflow_id
                 record.temporal_run_id = info.run_id
         except Exception:
-            pass
+            logging.debug("Failed to retrieve Temporal workflow context", exc_info=True)
 
         try:
             if temporalio.activity.in_activity():
@@ -729,7 +738,7 @@ class OpenTelemetryLoggingFilter(logging.Filter):
                 record.temporal_run_id = info.workflow_run_id
                 record.temporal_activity_id = info.activity_id
         except Exception:
-            pass
+            logging.debug("Failed to retrieve Temporal activity context", exc_info=True)
 
         return True
 
