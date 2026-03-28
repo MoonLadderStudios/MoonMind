@@ -215,6 +215,118 @@ async def test_resolve_profile_auto_picks_first():
     assert handle.metadata["profile_id"] == "first"
 
 
+async def test_resolve_profile_selector_filters():
+    profiles = [
+        {
+            "profile_id": "prof-a",
+            "auth_mode": "api_key",
+            "provider_id": "anthropic",
+            "runtime_materialization_mode": "env",
+            "tags": ["premium", "fast"],
+            "priority": 10,
+        },
+        {
+            "profile_id": "prof-b",
+            "auth_mode": "oauth",
+            "provider_id": "anthropic",
+            "runtime_materialization_mode": "oauth",
+            "tags": ["standard"],
+            "priority": 20,
+        },
+        {
+            "profile_id": "prof-c",
+            "auth_mode": "api_key",
+            "provider_id": "openai",
+            "runtime_materialization_mode": "env",
+            "tags": ["premium"],
+            "priority": 5,
+            "available_slots": 5,
+        },
+        {
+            "profile_id": "prof-d",
+            "auth_mode": "api_key",
+            "provider_id": "openai",
+            "runtime_materialization_mode": "env",
+            "tags": ["premium"],
+            "priority": 5,
+            "available_slots": 10,
+        },
+    ]
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-selectors",
+    )
+
+    from moonmind.schemas.agent_runtime_models import (
+        AgentExecutionRequest,
+        ProfileSelector,
+    )
+
+    # 1. Match by exact providerId and runtimeMaterializationMode
+    req1 = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        correlationId="corr",
+        idempotencyKey="idem",
+        profileSelector=ProfileSelector(
+            providerId="anthropic", runtimeMaterializationMode="oauth"
+        ),
+    )
+    h1 = await adapter.start(req1)
+    assert h1.metadata["profile_id"] == "prof-b"
+
+    # 2. Match by tagsAny
+    req2 = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        correlationId="corr",
+        idempotencyKey="idem",
+        profileSelector=ProfileSelector(tagsAny=["premium"]),
+    )
+    h2 = await adapter.start(req2)
+    assert h2.metadata["profile_id"] == "prof-a"
+
+    # 3. Match by tagsAll
+    req3 = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        correlationId="corr",
+        idempotencyKey="idem",
+        profileSelector=ProfileSelector(tagsAll=["premium", "fast"]),
+    )
+    h3 = await adapter.start(req3)
+    assert h3.metadata["profile_id"] == "prof-a"
+
+    # 4. Tie-breaking by available slots when priority is equal
+    req4 = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        correlationId="corr",
+        idempotencyKey="idem",
+        profileSelector=ProfileSelector(providerId="openai"),
+    )
+    h4 = await adapter.start(req4)
+    assert h4.metadata["profile_id"] == "prof-d"
+
+    # 5. Invalid selector causing error
+    req5 = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        correlationId="corr",
+        idempotencyKey="idem",
+        profileSelector=ProfileSelector(tagsAll=["nonexistent"]),
+    )
+    with pytest.raises(
+        ProfileResolutionError, match="No eligible provider profiles"
+    ):
+        await adapter.start(req5)
+
+
+
 async def test_start_uses_passthrough_keys_for_github_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -435,7 +547,7 @@ async def test_resolve_profile_raises_when_no_profiles():
         correlationId="corr-none",
         idempotencyKey="idem-none",
     )
-    with pytest.raises(ProfileResolutionError, match="No enabled auth profiles"):
+    with pytest.raises(ProfileResolutionError, match="No enabled provider profiles"):
         await adapter.start(request)
 
 

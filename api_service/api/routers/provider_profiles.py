@@ -166,7 +166,7 @@ class ProviderProfileResponse(BaseModel):
     provider_id: str
     provider_label: Optional[str]
     default_model: Optional[str] = None
-    model_overrides: Optional[dict[str, str]] = None
+    model_overrides: dict[str, str] = Field(default_factory=dict)
     credential_source: str
     runtime_materialization_mode: str
     volume_ref: Optional[str]

@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
   "tool": "pr_resolve_finalize",
-  "timestamp": "2026-03-28T21:19:57.203618+00:00",
-  "pr_number": 1046,
-  "pr_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1046",
+  "timestamp": "2026-03-28T22:12:32.934889+00:00",
+  "pr_number": 1047,
+  "pr_url": "https://github.com/MoonLadderStudios/MoonMind/pull/1047",
   "decision": "blocked",
   "merge_outcome": "blocked",
   "status": "blocked",
@@ -11,6 +11,6 @@
   "max_attempts": 1,
   "escalations": 0,
   "next_step": "run_full_remediation",
-  "reason": "merge_conflicts",
-  "final_reason": "merge_conflicts"
+  "reason": "actionable_comments",
+  "final_reason": "actionable_comments"
 }

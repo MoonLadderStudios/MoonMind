@@ -1,113 +1,87 @@
 [
-  { "id": 4148812781, "disposition": "not-applicable", "rationale": "Quota bot message." },
-  { "id": 3005326885, "disposition": "addressed", "rationale": "Added command_template validator." },
-  { "id": 3005326887, "disposition": "addressed", "rationale": "Renamed DB_LEASE_PERSISTENCE_PATCH literal." },
-  { "id": 4026026739, "disposition": "not-applicable", "rationale": "General PR summary." },
-  { "id": 3005326891, "disposition": "addressed", "rationale": "Constrained secret_refs using Union type." },
-  { "id": 3005326892, "disposition": "addressed", "rationale": "Updated paths to relative in tasks.md." },
-  { "id": 3005326894, "disposition": "addressed", "rationale": "Fixed gemini_oprovider typo in test schema definitions." },
-  { "id": 3005332000, "disposition": "addressed", "rationale": "Used xfail instead of skip for migration graph." },
-  { "id": 3005332007, "disposition": "addressed", "rationale": "Updated ID prefix to provider-profile-manager." },
-  { "id": 3005332015, "disposition": "addressed", "rationale": "Updated startup prefix to provider-profile-manager." },
-  { "id": 3005332017, "disposition": "addressed", "rationale": "Fixed gemini_oprovider typo." },
-  { "id": 3005332018, "disposition": "addressed", "rationale": "Updated docstring." },
-  { "id": 3005332020, "disposition": "addressed", "rationale": "Removed duplicate import." },
-  { "id": 3005332022, "disposition": "not-applicable", "rationale": "Migration graph is currently a clean reset so modifying old values is acceptable." },
-  { "id": 3005332024, "disposition": "addressed", "rationale": "Updated seeded raw env to env:// locator format." },
-  { "id": 4026030481, "disposition": "not-applicable", "rationale": "Bot aggregated review comment." },
   {
-    "id": 4148799672,
+    "id": 4148890356,
     "disposition": "not-applicable",
-    "rationale": "Automated warning limits from Codex, no code changes required."
+    "rationale": "Informational bot limit message. No action required."
   },
   {
-    "id": 3005318142,
-    "disposition": "addressed",
-    "rationale": "Sorted log_streaming_enabled alphabetically in moonmind/config/settings.py."
-  },
-  {
-    "id": 3005318144,
-    "disposition": "addressed",
-    "rationale": "Updated the feature flag file path in requirements-traceability.md to reference moonmind/config/settings.py."
-  },
-  {
-    "id": 3005318150,
-    "disposition": "addressed",
-    "rationale": "Added moonmind/config/settings.py to the project structure documentation in plan.md."
-  },
-  {
-    "id": 3005318151,
-    "disposition": "addressed",
-    "rationale": "Updated the configuration path to moonmind/config/settings.py in research.md."
-  },
-  {
-    "id": 3005318155,
-    "disposition": "addressed",
-    "rationale": "Corrected the specification analysis report for issue C2 to reflect production changes."
-  },
-  {
-    "id": 3005318156,
-    "disposition": "addressed",
-    "rationale": "Fixed the configuration file path from api_service to moonmind in tasks.md."
-  },
-  {
-    "id": 4026020322,
+    "id": 4026079777,
     "disposition": "not-applicable",
-    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
+    "rationale": "High-level code review summary from bot."
   },
   {
-    "id": 3005321202,
+    "id": 3005380779,
     "disposition": "addressed",
-    "rationale": "Updated implementation surface trace to moonmind/config/settings.py."
+    "rationale": "Removed unrelated task template foreign key migration."
   },
   {
-    "id": 3005321211,
+    "id": 3005380781,
     "disposition": "addressed",
-    "rationale": "Fixed classification in specification analysis report since production changes are included."
+    "rationale": "Implemented compound tuple sorting by priority then available slots."
   },
   {
-    "id": 3005321216,
+    "id": 3005380783,
     "disposition": "addressed",
-    "rationale": "Added test_log_streaming_env_overrides coverage for log_streaming_enabled flag in tests/unit/config/test_settings.py."
+    "rationale": "Removed the accidental finalize artifact json file from git."
   },
   {
-    "id": 3005321220,
+    "id": 3005381524,
     "disposition": "addressed",
-    "rationale": "Replaced non-existent api_service config reference with moonmind config in tasks."
+    "rationale": "Exported revision and down_revision via __all__ to suppress linter."
   },
   {
-    "id": 3005321223,
+    "id": 3005381525,
     "disposition": "addressed",
-    "rationale": "Updated the unlinked data-model item in traceability to research.md."
+    "rationale": "Exported revision and down_revision via __all__ to suppress linter."
   },
   {
-    "id": 3005321225,
+    "id": 3005381526,
     "disposition": "addressed",
-    "rationale": "Removed phantom data-model.md and quickstart.md entries from project structure in plan.md."
+    "rationale": "Removed unused branch_labels migration variable."
   },
   {
-    "id": 3005321230,
+    "id": 3005381527,
     "disposition": "addressed",
-    "rationale": "Unchecked non-technical checklist constraints since the spec legitimately includes implementation details."
+    "rationale": "Removed unused depends_on migration variable."
   },
   {
-    "id": 3005321239,
+    "id": 3005384695,
     "disposition": "addressed",
-    "rationale": "Unchecked the 'Update any stale docs' exit criteria since deprecation notices will be handled later."
+    "rationale": "Removed unrelated task template foreign key migration."
   },
   {
-    "id": 3005321242,
+    "id": 3005384708,
     "disposition": "addressed",
-    "rationale": "Updated the path for the pytest validation string to use ./tools/test_unit.sh."
+    "rationale": "Renamed user-facing exception trace strings from 'auth' to 'provider' profile."
   },
   {
-    "id": 3005321254,
+    "id": 3005384713,
     "disposition": "addressed",
-    "rationale": "Updated the feature flag tracking path to moonmind in research.md."
+    "rationale": "Renamed user-facing exception trace strings from 'auth' to 'provider' profile."
   },
   {
-    "id": 4026022770,
+    "id": 3005384717,
+    "disposition": "addressed",
+    "rationale": "Implemented compound tuple sorting by priority then available slots."
+  },
+  {
+    "id": 3005384719,
+    "disposition": "addressed",
+    "rationale": "Added comprehensive suite of 5 selector tie-breaker and constraint branching unit tests."
+  },
+  {
+    "id": 3005384725,
+    "disposition": "addressed",
+    "rationale": "Updated model_overrides to required dict with default_factory instead of Optional."
+  },
+  {
+    "id": 3005384727,
+    "disposition": "addressed",
+    "rationale": "Removed the accidental finalize artifact json file from git."
+  },
+  {
+    "id": 4026082229,
     "disposition": "not-applicable",
-    "rationale": "Top-level summary review body containing no actionable feedback outside the line-item discussions."
+    "rationale": "Pull request overview summary comment from Copilot."
   }
 ]

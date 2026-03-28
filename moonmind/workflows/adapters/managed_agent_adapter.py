@@ -576,7 +576,7 @@ class ManagedAgentAdapter:
 
         if not profiles:
             raise ProfileResolutionError(
-                f"No enabled auth profiles found for runtime_id='{runtime_id}'"
+                f"No enabled provider profiles found for runtime_id='{runtime_id}'"
             )
 
         if execution_profile_ref == "auto":
@@ -587,7 +587,7 @@ class ManagedAgentAdapter:
                 if profile.get("profile_id") == execution_profile_ref:
                     return profile
             raise ProfileResolutionError(
-                f"Auth profile '{execution_profile_ref}' not found for "
+                f"Provider profile '{execution_profile_ref}' not found for "
                 f"runtime_id='{runtime_id}' (available profile count: {len(profiles)})"
             )
 
@@ -615,10 +615,16 @@ class ManagedAgentAdapter:
 
         if not eligible_profiles:
             raise ProfileResolutionError(
-                f"No eligible auth profiles found for runtime_id='{runtime_id}' matching selector constraints."
+                f"No eligible provider profiles found for runtime_id='{runtime_id}' matching selector constraints."
             )
 
-        eligible_profiles.sort(key=lambda p: p.get("priority", 100), reverse=True)
+        eligible_profiles.sort(
+            key=lambda p: (
+                p.get("priority", 100),
+                p.get("available_slots", 0),
+            ),
+            reverse=True,
+        )
         return eligible_profiles[0]
 
 
