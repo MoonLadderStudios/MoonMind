@@ -18,7 +18,7 @@ from api_service.api.schemas_task_runs import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from api_service.db.models import AgentJobLiveSessionProvider, AgentJobLiveSessionStatus, TaskRunLiveSession, User
+from api_service.db.models import AgentJobLiveSessionStatus, TaskRunLiveSession, User
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 router = APIRouter(prefix="/task-runs", tags=["task_runs"])

@@ -2,91 +2,71 @@
   "pr": {
     "baseRefName": "main",
     "headRefName": "111-live-logs-phase-2",
-    "headRefOid": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+    "headRefOid": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
     "isDraft": false,
-    "mergeStateStatus": "UNSTABLE",
-    "mergeable": "MERGEABLE",
+    "mergeStateStatus": "DIRTY",
+    "mergeable": "CONFLICTING",
     "number": 1048,
     "reviewDecision": "",
     "state": "OPEN",
     "statusCheckRollup": [
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:01:34Z",
-        "conclusion": "FAILURE",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695247477/job/69029370206",
-        "name": "test-backend",
-        "startedAt": "2026-03-28T21:59:53Z",
-        "status": "COMPLETED",
-        "workflowName": "Run Pytest Unit Tests"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:00:43Z",
+        "completedAt": "2026-03-28T22:23:57Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695246826/job/69029369288",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645807/job/69030402461",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-28T21:59:52Z",
+        "startedAt": "2026-03-28T22:23:04Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:00:38Z",
+        "completedAt": "2026-03-28T22:23:52Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695246773/job/69029369287",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645781/job/69030402452",
         "name": "Analyze (actions)",
-        "startedAt": "2026-03-28T21:59:52Z",
+        "startedAt": "2026-03-28T22:23:06Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:01:50Z",
+        "completedAt": "2026-03-28T22:24:57Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695246826/job/69029369284",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645807/job/69030402448",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-28T21:59:52Z",
+        "startedAt": "2026-03-28T22:23:06Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:01:00Z",
+        "completedAt": "2026-03-28T22:24:11Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695246773/job/69029369286",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645781/job/69030402458",
         "name": "Analyze (javascript-typescript)",
-        "startedAt": "2026-03-28T21:59:53Z",
+        "startedAt": "2026-03-28T22:23:04Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:01:11Z",
+        "completedAt": "2026-03-28T22:24:19Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695246773/job/69029369285",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695645781/job/69030402457",
         "name": "Analyze (python)",
-        "startedAt": "2026-03-28T21:59:53Z",
+        "startedAt": "2026-03-28T22:23:05Z",
         "status": "COMPLETED",
         "workflowName": "CodeQL"
       },
       {
         "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:01:21Z",
-        "conclusion": "FAILURE",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/actions/runs/23695247477/job/69029370205",
-        "name": "test-frontend",
-        "startedAt": "2026-03-28T21:59:55Z",
-        "status": "COMPLETED",
-        "workflowName": "Run Pytest Unit Tests"
-      },
-      {
-        "__typename": "CheckRun",
-        "completedAt": "2026-03-28T22:00:30Z",
+        "completedAt": "2026-03-28T22:23:44Z",
         "conclusion": "SUCCESS",
-        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69029402687",
+        "detailsUrl": "https://github.com/MoonLadderStudios/MoonMind/runs/69030431306",
         "name": "CodeQL",
-        "startedAt": "2026-03-28T22:00:28Z",
+        "startedAt": "2026-03-28T22:23:42Z",
         "status": "COMPLETED",
         "workflowName": ""
       }
@@ -99,36 +79,33 @@
     "hasFailures": true,
     "failedChecks": [
       {
-        "name": "test-backend",
-        "state": "FAILURE",
-        "url": ""
-      },
-      {
-        "name": "test-frontend",
-        "state": "FAILURE",
+        "name": "CI signal continuity",
+        "state": "MISSING_NON_SECURITY_CHECKS_ON_HEAD",
         "url": ""
       }
     ],
-    "totalCheckCount": 8,
+    "totalCheckCount": 6,
     "securityCheckCount": 6,
-    "nonSecurityCheckCount": 2,
+    "nonSecurityCheckCount": 0,
     "checkNames": [
-      "test-backend",
       "Analyze (javascript-typescript)",
       "Analyze (actions)",
       "Analyze (python)",
       "Analyze (javascript-typescript)",
       "Analyze (python)",
-      "test-frontend",
       "CodeQL"
     ],
-    "signalQuality": "ok",
-    "degradedReasons": [],
+    "signalQuality": "degraded",
+    "degradedReasons": [
+      "head_missing_non_security_checks_seen_on_previous_commit"
+    ],
     "requiredChecksKnown": false,
     "requiredChecks": [],
     "missingRequiredChecks": [],
-    "headShaVerified": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
-    "headShaNonSecurityCheckCount": 6
+    "headShaVerified": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+    "headShaNonSecurityCheckCount": 0,
+    "previousCommitSha": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+    "previousCommitNonSecurityCheckCount": 6
   },
   "commentsFetch": {
     "succeeded": true,
@@ -165,10 +142,10 @@
       "path": "api_service/api/routers/task_runs.py",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 249,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -181,10 +158,10 @@
       "path": "api_service/api/routers/task_runs.py",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 288,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -197,10 +174,10 @@
       "path": "api_service/api/routers/task_runs.py",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 240,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -213,10 +190,10 @@
       "path": "api_service/api/routers/task_runs.py",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 169,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -227,11 +204,11 @@
       "updated_at": "2026-03-28T22:01:54Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382173",
       "path": "tests/unit/api/routers/test_task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 358,
+      "line": 359,
       "side": "RIGHT",
-      "thread_resolved": false,
+      "thread_resolved": true,
       "thread_outdated": false
     },
     {
@@ -243,9 +220,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384368",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 216,
+      "line": 223,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -259,9 +236,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384375",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 228,
+      "line": 239,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -275,9 +252,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384377",
       "path": "tests/unit/api/routers/test_task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 366,
+      "line": 365,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -291,9 +268,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384379",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 293,
+      "line": 342,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -309,10 +286,10 @@
       "path": "docs/tmp/009-LiveLogsPlan.md",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 121,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -325,10 +302,10 @@
       "path": "moonmind/schemas/agent_runtime_models.py",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 383,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -339,9 +316,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384390",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 250,
+      "line": 280,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -355,9 +332,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384394",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 259,
+      "line": 289,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -373,10 +350,10 @@
       "path": "specs/111-live-logs-phase-2/tasks.md",
       "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
       "in_reply_to_id": null,
-      "line": 11,
+      "line": null,
       "side": "RIGHT",
       "thread_resolved": false,
-      "thread_outdated": false
+      "thread_outdated": true
     },
     {
       "type": "review_comment",
@@ -387,9 +364,9 @@
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384402",
       "path": "api_service/api/routers/task_runs.py",
-      "commit_id": "fc0fe1d3621d47d33d11ff799a65991c24c5b977",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
       "in_reply_to_id": null,
-      "line": 246,
+      "line": 276,
       "side": "RIGHT",
       "thread_resolved": false,
       "thread_outdated": false
@@ -403,38 +380,40 @@
       "created_at": "2026-03-28T22:04:19Z",
       "updated_at": "2026-03-28T22:04:19Z",
       "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#pullrequestreview-4026082010"
+    },
+    {
+      "type": "review_comment",
+      "id": 3005403381,
+      "user": "github-code-quality[bot]",
+      "body": "## Unused import\n\nImport of 'AgentJobLiveSessionProvider' is not used.\n\n---\n\nIn general, an unused import should be removed from the file to avoid clutter and potential confusion. This keeps the codebase clean and can slightly improve import time and readability.</p>\n<p>The single best fix here is to adjust the import statement on line 21 so that it only imports the models that are actually used in this file: <code>AgentJobLiveSessionStatus</code>, <code>TaskRunLiveSession</code>, and <code>User</code>. We will remove <code>AgentJobLiveSessionProvider</code> from the comma-separated list. No other code changes are required, and existing functionality will remain unchanged.</p>\n<p>Concretely, in <code>api_service/api/routers/task_runs.py</code>, locate the <code>from api_service.db.models import ...</code> line that currently imports four names and modify it to import only the three used names. No new methods, imports, or definitions are needed.",
+      "created_at": "2026-03-28T22:25:02Z",
+      "updated_at": "2026-03-28T22:25:03Z",
+      "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005403381",
+      "path": "api_service/api/routers/task_runs.py",
+      "commit_id": "21bfd5f53595c67afff1bf411f6d66bfefe4d9ba",
+      "in_reply_to_id": null,
+      "line": 21,
+      "side": "RIGHT",
+      "thread_resolved": false,
+      "thread_outdated": false
     }
   ],
   "commentsSummary": {
     "classificationVersion": 2,
-    "total": 18,
-    "reviewCommentCount": 15,
+    "total": 19,
+    "reviewCommentCount": 16,
     "issueCommentCount": 1,
     "reviewBodyCount": 2,
-    "actionableCommentCount": 15,
+    "actionableCommentCount": 1,
     "includeBotReviewComments": true,
     "humanCommentCount": 10,
-    "botCommentCount": 8,
+    "botCommentCount": 9,
     "hasActionableComments": true,
     "actionableCommentIds": [
-      3005382088,
-      3005382090,
-      3005382093,
-      3005382096,
-      3005382173,
-      3005384368,
-      3005384375,
-      3005384377,
-      3005384379,
-      3005384383,
-      3005384387,
-      3005384390,
-      3005384394,
-      3005384397,
-      3005384402
+      3005403381
     ],
     "nonActionableReasonCounts": {
-      "bot_comment_excluded": 3
+      "addressed_in_ledger": 18
     },
     "classifiedComments": [
       {
@@ -445,7 +424,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4026080599,
@@ -455,7 +434,7 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005382088,
@@ -463,9 +442,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382088",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 249,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005382090,
@@ -473,9 +452,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382090",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 288,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005382093,
@@ -483,9 +462,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382093",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 240,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005382096,
@@ -493,9 +472,9 @@
         "user": "gemini-code-assist[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382096",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 169,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005382173,
@@ -503,9 +482,9 @@
         "user": "github-code-quality[bot]",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005382173",
         "path": "tests/unit/api/routers/test_task_runs.py",
-        "line": 358,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 359,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384368,
@@ -513,9 +492,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384368",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 216,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 223,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384375,
@@ -523,9 +502,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384375",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 228,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 239,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384377,
@@ -533,9 +512,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384377",
         "path": "tests/unit/api/routers/test_task_runs.py",
-        "line": 366,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 365,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384379,
@@ -543,9 +522,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384379",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 293,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 342,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384383,
@@ -553,9 +532,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384383",
         "path": "docs/tmp/009-LiveLogsPlan.md",
-        "line": 121,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384387,
@@ -563,9 +542,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384387",
         "path": "moonmind/schemas/agent_runtime_models.py",
-        "line": 383,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384390,
@@ -573,9 +552,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384390",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 250,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 280,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384394,
@@ -583,9 +562,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384394",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 259,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 289,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384397,
@@ -593,9 +572,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384397",
         "path": "specs/111-live-logs-phase-2/tasks.md",
-        "line": 11,
-        "actionable": true,
-        "reason": "actionable"
+        "line": null,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 3005384402,
@@ -603,9 +582,9 @@
         "user": "Copilot",
         "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005384402",
         "path": "api_service/api/routers/task_runs.py",
-        "line": 246,
-        "actionable": true,
-        "reason": "actionable"
+        "line": 276,
+        "actionable": false,
+        "reason": "addressed_in_ledger"
       },
       {
         "id": 4026082010,
@@ -615,7 +594,17 @@
         "path": null,
         "line": null,
         "actionable": false,
-        "reason": "bot_comment_excluded"
+        "reason": "addressed_in_ledger"
+      },
+      {
+        "id": 3005403381,
+        "type": "review_comment",
+        "user": "github-code-quality[bot]",
+        "url": "https://github.com/MoonLadderStudios/MoonMind/pull/1048#discussion_r3005403381",
+        "path": "api_service/api/routers/task_runs.py",
+        "line": 21,
+        "actionable": true,
+        "reason": "actionable"
       }
     ]
   }
