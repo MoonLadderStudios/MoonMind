@@ -167,18 +167,18 @@ The `SecretRef` contract is represented as a URI string:
 
 **Schema:**
 
-- **backend**: The resolution mechanism (e.g., `env`, `db_encrypted`, `exec`).
+- **backend**: The resolution mechanism (e.g., `env`, `db`, `exec`).
 - **key**: The backend-specific locator, lookup key, or command reference.
 
 **Validation Rules:**
 
 1. **Format**: Must follow the `<backend>://<key>` URI pattern.
-2. **Backend Allowlist**: The `backend` scheme must be one of the explicitly supported types (`env`, `db_encrypted`, `exec`).
+2. **Backend Allowlist**: The `backend` scheme must be one of the explicitly supported types (`env`, `db`, `exec`).
 3. **Key Presence**: The `key` portion must not be empty.
 4. **Backend-Specific Checks**:
-   - For `db_encrypted`, `key` must map to a valid stored secret ID or label (e.g., `db://providers/anthropic/default`).
+   - For `db`, `key` must map to a valid stored secret ID or label (e.g., `db://providers/anthropic/default`).
    - For `env`, `key` must be a valid environment variable name (e.g., `env://ANTHROPIC_API_KEY`).
-   - For `exec`, `key` must map to an allowlisted command or safe script reference (e.g., `exec://op/read/op://Vault/Item/Password`).
+   - For `exec`, `key` must map to an allowlisted command or safe script reference (e.g., `exec://get-op-secret?ref=op://Vault/Item/Password`).
 5. **No Raw Secrets**: The string must not contain embedded raw API keys, passwords, or tokens.
 
 ### 5.3 SecretRef Use Sites
@@ -214,7 +214,7 @@ This is convenient but not a managed encrypted-at-rest store by itself.
 
 It should remain supported for bootstrap and break-glass cases, but it is not the preferred steady-state path for personal or production deployments once UI-managed secrets are available.
 
-### 6.2 `db_encrypted`
+### 6.2 `db`
 
 Stores MoonMind-managed secrets as encrypted application data in the MoonMind database.
 
@@ -265,7 +265,7 @@ Additional backend types may be added behind the same resolver boundary as long 
 
 ### 7.1 Managed Secret Storage
 
-For `db_encrypted`, MoonMind must encrypt secret values before persistence using authenticated encryption such as AES-GCM.
+For `db`, MoonMind must encrypt secret values before persistence using authenticated encryption such as AES-GCM.
 
 The baseline local-first root-key source is locked to a protected local key file (e.g., `/var/lib/moonmind/master.key` or `~/.moonmind/master.key`) created and managed by MoonMind outside the repo and outside the main application database.
 
@@ -493,7 +493,7 @@ The expected first-run onboarding flow is:
 1. start MoonMind with `docker compose up -d` and no required `.env` editing. During startup, MoonMind auto-generates the local `master.key` if it does not exist.
 2. open Mission Control in the browser.
 3. The UI detects an unconfigured baseline and prompts the user to add a small number of secrets (e.g., a model-provider API key and a GitHub PAT).
-4. Upon entry, the API stores these as `db_encrypted` secrets and the UI guides the user to generate default Provider Profiles binding those secret references.
+4. Upon entry, the API stores these as `db` secrets and the UI guides the user to generate default Provider Profiles binding those secret references.
 5. launch workloads successfully without external secret-manager setup.
 
 The UI should show:

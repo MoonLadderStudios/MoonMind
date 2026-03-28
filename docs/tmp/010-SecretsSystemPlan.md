@@ -63,7 +63,7 @@ Outcome:
 Tasks:
 
 - [x] Cross-check `docs/Security/ProviderProfiles.md` so terminology matches `SecretsSystem.md`.
-- [x] Lock the baseline `db_encrypted` root key source for local deployments to a protected local key file created outside the repo, with Docker secret as an override path.
+- [x] Lock the baseline `db` root key source for local deployments to a protected local key file created outside the repo, with Docker secret as an override path.
 - [x] Decide whether `oauth_volume` remains modeled inside the secrets resolver layer or as an adjacent credential-source adapter with shared observability.
 - [x] Define the initial `SecretRef` schema and validation rules.
 - [x] Define the first-run onboarding UX from compose startup to secret entry in Mission Control.
@@ -84,7 +84,7 @@ Outcome:
 Tasks:
 
 - Add a secrets persistence model for managed secrets and metadata.
-- Implement application-layer authenticated encryption for `db_encrypted`.
+- Implement application-layer authenticated encryption for `db`.
 - Implement root-key creation/loading from the selected baseline source.
 - Ensure the database never contains everything needed to decrypt by itself.
 - Add create, update, rotate, delete, and metadata-list operations at the service layer.
@@ -101,14 +101,14 @@ Validation:
 
 Outcome:
 
-- A single resolver contract can resolve `env`, `db_encrypted`, and `exec` references at launch time.
+- A single resolver contract can resolve `env`, `db`, and `exec` references at launch time.
 
 Tasks:
 
 - Define the `SecretRef` model and parser.
 - Implement backend adapters for:
   - `env`,
-  - `db_encrypted`,
+  - `db`,
   - `exec`.
 - Decide whether `oauth_volume` plugs into the same interface or a sibling credential-source abstraction.
 - Add allowlisting and trust constraints for `exec` resolution.
@@ -250,7 +250,7 @@ The following backlog is a practical first slice for implementation:
 2. Choose baseline local root-key source.
 3. Add encrypted secret persistence table and service.
 4. Implement crypto wrapper and key-loader abstraction.
-5. Implement resolver adapters for `env`, `db_encrypted`, and `exec`.
+5. Implement resolver adapters for `env`, `db`, and `exec`.
 6. Integrate resolver into provider-profile launch materialization.
 7. Add redaction-safe audit events and diagnostics.
 8. Add API and UI support for managed secrets.
