@@ -354,12 +354,14 @@ async def test_streaming_starts_concurrently_with_heartbeat(tmp_path: Path):
 
     async def tracking_stream(*args, **kwargs):
         call_order.append("stream_started")
+        await asyncio.sleep(0.01)  # Yield to event loop to ensure concurrency is visible
         result = await original_stream(*args, **kwargs)
         call_order.append("stream_done")
         return result
 
     async def tracking_heartbeat(*args, **kwargs):
         call_order.append("heartbeat_started")
+        await asyncio.sleep(0.01)  # Yield to event loop to ensure concurrency is visible
         result = await original_heartbeat(*args, **kwargs)
         call_order.append("heartbeat_done")
         return result
