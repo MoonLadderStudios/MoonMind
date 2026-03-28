@@ -304,6 +304,229 @@ tbody tr:hover {
   gap: 1rem;
 }
 
+.task-list-filters {
+  display: grid;
+  gap: 0.85rem;
+  max-width: 1180px;
+  margin-bottom: 1rem;
+}
+
+.task-list-filter-primary {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: minmax(18rem, 2fr) repeat(3, minmax(0, 1fr));
+}
+
+.task-list-filter-search {
+  min-width: 0;
+}
+
+.task-list-advanced-filters {
+  border: 1px solid rgb(var(--mm-border) / 0.75);
+  border-radius: 0.9rem;
+  padding: 0.65rem 0.85rem 0.85rem;
+  background: rgb(var(--mm-panel) / 0.46);
+}
+
+.task-list-advanced-filters summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: rgb(var(--mm-ink) / 0.88);
+  list-style: none;
+}
+
+.task-list-advanced-filters summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-list-advanced-filters[open] summary {
+  margin-bottom: 0.75rem;
+}
+
+.task-list-results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.75rem;
+}
+
+.task-list-results-meta {
+  color: rgb(var(--mm-muted));
+  font-size: 0.88rem;
+}
+
+.task-list-results-meta strong {
+  color: rgb(var(--mm-ink));
+}
+
+.task-list-results-separator {
+  margin: 0 0.45rem;
+  opacity: 0.4;
+}
+
+.task-list-filtered-count {
+  margin-left: 0.3rem;
+}
+
+.task-list-results-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.task-list-page-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+  color: rgb(var(--mm-muted));
+}
+
+.task-list-page-size select {
+  min-width: 4.5rem;
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.task-table-wrap {
+  border-radius: 1rem;
+}
+
+.task-table th:nth-child(1),
+.task-table td:nth-child(1) {
+  width: 12rem;
+}
+
+.task-table th:nth-child(2),
+.task-table td:nth-child(2) {
+  min-width: 22rem;
+}
+
+.task-table th:nth-child(3),
+.task-table td:nth-child(3) {
+  width: 10rem;
+}
+
+.task-table th:nth-child(4),
+.task-table td:nth-child(4) {
+  width: 9rem;
+}
+
+.task-table th:nth-child(5),
+.task-table td:nth-child(5),
+.task-table th:nth-child(6),
+.task-table td:nth-child(6) {
+  width: 8.5rem;
+}
+
+.task-table th:nth-child(7),
+.task-table td:nth-child(7) {
+  width: 12rem;
+}
+
+.task-id-link {
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-size: 0.82rem;
+  text-decoration: none;
+  color: rgb(var(--mm-ink) / 0.9);
+}
+
+.task-id-link:hover {
+  text-decoration: underline;
+}
+
+.task-title-cell {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.task-title-link {
+  color: rgb(var(--mm-ink));
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.task-title-link:hover {
+  text-decoration: underline;
+}
+
+.task-title-summary {
+  color: rgb(var(--mm-ink) / 0.78);
+  line-height: 1.35;
+}
+
+.task-title-meta {
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+}
+
+.task-status-cell {
+  display: grid;
+  gap: 0.2rem;
+  justify-items: start;
+}
+
+.table-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  background: rgb(var(--mm-panel) / 0.72);
+  border: 1px solid rgb(var(--mm-border) / 0.8);
+  color: rgb(var(--mm-ink) / 0.88);
+  font-size: 0.79rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table-pill-neutral {
+  background: rgb(var(--mm-panel) / 0.68);
+}
+
+.queue-card-id {
+  font-family: "IBM Plex Mono", "Consolas", monospace;
+}
+
+.task-detail-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.task-detail-heading {
+  margin: 0.1rem 0 0.35rem;
+  font-size: 1.6rem;
+  line-height: 1.05;
+}
+
+.task-detail-summary {
+  margin: 0;
+  max-width: 78ch;
+  color: rgb(var(--mm-muted));
+}
+
+.task-detail-hero-status {
+  flex-shrink: 0;
+}
+
+.task-detail-facts-grid,
+.task-detail-meta-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 1rem;
+}
+
+.task-detail-fact-card strong,
+.task-detail-meta-card strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
 .queue-table-wrapper {
   display: block;
 }
@@ -455,6 +678,9 @@ tr[data-proposal-id].proposal-consuming td {
 .status {
   display: inline-flex;
   align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
   border-radius: 999px;
   border: 1px solid currentcolor;
   padding: 0.12rem 0.46rem;
@@ -462,6 +688,7 @@ tr[data-proposal-id].proposal-consuming td {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .status-queued {
