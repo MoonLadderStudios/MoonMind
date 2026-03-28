@@ -43,9 +43,9 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
     workflow._owner_id = "owner-1"
     captured: dict[str, object] = {}
 
-    async def fake_execute_activity(
+    async def fake_execute_typed_activity(
         activity_type: str,
-        payload: dict[str, object],
+        payload: object,
         **_kwargs: object,
     ) -> dict[str, str]:
         captured["activity_type"] = activity_type
@@ -53,9 +53,9 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
         return {"plan_ref": "art_plan_2"}
 
     monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "execute_activity",
-        fake_execute_activity,
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
     )
     workflow_info = type(
         "WorkflowInfo",
@@ -74,9 +74,10 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
 
     assert captured["activity_type"] == "plan.generate"
     payload = captured["payload"]
-    assert isinstance(payload, dict)
-    assert payload["inputs_ref"] == "art_input_1"
-    assert "workflow_id" in payload["execution_ref"]
+    from moonmind.schemas.temporal_activity_models import PlanGenerateInput
+    assert isinstance(payload, PlanGenerateInput)
+    assert payload.inputs_ref == "art_input_1"
+    assert "workflow_id" in payload.execution_ref
     assert resolved == "art_plan_2"
     assert workflow._plan_ref == "art_plan_2"
 
