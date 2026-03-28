@@ -1,106 +1,88 @@
 {
-  "_DataTable-BpG1mWfJ.js": {
-    "file": "assets/DataTable-BpG1mWfJ.js",
+  "_DataTable-BdOvTdxG.js": {
+    "file": "assets/DataTable-BdOvTdxG.js",
     "name": "DataTable",
     "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js"
     ]
   },
-  "_mountPage-tWXaPQqX.js": {
-    "file": "assets/mountPage-tWXaPQqX.js",
+  "_mountPage-C2pxuJYj.js": {
+    "file": "assets/mountPage-C2pxuJYj.js",
     "name": "mountPage"
   },
   "entrypoints/dashboard-alerts.tsx": {
-    "file": "assets/dashboard-alerts-BRtnvhsY.js",
+    "file": "assets/dashboard-alerts-RPQPs4ZR.js",
     "name": "dashboard-alerts",
     "src": "entrypoints/dashboard-alerts.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js"
     ]
   },
   "entrypoints/manifests.tsx": {
-    "file": "assets/manifests-WZNoYxq5.js",
+    "file": "assets/manifests-Us9h3UDY.js",
     "name": "manifests",
     "src": "entrypoints/manifests.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js",
-      "_DataTable-BpG1mWfJ.js"
+      "_mountPage-C2pxuJYj.js",
+      "_DataTable-BdOvTdxG.js"
     ]
   },
   "entrypoints/proposals.tsx": {
-    "file": "assets/proposals-Cg-2EKQI.js",
+    "file": "assets/proposals-KvXTnnK3.js",
     "name": "proposals",
     "src": "entrypoints/proposals.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js",
-      "_DataTable-BpG1mWfJ.js"
+      "_mountPage-C2pxuJYj.js",
+      "_DataTable-BdOvTdxG.js"
     ]
   },
   "entrypoints/schedules.tsx": {
-    "file": "assets/schedules-3LW46ABX.js",
+    "file": "assets/schedules-BP1w2Aht.js",
     "name": "schedules",
     "src": "entrypoints/schedules.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js",
-      "_DataTable-BpG1mWfJ.js"
-    ]
-  },
-  "entrypoints/secrets.tsx": {
-    "file": "assets/secrets-CaULqnEZ.js",
-    "name": "secrets",
-    "src": "entrypoints/secrets.tsx",
-    "isEntry": true,
-    "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js",
+      "_DataTable-BdOvTdxG.js"
     ]
   },
   "entrypoints/settings.tsx": {
-    "file": "assets/settings-BqBwHj9k.js",
+    "file": "assets/settings-CLOhRz_8.js",
     "name": "settings",
     "src": "entrypoints/settings.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js"
     ]
   },
   "entrypoints/task-detail.tsx": {
-    "file": "assets/task-detail-BnVnOStc.js",
+    "file": "assets/task-detail-CmH8Hj5k.js",
     "name": "task-detail",
     "src": "entrypoints/task-detail.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js"
     ]
   },
   "entrypoints/tasks-home.tsx": {
-    "file": "assets/tasks-home-De7K2Q1c.js",
+    "file": "assets/tasks-home-B0c0bcfq.js",
     "name": "tasks-home",
     "src": "entrypoints/tasks-home.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js"
     ]
   },
   "entrypoints/tasks-list.tsx": {
-    "file": "assets/tasks-list-CUxQSJZm.js",
+    "file": "assets/tasks-list-ClYISAXu.js",
     "name": "tasks-list",
     "src": "entrypoints/tasks-list.tsx",
     "isEntry": true,
     "imports": [
-      "_mountPage-tWXaPQqX.js"
-    ]
-  },
-  "entrypoints/workers.tsx": {
-    "file": "assets/workers-DbJkzYOs.js",
-    "name": "workers",
-    "src": "entrypoints/workers.tsx",
-    "isEntry": true,
-    "imports": [
-      "_mountPage-tWXaPQqX.js"
+      "_mountPage-C2pxuJYj.js"
     ]
   }
 }

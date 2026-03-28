@@ -54,9 +54,7 @@ _STATIC_PATHS = {
     "manifests/new",
     "schedules",
     "settings",
-    "secrets",
     "skills",
-    "workers",
 }
 
 _PATH_ALIASES = {
@@ -278,13 +276,13 @@ def _render_react_page(
     )
 
 
-@router.get("/tasks/secrets", response_class=HTMLResponse)
+@router.get("/tasks/secrets")
 async def task_secrets_route(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered secrets page."""
-    return _render_react_page(request, "secrets", "/tasks/secrets")
+) -> RedirectResponse:
+    """Redirect the legacy secrets page into unified settings."""
+    return RedirectResponse(url="/tasks/settings?section=providers-secrets", status_code=307)
 
 @router.get("/tasks", name="task_dashboard_root")
 async def task_dashboard_root(
@@ -355,19 +353,13 @@ async def task_list_route(
     )
 
 
-@router.get("/tasks/workers", response_class=HTMLResponse)
+@router.get("/tasks/workers")
 async def task_workers_route(
     request: Request,
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered workers page."""
-    initial_data = {
-        "workerPause": {
-            "get": "/api/system/worker-pause",
-            "post": "/api/system/worker-pause",
-        }
-    }
-    return _render_react_page(request, "workers", "/tasks/workers", initial_data=initial_data)
+) -> RedirectResponse:
+    """Redirect the legacy workers page into unified settings."""
+    return RedirectResponse(url="/tasks/settings?section=operations", status_code=307)
 
 
 @router.get("/tasks/settings", response_class=HTMLResponse)
@@ -376,7 +368,19 @@ async def task_settings_route(
     _user: User = Depends(get_current_user()),
 ) -> HTMLResponse:
     """Serve the React-powered settings page."""
-    return _render_react_page(request, "settings", "/tasks/settings")
+    initial_data = {
+        "workerPause": {
+            "get": "/api/system/worker-pause",
+            "post": "/api/system/worker-pause",
+        }
+    }
+    return _render_react_page(
+        request,
+        "settings",
+        "/tasks/settings",
+        initial_data=initial_data,
+        data_wide_panel=True,
+    )
 
 
 @router.get("/tasks/{dashboard_path:path}", response_class=HTMLResponse)
@@ -397,7 +401,7 @@ async def task_dashboard_route(
                     "Dashboard route was not found. Use /tasks/list, /tasks/{taskId}, "
                     "/tasks/create, /tasks/new, "
                     "/tasks/proposals, /tasks/manifests, /tasks/manifests/new, "
-                    "/tasks/schedules, /tasks/workers, /tasks/skills, or /tasks/settings."
+                    "/tasks/schedules, /tasks/skills, or /tasks/settings."
                 ),
             },
         )
