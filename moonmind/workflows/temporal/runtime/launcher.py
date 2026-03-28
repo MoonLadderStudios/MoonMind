@@ -19,7 +19,6 @@ from moonmind.schemas.agent_runtime_models import (
 )
 
 from .store import ManagedRunStore
-from .tmate_session import TmateSessionManager
 
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -412,15 +411,18 @@ class ManagedRuntimeLauncher:
         request: AgentExecutionRequest,
         profile: ManagedRuntimeProfile,
         workspace_path: str | Path | None = None,
-    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None, TmateSessionManager | None]:
+    ) -> tuple[ManagedRunRecord, asyncio.subprocess.Process | None, dict[str, str] | None]:
         """Spawn a subprocess for the managed agent run.
 
         Idempotency: if an active record already exists for run_id, returns it
         without launching a new process.
+
+        External live-session relay endpoints are not produced here; managed runs use a
+        direct subprocess with piped stdout/stderr for log streaming.
         """
         existing = self._store.load(run_id)
         if existing is not None and existing.status not in TERMINAL_AGENT_RUN_STATES:
-            return existing, None, None, None
+            return existing, None, None
 
         from moonmind.workflows.temporal.runtime.strategies import get_strategy
         strategy = get_strategy(profile.runtime_id)
@@ -513,73 +515,14 @@ class ManagedRuntimeLauncher:
             env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
             env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
-        use_tmate = TmateSessionManager.is_available()
-        endpoints: dict[str, str] | None = None
-        tmate_manager: TmateSessionManager | None = None
-
-        if use_tmate:
-            session_name = f"mm-{run_id.replace('-', '')[:16]}"
-            tmate_manager = TmateSessionManager(session_name=session_name)
-            try:
-                tmate_endpoints = await tmate_manager.start(
-                    command=cmd,
-                    env=env_overrides,
-                    cwd=resolved_workspace_path,
-                    exit_code_capture=True,
-                )
-                process = tmate_manager.process
-                # Verify the tmate-wrapped process is actually alive.
-                # If tmate crashed during startup the process will already
-                # have a non-None returncode.
-                if process is None or (
-                    process.returncode is not None and process.returncode != 0
-                ):
-                    raise RuntimeError(
-                        f"tmate process exited immediately "
-                        f"(rc={getattr(process, 'returncode', '?')})"
-                    )
-            except Exception:
-                logger.warning(
-                    "Tmate session failed for run_id=%s; "
-                    "falling back to plain subprocess.",
-                    run_id,
-                    exc_info=True,
-                )
-                # Clean up the failed tmate session.
-                try:
-                    await tmate_manager.teardown()
-                except Exception:
-                    logger.debug(
-                        "tmate teardown after fallback failed", exc_info=True
-                    )
-                tmate_manager = None
-                use_tmate = False
-                # Fall through to the plain subprocess path below.
-
-        if use_tmate and tmate_manager is not None:
-            tmate_endpoints = tmate_manager.endpoints
-            process = tmate_manager.process
-            endpoints = {
-                "tmate_session_name": tmate_endpoints.session_name,
-                "tmate_socket_path": tmate_endpoints.socket_path,
-                "tmate_config_path": str(tmate_manager.config_path),
-            }
-            if tmate_manager.exit_code_path is not None:
-                endpoints["exit_code_path"] = str(tmate_manager.exit_code_path)
-            for attr in ("attach_ro", "attach_rw", "web_ro", "web_rw"):
-                value = getattr(tmate_endpoints, attr, None)
-                if value:
-                    endpoints[attr] = value
-
-        if not use_tmate:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env_overrides,
-                cwd=resolved_workspace_path,
-            )
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env_overrides,
+            cwd=resolved_workspace_path,
+        )
 
         record = ManagedRunRecord(
             run_id=run_id,
@@ -591,4 +534,4 @@ class ManagedRuntimeLauncher:
             workspace_path=resolved_workspace_path,
         )
         self._store.save(record)
-        return record, process, endpoints, tmate_manager
+        return record, process, None

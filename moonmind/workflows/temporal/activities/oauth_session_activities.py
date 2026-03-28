@@ -2,11 +2,11 @@
 
 Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
   - ``oauth_session.ensure_volume``       — verify / create Docker volume
-  - ``oauth_session.start_auth_runner``   — launch tmate container
-  - ``oauth_session.stop_auth_runner``    — tear down tmate container
+  - ``oauth_session.start_auth_runner``   — removed (browser OAuth transport retired)
+  - ``oauth_session.stop_auth_runner``    — tear down auth runner container
   - ``oauth_session.update_status``       — transition session status in DB
   - ``oauth_session.mark_failed``         — mark session as failed with reason
-  - ``oauth_session.update_session_urls`` — store extracted tmate urls in DB
+  - ``oauth_session.update_session_urls`` — store session URLs in DB
   - ``oauth_session.verify_volume``       — call provider volume verifier
   - ``oauth_session.register_profile``    — create or update auth profile
 """
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shlex
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
@@ -27,16 +26,8 @@ from api_service.db.models import (
     ManagedAgentOAuthSession,
     OAuthSessionStatus,
 )
-from moonmind.workflows.temporal.runtime.tmate_session import _ENDPOINT_KEYS
 
 logger = logging.getLogger(__name__)
-
-# Container image used for auth runner sessions.  Falls back to the
-# standard MoonMind worker image which already has tmate + CLI tools.
-_DEFAULT_AUTH_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind:latest"
-
-# Seconds to wait for tmate to become ready inside the container.
-_TMATE_READY_TIMEOUT = 30
 
 
 @activity.defn(name="oauth_session.ensure_volume")
@@ -86,184 +77,23 @@ async def oauth_session_ensure_volume(
 async def oauth_session_start_auth_runner(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Launch a Docker container with tmate for interactive OAuth login.
-
-    The container mounts the auth volume at the provider's expected path,
-    starts tmate, and runs the provider bootstrap command.  Returns the
-    tmate web/ssh URLs and container name so the workflow can store them
-    and the user can connect.
-    """
-    session_id = request.get("session_id", "")
-    runtime_id = request.get("runtime_id", "")
-    volume_ref = request.get("volume_ref", "")
-    volume_mount_path = request.get("volume_mount_path", "")
-    session_ttl = int(request.get("session_ttl", 1800))
-
-    from moonmind.workflows.temporal.runtime.providers.registry import get_provider
-    from moonmind.config.settings import settings
-
-    provider = get_provider(runtime_id)
-    if provider is None:
-        raise ValueError(f"No OAuth provider registered for runtime: {runtime_id}")
-
-    mount_path = volume_mount_path or provider["default_mount_path"]
-    vol = volume_ref or provider["default_volume_name"]
-    bootstrap_cmd = provider["bootstrap_command"]
-    container_name = f"mm-oauth-{session_id}"
-    image = (
-        getattr(settings.workflow, "job_image", None)
-        or _DEFAULT_AUTH_RUNNER_IMAGE
+    """Browser-based OAuth runners were removed; fail fast with guidance."""
+    _ = request  # reserved for workflow contract compatibility
+    raise RuntimeError(
+        "Managed browser OAuth sessions are not available: the legacy runner was "
+        "removed. Use API-key or token-based auth profiles, or implement the "
+        "first-party flow described in docs/ManagedAgents/OAuthTerminal.md."
     )
-
-    # Build the entrypoint script that starts tmate and runs bootstrap
-    bootstrap_script = (
-        "#!/usr/bin/env bash\n"
-        "set -e\n"
-        "# Start tmate in the background with a named session\n"
-        "tmate -F -n main new-session -d -s oauth &\n"
-        "TMATE_PID=$!\n"
-        "# Wait for tmate to be ready\n"
-        "for i in $(seq 1 {timeout}); do\n"
-        "  if tmate -S /tmp/tmate.sock display -p '#{{tmate_ssh}}' 2>/dev/null | grep -q '^ssh '; then\n"
-        "    break\n"
-        "  fi\n"
-        "  sleep 1\n"
-        "done\n"
-        "# Send bootstrap command into the tmate session\n"
-        "tmate -S /tmp/tmate.sock send-keys -t oauth '{bootstrap}' Enter\n"
-        "# Keep alive until tmate exits\n"
-        "wait $TMATE_PID\n"
-    ).format(
-        timeout=_TMATE_READY_TIMEOUT,
-        bootstrap=shlex.join(bootstrap_cmd),
-    )
-
-    # Docker run: detached container with tmate + auth volume
-    docker_cmd = [
-        "docker", "run", "-d",
-        "--name", container_name,
-        "-v", f"{vol}:{mount_path}",
-        "-e", f"HOME={mount_path}",
-        "--stop-timeout", str(min(session_ttl + 60, 3600)),
-        image,
-        "bash", "-c", bootstrap_script,
-    ]
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *docker_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except FileNotFoundError:
-        raise RuntimeError("Docker CLI not available on this worker")
-    except asyncio.TimeoutError:
-        raise RuntimeError("Docker container launch timed out")
-
-    if proc.returncode != 0:
-        err = stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"Failed to start auth runner container (rc={proc.returncode}): {err[:300]}")
-
-    container_id = stdout.decode("utf-8", errors="replace").strip()[:12]
-    logger.info(
-        "Started auth runner container %s (%s) for session %s",
-        container_name, container_id, session_id,
-    )
-
-    # Wait for tmate to become ready and extract URLs
-    tmate_web_url = ""
-    tmate_ssh_url = ""
-
-    for attempt in range(_TMATE_READY_TIMEOUT):
-        await asyncio.sleep(1)
-        # Use the shared endpoint key mapping for consistency with TmateSessionManager.
-        web_key = _ENDPOINT_KEYS["web_rw"]
-        ssh_key = _ENDPOINT_KEYS["attach_rw"]
-        # Try to extract tmate URLs from the container's tmate socket
-        url_cmd = [
-            "docker",
-            "exec",
-            container_name,
-            "bash",
-            "-c",
-            (
-                f"tmate -S /tmp/tmate.sock display -p '#{{{web_key}}}' 2>/dev/null && "
-                "echo '---SEPARATOR---' && "
-                f"tmate -S /tmp/tmate.sock display -p '#{{{ssh_key}}}' 2>/dev/null"
-            ),
-        ]
-        try:
-            url_proc = await asyncio.create_subprocess_exec(
-                *url_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            url_stdout, _ = await asyncio.wait_for(url_proc.communicate(), timeout=5)
-            if url_proc.returncode == 0:
-                output = url_stdout.decode("utf-8", errors="replace").strip()
-                parts = output.split("---SEPARATOR---")
-                if len(parts) == 2:
-                    web = parts[0].strip()
-                    ssh = parts[1].strip()
-                    if web and ssh and ssh.startswith("ssh "):
-                        tmate_web_url = web
-                        tmate_ssh_url = ssh
-                        break
-        except (asyncio.TimeoutError, Exception) as exc:
-            logger.debug(
-                "Polling for tmate URLs failed on attempt %d: %s",
-                attempt + 1,
-                exc,
-            )
-            continue
-
-    if not tmate_ssh_url:
-        logger.warning(
-            "Tmate URLs not available after %ds for session %s — container is running but tmate may still be starting",
-            _TMATE_READY_TIMEOUT, session_id,
-        )
-
-    # Store tmate URLs and container info in the DB
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=session_ttl)
-    async with get_async_session_context() as db:
-        from sqlalchemy.future import select
-
-        result = await db.execute(
-            select(ManagedAgentOAuthSession).where(
-                ManagedAgentOAuthSession.session_id == session_id
-            )
-        )
-        session_obj = result.scalars().first()
-        if session_obj:
-            session_obj.tmate_web_url = tmate_web_url or None
-            session_obj.tmate_ssh_url = tmate_ssh_url or None
-            session_obj.container_name = container_name
-            session_obj.expires_at = expires_at
-            await db.commit()
-
-    logger.info(
-        "Auth runner ready for session %s: web=%s container=%s",
-        session_id, tmate_web_url or "(pending)", container_name,
-    )
-
-    return {
-        "session_id": session_id,
-        "container_name": container_name,
-        "tmate_web_url": tmate_web_url,
-        "tmate_ssh_url": tmate_ssh_url,
-        "expires_at": expires_at.isoformat(),
-    }
 
 
 @activity.defn(name="oauth_session.update_session_urls")
 async def oauth_session_update_session_urls(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Write extracted tmate web/ssh URLs to the session DB row."""
+    """Write session web/ssh URLs to the session DB row."""
     session_id = request.get("session_id", "")
-    tmate_web_url = request.get("tmate_web_url", "")
-    tmate_ssh_url = request.get("tmate_ssh_url", "")
+    oauth_web_url = request.get("oauth_web_url", "")
+    oauth_ssh_url = request.get("oauth_ssh_url", "")
 
     if not session_id:
         raise ValueError("session_id is required")
@@ -280,18 +110,18 @@ async def oauth_session_update_session_urls(
         if not session_obj:
             raise ValueError(f"Session {session_id} not found")
 
-        if tmate_web_url:
-            session_obj.tmate_web_url = tmate_web_url
-        if tmate_ssh_url:
-            session_obj.tmate_ssh_url = tmate_ssh_url
+        if oauth_web_url:
+            session_obj.oauth_web_url = oauth_web_url
+        if oauth_ssh_url:
+            session_obj.oauth_ssh_url = oauth_ssh_url
 
         await db.commit()
 
-    logger.info("Updated tmate URLs for session %s", session_id)
+    logger.info("Updated OAuth session URLs for session %s", session_id)
     return {
         "session_id": session_id,
-        "tmate_web_url": tmate_web_url,
-        "tmate_ssh_url": tmate_ssh_url,
+        "oauth_web_url": oauth_web_url,
+        "oauth_ssh_url": oauth_ssh_url,
     }
 
 
@@ -307,7 +137,6 @@ async def oauth_session_stop_auth_runner(
     container_name = request.get("container_name", "")
 
     if not container_name:
-        # Look up the container name from the DB
         async with get_async_session_context() as db:
             from sqlalchemy.future import select
 
@@ -324,7 +153,6 @@ async def oauth_session_stop_auth_runner(
         logger.info("No container to stop for session %s", session_id)
         return {"session_id": session_id, "stopped": False, "reason": "no_container"}
 
-    # Stop the container (with a short grace period)
     try:
         stop_proc = await asyncio.create_subprocess_exec(
             "docker", "stop", "-t", "5", container_name,
@@ -335,7 +163,6 @@ async def oauth_session_stop_auth_runner(
     except (FileNotFoundError, asyncio.TimeoutError, Exception) as exc:
         logger.warning("Failed to stop container %s: %s", container_name, exc)
 
-    # Remove the container
     try:
         rm_proc = await asyncio.create_subprocess_exec(
             "docker", "rm", "-f", container_name,
@@ -373,9 +200,6 @@ async def oauth_session_verify_volume(
 
     verification["session_id"] = session_id
 
-    # Store verification results in the DB? The design says:
-    # "returns pass/fail with details". The actual activity just returns it.
-
     return verification
 
 
@@ -409,7 +233,6 @@ async def oauth_session_update_status(
 
         session_obj.status = new_status
 
-        # Set lifecycle timestamps based on status
         now = datetime.now(timezone.utc)
         if new_status == OAuthSessionStatus.STARTING:
             session_obj.started_at = now
@@ -483,7 +306,6 @@ async def oauth_session_register_profile(
                 setattr(existing_profile, key, value)
         else:
             try:
-                # The owner_user_id column is a UUID, not an integer.
                 owner_id = UUID(session_obj.requested_by_user_id) if session_obj.requested_by_user_id else None
             except ValueError:
                 owner_id = None

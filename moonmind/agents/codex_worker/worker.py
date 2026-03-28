@@ -425,11 +425,10 @@ class CodexWorkerConfig:
     live_log_events_batch_bytes: int = 8192
     live_log_events_flush_interval_ms: int = 300
     live_session_enabled_default: bool = True
-    live_session_provider: str = "tmate"
+    live_session_provider: str = "none"
     live_session_ttl_minutes: int = 60
     live_session_rw_grant_ttl_minutes: int = 15
     live_session_allow_web: bool = False
-    tmate_server_host: str | None = None
     live_session_max_concurrent_per_worker: int = 4
     enable_task_proposals: bool = False
     artifact_upload_incremental: bool = True
@@ -924,10 +923,10 @@ class CodexWorkerConfig:
             )
             .strip()
             .lower()
-            or "tmate"
+            or "none"
         )
-        if live_session_provider not in {"tmate"}:
-            raise ValueError("MOONMIND_LIVE_SESSION_PROVIDER must be one of: tmate")
+        if live_session_provider not in {"none"}:
+            raise ValueError("MOONMIND_LIVE_SESSION_PROVIDER must be one of: none")
         live_session_ttl_minutes = int(
             str(
                 source.get(
@@ -965,15 +964,6 @@ class CodexWorkerConfig:
             "off",
             "",
         }
-        tmate_server_host = (
-            str(
-                source.get(
-                    "MOONMIND_TMATE_SERVER_HOST",
-                    settings.workflow.tmate_server_host or "",
-                )
-            ).strip()
-            or None
-        )
         live_session_max_concurrent_per_worker = int(
             str(
                 source.get(
@@ -1096,7 +1086,6 @@ class CodexWorkerConfig:
             live_session_ttl_minutes=live_session_ttl_minutes,
             live_session_rw_grant_ttl_minutes=live_session_rw_grant_ttl_minutes,
             live_session_allow_web=live_session_allow_web,
-            tmate_server_host=tmate_server_host,
             live_session_max_concurrent_per_worker=live_session_max_concurrent_per_worker,
             enable_task_proposals=enable_task_proposals,
             artifact_upload_incremental=artifact_upload_incremental,
@@ -1567,8 +1556,8 @@ class QueueApiClient:
         attach_rw: str | None = None,
         web_ro: str | None = None,
         web_rw: str | None = None,
-        tmate_session_name: str | None = None,
-        tmate_socket_path: str | None = None,
+        live_session_name: str | None = None,
+        live_session_socket_path: str | None = None,
         expires_at: str | None = None,
         error_message: str | None = None,
     ) -> dict[str, Any]:
@@ -1590,10 +1579,10 @@ class QueueApiClient:
             payload["webRo"] = web_ro
         if web_rw:
             payload["webRw"] = web_rw
-        if tmate_session_name:
-            payload["tmateSessionName"] = tmate_session_name
-        if tmate_socket_path:
-            payload["tmateSocketPath"] = tmate_socket_path
+        if live_session_name:
+            payload["liveSessionName"] = live_session_name
+        if live_session_socket_path:
+            payload["liveSessionSocketPath"] = live_session_socket_path
         if expires_at:
             payload["expiresAt"] = expires_at
         if error_message:
@@ -7610,238 +7599,38 @@ class CodexWorker:
         log_path: Path,
         cwd: Path,
     ) -> None:
-        """Best-effort tmate live-session bootstrap for the active task run.
-
-        Applies to any managed CLI runtime handled by this queue worker (the
-        ``codex_worker`` package name is historical).
-        """
+        """External live-session transport was removed; ``none`` provider is a no-op."""
 
         async with self._live_session_start_lock:
             if self._active_live_session is not None:
                 return
-            if self._config.live_session_provider != "tmate":
+            if self._config.live_session_provider != "none":
                 return
             if not await self._should_bootstrap_live_session(job_id=job_id):
                 return
-
-            expires_at = datetime.now(UTC) + timedelta(
-                minutes=max(1, self._config.live_session_ttl_minutes)
-            )
-            with suppress(Exception):
-                await self._queue_client.report_live_session(
-                    job_id=job_id,
-                    worker_id=self._config.worker_id,
-                    worker_hostname=socket.gethostname(),
-                    status="starting",
-                    provider="tmate",
-                    expires_at=expires_at.isoformat(),
-                )
-
-            tmate_binary = shutil.which("tmate")
-            if not tmate_binary:
-                with suppress(Exception):
-                    await self._queue_client.report_live_session(
-                        job_id=job_id,
-                        worker_id=self._config.worker_id,
-                        worker_hostname=socket.gethostname(),
-                        status="error",
-                        provider="tmate",
-                        error_message="tmate binary was not found in PATH",
-                        expires_at=expires_at.isoformat(),
-                    )
-                return
-
-            cwd.mkdir(parents=True, exist_ok=True)
-            socket_dir = Path("/tmp/moonmind/tmate")
-            socket_dir.mkdir(parents=True, exist_ok=True)
-            socket_path = socket_dir / f"{job_id}.sock"
-            socket_path.unlink(missing_ok=True)
-            session_name = f"mm-{str(job_id).replace('-', '')[:16]}"
-            tmate_config_path: Path | None = None
-            tmate_host = str(self._config.tmate_server_host or "").strip()
-            if tmate_host:
-                escaped_host = tmate_host.replace("\\", "\\\\").replace('"', '\\"')
-                tmate_config_path = socket_dir / f"{job_id}.conf"
-                tmate_config_path.write_text(
-                    f'set -g tmate-server-host "{escaped_host}"\n',
-                    encoding="utf-8",
-                )
-            tmate_command_prefix = [tmate_binary]
-            if tmate_config_path is not None:
-                tmate_command_prefix.extend(["-f", str(tmate_config_path)])
-            tmate_command_prefix.extend(["-S", str(socket_path)])
-
-            try:
-                await self._run_stage_command(
-                    [*tmate_command_prefix, "new-session", "-d", "-s", session_name],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                await self._run_stage_command(
-                    [
-                        *tmate_command_prefix,
-                        "set",
-                        "-g",
-                        "remain-on-exit",
-                        "on",
-                    ],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                await self._run_stage_command(
-                    [
-                        *tmate_command_prefix,
-                        "set",
-                        "-g",
-                        "history-limit",
-                        "200000",
-                    ],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                await self._run_stage_command(
-                    [
-                        *tmate_command_prefix,
-                        "split-window",
-                        "-h",
-                        "-t",
-                        f"{session_name}:0",
-                    ],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                await self._run_stage_command(
-                    [
-                        *tmate_command_prefix,
-                        "split-window",
-                        "-v",
-                        "-t",
-                        f"{session_name}:0.0",
-                    ],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                await self._run_stage_command(
-                    [
-                        *tmate_command_prefix,
-                        "split-window",
-                        "-v",
-                        "-t",
-                        f"{session_name}:0.1",
-                    ],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                await self._run_stage_command(
-                    [*tmate_command_prefix, "wait", "tmate-ready"],
-                    cwd=cwd,
-                    log_path=log_path,
-                )
-                ssh_ro_result = await self._run_command_without_logging(
-                    [*tmate_command_prefix, "display", "-p", "#{tmate_ssh_ro}"],
-                    cwd=cwd,
-                )
-                ssh_rw_result = await self._run_command_without_logging(
-                    [*tmate_command_prefix, "display", "-p", "#{tmate_ssh}"],
-                    cwd=cwd,
-                )
-                web_ro_result = await self._run_command_without_logging(
-                    [*tmate_command_prefix, "display", "-p", "#{tmate_web_ro}"],
-                    cwd=cwd,
-                )
-                web_rw_result = await self._run_command_without_logging(
-                    [*tmate_command_prefix, "display", "-p", "#{tmate_web}"],
-                    cwd=cwd,
-                )
-                attach_ro = ssh_ro_result.stdout.strip() or None
-                attach_rw = ssh_rw_result.stdout.strip() or None
-                web_ro = web_ro_result.stdout.strip() or None
-                web_rw = web_rw_result.stdout.strip() or None
-                self._register_redaction_value(attach_rw)
-                self._register_redaction_value(web_rw)
-                if not self._config.live_session_allow_web:
-                    web_ro = None
-                    web_rw = None
-
-                self._active_live_session = LiveSessionHandle(
-                    job_id=job_id,
-                    session_name=session_name,
-                    socket_path=socket_path,
-                    config_path=tmate_config_path,
-                    log_path=log_path,
-                    status="ready",
-                )
-
-                with suppress(Exception):
-                    await self._queue_client.report_live_session(
-                        job_id=job_id,
-                        worker_id=self._config.worker_id,
-                        worker_hostname=socket.gethostname(),
-                        status="ready",
-                        provider="tmate",
-                        attach_ro=attach_ro,
-                        attach_rw=attach_rw,
-                        web_ro=web_ro,
-                        web_rw=web_rw,
-                        tmate_session_name=session_name,
-                        tmate_socket_path=str(socket_path),
-                        expires_at=expires_at.isoformat(),
-                    )
-            except Exception as exc:
-                with suppress(Exception):
-                    await self._queue_client.report_live_session(
-                        job_id=job_id,
-                        worker_id=self._config.worker_id,
-                        worker_hostname=socket.gethostname(),
-                        status="error",
-                        provider="tmate",
-                        error_message=str(exc),
-                        tmate_session_name=session_name,
-                        tmate_socket_path=str(socket_path),
-                        expires_at=expires_at.isoformat(),
-                    )
-                with suppress(Exception):
-                    await self._run_stage_command(
-                        [*tmate_command_prefix, "kill-session", "-t", session_name],
-                        cwd=cwd,
-                        log_path=log_path,
-                        check=False,
-                    )
-                socket_path.unlink(missing_ok=True)
-                if tmate_config_path is not None:
-                    tmate_config_path.unlink(missing_ok=True)
+            return
 
     async def _teardown_live_session(self, *, job_id: UUID) -> None:
-        """Best-effort live-session teardown + terminal status report."""
+        """Clear worker live-session state."""
 
         live = self._active_live_session
         self._active_live_session = None
         if live is None:
             return
-        tmate_binary = shutil.which("tmate") or "tmate"
-        tmate_command_prefix = [tmate_binary]
-        if live.config_path is not None:
-            tmate_command_prefix.extend(["-f", str(live.config_path)])
-        tmate_command_prefix.extend(["-S", str(live.socket_path)])
         with suppress(Exception):
-            await self._run_stage_command(
-                [*tmate_command_prefix, "kill-session", "-t", live.session_name],
-                cwd=live.socket_path.parent,
-                log_path=live.log_path,
-                check=False,
-            )
-        live.socket_path.unlink(missing_ok=True)
+            live.socket_path.unlink(missing_ok=True)
         if live.config_path is not None:
-            live.config_path.unlink(missing_ok=True)
+            with suppress(Exception):
+                live.config_path.unlink(missing_ok=True)
         with suppress(Exception):
             await self._queue_client.report_live_session(
                 job_id=job_id,
                 worker_id=self._config.worker_id,
                 worker_hostname=socket.gethostname(),
                 status="ended",
-                provider="tmate",
-                tmate_session_name=live.session_name,
-                tmate_socket_path=str(live.socket_path),
+                provider="none",
+                live_session_name=live.session_name,
+                live_session_socket_path=str(live.socket_path),
             )
 
     @staticmethod

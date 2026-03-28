@@ -25,7 +25,7 @@ This document outlines **Task Cancellation** in MoonMind so that:
 2. **Running cancellation**: user requests cancellation for a running workflow → API sends a Temporal Cancellation Request, workflow detects request, stops execution gracefully, and job transitions to `cancelled`.
 3. **Unified surfaces**: UI + REST + MCP all map to the **same API service methods**.
 4. **Auditability**: cancellation actions are visible in workflow history and UI events.
-5. **Resource lease cleanup**: cancellation must release shared resources (auth profile slots, tmate sessions) so they are not orphaned.
+5. **Resource lease cleanup**: cancellation must release shared resources (auth profile slots, live sessions) so they are not orphaned.
 
 ### Non-Goals
 

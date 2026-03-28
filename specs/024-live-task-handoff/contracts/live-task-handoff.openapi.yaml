@@ -178,7 +178,7 @@ components:
       enum: [disabled, starting, ready, revoked, ended, error]
     TaskRunLiveSessionProvider:
       type: string
-      enum: [tmate]
+      enum: [none]
     TaskRunLiveSession:
       type: object
       additionalProperties: false
@@ -289,9 +289,9 @@ components:
           type: string
         webRw:
           type: string
-        tmateSessionName:
+        liveSessionName:
           type: string
-        tmateSocketPath:
+        liveSessionSocketPath:
           type: string
         expiresAt:
           type: string

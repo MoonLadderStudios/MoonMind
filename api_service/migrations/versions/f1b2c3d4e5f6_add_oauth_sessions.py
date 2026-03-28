@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Enum types
     oauth_status_enum = postgresql.ENUM(
-        'pending', 'starting', 'tmate_ready', 'awaiting_user', 'verifying', 'registering_profile', 'succeeded', 'failed', 'cancelled', 'expired',
+        'pending', 'starting', 'oauth_runner_ready', 'awaiting_user', 'verifying', 'registering_profile', 'succeeded', 'failed', 'cancelled', 'expired',
         name='oauthsessionstatus',
         create_type=False
     )
@@ -38,14 +38,14 @@ def upgrade() -> None:
         sa.Column('runtime_id', sa.String(length=64), nullable=False),
         sa.Column('profile_id', sa.String(length=128), nullable=False),
         sa.Column('auth_mode', managed_agent_auth_mode_enum, server_default='oauth', nullable=False),
-        sa.Column('session_transport', sa.String(length=64), server_default=sa.text("'tmate'"), nullable=False),
+        sa.Column('session_transport', sa.String(length=64), server_default=sa.text("'none'"), nullable=False),
         sa.Column('volume_ref', sa.String(length=255), nullable=True),
         sa.Column('volume_mount_path', sa.String(length=512), nullable=True),
         sa.Column('status', oauth_status_enum, server_default='pending', nullable=False),
         sa.Column('requested_by_user_id', sa.String(length=128), nullable=True),
         sa.Column('account_label', sa.String(length=255), nullable=True),
-        sa.Column('tmate_web_url', sa.String(length=1024), nullable=True),
-        sa.Column('tmate_ssh_url', sa.String(length=1024), nullable=True),
+        sa.Column('oauth_web_url', sa.String(length=1024), nullable=True),
+        sa.Column('oauth_ssh_url', sa.String(length=1024), nullable=True),
         sa.Column('container_name', sa.String(length=255), nullable=True),
         sa.Column('worker_service', sa.String(length=255), nullable=True),
         sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),

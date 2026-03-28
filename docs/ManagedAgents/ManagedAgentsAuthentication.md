@@ -21,5 +21,5 @@
 | Selection and assignment | [ProviderProfiles.md §8–9](../Security/ProviderProfiles.md) |
 | Materialization pipeline | [ProviderProfiles.md §10](../Security/ProviderProfiles.md) |
 | Security requirements | [ProviderProfiles.md §12](../Security/ProviderProfiles.md) |
-| OAuth session UX and tmate bootstrap | [TmateArchitecture.md](TmateArchitecture.md) |
+| OAuth session UX | [TmateArchitecture.md](TmateArchitecture.md), [OAuthTerminal.md](OAuthTerminal.md) |
 | OAuth volume provisioning scripts | `tools/auth-gemini-volume.sh`, `tools/auth-codex-volume.sh`, `tools/auth-claude-volume.sh` |

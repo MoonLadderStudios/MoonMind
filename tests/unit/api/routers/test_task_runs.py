@@ -78,7 +78,7 @@ def test_get_live_session_returns_200_when_present(
         id=uuid4(),
         task_run_id=task_run_id,
         status=AgentJobLiveSessionStatus.STARTING,
-        provider=AgentJobLiveSessionProvider.TMATE,
+        provider=AgentJobLiveSessionProvider.NONE,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -105,7 +105,7 @@ def test_get_live_session_worker_returns_200_and_encrypted_fields(
         id=uuid4(),
         task_run_id=task_run_id,
         status=AgentJobLiveSessionStatus.STARTING,
-        provider=AgentJobLiveSessionProvider.TMATE,
+        provider=AgentJobLiveSessionProvider.NONE,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -140,7 +140,7 @@ def test_report_live_session_creates_new(
         f"/api/task-runs/{task_run_id}/live-session/report",
         json={
             "workerId": "test-worker-123",
-            "provider": "tmate",
+            "provider": "none",
             "status": "starting"
         }
     )
@@ -184,8 +184,8 @@ def test_task_run_live_session_enums_bind_postgres_values() -> None:
 
     assert provider_processor is not None
     assert status_processor is not None
-    assert provider_processor(AgentJobLiveSessionProvider.TMATE) == "tmate"
-    assert provider_processor("tmate") == "tmate"
+    assert provider_processor(AgentJobLiveSessionProvider.NONE) == "none"
+    assert provider_processor("none") == "none"
     assert status_processor(AgentJobLiveSessionStatus.READY) == "ready"
     assert status_processor("ready") == "ready"
 
@@ -201,7 +201,7 @@ def test_heartbeat_returns_200(
         task_run_id=task_run_id,
         worker_id="test-worker-123",
         status=AgentJobLiveSessionStatus.STARTING,
-        provider=AgentJobLiveSessionProvider.TMATE,
+        provider=AgentJobLiveSessionProvider.NONE,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -235,7 +235,7 @@ def test_heartbeat_rejects_worker_id_mismatch(
         task_run_id=task_run_id,
         worker_id="different-worker",
         status=AgentJobLiveSessionStatus.STARTING,
-        provider=AgentJobLiveSessionProvider.TMATE,
+        provider=AgentJobLiveSessionProvider.NONE,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )

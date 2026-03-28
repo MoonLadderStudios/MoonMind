@@ -215,11 +215,11 @@ cmd = strategy.build_command(profile, request)
 The following concerns stay in the **supervisor** (cross-cutting, not runtime-specific):
 
 - Process heartbeats and timeout
-- tmate session lifecycle via shared `TmateSessionManager` (see [TmateSessionArchitecture.md](../Temporal/TmateSessionArchitecture.md)) and exit-code-file resolution
+- Exit-code-file resolution and concurrent stdout/stderr streaming to run artifacts
 - Endpoint persistence for live sessions via `agent_runtime.report_live_session` / `end_live_session` activities
 - SIGTERM → SIGKILL escalation
 - PID reconciliation on restart
-- Runtime file cleanup (including orphaned tmate socket GC on startup)
+- Runtime file cleanup (including orphaned artifact/socket reconciliation on startup where applicable)
 
 The following are in the **strategy** (runtime-specific):
 
@@ -279,7 +279,7 @@ The codebase has adopted a **Strategy Pattern-based Registry** (`ManagedRuntimeS
 - **`agent_runtime_env_keys` in `settings.py`** may be dead config — verify and clean up
 - **codex_worker** unification: self-heal, metrics, and secret refs not yet factored into shared services
 
-The supervisor retains cross-cutting process lifecycle concerns (heartbeats, timeouts, tmate, reconciliation).
+The supervisor retains cross-cutting process lifecycle concerns (heartbeats, timeouts, log streaming, reconciliation).
 
 ---
 

@@ -50,7 +50,7 @@ These endpoints are authenticated with worker tokens and used by agent workers d
 
 ### 2.3 Live Session & Control (`/api/task-runs`)
 
-These endpoints manage real-time operator interaction with an in-progress run (e.g., live terminal sessions via tmate).
+These endpoints manage real-time operator interaction with an in-progress run (live session metadata, grants, and related controls).
 
 | Method | Path | Description |
 |--------|------|-------------|
