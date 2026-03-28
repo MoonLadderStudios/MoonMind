@@ -232,13 +232,14 @@ class TaskRuntimeSelection(BaseModel):
     )
     model: str | None = Field(None, alias="model")
     effort: str | None = Field(None, alias="effort")
+    provider_profile: str | None = Field(None, alias="providerProfile")
 
     @field_validator("mode", mode="before")
     @classmethod
     def _normalize_mode(cls, value: object) -> str | None:
         return _normalize_runtime_value(value, field_name="task.runtime.mode")
 
-    @field_validator("model", "effort", mode="before")
+    @field_validator("model", "effort", "provider_profile", mode="before")
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> str | None:
         return _clean_optional_str(value)
