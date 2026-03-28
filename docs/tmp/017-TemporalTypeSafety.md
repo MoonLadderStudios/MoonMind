@@ -6,6 +6,17 @@ A concrete failure mode: when a `bytes` value is embedded in a **dict** (or othe
 
 Goal: make activity boundaries **explicit, typed, and reviewable** so serialization shape and business types stay aligned, and so static analysis can flag mistakes before runtime.
 
+## Status
+
+**Last updated:** 2026-03-27
+
+| Phase | State | Notes |
+| ----- | ----- | ----- |
+| **1 — Standards and binary policy** | **Complete** | `moonmind/schemas/temporal_activity_models.py` (Pydantic v2, `Base64Bytes`, `ArtifactWriteCompleteInput`, `ArtifactReadInput` / `ArtifactReadOutput`, `PlanGenerateInput`, etc.); `moonmind/workflows/temporal/typed_execution.py` overload-backed `execute_typed_activity`. |
+| **2 — Activity definitions and worker wiring** | **In progress** | `plan.generate` entry in `activity_runtime.py` validates legacy dicts through `PlanGenerateInput` with an explicit fallback path (dual-read). `artifact.write_complete` / `artifact.read` handlers in `moonmind/workflows/temporal/artifacts.py` still take **loose keyword args** (e.g. payload as bytes, str, or legacy `list[int]`) rather than the Pydantic models at the public activity stub. |
+| **3 — Workflow call sites** | **Partial** | Planning in `moonmind/workflows/temporal/workflows/run.py` passes `PlanGenerateInput` via `execute_typed_activity`. Many other paths still use `workflow.execute_activity(..., { ... })` (e.g. `artifact.write_complete`, `artifact.read`). |
+| **4 — Expansion and guardrails** | **Mostly pending** | Schema unit tests exist (`tests/schemas/test_temporal_activity_models.py`); planning-stage tests assert `PlanGenerateInput` shape. Broader workflow-boundary round-trip, replay/in-flight compatibility cases, and activity catalog model table updates for all high-risk activities are still open. |
+
 ## Design constraints (Temporal + MoonMind)
 
 - **Activity type names are stable contracts** — do not rename activity types to “fix” typing; evolve input shapes in a compatibility-safe way. See `docs/Temporal/ActivityCatalogAndWorkerTopology.md` and `moonmind/workflows/temporal/activity_catalog.py`.
