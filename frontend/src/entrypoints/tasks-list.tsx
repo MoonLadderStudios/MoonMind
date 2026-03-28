@@ -38,6 +38,25 @@ const ENTRY_OPTIONS = ['run', 'manifest'] as const;
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'startedAt', 'closedAt']);
 
+/** Column sort keys (excludes removed legacy "type" / source column). */
+const TABLE_COLUMNS = [
+  ['taskId', 'ID'],
+  ['targetRuntime', 'Runtime'],
+  ['targetSkill', 'Skill'],
+  ['status', 'Status'],
+  ['title', 'Title'],
+  ['scheduledFor', 'Scheduled'],
+  ['startedAt', 'Started'],
+  ['closedAt', 'Finished'],
+] as const;
+
+const VALID_TABLE_SORT_FIELDS = new Set<string>(TABLE_COLUMNS.map((c) => c[0]));
+
+function normalizeTableSortField(raw: string | null): string {
+  const s = (raw || '').trim();
+  return VALID_TABLE_SORT_FIELDS.has(s) ? s : 'scheduledFor';
+}
+
 const ExecutionRowSchema = z
   .object({
     taskId: z.string(),
@@ -105,11 +124,6 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
       leftVal = Date.parse(getTs(left) || '') || 0;
       rightVal = Date.parse(getTs(right) || '') || 0;
       if (leftVal !== rightVal) return dir * (leftVal - rightVal);
-    } else if (field === 'type') {
-      leftVal = (left.source || '').toLowerCase();
-      rightVal = (right.source || '').toLowerCase();
-      const c = leftVal.localeCompare(rightVal);
-      if (c !== 0) return dir * c;
     } else if (field === 'status') {
       const ls = (left.rawState || left.state || '').toLowerCase();
       const rs = (right.rawState || right.state || '').toLowerCase();
@@ -149,7 +163,7 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
   const [listCursor, setListCursor] = useState<string | null>(() => initial.get('nextPageToken')?.trim() || null);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [liveUpdates, setLiveUpdates] = useState(true);
-  const [sortField, setSortField] = useState<string>(() => initial.get('sort') || 'scheduledFor');
+  const [sortField, setSortField] = useState<string>(() => normalizeTableSortField(initial.get('sort')));
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(
     () => (initial.get('sortDir') === 'asc' ? 'asc' : 'desc'),
   );
@@ -407,19 +421,7 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
             <table className="min-w-full text-left text-sm whitespace-nowrap">
               <thead className="border-b border-gray-200/80 dark:border-gray-700/80 bg-transparent">
                 <tr>
-                  {(
-                    [
-                      ['type', 'Type'],
-                      ['taskId', 'ID'],
-                      ['targetRuntime', 'Runtime'],
-                      ['targetSkill', 'Skill'],
-                      ['status', 'Status'],
-                      ['title', 'Title'],
-                      ['scheduledFor', 'Scheduled'],
-                      ['startedAt', 'Started'],
-                      ['closedAt', 'Finished'],
-                    ] as const
-                  ).map(([field, label]) => {
+                  {TABLE_COLUMNS.map(([field, label]) => {
                     const active = sortField === field;
                     return (
                       <th key={field} className="px-1.5 py-2 align-bottom first:pl-0 last:pr-0">
@@ -445,16 +447,13 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {sortedItems.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-8 text-center text-gray-500">
+                    <td colSpan={8} className="px-3 py-8 text-center text-gray-500">
                       No tasks found.
                     </td>
                   </tr>
                 ) : (
                   sortedItems.map((row) => (
                     <tr key={row.taskId} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td className="px-3 py-2 capitalize">
-                        {row.source === 'temporal' ? 'Temporal' : row.source}
-                      </td>
                       <td className="px-3 py-2 font-mono text-xs">
                         <a
                           className="text-blue-600 dark:text-blue-400 hover:underline"
