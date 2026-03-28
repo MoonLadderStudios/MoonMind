@@ -11,8 +11,14 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from moonmind.schemas.temporal_activity_models import (
+        ArtifactReadInput,
+        ArtifactWriteCompleteInput,
+    )
 
 import boto3
 from botocore.exceptions import ClientError
@@ -1942,34 +1948,27 @@ class TemporalArtifactActivities:
 
     async def artifact_read(
         self,
-        request: Mapping[str, Any] | Any | None = None,
+        request: "ArtifactReadInput | Mapping[str, Any] | None" = None,
         /,
         *,
         artifact_ref: ArtifactRef | Mapping[str, Any] | str | None = None,
         principal: str | None = None,
     ) -> bytes:
         from moonmind.schemas.temporal_activity_models import ArtifactReadInput
+        try:
+            from pydantic import ValidationError
+        except ImportError:
+            ValidationError = Exception
 
+        model = None
         if request is not None and isinstance(request, ArtifactReadInput):
             # Model fast path
-            if principal is None:
-                principal = request.principal
-            if artifact_ref is None:
-                artifact_ref = getattr(
-                    request.artifact_ref, "artifact_id", request.artifact_ref
-                )
-
-        if isinstance(request, Mapping):
+            model = request
+        elif isinstance(request, Mapping):
             try:
                 # Validate legacy dictionary through the new model
                 model = ArtifactReadInput.model_validate(request)
-                if principal is None:
-                    principal = model.principal
-                if artifact_ref is None:
-                    artifact_ref = getattr(
-                        model.artifact_ref, "artifact_id", model.artifact_ref
-                    )
-            except Exception as e:
+            except ValidationError as e:
                 logger.warning(
                     "Failed to parse artifact.read legacy payload as ArtifactReadInput: %s",
                     e,
@@ -1978,6 +1977,14 @@ class TemporalArtifactActivities:
                     principal = request.get("principal")
                 if artifact_ref is None:
                     artifact_ref = request.get("artifact_ref")
+
+        if model:
+            if principal is None:
+                principal = model.principal
+            if artifact_ref is None:
+                artifact_ref = getattr(
+                    model.artifact_ref, "artifact_id", model.artifact_ref
+                )
 
         if artifact_ref is None:
             raise TemporalArtifactValidationError("artifact_ref is required")
@@ -1992,7 +1999,7 @@ class TemporalArtifactActivities:
 
     async def artifact_write_complete(
         self,
-        request: Mapping[str, Any] | Any | None = None,
+        request: "ArtifactWriteCompleteInput | Mapping[str, Any] | None" = None,
         /,
         *,
         artifact_id: str | None = None,
@@ -2001,31 +2008,20 @@ class TemporalArtifactActivities:
         content_type: str | None = None,
     ) -> ArtifactRef:
         from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
+        try:
+            from pydantic import ValidationError
+        except ImportError:
+            ValidationError = Exception
 
+        model = None
         if request is not None and isinstance(request, ArtifactWriteCompleteInput):
             # Model fast path
-            if principal is None:
-                principal = request.principal
-            if artifact_id is None:
-                artifact_id = request.artifact_id
-            if payload is None:
-                payload = request.payload
-            if content_type is None:
-                content_type = request.content_type
-
-        if isinstance(request, Mapping):
+            model = request
+        elif isinstance(request, Mapping):
             try:
                 # Validate legacy dictionary through the new model
                 model = ArtifactWriteCompleteInput.model_validate(request)
-                if principal is None:
-                    principal = model.principal
-                if artifact_id is None:
-                    artifact_id = model.artifact_id
-                if payload is None:
-                    payload = model.payload
-                if content_type is None:
-                    content_type = model.content_type
-            except Exception as e:
+            except ValidationError as e:
                 logger.warning(
                     "Failed to parse artifact.write_complete legacy payload as ArtifactWriteCompleteInput: %s",
                     e,
@@ -2038,6 +2034,16 @@ class TemporalArtifactActivities:
                     payload = request.get("payload")
                 if content_type is None and "content_type" in request:
                     content_type = request.get("content_type")
+
+        if model:
+            if principal is None:
+                principal = model.principal
+            if artifact_id is None:
+                artifact_id = model.artifact_id
+            if payload is None:
+                payload = model.payload
+            if content_type is None:
+                content_type = model.content_type
 
         if not artifact_id:
             raise TemporalArtifactValidationError("artifact_id is required")
