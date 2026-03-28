@@ -80,8 +80,6 @@ const ExecutionDetailSchema = z
   })
   .passthrough();
 
-type ExecutionDetail = z.infer<typeof ExecutionDetailSchema>;
-
 const ArtifactListSchema = z.object({
   artifacts: z
     .array(

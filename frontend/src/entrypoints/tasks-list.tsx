@@ -242,7 +242,8 @@ function TasksListPage({ payload }: { payload: BootPayload }) {
     const prev = cursorStack.slice(0, -1);
     const last = cursorStack[cursorStack.length - 1];
     setCursorStack(prev);
-    setListCursor(last === '' ? null : last);
+    const nextCursor = last === undefined || last === '' ? null : last;
+    setListCursor(nextCursor);
   };
 
   return (
