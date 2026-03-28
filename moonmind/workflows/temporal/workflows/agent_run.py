@@ -1366,47 +1366,54 @@ class MoonMindAgentRun:
 
                 # Check for 429
                 if request.agent_kind == "managed" and manager_handle and self.final_result.provider_error_code == PROVIDER_RATE_LIMIT_ERROR_CODE:
-                    runtime_id = self._managed_runtime_id(request.agent_id)
-                    profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
-                    cooldown_seconds = self._cooldown_seconds_for_profile(profile_id)
-                    waiting_reason = self._build_managed_rate_limit_waiting_reason(
-                        runtime_id=runtime_id,
-                        profile_id=profile_id,
-                        cooldown_seconds=cooldown_seconds,
-                    )
-                    parent_info = workflow.info().parent
-                    if parent_info:
-                        parent_handle = workflow.get_external_workflow_handle(
-                            parent_info.workflow_id, run_id=parent_info.run_id
+                    if workflow.patched("gemini-429-cooldown-retry-signal"):
+                        runtime_id = self._managed_runtime_id(request.agent_id)
+                        profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
+                        cooldown_seconds = self._cooldown_seconds_for_profile(profile_id)
+                        waiting_reason = self._build_managed_rate_limit_waiting_reason(
+                            runtime_id=runtime_id,
+                            profile_id=profile_id,
+                            cooldown_seconds=cooldown_seconds,
                         )
-                        await parent_handle.signal(
-                            "child_state_changed",
-                            args=["awaiting_slot", waiting_reason],
+                        parent_info = workflow.info().parent
+                        if parent_info:
+                            parent_handle = workflow.get_external_workflow_handle(
+                                parent_info.workflow_id, run_id=parent_info.run_id
+                            )
+                            await parent_handle.signal(
+                                "child_state_changed",
+                                args=["awaiting_slot", waiting_reason],
+                            )
+                        await manager_handle.signal(
+                            "report_cooldown",
+                            {
+                                "profile_id": profile_id or request.execution_profile_ref,
+                                "cooldown_seconds": cooldown_seconds,
+                            },
                         )
-                    await manager_handle.signal(
-                        "report_cooldown",
-                        {
-                            "profile_id": profile_id or request.execution_profile_ref,
-                            "cooldown_seconds": cooldown_seconds,
-                        },
-                    )
-                    await manager_handle.signal(
-                        "release_slot",
-                        {
-                            "requester_workflow_id": workflow.info().workflow_id,
-                            "profile_id": profile_id or request.execution_profile_ref,
-                        },
-                    )
-                    self._awaiting_slot_reason_override = waiting_reason
-                    self._slot_wait_timeout_override_seconds = max(
-                        cooldown_seconds + 60,
-                        _SLOT_WAIT_TIMEOUT_SECONDS,
-                    )
-                    self.completion_event.clear()
-                    self.final_result = None
-                    self._assigned_profile_id = None
-                    self.run_status = RunStatus.awaiting_slot
-                    continue # Retries loop
+                        await manager_handle.signal(
+                            "release_slot",
+                            {
+                                "requester_workflow_id": workflow.info().workflow_id,
+                                "profile_id": profile_id or request.execution_profile_ref,
+                            },
+                        )
+                        self._awaiting_slot_reason_override = waiting_reason
+                        self._slot_wait_timeout_override_seconds = max(
+                            cooldown_seconds + 60,
+                            _SLOT_WAIT_TIMEOUT_SECONDS,
+                        )
+                        self.completion_event.clear()
+                        self.final_result = None
+                        self._assigned_profile_id = None
+                        self.run_status = RunStatus.awaiting_slot
+                        continue # Retries loop
+                    else:
+                        await manager_handle.signal("report_cooldown", {"profile_id": request.execution_profile_ref, "cooldown_seconds": 300})
+                        await manager_handle.signal("release_slot", {"requester_workflow_id": workflow.info().workflow_id, "profile_id": request.execution_profile_ref})
+                        self.completion_event.clear()
+                        self.final_result = None
+                        continue # Retries loop
 
                 # Not a 429 or external agent
                 if manager_handle and request.execution_profile_ref:

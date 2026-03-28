@@ -142,7 +142,7 @@ class ManagedRunSupervisor:
                 duration_seconds=duration,
                 log_refs=log_refs,
                 parsed_output=parsed_output,
-                events=parsed_output.events,
+                events=events,
             )
 
             # Classify exit
@@ -437,5 +437,8 @@ class ManagedRunSupervisor:
             return True
         except (ProcessLookupError, PermissionError):
             return False
+        except OSError:
+            return False
+turn False
         except OSError:
             return False

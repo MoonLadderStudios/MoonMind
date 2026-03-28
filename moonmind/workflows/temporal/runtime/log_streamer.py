@@ -155,7 +155,7 @@ class RuntimeLogStreamer:
         effective_parser = parser or PlainTextOutputParser()
         parsed_output = effective_parser.parse(stdout_content, stderr_content)
 
-        return log_refs, stdout_content, stderr_content, parsed_output
+        return log_refs, stdout_content, stderr_content, parsed_output, events
 
     def collect_diagnostics(
         self,
@@ -189,3 +189,4 @@ class RuntimeLogStreamer:
             data=data,
         )
         return storage_ref
+ref

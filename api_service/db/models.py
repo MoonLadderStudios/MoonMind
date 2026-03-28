@@ -1843,7 +1843,7 @@ class ManagedAgentProviderProfile(Base):
         Integer, nullable=False, default=1, server_default=text("1")
     )
     cooldown_after_429_seconds: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=300, server_default=text("300")
+        Integer, nullable=False, default=900, server_default=text("900")
     )
     rate_limit_policy: Mapped[ManagedAgentRateLimitPolicy] = mapped_column(
         Enum(
