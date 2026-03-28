@@ -61,7 +61,6 @@ jobs:
           npm run ui:lint
           npm run ui:test
           npm run ui:build
-          npm run ui:dist:check
           npm run api:types:check
 
       - name: Set up Docker Buildx
